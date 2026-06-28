@@ -1,4 +1,4 @@
-/* Inspector panels — complements the .insp-*/.reg-*/.palette-* rules already in
+/* Inspector panels — complements the insp / reg / palette rules already in
    studio.css. Scoped to NEW classes only (no edits to studio.css). */
 
 .insp-tab { user-select: none; }
