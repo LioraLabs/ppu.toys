@@ -1,13 +1,13 @@
 import { useCallback, useRef, useState } from "react";
 import type { ChangeEvent, DragEvent } from "react";
 import "./assets.css";
-import { ppuCore } from "../../ppu/instance";
+import { transport } from "../transport/transport";
 import { useAssets } from "./useAssets";
 
 /** ASSETS dock section: a PNG drop zone + a list of uploaded assets (preview +
  *  the id users reference from Lua as bg[n].source / obj.sheet). */
 export function AssetsPanel() {
-  const { assets, error, addFiles } = useAssets(ppuCore);
+  const { assets, error, addFiles } = useAssets(transport.uploadTexture);
   const [over, setOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 

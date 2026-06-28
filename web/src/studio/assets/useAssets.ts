@@ -1,15 +1,14 @@
-import { useCallback, useRef, useState } from "react";
-import type { PpuCore } from "../../ppu/core";
-import { registerAsset, type Asset } from "./assetStore";
+import { useCallback, useState } from "react";
+import { assetStore, useSharedAssets } from "./sharedAssets";
+import { registerAsset } from "./assetStore";
 import { decodeImageFile, pngFiles } from "./decode";
 
-/** Owns the uploaded-asset list and the drop/decode/register pipeline. */
-export function useAssets(core: PpuCore) {
-  const [assets, setAssets] = useState<Asset[]>([]);
+/** Owns the drop/decode/register pipeline. The asset LIST lives in the shared
+ *  assetStore (so the VRAM tab sees it); uploads go through the supplied
+ *  uploader (the transport, which pokes the shared core + refreshes the frame). */
+export function useAssets(upload: (slot: string, image: ImageData) => void) {
+  const assets = useSharedAssets();
   const [error, setError] = useState<string | null>(null);
-  // Mirrors `assets` so sequential uploads dedupe against in-flight additions
-  // without putting upload side effects inside a state updater.
-  const ref = useRef<Asset[]>([]);
 
   const addFiles = useCallback(
     async (files: FileList | File[]) => {
@@ -22,15 +21,14 @@ export function useAssets(core: PpuCore) {
       for (const file of pngs) {
         try {
           const decoded = await decodeImageFile(file);
-          const asset = registerAsset(core, ref.current, decoded);
-          ref.current = [...ref.current, asset];
-          setAssets(ref.current);
+          const asset = registerAsset(upload, assetStore.list(), decoded);
+          assetStore.add(asset);
         } catch (e) {
           setError(e instanceof Error ? e.message : "Failed to decode image");
         }
       }
     },
-    [core],
+    [upload],
   );
 
   return { assets, error, addFiles };
