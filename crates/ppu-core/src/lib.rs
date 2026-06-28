@@ -8,28 +8,12 @@ pub use registers::*;
 mod memory;
 pub use memory::*;
 
+mod linetable;
+pub use linetable::*;
+
 /// Native SNES PPU output dimensions (the only resolution v1 targets).
 pub const WIDTH: usize = 256;
 pub const HEIGHT: usize = 224;
-
-/// M0 placeholder line table: one RGBA fill color per scanline.
-/// M1-ENGINE replaces `rows` with resolved per-line register state.
-pub struct LineTable {
-    pub rows: Vec<[u8; 4]>,
-}
-
-/// Render a line table into a `width * height * 4` RGBA framebuffer by
-/// filling each scanline with its row color. No GPU.
-pub fn rasterize(lt: &LineTable, width: usize, height: usize) -> Vec<u8> {
-    let mut fb = Vec::with_capacity(width * height * 4);
-    for y in 0..height {
-        let color = lt.rows[y];
-        for _ in 0..width {
-            fb.extend_from_slice(&color);
-        }
-    }
-    fb
-}
 
 /// A single PPU register's mirrored value, surfaced to the UI inspector.
 #[derive(Clone, Debug, Serialize)]
@@ -83,13 +67,6 @@ mod wasm;
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn rasterize_fills_each_row_with_its_color() {
-        let lt = LineTable { rows: vec![[1, 2, 3, 4], [5, 6, 7, 8]] };
-        let fb = rasterize(&lt, 2, 2);
-        assert_eq!(fb, vec![1, 2, 3, 4, 1, 2, 3, 4, 5, 6, 7, 8, 5, 6, 7, 8]);
-    }
 
     #[test]
     fn placeholder_framebuffer_is_full_size_and_opaque() {
