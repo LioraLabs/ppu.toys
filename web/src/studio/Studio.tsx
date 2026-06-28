@@ -6,6 +6,7 @@ import { LeftDock } from "./LeftDock";
 import { EditorPane } from "./EditorPane";
 import { RightColumn } from "./RightColumn";
 import { StatusBar } from "./StatusBar";
+import { transport } from "./transport/transport";
 
 export function Studio() {
   return (
@@ -14,7 +15,7 @@ export function Studio() {
       <div className="studio-body">
         <ActivityRail />
         <LeftDock />
-        <EditorPane />
+        <EditorPane onSource={transport.setSource} />
         <RightColumn />
       </div>
       <StatusBar />
