@@ -101,7 +101,7 @@
 
 .editor { display: flex; flex-direction: column; background: var(--bg-editor); border-right: 1px solid var(--border-primary); }
 .editor-tabs { height: 38px; flex: none; display: flex; align-items: stretch; background: var(--bg-tabbar); border-bottom: 1px solid var(--border-subtle); }
-.etab { display: flex; align-items: center; gap: 7px; padding: 0 16px; font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); border-bottom: 2px solid transparent; cursor: pointer; }
+.etab { display: flex; align-items: center; gap: 7px; padding: 0 16px; font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); appearance: none; -webkit-appearance: none; background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; }
 .etab--active { color: var(--text-hi); background: var(--bg-editor); border-bottom-color: var(--accent-orange); }
 .etab-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-orange); }
 .etab-spacer { flex: 1; }
