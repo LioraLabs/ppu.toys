@@ -23,6 +23,9 @@ pub use mode7::*;
 mod sprite;
 pub use sprite::*;
 
+mod compositor;
+pub use compositor::*;
+
 mod lua;
 pub use lua::*;
 
