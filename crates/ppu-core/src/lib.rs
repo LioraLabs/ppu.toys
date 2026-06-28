@@ -17,6 +17,9 @@ pub use linetable::*;
 mod bg;
 pub use bg::*;
 
+mod mode7;
+pub use mode7::*;
+
 /// Native SNES PPU output dimensions (the only resolution v1 targets).
 pub const WIDTH: usize = 256;
 pub const HEIGHT: usize = 224;
