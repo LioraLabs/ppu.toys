@@ -134,3 +134,8 @@
 .reg-name { flex: 1; color: var(--text-mid); }
 .reg-value { font-weight: 500; color: var(--text-code); }
 .reg-value--changed { color: var(--accent-orange); }
+
+.statusbar { display: flex; align-items: center; gap: 16px; padding: 0 14px; background: var(--bg-bar); border-top: 1px solid var(--border-primary); font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); }
+.sb-item { display: flex; align-items: center; gap: 6px; }
+.sb-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-orange); }
+.sb-item--dim { color: var(--text-dimmer); }
