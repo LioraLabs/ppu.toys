@@ -1,19 +1,29 @@
 //! Golden framebuffer compare — the engine test pattern (no GPU, no JS).
-use ppu_core::{rasterize, LineTable, HEIGHT, WIDTH};
+use ppu_core::{rasterize, LineTable, LineTableBuilder, LineTableRow, HEIGHT, WIDTH};
 use std::path::Path;
 
 const GOLDEN: &str = "tests/fixtures/golden_basic.png";
 
-/// Hand-authored fixture: three horizontal color bands over the full frame.
+/// Hand-authored fixture: three horizontal bands, each a distinct resolved
+/// register state, exercising defaults -> per-line override resolution.
 fn fixture() -> LineTable {
-    let rows = (0..HEIGHT)
-        .map(|y| match y {
-            0..=73 => [200, 40, 40, 255],
-            74..=148 => [40, 200, 40, 255],
-            _ => [40, 40, 200, 255],
-        })
-        .collect();
-    LineTable { rows }
+    let mut b = LineTableBuilder::new(LineTableRow::default());
+    b.hdma(0, 73, |_, r| {
+        r.mode = 1;
+        r.brightness = 4;
+        r.bg[0].scroll_x = 10.0;
+    });
+    b.hdma(74, 148, |_, r| {
+        r.mode = 2;
+        r.brightness = 8;
+        r.bg[0].scroll_x = 20.0;
+    });
+    b.hdma(149, 223, |_, r| {
+        r.mode = 7;
+        r.brightness = 15;
+        r.bg[0].scroll_x = 30.0;
+    });
+    b.build(HEIGHT)
 }
 
 fn decode_png(path: &str) -> Vec<u8> {
