@@ -1,0 +1,17 @@
+.studio {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-card);
+}
+.studio-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.toolbar { height: var(--toolbar-h); flex: none; }
+.statusbar { height: var(--statusbar-h); flex: none; }
+.rail { width: var(--rail-w); flex: none; }
+.dock { width: var(--dock-w); flex: none; overflow-y: auto; }
+.editor { flex: 1; min-width: 0; }
+.right { width: var(--right-w); flex: none; }
