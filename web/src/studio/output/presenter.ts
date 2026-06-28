@@ -241,8 +241,12 @@ export class Presenter {
     if (this.program) gl.deleteProgram(this.program);
     if (this.buf) gl.deleteBuffer(this.buf);
     if (this.tex) gl.deleteTexture(this.tex);
-    const ext = gl.getExtension("WEBGL_lose_context");
-    ext?.loseContext();
+    // Deliberately do NOT call WEBGL_lose_context.loseContext() here. getContext()
+    // returns the SAME context for a given canvas, and React reuses the canvas DOM
+    // node across remounts (StrictMode double-invokes effects in dev), so losing
+    // the context poisons it: the next init() gets back a dead context whose shader
+    // compiles fail with a null log. Just free our resources; the context is
+    // released when the canvas element is removed.
     this.gl = null;
   }
 }
