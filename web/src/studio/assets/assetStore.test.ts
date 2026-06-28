@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { assetId, registerAsset, Asset } from "./assetStore";
+import { assetId, registerAsset, type Asset } from "./assetStore";
 import type { PpuCore } from "../../ppu/core";
 
 function fakeImage(w: number, h: number): ImageData {

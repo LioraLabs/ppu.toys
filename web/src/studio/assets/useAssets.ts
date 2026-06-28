@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import type { PpuCore } from "../../ppu/core";
-import { Asset, registerAsset } from "./assetStore";
+import { registerAsset, type Asset } from "./assetStore";
 import { decodeImageFile, pngFiles } from "./decode";
 
 /** Owns the uploaded-asset list and the drop/decode/register pipeline. */
