@@ -1,0 +1,85 @@
+/* Inspector panels — new classes plus a couple additive properties on existing
+   insp / reg classes. Lives here so studio.css stays untouched. */
+
+/* additive: existing .insp-tab is defined in studio.css */
+.insp-tab { user-select: none; }
+
+.insp-empty {
+  padding: 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim2);
+}
+
+.insp-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 8px; }
+
+.insp-note {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: var(--bg-grid);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-dim2);
+}
+
+.insp-subhead {
+  padding: 8px 4px 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--text-dim2);
+}
+
+/* registers flash: RegistersTab keys each row by addr+value, so a changed
+   register remounts the row and this keyframe replays from the start. */
+.reg-row--flash { animation: reg-flash 0.5s ease-out; }
+@keyframes reg-flash {
+  from { background: rgba(255, 149, 64, 0.28); }
+  to { background: transparent; }
+}
+
+/* OAM placeholder grid */
+.oam-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 4px;
+}
+.oam-cell {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-grid);
+}
+.oam-chip {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  flex: none;
+  border: 1px solid var(--border-palette);
+}
+.oam-idx {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim2);
+}
+
+/* OAM active-sprite list */
+.oam-list { display: flex; flex-direction: column; gap: 3px; }
+.oam-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-grid);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.oam-field { color: var(--text-dim2); }

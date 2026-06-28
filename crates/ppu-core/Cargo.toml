@@ -9,10 +9,15 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+piccolo = "0.3.3"
+ahash = "=0.8.11" # pin: forces single getrandom 0.2 so wasm32 builds
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 serde-wasm-bindgen = "0.6"
+getrandom = { version = "0.2", features = ["js"] }
+js-sys = "0.3"
 
 [dev-dependencies]
 png = "0.17"
+serde_json = "1"

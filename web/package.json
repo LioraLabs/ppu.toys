@@ -12,6 +12,16 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.18.3",
+    "@codemirror/commands": "^6.7.1",
+    "@codemirror/language": "^6.10.6",
+    "@codemirror/legacy-modes": "^6.4.2",
+    "@codemirror/lint": "^6.8.4",
+    "@codemirror/state": "^6.4.1",
+    "@codemirror/view": "^6.35.0",
+    "@lezer/highlight": "^1.2.1",
+    "@replit/codemirror-vim": "^6.2.1",
+    "codemirror": "^6.0.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
