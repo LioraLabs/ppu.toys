@@ -57,11 +57,17 @@ impl PpuCore {
         serde_wasm_bindgen::to_value(&res).map_err(Into::into)
     }
 
-    pub fn frame(&mut self, t: f64, f: u32) {
-        // Build the LineTable + update Memory. On a runtime error keep last frame.
+    pub fn frame(&mut self, t: f64, f: u32) -> Result<(), JsValue> {
+        // Build the LineTable + update Memory. On a Lua runtime error, throw the
+        // structured LuaError (same shape as setSource) so the JS adapter's
+        // safeFrame surfaces it as an editor diagnostic. The cached framebuffer/
+        // registers/cgram/oam are left intact -> last good frame survives.
         let mut lt = match self.engine.frame(t, f) {
             Ok(lt) => lt,
-            Err(_) => return,
+            Err(e) => {
+                let view = LuaErrorView { message: e.message, line: e.line };
+                return Err(serde_wasm_bindgen::to_value(&view)?);
+            }
         };
 
         // Apply layer-visibility overrides: bg per-row, obj by clearing on-flags
@@ -88,6 +94,7 @@ impl PpuCore {
         // resolved top scanline (row 0).
         self.registers = derive_registers(&lt.rows[0], &self.prev_reg);
         self.prev_reg = self.registers.iter().map(|r| (r.addr, r.value)).collect();
+        Ok(())
     }
 
     pub fn framebuffer(&self) -> Vec<u8> {
