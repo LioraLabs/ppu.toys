@@ -33,14 +33,6 @@
   color: var(--text-dim2);
 }
 
-/* registers flash: RegistersTab keys each row by addr+value, so a changed
-   register remounts the row and this keyframe replays from the start. */
-.reg-row--flash { animation: reg-flash 0.5s ease-out; }
-@keyframes reg-flash {
-  from { background: rgba(255, 149, 64, 0.28); }
-  to { background: transparent; }
-}
-
 /* OAM placeholder grid */
 .oam-grid {
   display: grid;

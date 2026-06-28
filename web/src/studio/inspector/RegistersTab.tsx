@@ -6,18 +6,14 @@ export function RegistersTab({ frame }: { frame: FrameResult | null }) {
   return (
     <div className="reg-list">
       {frame.registers.map((r) => (
-        <div
-          className={"reg-row" + (r.changed ? " reg-row--flash" : "")}
-          // key includes the value so a changed register remounts the row,
-          // restarting the flash keyframe even when it changes every frame
-          // (React won't touch the DOM node if only the className is stable).
-          key={`${r.addr}:${r.value}`}
-        >
+        // key by addr only: the register set is stable frame-to-frame, so the
+        // row's DOM node persists and updates in place on a value change. No
+        // change-highlight by design — a steady, readable list (the previous
+        // flash/remount strobed on every-frame registers like the scroll regs).
+        <div className="reg-row" key={r.addr}>
           <span className="reg-addr">{formatAddr(r.addr)}</span>
           <span className="reg-name">{r.name}</span>
-          <span className={"reg-value" + (r.changed ? " reg-value--changed" : "")}>
-            {formatValue(r.value)}
-          </span>
+          <span className="reg-value">{formatValue(r.value)}</span>
         </div>
       ))}
       <div className="cgram-section">
