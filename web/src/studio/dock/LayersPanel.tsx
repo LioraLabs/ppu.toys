@@ -24,11 +24,11 @@ export function LayersPanel() {
   });
 
   const toggle = (id: string) => {
-    setVisible((prev) => {
-      const next = !prev[id];
-      ppuCore.setLayerVisible(id, next);
-      return { ...prev, [id]: next };
-    });
+    // Keep the core call out of the setState updater: updaters must be pure
+    // (StrictMode double-invokes them in dev).
+    const next = !visible[id];
+    ppuCore.setLayerVisible(id, next);
+    setVisible((prev) => ({ ...prev, [id]: next }));
   };
 
   return (
