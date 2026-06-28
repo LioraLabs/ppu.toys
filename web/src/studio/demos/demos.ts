@@ -18,21 +18,36 @@ export interface Demo {
   assets: DemoAsset[];
 }
 
-// ── procedural sources (mirror golden_demos.rs) ──────────────────────────────
+// ── procedural sources ───────────────────────────────────────────────────────
+// Authored at full screen size (256x224) so the BG layers fill the frame and do
+// NOT tile vertically. A SNES BG plane wraps a source smaller than the screen, so
+// a 64x64 sky would repeat ~3.5x down the frame (banding). The Rust engine's
+// vertical wrap is exercised independently by crates/ppu-core/tests/golden_demos.rs;
+// these are tuned for how the flagship demo looks, not byte-identity with it.
+const SCREEN_W = 256, SCREEN_H = 224;
+const HORIZON = 140; // sky opaque above; transparent below so hills (bg2) show
+
 function sky(): DemoAsset {
-  const w = 64, h = 64;
+  const w = SCREEN_W, h = SCREEN_H;
   const data = new Uint8ClampedArray(w * h * 4);
+  const sunX = 192, sunY = 50, sunR = 20;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i = (y * w + x) * 4;
-      if (y >= h / 2) {
-        data[i + 3] = 0; // transparent lower half -> hills shows through
+      if (y >= HORIZON) {
+        data[i + 3] = 0; // below the horizon -> transparent, hills show through
         continue;
       }
-      const stripe = Math.floor((x + y) / 4) % 2;
-      data[i] = 80 + stripe * 60;
-      data[i + 1] = 40 + y;
-      data[i + 2] = 120 + stripe * 40;
+      const dx = x - sunX, dy = y - sunY;
+      if (dx * dx + dy * dy < sunR * sunR) {
+        data[i] = 255; data[i + 1] = 226; data[i + 2] = 168; data[i + 3] = 255; // sun
+        continue;
+      }
+      // dusk vertical gradient: deep indigo up top -> warm pink at the horizon
+      const t = y / HORIZON;
+      data[i] = 30 + Math.round(t * t * 210);
+      data[i + 1] = 18 + Math.round(t * 70);
+      data[i + 2] = 78 + Math.round(t * 52);
       data[i + 3] = 255;
     }
   }
@@ -40,15 +55,21 @@ function sky(): DemoAsset {
 }
 
 function hills(): DemoAsset {
-  const w = 64, h = 64;
+  const w = SCREEN_W, h = SCREEN_H;
   const data = new Uint8ClampedArray(w * h * 4);
+  const top = HORIZON - 2; // slight overlap (hidden behind sky) avoids a seam
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i = (y * w + x) * 4;
-      const band = Math.floor(x / 8);
-      data[i] = 20 + band * 16;
-      data[i + 1] = 60 + band * 20;
-      data[i + 2] = 30;
+      if (y < top) {
+        data[i + 3] = 0; // above the ground -> transparent (sky shows)
+        continue;
+      }
+      const stripe = Math.floor(x / 16) % 2; // vertical bands make scroll visible
+      const d = (y - top) / (h - top); // 0 at ground line -> 1 at the bottom
+      data[i] = 18 + stripe * 10;
+      data[i + 1] = 96 - Math.round(d * 46) + stripe * 12;
+      data[i + 2] = 38 + stripe * 8;
       data[i + 3] = 255;
     }
   }

@@ -10,7 +10,8 @@ describe("DEMOS", () => {
     const d = DEMOS.find((x) => x.id === "dusk-parallax")!;
     expect(d.assets.map((a) => a.id)).toEqual(["sky", "hills", "hero"]);
     const dims = Object.fromEntries(d.assets.map((a) => [a.id, [a.width, a.height]]));
-    expect(dims).toEqual({ sky: [64, 64], hills: [64, 64], hero: [64, 8] });
+    // sky/hills are full screen height so the BG layers don't tile vertically.
+    expect(dims).toEqual({ sky: [256, 224], hills: [256, 224], hero: [64, 8] });
     for (const a of d.assets) expect(a.data.length).toBe(a.width * a.height * 4);
     expect(d.source).toContain('bg[1].source = "sky"');
     expect(d.source).toContain('obj.sheet = "hero"');
@@ -25,10 +26,10 @@ describe("DEMOS", () => {
     expect(d.source).toContain("hdma(96, 223");
   });
 
-  it("sky has an opaque top half and a transparent bottom half", () => {
+  it("sky is opaque above the horizon and transparent below it", () => {
     const sky = DEMOS[0].assets.find((a) => a.id === "sky")!;
     const alphaAt = (x: number, y: number) => sky.data[(y * sky.width + x) * 4 + 3];
-    expect(alphaAt(0, 0)).toBe(255);
-    expect(alphaAt(0, 40)).toBe(0);
+    expect(alphaAt(0, 0)).toBe(255); // up top: opaque sky
+    expect(alphaAt(0, 200)).toBe(0); // below the horizon: transparent (hills show)
   });
 });
