@@ -172,3 +172,10 @@ export const transport = new Transport();
 export function useTransport(): TransportState {
   return useSyncExternalStore(transport.subscribe, transport.getSnapshot);
 }
+
+/** Subscribe only to the transport's runtime error. Re-renders the consumer
+ *  only when the error identity changes (the snapshot churns every frame, but
+ *  runtimeError keeps a stable reference while unchanged). */
+export function useTransportRuntimeError(): LuaError | undefined {
+  return useSyncExternalStore(transport.subscribe, () => transport.getSnapshot().runtimeError);
+}
