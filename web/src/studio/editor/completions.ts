@@ -45,6 +45,8 @@ export function ppuCompletions(ctx: CompletionContext): CompletionResult | null 
   }
 
   const word = ctx.matchBefore(/\w+/);
-  if (!word || (word.from === word.to && !ctx.explicit)) return null;
+  // No word before the cursor: only surface globals on an explicit request
+  // (Ctrl-Space), never auto-pop on whitespace.
+  if (!word) return ctx.explicit ? { from: ctx.pos, options: GLOBALS } : null;
   return { from: word.from, options: GLOBALS };
 }
