@@ -1,4 +1,7 @@
-//! ppu.toys headless PPU core. M0: stubs + seam only.
+//! ppu.toys headless PPU core. Phase-1 register model, clean memory model
+//! (CGRAM/OAM/named image sources), and defaults->per-line override resolution.
+//! Rasterization is still a placeholder; the wasm shim uses the `placeholder_*`
+//! helpers until the real compositor lands.
 
 use serde::Serialize;
 
