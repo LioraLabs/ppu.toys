@@ -51,3 +51,16 @@ fn setsource_reports_compile_error() {
     let err = engine.set_source("function frame(t,f) this is not lua end").unwrap_err();
     assert!(!err.message.is_empty());
 }
+
+#[test]
+fn frame_reports_runtime_error() {
+    let mut engine = LuaEngine::new();
+    // index a nil global at frame() time -> Lua runtime error
+    engine
+        .set_source("function frame(t, f) local x = nope.field end")
+        .expect("compiles");
+    let result = engine.frame(0.0, 0);
+    assert!(result.is_err(), "expected a runtime error from frame()");
+    let err = result.err().unwrap();
+    assert!(!err.message.is_empty(), "runtime error carries a message");
+}
