@@ -134,3 +134,44 @@ end
     approx(lt.rows[120].bg[0].scroll_y, 80.0 * (64.0 / 25.0));
     assert_eq!(e.memory().obj_sheet, None);
 }
+
+#[test]
+fn scanline_is_an_alias_for_hdma() {
+    let mut e = engine("function frame(t,f) scanline(0,223, function(y) brightness=3 end) end");
+    let lt = e.frame(0.0, 0).unwrap();
+    assert_eq!(lt.rows[10].brightness, 3);
+}
+
+#[test]
+fn init_runs_once_and_seeds_globals() {
+    // `init` sets a global that `frame` never touches; it must survive into the
+    // frame-wide defaults (proves init ran and globals are shared).
+    let mut e = engine("function init() mode = 3 end\nfunction frame(t,f) end");
+    let lt = e.frame(0.0, 0).unwrap();
+    assert_eq!(lt.rows[0].mode, 3);
+}
+
+#[test]
+fn sticky_defaults_survive_hook_mutation_across_frames() {
+    // `m7.a` is set only on frame 0; a hook stomps it to 99 on lines 100..223.
+    // After frame 0's build, globals must be restored to the frame-wide default
+    // (5), so frame 1 (which does not re-set m7.a) sees 5 on uncovered lines.
+    let src = "function frame(t,f)\n  if f == 0 then m7.a = 5 end\n  hdma(100,223, function(y) m7.a = 99 end)\nend";
+    let mut e = engine(src);
+    let lt0 = e.frame(0.0, 0).unwrap();
+    approx(lt0.rows[0].m7.a, 5.0); // uncovered: frame-wide default
+    approx(lt0.rows[150].m7.a, 99.0); // covered: hook override
+    let lt1 = e.frame(0.0, 1).unwrap();
+    approx(lt1.rows[0].m7.a, 5.0); // sticky restore held; not stomped to 99
+    approx(lt1.rows[150].m7.a, 99.0);
+}
+
+#[test]
+fn runtime_error_in_hook_propagates() {
+    let mut e = engine("function frame(t,f) hdma(0,10, function(y) error('boom') end) end");
+    let err = match e.frame(0.0, 0) {
+        Err(err) => err,
+        Ok(_) => panic!("expected a runtime error from the hook"),
+    };
+    assert!(err.message.contains("boom"), "got: {}", err.message);
+}
