@@ -8,21 +8,21 @@ use std::path::Path;
 
 const GOLDEN: &str = "tests/fixtures/golden_bg.png";
 
-/// Memory with a 16x16 paletted source and a CGRAM ramp.
+/// Memory with a 16x16 direct-RGBA source (a deterministic color pattern with
+/// some alpha-0 transparent cells so the backdrop shows through).
 fn fixture_mem() -> Memory {
     let mut m = Memory::new();
     m.cgram[0] = rgb15(8, 8, 16); // backdrop
-    for i in 1..=15u16 {
-        m.cgram[i as usize] = rgb15((i * 16) as u8, 0, (255 - i * 16) as u8);
-    }
-    // 16x16 source: index = (x ^ y) & 15 -> deterministic pattern that includes
-    // index-0 transparent cells so the backdrop shows through.
     let (w, h) = (16u32, 16u32);
     let mut rgba = Vec::with_capacity((w * h * 4) as usize);
     for y in 0..h {
         for x in 0..w {
-            let idx = ((x ^ y) & 0x0f) as u8;
-            rgba.extend_from_slice(&[idx, 0, 0, 255]);
+            let k = ((x ^ y) & 0x0f) as u8;
+            if k == 0 {
+                rgba.extend_from_slice(&[0, 0, 0, 0]); // transparent cell
+            } else {
+                rgba.extend_from_slice(&[k * 16, 0, 255 - k * 16, 255]);
+            }
         }
     }
     m.sources.insert("bg".into(), Source { width: w, height: h, rgba });
