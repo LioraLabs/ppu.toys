@@ -50,6 +50,48 @@ impl LuaEngine {
     pub fn memory(&self) -> &Memory {
         &self.memory
     }
+
+    /// Compile and load a DSL source: builds a fresh VM, installs bindings, runs
+    /// the chunk (defining `frame`/`init`/helpers as globals), runs `init()` once
+    /// if present. Returns `LuaError{message,line?}` on compile/runtime failure.
+    pub fn set_source(&mut self, src: &str) -> Result<(), LuaError> {
+        let mut lua = Lua::core();
+        lua.enter(install_bindings);
+
+        let load = lua.try_enter(|ctx| {
+            let closure = Closure::load(ctx, Some("source"), src.as_bytes())?;
+            Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
+        });
+        let ex = load.map_err(static_error_to_lua)?;
+        lua.execute::<()>(&ex).map_err(static_error_to_lua)?;
+
+        let (frame_fn, init_fn) = lua.enter(|ctx| {
+            let frame_fn = match ctx.get_global("frame") {
+                Value::Function(f) => Some(ctx.stash(f)),
+                _ => None,
+            };
+            let init_fn = match ctx.get_global("init") {
+                Value::Function(f) => Some(ctx.stash(f)),
+                _ => None,
+            };
+            (frame_fn, init_fn)
+        });
+
+        self.lua = Rc::new(RefCell::new(lua));
+        self.frame_fn = frame_fn;
+        self.init_fn = init_fn;
+        self.memory = Memory::new();
+
+        if let Some(init) = self.init_fn.clone() {
+            let mut l = self.lua.borrow_mut();
+            let ex = l.enter(|ctx| {
+                let f = ctx.fetch(&init);
+                ctx.stash(Executor::start(ctx, f, ()))
+            });
+            l.execute::<()>(&ex).map_err(static_error_to_lua)?;
+        }
+        Ok(())
+    }
 }
 
 fn clamp_u8(v: f64) -> u8 {
@@ -190,4 +232,116 @@ fn static_error_to_lua(e: StaticError) -> LuaError {
         None
     };
     LuaError { message: e.to_string(), line }
+}
+
+fn value_to_string(v: Value<'_>) -> Option<String> {
+    match v {
+        Value::String(s) => Some(String::from_utf8_lossy(s.as_bytes()).into_owned()),
+        _ => None,
+    }
+}
+
+/// Read the per-scanline register globals into a `LineTableRow`. Missing globals
+/// keep their `LineTableRow::default()` value (sticky semantics).
+fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
+    let mut row = LineTableRow::default();
+    if let Some(m) = ctx.get_global("mode").to_integer() {
+        row.mode = m.clamp(0, 7) as u8;
+    }
+    if let Some(b) = ctx.get_global("brightness").to_integer() {
+        row.brightness = b.clamp(0, 15) as u8;
+    }
+    if let Value::Table(bg) = ctx.get_global("bg") {
+        for i in 0..4 {
+            if let Value::Table(layer) = bg.get(ctx, (i + 1) as i64) {
+                if let Value::Table(scroll) = layer.get(ctx, "scroll") {
+                    if let Some(x) = scroll.get(ctx, "x").to_number() {
+                        row.bg[i].scroll_x = x as f32;
+                    }
+                    if let Some(y) = scroll.get(ctx, "y").to_number() {
+                        row.bg[i].scroll_y = y as f32;
+                    }
+                }
+                row.bg[i].source = value_to_string(layer.get(ctx, "source"));
+                row.bg[i].visible = match layer.get(ctx, "visible") {
+                    Value::Nil => true,
+                    v => v.to_bool(),
+                };
+            }
+        }
+    }
+    if let Value::Table(m7) = ctx.get_global("m7") {
+        if let Some(v) = m7.get(ctx, "a").to_number() { row.m7.a = v as f32; }
+        if let Some(v) = m7.get(ctx, "b").to_number() { row.m7.b = v as f32; }
+        if let Some(v) = m7.get(ctx, "c").to_number() { row.m7.c = v as f32; }
+        if let Some(v) = m7.get(ctx, "d").to_number() { row.m7.d = v as f32; }
+        if let Some(v) = m7.get(ctx, "cx").to_number() { row.m7.cx = v as f32; }
+        if let Some(v) = m7.get(ctx, "cy").to_number() { row.m7.cy = v as f32; }
+    }
+    row
+}
+
+/// Write a `LineTableRow` back into the per-scanline register globals (used to
+/// re-baseline globals before each hook and to restore sticky state after build).
+fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
+    ctx.set_global("mode", row.mode as i64).unwrap();
+    ctx.set_global("brightness", row.brightness as i64).unwrap();
+    if let Value::Table(bg) = ctx.get_global("bg") {
+        for i in 0..4 {
+            if let Value::Table(layer) = bg.get(ctx, (i + 1) as i64) {
+                if let Value::Table(scroll) = layer.get(ctx, "scroll") {
+                    scroll.set(ctx, "x", row.bg[i].scroll_x as f64).unwrap();
+                    scroll.set(ctx, "y", row.bg[i].scroll_y as f64).unwrap();
+                }
+                match &row.bg[i].source {
+                    Some(s) => {
+                        let interned = ctx.intern(s.as_bytes());
+                        layer.set(ctx, "source", interned).unwrap();
+                    }
+                    None => {
+                        layer.set(ctx, "source", Value::Nil).unwrap();
+                    }
+                };
+                layer.set(ctx, "visible", row.bg[i].visible).unwrap();
+            }
+        }
+    }
+    if let Value::Table(m7) = ctx.get_global("m7") {
+        m7.set(ctx, "a", row.m7.a as f64).unwrap();
+        m7.set(ctx, "b", row.m7.b as f64).unwrap();
+        m7.set(ctx, "c", row.m7.c as f64).unwrap();
+        m7.set(ctx, "d", row.m7.d as f64).unwrap();
+        m7.set(ctx, "cx", row.m7.cx as f64).unwrap();
+        m7.set(ctx, "cy", row.m7.cy as f64).unwrap();
+    }
+}
+
+/// Read cgram / obj / obj.sheet globals into `Memory` (frame-global, read once).
+fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
+    if let Value::Table(cg) = ctx.get_global("cgram") {
+        for i in 0..256 {
+            mem.cgram[i] = cg
+                .get(ctx, i as i64)
+                .to_integer()
+                .map(|v| (v as u16) & 0x7fff)
+                .unwrap_or(0);
+        }
+    }
+    if let Value::Table(obj) = ctx.get_global("obj") {
+        mem.obj_sheet = value_to_string(obj.get(ctx, "sheet"));
+        for i in 0..128 {
+            if let Value::Table(o) = obj.get(ctx, i as i64) {
+                let e = &mut mem.oam[i];
+                e.x = o.get(ctx, "x").to_number().unwrap_or(0.0) as f32;
+                e.y = o.get(ctx, "y").to_number().unwrap_or(0.0) as f32;
+                e.tile = o.get(ctx, "tile").to_integer().unwrap_or(0) as u16;
+                e.pal = o.get(ctx, "pal").to_integer().unwrap_or(0) as u8;
+                e.prio = o.get(ctx, "prio").to_integer().unwrap_or(0) as u8;
+                e.size = o.get(ctx, "size").to_integer().unwrap_or(0) as u8;
+                e.flip_x = o.get(ctx, "flip_x").to_bool();
+                e.flip_y = o.get(ctx, "flip_y").to_bool();
+                e.on = o.get(ctx, "on").to_bool();
+            }
+        }
+    }
 }
