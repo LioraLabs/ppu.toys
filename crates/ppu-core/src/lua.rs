@@ -315,7 +315,8 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
 fn static_error_to_lua(e: StaticError) -> LuaError {
     let line = if let StaticError::Runtime(rt) = &e {
         rt.downcast::<PrototypeError>().and_then(|pe| match pe {
-            PrototypeError::Parser(p) => Some(p.line_number.0 as u32),
+            // `LineNumber` is 0-indexed; render it 1-based for the editor.
+            PrototypeError::Parser(p) => Some(p.line_number.0 as u32 + 1),
             _ => None,
         })
     } else {
