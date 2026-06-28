@@ -9,6 +9,9 @@ local SPEED = 12
 function frame(t, f)
   mode = 1
   brightness = 15
+  -- animated backdrop (cgram[0]) — visible without uploading any assets
+  cgram[0] = hsl((t * 40) % 360, 0.6, 0.4)
+  -- set bg[1].source = "sky" (drag a PNG onto the dock) to see a scrolling layer
   bg[1].scroll.x = t * SPEED
 end`;
 
