@@ -139,3 +139,5 @@
 .sb-item { display: flex; align-items: center; gap: 6px; }
 .sb-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-orange); }
 .sb-item--dim { color: var(--text-dimmer); }
+.sb-dot--error { background: var(--accent-magenta); }
+.sb-item--error { color: var(--accent-magenta); }
