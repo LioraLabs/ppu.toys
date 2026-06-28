@@ -4,6 +4,7 @@
 //! helpers until the real compositor lands.
 
 use serde::Serialize;
+use std::collections::HashMap;
 
 mod registers;
 pub use registers::*;
@@ -42,41 +43,92 @@ pub struct Register {
     pub changed: bool,
 }
 
-/// Deterministic placeholder framebuffer: an x/y color ramp that animates
-/// slightly with time/frame so the UI shows live motion. Replaced by the real
-/// rasterizer in M1.
-pub fn placeholder_framebuffer(t: f64, f: u32) -> Vec<u8> {
-    let b = (((t * 60.0) as i64).rem_euclid(256) as u8) ^ (f as u8);
-    let mut fb = vec![0u8; WIDTH * HEIGHT * 4];
-    for y in 0..HEIGHT {
-        for x in 0..WIDTH {
-            let i = (y * WIDTH + x) * 4;
-            fb[i] = x as u8;
-            fb[i + 1] = y as u8;
-            fb[i + 2] = b;
-            fb[i + 3] = 255;
-        }
-    }
-    fb
-}
-
-/// A couple of fake registers so the inspector has something to render in M0.
-pub fn placeholder_registers() -> Vec<Register> {
-    vec![
-        Register { addr: 0x2100, name: "INIDISP".into(), value: 0x0f, changed: false },
-        Register { addr: 0x2105, name: "BGMODE".into(), value: 0x01, changed: false },
-    ]
-}
-
-/// A 256-entry CGRAM gradient (15-bit packed) for the palette grid.
-pub fn placeholder_cgram() -> Vec<u16> {
-    (0..256).map(|i| ((i as u16) * 0x84) & 0x7fff).collect()
-}
-
-/// Result of `setSource`, matching the TS `{ ok, error? }` shape.
+/// `setSource` result, matching the TS `{ ok, error? }` shape.
 #[derive(Serialize)]
 pub struct SetSourceResult {
     pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<LuaErrorView>,
+}
+
+/// Serializable Lua compile/runtime error, matching TS `LuaError`.
+#[derive(Serialize)]
+pub struct LuaErrorView {
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+}
+
+/// A sprite mapped to the JS `OamSprite` shape (camelCase flip fields).
+#[derive(Serialize)]
+pub struct OamSprite {
+    pub x: i32,
+    pub y: i32,
+    pub tile: u16,
+    pub pal: u8,
+    pub prio: u8,
+    pub size: u8,
+    #[serde(rename = "flipX")]
+    pub flip_x: bool,
+    #[serde(rename = "flipY")]
+    pub flip_y: bool,
+    pub on: bool,
+}
+
+impl From<&Obj> for OamSprite {
+    fn from(o: &Obj) -> Self {
+        OamSprite {
+            x: o.x.round() as i32,
+            y: o.y.round() as i32,
+            tile: o.tile,
+            pal: o.pal,
+            prio: o.prio,
+            size: o.size,
+            flip_x: o.flip_x,
+            flip_y: o.flip_y,
+            on: o.on,
+        }
+    }
+}
+
+/// An uploaded image source, mapped to the JS `AssetInfo` shape.
+#[derive(Serialize)]
+pub struct AssetInfo {
+    pub id: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Derive the inspector register list from the resolved frame-wide row. `changed`
+/// is true when `prev` held a different value for that addr (false on first frame).
+pub fn derive_registers(row: &LineTableRow, prev: &HashMap<u16, u8>) -> Vec<Register> {
+    let scroll = |v: f32| (v as i64).rem_euclid(256) as u8;
+    let m7 = |v: f32| ((v * 256.0) as i64).rem_euclid(256) as u8;
+    let entries: [(u16, &str, u8); 14] = [
+        (0x2100, "INIDISP", row.brightness),
+        (0x2105, "BGMODE", row.mode),
+        (0x210d, "BG1HOFS", scroll(row.bg[0].scroll_x)),
+        (0x210e, "BG1VOFS", scroll(row.bg[0].scroll_y)),
+        (0x210f, "BG2HOFS", scroll(row.bg[1].scroll_x)),
+        (0x2110, "BG2VOFS", scroll(row.bg[1].scroll_y)),
+        (0x2111, "BG3HOFS", scroll(row.bg[2].scroll_x)),
+        (0x2112, "BG3VOFS", scroll(row.bg[2].scroll_y)),
+        (0x2113, "BG4HOFS", scroll(row.bg[3].scroll_x)),
+        (0x2114, "BG4VOFS", scroll(row.bg[3].scroll_y)),
+        (0x211b, "M7A", m7(row.m7.a)),
+        (0x211c, "M7B", m7(row.m7.b)),
+        (0x211d, "M7C", m7(row.m7.c)),
+        (0x211e, "M7D", m7(row.m7.d)),
+    ];
+    entries
+        .iter()
+        .map(|&(addr, name, value)| Register {
+            addr,
+            name: name.to_string(),
+            value,
+            changed: prev.get(&addr).is_some_and(|&p| p != value),
+        })
+        .collect()
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -85,18 +137,44 @@ mod wasm;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::registers::LineTableRow;
+    use std::collections::HashMap;
 
     #[test]
-    fn placeholder_framebuffer_is_full_size_and_opaque() {
-        let fb = placeholder_framebuffer(0.0, 0);
-        assert_eq!(fb.len(), WIDTH * HEIGHT * 4);
-        assert!(fb.chunks(4).all(|px| px[3] == 255));
+    fn derive_registers_reports_inidisp_and_bgmode() {
+        let mut row = LineTableRow::default();
+        row.brightness = 7;
+        row.mode = 3;
+        let regs = derive_registers(&row, &HashMap::new());
+        let inidisp = regs.iter().find(|r| r.name == "INIDISP").unwrap();
+        assert_eq!(inidisp.addr, 0x2100);
+        assert_eq!(inidisp.value, 7);
+        let bgmode = regs.iter().find(|r| r.name == "BGMODE").unwrap();
+        assert_eq!(bgmode.value, 3);
     }
 
     #[test]
-    fn placeholder_registers_and_cgram_have_expected_shape() {
-        let regs = placeholder_registers();
-        assert!(regs.iter().any(|r| r.name == "BGMODE"));
-        assert_eq!(placeholder_cgram().len(), 256);
+    fn derive_registers_changed_flag_tracks_prev() {
+        let row = LineTableRow::default(); // brightness 15
+        let first = derive_registers(&row, &HashMap::new());
+        assert!(first.iter().all(|r| !r.changed));
+        let mut prev = HashMap::new();
+        prev.insert(0x2100u16, 7u8);
+        prev.insert(0x2105u16, 1u8);
+        let next = derive_registers(&row, &prev);
+        assert!(next.iter().find(|r| r.addr == 0x2100).unwrap().changed);
+        assert!(!next.iter().find(|r| r.addr == 0x2105).unwrap().changed);
+    }
+
+    #[test]
+    fn oam_sprite_serializes_camelcase() {
+        let obj = Obj { on: true, flip_x: true, flip_y: false, tile: 5, ..Obj::default() };
+        let s = OamSprite::from(&obj);
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["flipX"], true);
+        assert_eq!(json["flipY"], false);
+        assert_eq!(json["on"], true);
+        assert_eq!(json["tile"], 5);
+        assert!(json.get("flip_x").is_none());
     }
 }
