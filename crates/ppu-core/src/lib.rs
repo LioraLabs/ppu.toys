@@ -23,6 +23,9 @@ pub use mode7::*;
 mod sprite;
 pub use sprite::*;
 
+mod lua;
+pub use lua::*;
+
 /// Native SNES PPU output dimensions (the only resolution v1 targets).
 pub const WIDTH: usize = 256;
 pub const HEIGHT: usize = 224;
