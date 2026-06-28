@@ -139,3 +139,79 @@ fn dusk_parallax_matches_golden_png() {
     assert_eq!(actual.len(), WIDTH * HEIGHT * 4);
     assert_eq!(actual, expected, "dusk-parallax framebuffer differs from golden PNG");
 }
+
+// ── mode7-floor ───────────────────────────────────────────────────────────────
+const MODE7_GOLDEN: &str = "tests/fixtures/golden_mode7_floor.png";
+
+/// Spec worked example, verbatim.
+const MODE7_SRC: &str = r#"
+function frame(t, f)
+  mode = 7; brightness = 15; bg[1].source = "track"
+  hdma(96, 223, function(y)
+    local d = 64 / (y - 95)
+    m7.a, m7.d = d, d
+    m7.cx, m7.cy = 128, 0
+    bg[1].scroll.y = (t*80) * d
+  end)
+end
+"#;
+
+/// 64x64 procedural "track": an 8x8 grid of distinctly-colored cells so the
+/// receding-perspective warp is legible (same source style as golden_mode7).
+fn track_source() -> Source {
+    let (w, h) = (64u32, 64u32);
+    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let cx = (x / 8) as u8;
+            let cy = (y / 8) as u8;
+            let i = ((y * w + x) * 4) as usize;
+            rgba[i] = cx * 32;
+            rgba[i + 1] = cy * 32;
+            rgba[i + 2] = ((cx + cy) & 1) * 255;
+            rgba[i + 3] = 255;
+        }
+    }
+    Source { width: w, height: h, rgba }
+}
+
+/// Run mode7-floor through the real pipeline at a fixed (t,f).
+fn mode7_frame(t: f64, f: u32) -> Vec<u8> {
+    let mut engine = LuaEngine::new();
+    engine.set_source(MODE7_SRC).expect("mode7-floor compiles");
+    engine
+        .memory_mut()
+        .sources
+        .insert("track".into(), track_source());
+    let lt = engine.frame(t, f).expect("mode7-floor frame runs");
+    render_frame(&lt, engine.memory())
+}
+
+#[test]
+fn mode7_floor_is_per_scanline_affine() {
+    // The hdma hook switches the affine per line: rows in the floor band carry a
+    // shrinking 1/(y-95) scale, so adjacent floor scanlines are NOT identical.
+    let fb = mode7_frame(1.0, 60);
+    let row = |y: usize| &fb[y * WIDTH * 4..(y + 1) * WIDTH * 4];
+    assert_ne!(row(150), row(200), "floor scanlines should differ (perspective)");
+}
+
+#[test]
+fn mode7_floor_matches_golden_png() {
+    assert!(
+        Path::new(MODE7_GOLDEN).exists(),
+        "golden missing — run: cargo test -p ppu-core --test golden_demos regen_golden_demos -- --ignored"
+    );
+    let actual = mode7_frame(1.0, 60);
+    let expected = decode_png(MODE7_GOLDEN);
+    assert_eq!(actual.len(), WIDTH * HEIGHT * 4);
+    assert_eq!(actual, expected, "mode7-floor framebuffer differs from golden PNG");
+}
+
+// ── regen (ignored): (re)generate both committed golden fixtures ──────────────
+#[test]
+#[ignore = "regenerates the committed golden demo PNGs"]
+fn regen_golden_demos() {
+    write_png(DUSK_GOLDEN, &dusk_frame(1.0, 60));
+    write_png(MODE7_GOLDEN, &mode7_frame(1.0, 60));
+}
