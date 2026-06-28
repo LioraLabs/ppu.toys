@@ -1,16 +1,11 @@
 //! Mode-1 tile background rasterizer.
 //!
 //! Renders BG layers from their whole-image sources (`Bg::source`), auto-tiled
-//! and wrapped, through the CGRAM palette, with INIDISP brightness attenuation.
-//!
-//! ## Paletted-source contract (v1)
-//! The clean memory model stores each BG `Source` as decoded RGBA, but SNES BG
-//! graphics are *indexed* and the DSL color-cycles via `cgram[]` (dusk-parallax).
-//! So a BG source pixel is a CGRAM index, NOT a direct color:
-//!   - `rgba[3] == 0` (alpha 0) -> transparent (lower layer / backdrop shows)
-//!   - else `index = rgba[0]` (red channel, 0..=255)
-//!   - `index == 0`             -> transparent (SNES color-0 convention)
-//!   - else color = `unpack_rgb15(cgram[index])`, then brightness-attenuated.
+//! and wrapped. Direct-RGBA contract (v1): a source pixel's actual RGBA *is* the
+//! graphic; `rgba[3] == 0` (alpha 0) is transparent so the lower layer / backdrop
+//! shows through. CGRAM is NOT consulted for BG pixels in v1 (only `cgram[0]`
+//! backdrop, handled by the compositor). Brightness is applied once by the E5
+//! compositor; the per-layer primitive here returns un-attenuated color.
 
 use crate::memory::{unpack_rgb15, Memory};
 use crate::registers::{Bg, LineTableRow};
@@ -35,11 +30,11 @@ fn attenuate(mut px: [u8; 4], brightness: u8) -> [u8; 4] {
 /// Render one BG layer for scanline `y` into `width` pixel candidates.
 /// `None` = transparent at that x (lower layer / backdrop shows through).
 /// Honors `.visible`, `.source` presence/lookup, per-layer scroll (wrapped over
-/// the whole source image), the paletted-source contract, and brightness.
+/// the whole source image). Returns DIRECT, un-attenuated source RGBA; the
+/// compositor applies brightness once.
 pub fn render_bg_layer_scanline(
     layer: &Bg,
     mem: &Memory,
-    brightness: u8,
     y: usize,
     width: usize,
 ) -> Vec<Option<[u8; 4]>> {
@@ -65,37 +60,38 @@ pub fn render_bg_layer_scanline(
         if src.rgba[base + 3] == 0 {
             continue; // alpha 0 -> transparent
         }
-        let pal = src.rgba[base]; // red channel = CGRAM index
-        if pal == 0 {
-            continue; // SNES color-0 -> transparent
-        }
-        let color = unpack_rgb15(mem.cgram[pal as usize]);
-        *slot = Some(attenuate(color, brightness));
+        *slot = Some([
+            src.rgba[base],
+            src.rgba[base + 1],
+            src.rgba[base + 2],
+            255,
+        ]);
     }
     out
 }
 
-/// Composite the four Mode-1 BG layers for scanline `y` into opaque RGBA pixels.
-/// Paints back-to-front (BG4, BG3, BG2, BG1) over the backdrop (`cgram[0]`); the
-/// topmost non-transparent layer wins each pixel. Brightness applies to every
-/// layer and the backdrop. Convenience entry for the E5 compositor / golden test;
-/// sprite + per-tile priority compositing is E5's job.
+/// Standalone Mode-1 BG raster: backdrop (`cgram[0]`) + the four layers
+/// (BG4..BG1, topmost wins) with INIDISP brightness applied once. Convenience
+/// for the BG golden/unit tests ONLY — the E5 compositor composites layers
+/// itself via `render_bg_layer_scanline` and applies brightness once globally,
+/// so it never calls this (no double-attenuation).
 pub fn render_bg_scanline(
     row: &LineTableRow,
     mem: &Memory,
     y: usize,
     width: usize,
 ) -> Vec<[u8; 4]> {
-    let backdrop = attenuate(unpack_rgb15(mem.cgram[0]), row.brightness);
-    let mut out = vec![backdrop; width];
-    // row.bg[0] = BG1 (topmost). Paint BG4..BG1 so BG1 lands last / on top.
+    let mut out = vec![unpack_rgb15(mem.cgram[0]); width];
     for layer in row.bg.iter().rev() {
-        let line = render_bg_layer_scanline(layer, mem, row.brightness, y, width);
+        let line = render_bg_layer_scanline(layer, mem, y, width);
         for (slot, px) in out.iter_mut().zip(line) {
             if let Some(c) = px {
                 *slot = c;
             }
         }
+    }
+    for px in out.iter_mut() {
+        *px = attenuate(*px, row.brightness);
     }
     out
 }
@@ -121,19 +117,16 @@ mod tests {
 
     use crate::memory::{rgb15, Source};
 
-    // A 2x2 paletted source: red-channel = CGRAM index.
-    // row0: (0,0)->idx1 opaque, (1,0)->idx2 opaque
-    // row1: (0,1)->idx0 (transparent), (1,1)->idx3 alpha0 (transparent)
+    // A 2x2 direct-RGBA source:
+    // row0: (0,0)=red opaque, (1,0)=green opaque
+    // row1: (0,1)=alpha0 transparent, (1,1)=blue opaque
     fn fixture_mem() -> Memory {
         let mut m = Memory::new();
-        m.cgram[1] = rgb15(255, 0, 0);
-        m.cgram[2] = rgb15(0, 255, 0);
-        m.cgram[3] = rgb15(0, 0, 255);
         let rgba = vec![
-            1, 0, 0, 255, // (0,0) index 1 opaque
-            2, 0, 0, 255, // (1,0) index 2 opaque
-            0, 0, 0, 255, // (0,1) index 0 -> transparent
-            3, 0, 0, 0, // (1,1) alpha 0 -> transparent
+            255, 0, 0, 255, // (0,0) red opaque
+            0, 255, 0, 255, // (1,0) green opaque
+            0, 0, 0, 0, // (0,1) alpha 0 -> transparent
+            0, 0, 255, 255, // (1,1) blue opaque
         ];
         m.sources.insert("bg".into(), Source { width: 2, height: 2, rgba });
         m
@@ -148,51 +141,47 @@ mod tests {
         let m = fixture_mem();
         let mut off = layer("bg");
         off.visible = false;
-        assert!(render_bg_layer_scanline(&off, &m, 15, 0, 4).iter().all(|p| p.is_none()));
+        assert!(render_bg_layer_scanline(&off, &m, 0, 4).iter().all(|p| p.is_none()));
         let no_src = Bg { source: None, ..layer("bg") };
-        assert!(render_bg_layer_scanline(&no_src, &m, 15, 0, 4).iter().all(|p| p.is_none()));
+        assert!(render_bg_layer_scanline(&no_src, &m, 0, 4).iter().all(|p| p.is_none()));
         let bad = layer("missing");
-        assert!(render_bg_layer_scanline(&bad, &m, 15, 0, 4).iter().all(|p| p.is_none()));
+        assert!(render_bg_layer_scanline(&bad, &m, 0, 4).iter().all(|p| p.is_none()));
     }
 
     #[test]
-    fn samples_palette_and_wraps_horizontally() {
+    fn samples_direct_color_and_wraps_horizontally() {
         let m = fixture_mem();
-        // scanline y=0 -> source row 0: [idx1=red, idx2=green], wraps over width 4.
-        let line = render_bg_layer_scanline(&layer("bg"), &m, 15, 0, 4);
-        assert_eq!(line[0], Some([255, 0, 0, 255])); // idx1 red
-        assert_eq!(line[1], Some([0, 255, 0, 255])); // idx2 green
-        assert_eq!(line[2], Some([255, 0, 0, 255])); // wrap -> idx1 red
-        assert_eq!(line[3], Some([0, 255, 0, 255])); // wrap -> idx2 green
+        // scanline y=0 -> source row 0: [red, green], wraps over width 4.
+        let line = render_bg_layer_scanline(&layer("bg"), &m, 0, 4);
+        assert_eq!(line[0], Some([255, 0, 0, 255])); // red
+        assert_eq!(line[1], Some([0, 255, 0, 255])); // green
+        assert_eq!(line[2], Some([255, 0, 0, 255])); // wrap -> red
+        assert_eq!(line[3], Some([0, 255, 0, 255])); // wrap -> green
     }
 
     #[test]
-    fn index0_and_alpha0_are_transparent() {
+    fn alpha0_is_transparent() {
         let m = fixture_mem();
-        // scanline y=1 -> source row 1: [idx0 transparent, idx3 alpha0 transparent]
-        let line = render_bg_layer_scanline(&layer("bg"), &m, 15, 1, 2);
+        // scanline y=1 -> source row 1: [alpha0 transparent, blue opaque]
+        let line = render_bg_layer_scanline(&layer("bg"), &m, 1, 2);
         assert_eq!(line[0], None);
-        assert_eq!(line[1], None);
+        assert_eq!(line[1], Some([0, 0, 255, 255]));
     }
 
     #[test]
-    fn scroll_offsets_and_brightness_attenuates() {
+    fn scroll_offsets_the_sample() {
         let m = fixture_mem();
         let mut l = layer("bg");
-        l.scroll_x = 1.0; // x=0 samples source col 1 (idx2 green)
-        let line = render_bg_layer_scanline(&l, &m, 0, 0, 1);
-        assert_eq!(line[0], Some([0, 0, 0, 255])); // green attenuated to black at brightness 0
-        let line2 = render_bg_layer_scanline(&l, &m, 15, 0, 1);
-        assert_eq!(line2[0], Some([0, 255, 0, 255])); // full brightness green
+        l.scroll_x = 1.0; // x=0 samples source col 1 (green) on row 0
+        assert_eq!(render_bg_layer_scanline(&l, &m, 0, 1)[0], Some([0, 255, 0, 255]));
     }
 
     #[test]
     fn negative_scroll_wraps() {
         let m = fixture_mem();
         let mut l = layer("bg");
-        l.scroll_x = -1.0; // x=0 -> col -1 -> wraps to col 1 (idx2 green) on row 0
-        let line = render_bg_layer_scanline(&l, &m, 15, 0, 1);
-        assert_eq!(line[0], Some([0, 255, 0, 255]));
+        l.scroll_x = -1.0; // x=0 -> col -1 -> wraps to col 1 (green) on row 0
+        assert_eq!(render_bg_layer_scanline(&l, &m, 0, 1)[0], Some([0, 255, 0, 255]));
     }
 
     #[test]
@@ -201,12 +190,11 @@ mod tests {
         m.cgram[0] = rgb15(10, 20, 30); // backdrop
         let mut row = LineTableRow::default();
         row.brightness = 15;
-        row.bg[0] = layer("bg"); // bg1; other layers default (no source)
-        // scanline y=1 of source is fully transparent -> backdrop everywhere.
+        row.bg[0] = layer("bg");
+        // row 1 col 0 of source is alpha0 -> backdrop shows through there.
         let line = render_bg_scanline(&row, &m, 1, 2);
-        let bd = unpack_rgb15(rgb15(10, 20, 30));
-        assert_eq!(line[0], bd);
-        assert_eq!(line[1], bd);
+        assert_eq!(line[0], unpack_rgb15(rgb15(10, 20, 30)));
+        assert_eq!(line[1], [0, 0, 255, 255]); // blue opaque
     }
 
     #[test]
@@ -215,11 +203,10 @@ mod tests {
         m.cgram[0] = rgb15(0, 0, 0);
         let mut row = LineTableRow::default();
         row.brightness = 15;
-        // bg1 and bg2 both opaque on col0 of row0; bg1 (idx 0 in array) is topmost.
         row.bg[0] = layer("bg"); // bg1 topmost
         row.bg[1] = layer("bg"); // bg2 below
-        let line = render_bg_scanline(&row, &m, 0, 1);
-        assert_eq!(line[0], [255, 0, 0, 255]); // bg1 idx1 red wins
+        // both opaque red at col 0 row 0; bg1 wins (same color here, asserts opacity).
+        assert_eq!(render_bg_scanline(&row, &m, 0, 1)[0], [255, 0, 0, 255]);
     }
 
     #[test]
@@ -228,7 +215,6 @@ mod tests {
         m.cgram[0] = rgb15(200, 200, 200);
         let mut row = LineTableRow::default();
         row.brightness = 0; // everything black
-        let line = render_bg_scanline(&row, &m, 0, 2);
-        assert_eq!(line[0], [0, 0, 0, 255]);
+        assert_eq!(render_bg_scanline(&row, &m, 0, 2)[0], [0, 0, 0, 255]);
     }
 }
