@@ -1,54 +1,58 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { WIDTH, HEIGHT } from "../../ppu/core";
 import { clockToScrub, integerScale } from "./clock";
 import { transport, useTransport } from "../transport/transport";
+import { Presenter } from "./presenter";
+import { loadFx, saveFx, type PresentFx } from "./fx";
 
-/** Right-column Output: blits the SHARED core's framebuffer to a native
- *  256x224 canvas (integer-upscaled, pixelated) and drives the SHARED transport
- *  (play/pause + scrubber). No private core or clock. */
+/** Right-column Output: presents the SHARED core's framebuffer through a WebGL
+ *  present pass (integer upscale + toggleable CRT/scanline/pixel-grid FX) and
+ *  drives the SHARED transport (play/pause + scrubber). No private core or clock. */
 export function OutputCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const displayRef = useRef<HTMLDivElement>(null);
-  const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
-  const imageRef = useRef<ImageData | null>(null);
+  const presenterRef = useRef<Presenter | null>(null);
+  const [fx, setFx] = useState<PresentFx>(() => loadFx());
+  const fxRef = useRef<PresentFx>(fx);
 
   const { t, f, playing, frame } = useTransport();
 
-  // one-time canvas setup + integer-scale sizing + initial paint
+  // one-time: init the presenter, integer-scale sizing + initial paint
   useEffect(() => {
     const canvas = canvasRef.current;
     const container = displayRef.current;
     if (!canvas || !container) return;
-    const ctx = canvas.getContext("2d");
-    const image = new ImageData(WIDTH, HEIGHT);
-    ctxRef.current = ctx;
-    imageRef.current = image;
+    const presenter = new Presenter();
+    presenter.init(canvas);
+    presenterRef.current = presenter;
 
+    const draw = () =>
+      presenter.render(transport.getSnapshot().frame.framebuffer, fxRef.current);
     const resize = () => {
-      const k = integerScale(container.clientWidth, container.clientHeight);
-      canvas.style.width = `${WIDTH * k}px`;
-      canvas.style.height = `${HEIGHT * k}px`;
+      presenter.resize(integerScale(container.clientWidth, container.clientHeight));
+      draw();
     };
     resize();
     const ro = new ResizeObserver(resize);
     ro.observe(container);
-
-    if (ctx) {
-      image.data.set(transport.getSnapshot().frame.framebuffer);
-      ctx.putImageData(image, 0, 0);
-    }
-    return () => ro.disconnect();
+    return () => {
+      ro.disconnect();
+      presenter.dispose();
+      presenterRef.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // paint whenever the shared frame advances
+  // repaint whenever the shared frame advances or the effect set changes
   useLayoutEffect(() => {
-    const ctx = ctxRef.current;
-    const image = imageRef.current;
-    if (!ctx || !image) return;
-    image.data.set(frame.framebuffer);
-    ctx.putImageData(image, 0, 0);
-  }, [frame]);
+    fxRef.current = fx;
+    presenterRef.current?.render(frame.framebuffer, fx);
+  }, [frame, fx]);
+
+  // persist effect toggles across sessions
+  useEffect(() => {
+    saveFx(fx);
+  }, [fx]);
 
   const scrub = clockToScrub({ t, f });
 
@@ -57,6 +61,9 @@ export function OutputCanvas() {
       <div className="output-header">
         <span className="section-header" style={{ padding: 0 }}>OUTPUT</span>
         <div className="tb-spacer" />
+        <FxToggle label="CRT" on={fx.crt} onClick={() => setFx((s) => ({ ...s, crt: !s.crt }))} />
+        <FxToggle label="SCAN" on={fx.scanline} onClick={() => setFx((s) => ({ ...s, scanline: !s.scanline }))} />
+        <FxToggle label="GRID" on={fx.pixelGrid} onClick={() => setFx((s) => ({ ...s, pixelGrid: !s.pixelGrid }))} />
         <span className="pill">MODE 1</span>
         <span className="pill">256×224</span>
       </div>
@@ -106,5 +113,18 @@ export function OutputCanvas() {
         <span className="fullscreen">⛶</span>
       </div>
     </div>
+  );
+}
+
+function FxToggle({ label, on, onClick }: { label: string; on: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className={`fx-toggle${on ? " fx-toggle--active" : ""}`}
+      aria-pressed={on}
+      onClick={onClick}
+    >
+      {label}
+    </button>
   );
 }
