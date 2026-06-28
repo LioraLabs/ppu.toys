@@ -1,3 +1,5 @@
+import { AssetsPanel } from "./assets/AssetsPanel";
+
 const LAYERS = [
   { name: "BG1", tag: "sky · 4bpp · scroll", visible: true, grad: "linear-gradient(180deg,#241640,#ff7a4d)" },
   { name: "BG2", tag: "hills · 4bpp · scroll", visible: true, grad: "linear-gradient(180deg,#23142e,#6a2a58)" },
@@ -61,6 +63,7 @@ export function LeftDock() {
           <span className="bits">15-bit</span>
         </div>
       </div>
+      <AssetsPanel />
     </aside>
   );
 }
