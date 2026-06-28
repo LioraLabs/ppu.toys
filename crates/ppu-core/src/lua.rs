@@ -92,6 +92,96 @@ impl LuaEngine {
         }
         Ok(())
     }
+
+    /// Run one frame: call `frame(t,f)` once (bare assigns -> frame-wide defaults,
+    /// `hdma` -> registered hooks), read CGRAM/OAM, then resolve the 224-row
+    /// LineTable by applying each covering hook per scanline (later call wins).
+    pub fn frame(&mut self, t: f64, f: u32) -> Result<LineTable, LuaError> {
+        // Reset the per-frame hook registry, then run frame(t,f) once.
+        {
+            let mut l = self.lua.borrow_mut();
+            l.enter(|ctx| {
+                ctx.set_global("__ppu_hooks", Table::new(&ctx)).unwrap();
+            });
+            if let Some(frame) = self.frame_fn.clone() {
+                let ex = l.enter(|ctx| {
+                    let func = ctx.fetch(&frame);
+                    ctx.stash(Executor::start(ctx, func, (t, f as i64)))
+                });
+                l.execute::<()>(&ex).map_err(static_error_to_lua)?;
+            }
+        }
+
+        // Read frame-wide defaults + frame-global memory.
+        let defaults = {
+            let mut l = self.lua.borrow_mut();
+            l.enter(|ctx| {
+                read_memory(ctx, &mut self.memory);
+                read_state(ctx)
+            })
+        };
+
+        // Collect registered hooks (stash each fn with its [y0,y1]).
+        let hooks: Vec<(usize, usize, StashedFunction)> = {
+            let mut l = self.lua.borrow_mut();
+            l.enter(|ctx| {
+                let mut out = Vec::new();
+                if let Value::Table(hk) = ctx.get_global("__ppu_hooks") {
+                    let n = hk.length();
+                    for idx in 1..=n {
+                        if let Value::Table(entry) = hk.get(ctx, idx) {
+                            let y0 = entry.get(ctx, 1).to_integer().unwrap_or(0).max(0) as usize;
+                            let y1 = entry.get(ctx, 2).to_integer().unwrap_or(0).max(0) as usize;
+                            if let Value::Function(func) = entry.get(ctx, 3) {
+                                out.push((y0, y1, ctx.stash(func)));
+                            }
+                        }
+                    }
+                }
+                out
+            })
+        };
+
+        // Resolve the line table: each hook becomes a closure that re-baselines
+        // globals to the working row, runs fn(y), and reads the row back.
+        let err_sink: Rc<RefCell<Option<LuaError>>> = Rc::new(RefCell::new(None));
+        let mut builder = LineTableBuilder::new(defaults.clone());
+        for (y0, y1, sf) in hooks {
+            let lua = self.lua.clone();
+            let sink = err_sink.clone();
+            builder.hdma(y0, y1, move |y, row| {
+                if sink.borrow().is_some() {
+                    return;
+                }
+                let mut l = lua.borrow_mut();
+                l.enter(|ctx| write_state(ctx, row));
+                let ex = l.enter(|ctx| {
+                    let func = ctx.fetch(&sf);
+                    ctx.stash(Executor::start(ctx, func, (y as i64,)))
+                });
+                match l.execute::<()>(&ex) {
+                    Ok(()) => {
+                        *row = l.enter(read_state);
+                    }
+                    Err(e) => {
+                        *sink.borrow_mut() = Some(static_error_to_lua(e));
+                    }
+                }
+            });
+        }
+        let lt = builder.build(HEIGHT);
+
+        // Restore sticky globals to the frame-wide defaults (hooks mutated them).
+        {
+            let mut l = self.lua.borrow_mut();
+            l.enter(|ctx| write_state(ctx, &defaults));
+        }
+
+        if let Some(e) = err_sink.borrow_mut().take() {
+            return Err(e);
+        }
+        Ok(lt)
+    }
 }
 
 fn clamp_u8(v: f64) -> u8 {
