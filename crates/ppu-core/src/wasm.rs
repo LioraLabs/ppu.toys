@@ -84,7 +84,8 @@ impl PpuCore {
         self.cgram = mem.cgram.to_vec();
         self.oam = mem.oam.iter().map(OamSprite::from).collect();
 
-        // Registers + changed flags vs the previous frame.
+        // Registers + changed flags vs the previous frame, snapshotted from the
+        // resolved top scanline (row 0).
         self.registers = derive_registers(&lt.rows[0], &self.prev_reg);
         self.prev_reg = self.registers.iter().map(|r| (r.addr, r.value)).collect();
     }
