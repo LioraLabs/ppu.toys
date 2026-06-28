@@ -3,6 +3,7 @@
 //! math internally (the DSL passes f32). Nearest-neighbor, wraps over the
 //! source — the namesake receding "floor". Brightness/compositing live in E5.
 
+use crate::linetable::LineTable;
 use crate::memory::Source;
 use crate::registers::{LineTableRow, Mode7};
 
@@ -63,7 +64,7 @@ pub fn render_mode7_scanline(row: &LineTableRow, src: &Source, y: usize, out: &m
 /// Render every scanline of a resolved line table as Mode 7 over `src` into a
 /// fresh `width * height * 4` RGBA buffer. Convenience for the golden test and a
 /// pure full-frame floor; the compositor composes scanlines itself.
-pub fn render_mode7(lt: &crate::linetable::LineTable, src: &Source, width: usize, height: usize) -> Vec<u8> {
+pub fn render_mode7(lt: &LineTable, src: &Source, width: usize, height: usize) -> Vec<u8> {
     let mut fb = vec![0u8; width * height * 4];
     for y in 0..height {
         let off = y * width * 4;
