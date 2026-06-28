@@ -70,6 +70,23 @@ function compile(gl: WebGLRenderingContext, type: number, src: string): WebGLSha
   return sh;
 }
 
+let warnedWebgl = false;
+/** A WebGL failure is recoverable: we degrade to the Canvas2D blit and the
+ *  framebuffer still shows — only the present-pass effects are lost. Warn once so
+ *  it's diagnosable without spamming a frame loop. The shaders are valid GLSL ES;
+ *  this fires when the browser's WebGL is disabled or the GPU is blocklisted. */
+function warnWebglOnce(err: unknown): void {
+  if (warnedWebgl) return;
+  warnedWebgl = true;
+  console.warn(
+    "[ppu.toys] WebGL present pass unavailable — falling back to a plain Canvas2D " +
+      "blit (CRT/scanline/pixel-grid effects disabled). The emulator output is " +
+      "unaffected. This usually means the browser's WebGL is disabled or the GPU " +
+      "is blocklisted; check chrome://gpu and enable hardware acceleration.",
+    err,
+  );
+}
+
 /** Owns the present pipeline: framebuffer texture -> integer upscale -> FX -> canvas.
  *  Falls back to a Canvas2D blit if WebGL is unavailable. */
 export class Presenter {
@@ -83,14 +100,51 @@ export class Presenter {
   private u: Record<string, WebGLUniformLocation | null> = {};
   private k = 1;
 
-  /** @returns true if WebGL succeeded, false if it fell back to Canvas2D. */
-  init(canvas: HTMLCanvasElement): boolean {
+  /** @returns true if WebGL succeeded, false if it fell back to Canvas2D.
+   *  Any GL failure — context unavailable, shader compile, or program link —
+   *  degrades to the Canvas2D blit rather than throwing, so a degraded browser
+   *  WebGL stack can't take down the React tree (the bug that blanked the app). */
+  init(canvas: HTMLCanvasElement, forceCanvas2d = false): boolean {
     this.canvas = canvas;
-    const opts: WebGLContextAttributes = { antialias: false, alpha: false };
-    const gl = (canvas.getContext("webgl", opts)
-      ?? canvas.getContext("experimental-webgl", opts)) as WebGLRenderingContext | null;
-    if (!gl) return this.initFallback(canvas);
-    const prog = gl.createProgram()!;
+    if (!forceCanvas2d) {
+      const opts: WebGLContextAttributes = { antialias: false, alpha: false };
+      const gl = (canvas.getContext("webgl", opts)
+        ?? canvas.getContext("experimental-webgl", opts)) as WebGLRenderingContext | null;
+      if (gl) {
+        try {
+          this.setupGl(gl);
+          this.gl = gl;
+          return true;
+        } catch (err) {
+          warnWebglOnce(err);
+          try {
+            gl.getExtension("WEBGL_lose_context")?.loseContext();
+          } catch {
+            /* ignore */
+          }
+          this.gl = null;
+          this.program = null;
+          this.buf = null;
+          this.tex = null;
+          // Obtaining a 'webgl' context locks this canvas to webgl for life, so
+          // getContext('2d') on it now returns null and the Canvas2D fallback
+          // can't draw. Signal failure: the caller must remount a FRESH canvas
+          // and re-init with forceCanvas2d=true (see OutputCanvas).
+          return false;
+        }
+      }
+      // No webgl context at all — the canvas is untainted, so the Canvas2D
+      // fallback below works directly on it.
+    }
+    return this.initFallback(canvas);
+  }
+
+  /** Build the present pipeline. Throws on any GL failure; init() catches it and
+   *  falls back. Does NOT assign this.gl — init() does that only on full success,
+   *  so render() never observes a half-built context. */
+  private setupGl(gl: WebGLRenderingContext): void {
+    const prog = gl.createProgram();
+    if (!prog) throw new Error("WebGL createProgram returned null");
     const vs = compile(gl, gl.VERTEX_SHADER, VERT_SRC);
     const fs = compile(gl, gl.FRAGMENT_SHADER, FRAG_SRC);
     gl.attachShader(prog, vs);
@@ -100,8 +154,9 @@ export class Presenter {
     gl.deleteShader(vs);
     gl.deleteShader(fs);
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      const log = gl.getProgramInfoLog(prog) ?? "program link failed";
       gl.deleteProgram(prog);
-      return this.initFallback(canvas);
+      throw new Error(log);
     }
     gl.useProgram(prog);
 
@@ -131,8 +186,6 @@ export class Presenter {
     gl.uniform2f(this.u.uNative, WIDTH, HEIGHT);
     gl.uniform1f(this.u.uGridW, 1 / this.k);
     this.program = prog;
-    this.gl = gl;
-    return true;
   }
 
   private initFallback(canvas: HTMLCanvasElement): boolean {
@@ -166,14 +219,20 @@ export class Presenter {
       }
       return;
     }
-    gl.bindTexture(gl.TEXTURE_2D, this.tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, WIDTH, HEIGHT, 0, gl.RGBA,
-      gl.UNSIGNED_BYTE, new Uint8Array(framebuffer.buffer, framebuffer.byteOffset, framebuffer.length));
-    const un = fxUniforms(fx);
-    gl.uniform1f(this.u.uCrt, un.uCrt);
-    gl.uniform1f(this.u.uScanline, un.uScanline);
-    gl.uniform1f(this.u.uGrid, un.uGrid);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    try {
+      gl.bindTexture(gl.TEXTURE_2D, this.tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, WIDTH, HEIGHT, 0, gl.RGBA,
+        gl.UNSIGNED_BYTE, new Uint8Array(framebuffer.buffer, framebuffer.byteOffset, framebuffer.length));
+      const un = fxUniforms(fx);
+      gl.uniform1f(this.u.uCrt, un.uCrt);
+      gl.uniform1f(this.u.uScanline, un.uScanline);
+      gl.uniform1f(this.u.uGrid, un.uGrid);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    } catch (err) {
+      // Context lost mid-run — stop driving GL so we don't re-throw every frame.
+      warnWebglOnce(err);
+      this.gl = null;
+    }
   }
 
   dispose(): void {

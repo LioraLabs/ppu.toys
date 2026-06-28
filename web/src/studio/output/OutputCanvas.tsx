@@ -15,17 +15,30 @@ export function OutputCanvas() {
   const presenterRef = useRef<Presenter | null>(null);
   const [fx, setFx] = useState<PresentFx>(() => loadFx());
   const fxRef = useRef<PresentFx>(fx);
+  // Once WebGL setup fails, the canvas is tainted to 'webgl' and can't give a 2D
+  // context. Flip this to remount a FRESH canvas (key change) and re-init the
+  // presenter in Canvas2D mode, so the framebuffer still shows (effects off).
+  const [forceCanvas2d, setForceCanvas2d] = useState(false);
 
   const { t, f, playing, frame } = useTransport();
 
-  // one-time: init the presenter, integer-scale sizing + initial paint
+  // init the presenter, integer-scale sizing + initial paint. Re-runs once if
+  // WebGL fails and we fall back to a remounted Canvas2D canvas.
   useEffect(() => {
     const canvas = canvasRef.current;
     const container = displayRef.current;
     if (!canvas || !container) return;
     const presenter = new Presenter();
-    presenter.init(canvas);
+    const ok = presenter.init(canvas, forceCanvas2d);
     presenterRef.current = presenter;
+
+    // WebGL failed → this canvas is unusable for 2D. Drop it and remount fresh.
+    if (!ok && !forceCanvas2d) {
+      presenter.dispose();
+      presenterRef.current = null;
+      setForceCanvas2d(true);
+      return;
+    }
 
     const draw = () =>
       presenter.render(transport.getSnapshot().frame.framebuffer, fxRef.current);
@@ -42,7 +55,7 @@ export function OutputCanvas() {
       presenterRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [forceCanvas2d]);
 
   // repaint whenever the shared frame advances or the effect set changes
   useLayoutEffect(() => {
@@ -75,6 +88,9 @@ export function OutputCanvas() {
       >
         <canvas
           ref={canvasRef}
+          // key flips on WebGL failure to mount a pristine canvas for Canvas2D
+          // (a canvas that once held a webgl context can't yield a 2D one).
+          key={forceCanvas2d ? "canvas2d" : "webgl"}
           className="display-canvas"
           width={WIDTH}
           height={HEIGHT}
