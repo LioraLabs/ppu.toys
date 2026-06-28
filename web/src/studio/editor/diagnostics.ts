@@ -16,3 +16,23 @@ export function luaErrorToDiagnostics(
   }
   return [{ from: 0, to: state.doc.length, severity: "error", message: error.message }];
 }
+
+/** Map several LuaErrors (e.g. compile + runtime) onto editor diagnostics.
+ *  Undefined entries are skipped; diagnostics with the same range+message are
+ *  deduped so a compile error that equals the runtime error shows once. */
+export function luaErrorsToDiagnostics(
+  state: EditorState,
+  errors: (LuaError | undefined)[],
+): Diagnostic[] {
+  const out: Diagnostic[] = [];
+  const seen = new Set<string>();
+  for (const error of errors) {
+    for (const d of luaErrorToDiagnostics(state, error)) {
+      const key = `${d.from}:${d.to}:${d.message}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(d);
+    }
+  }
+  return out;
+}
