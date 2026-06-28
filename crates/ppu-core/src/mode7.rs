@@ -139,6 +139,20 @@ mod tests {
     }
 
     #[test]
+    fn sampling_wraps_negative_texels() {
+        // Negative scroll drives the texel x to -1; `rem_euclid` must wrap it to
+        // the last column (1), where a plain `%` would mishandle the sign. This
+        // is the case the floor effect actually hits.
+        let mut row = LineTableRow::default();
+        row.bg[0].scroll_x = -1.0;
+        let src = tiny_source();
+        let mut out = [0u8; 8]; // width 2
+        render_mode7_scanline(&row, &src, 0, &mut out);
+        assert_eq!(&out[0..4], &[0, 255, 0, 255]); // screen x=0 -> texel -1 wraps to col 1 (green)
+        assert_eq!(&out[4..8], &[255, 0, 0, 255]); // screen x=1 -> texel 0 (red)
+    }
+
+    #[test]
     fn empty_source_yields_transparent_scanline() {
         let row = LineTableRow::default();
         let src = Source { width: 0, height: 0, rgba: vec![] };
