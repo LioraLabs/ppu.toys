@@ -30,7 +30,7 @@ pub struct Mode7 {
 
 impl Default for Mode7 {
     fn default() -> Self {
-        // Identity transform, origin center.
+        // Identity transform, origin (0, 0).
         Mode7 { a: 1.0, b: 0.0, c: 0.0, d: 1.0, cx: 0.0, cy: 0.0 }
     }
 }
