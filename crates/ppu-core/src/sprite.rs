@@ -102,7 +102,7 @@ pub fn render_scanline(mem: &Memory, y: usize, width: usize) -> Vec<Option<Sprit
                 continue; // transparent
             }
             let dst = &mut row[px as usize];
-            if dst.map_or(true, |cur| o.prio > cur.prio) {
+            if dst.is_none_or(|cur| o.prio > cur.prio) {
                 let color = unpack_rgb15(mem.cgram[pal_base + index]);
                 *dst = Some(SpritePixel { rgba: color, prio: o.prio });
             }
@@ -235,5 +235,61 @@ mod tests {
         let row = render_scanline(&mem, 0, 32);
         assert_eq!(row[0].unwrap().rgba, c2); // mirrored
         assert_eq!(row[7].unwrap().rgba, c1);
+    }
+
+    #[test]
+    fn higher_prio_sprite_wins_overlap() {
+        let mut mem = mem_with_sheet(2, 2, 1);
+        mem.cgram[128 + 1] = rgb15(10, 0, 0);
+        mem.cgram[128 + 16 + 1] = rgb15(0, 250, 0); // pal 1 index 1
+        // Lower index, low prio.
+        mem.oam[0] = Obj { on: true, x: 0.0, y: 0.0, size: 0, pal: 0, prio: 0, ..Obj::default() };
+        // Higher index, high prio — should win the shared pixel.
+        mem.oam[1] = Obj { on: true, x: 0.0, y: 0.0, size: 0, pal: 1, prio: 3, ..Obj::default() };
+        assert_eq!(render_scanline(&mem, 0, 32)[0].unwrap().rgba, unpack_rgb15(rgb15(0, 250, 0)));
+    }
+
+    #[test]
+    fn equal_prio_breaks_to_lower_oam_index() {
+        let mut mem = mem_with_sheet(2, 2, 1);
+        mem.cgram[128 + 1] = rgb15(10, 0, 0);
+        mem.cgram[128 + 16 + 1] = rgb15(0, 250, 0);
+        mem.oam[0] = Obj { on: true, x: 0.0, y: 0.0, size: 0, pal: 0, prio: 2, ..Obj::default() };
+        mem.oam[1] = Obj { on: true, x: 0.0, y: 0.0, size: 0, pal: 1, prio: 2, ..Obj::default() };
+        // Tie -> index 0 (pal 0) wins.
+        let px = render_scanline(&mem, 0, 32)[0].unwrap();
+        assert_eq!(px.rgba, unpack_rgb15(rgb15(10, 0, 0)));
+        assert_eq!(px.prio, 2);
+    }
+
+    #[test]
+    fn flip_y_mirrors_vertically_within_the_sprite() {
+        // 8x8 tile: top half (rows 0..4) index 1, bottom half index 2.
+        let w = 16u32;
+        let mut rgba = vec![0u8; (w * 16 * 4) as usize];
+        for yy in 0..16u32 {
+            for xx in 0..16u32 {
+                let i = ((yy * w + xx) * 4) as usize;
+                rgba[i] = if yy % 8 < 4 { 1 } else { 2 };
+                rgba[i + 3] = 255;
+            }
+        }
+        let mut mem = Memory::new();
+        mem.sources.insert("sheet".into(), Source { width: w, height: 16, rgba });
+        mem.obj_sheet = Some("sheet".into());
+        mem.cgram[128 + 1] = rgb15(10, 10, 10);
+        mem.cgram[128 + 2] = rgb15(250, 250, 250);
+        let c1 = unpack_rgb15(rgb15(10, 10, 10)); // index 1
+        let c2 = unpack_rgb15(rgb15(250, 250, 250)); // index 2
+
+        mem.oam[0] = Obj { on: true, x: 0.0, y: 0.0, size: 0, ..Obj::default() };
+        // Without flip: scanline 0 samples top half (index 1), scanline 7 bottom (index 2).
+        assert_eq!(render_scanline(&mem, 0, 32)[0].unwrap().rgba, c1);
+        assert_eq!(render_scanline(&mem, 7, 32)[0].unwrap().rgba, c2);
+
+        mem.oam[0].flip_y = true;
+        // With flip_y: scanline 0 samples bottom row -> index 2; scanline 7 -> index 1.
+        assert_eq!(render_scanline(&mem, 0, 32)[0].unwrap().rgba, c2);
+        assert_eq!(render_scanline(&mem, 7, 32)[0].unwrap().rgba, c1);
     }
 }
