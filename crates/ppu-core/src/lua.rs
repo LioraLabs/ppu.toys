@@ -51,6 +51,12 @@ impl LuaEngine {
         &self.memory
     }
 
+    /// Mutable mirrored memory — used by the wasm shim to insert uploaded
+    /// image sources (Memory.sources) without going through the Lua VM.
+    pub fn memory_mut(&mut self) -> &mut Memory {
+        &mut self.memory
+    }
+
     /// Compile and load a DSL source: builds a fresh VM, installs bindings, runs
     /// the chunk (defining `frame`/`init`/helpers as globals), runs `init()` once
     /// if present. Returns `LuaError{message,line?}` on compile/runtime failure.
