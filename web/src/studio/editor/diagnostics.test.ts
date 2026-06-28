@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { EditorState } from "@codemirror/state";
-import { luaErrorToDiagnostics } from "./diagnostics";
+import { luaErrorToDiagnostics, luaErrorsToDiagnostics } from "./diagnostics";
 
 const DOC = "function frame(t, f)\n  brightness = bad\nend\n";
 
@@ -27,5 +27,27 @@ describe("luaErrorToDiagnostics", () => {
     expect(diags).toHaveLength(1);
     expect(diags[0].from).toBe(0);
     expect(diags[0].to).toBe(state.doc.length);
+  });
+});
+
+describe("luaErrorsToDiagnostics", () => {
+  it("merges compile + runtime errors without dropping either", () => {
+    const state = EditorState.create({ doc: DOC });
+    const diags = luaErrorsToDiagnostics(state, [
+      { message: "compile boom", line: 1 },
+      { message: "runtime boom", line: 2 },
+    ]);
+    expect(diags.map((d) => d.message)).toEqual(["compile boom", "runtime boom"]);
+  });
+
+  it("skips undefined entries and dedupes identical errors", () => {
+    const state = EditorState.create({ doc: DOC });
+    const diags = luaErrorsToDiagnostics(state, [
+      undefined,
+      { message: "same", line: 2 },
+      { message: "same", line: 2 },
+    ]);
+    expect(diags).toHaveLength(1);
+    expect(diags[0].message).toBe("same");
   });
 });
