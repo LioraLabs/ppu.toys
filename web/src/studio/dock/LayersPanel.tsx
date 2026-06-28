@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ppuCore } from "../../ppu/instance";
+import { transport } from "../transport/transport";
 
 interface Layer {
   id: string;
@@ -27,7 +27,7 @@ export function LayersPanel() {
     // Keep the core call out of the setState updater: updaters must be pure
     // (StrictMode double-invokes them in dev).
     const next = !visible[id];
-    ppuCore.setLayerVisible(id, next);
+    transport.setLayerVisible(id, next);
     setVisible((prev) => ({ ...prev, [id]: next }));
   };
 
