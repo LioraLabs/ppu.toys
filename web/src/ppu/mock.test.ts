@@ -76,4 +76,31 @@ describe("MockPpuCore", () => {
     const after = core.frame(0.5, 30).framebuffer.slice();
     expect(differs(before, after)).toBe(true);
   });
+
+  it("frame() exposes 128 OAM sprites that animate over t", () => {
+    const core = new MockPpuCore();
+    const a = core.frame(0, 0).oam;
+    const b = core.frame(1.5, 90).oam;
+    expect(a.length).toBe(128);
+    const i = a.findIndex((s) => s.on);
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(a[i].x !== b[i].x || a[i].y !== b[i].y).toBe(true);
+    expect(a[i].pal).toBeGreaterThanOrEqual(0);
+    expect(a[i].pal).toBeLessThanOrEqual(7);
+  });
+
+  it("hiding the obj layer turns all OAM sprites off", () => {
+    const core = new MockPpuCore();
+    expect(core.frame(0.5, 30).oam.some((s) => s.on)).toBe(true);
+    core.setLayerVisible("obj", false);
+    expect(core.frame(0.5, 30).oam.every((s) => s.on === false)).toBe(true);
+  });
+
+  it("listAssets() reflects uploaded textures", () => {
+    const core = new MockPpuCore();
+    expect(core.listAssets()).toEqual([]);
+    const img = { width: 16, height: 8, data: new Uint8ClampedArray(16 * 8 * 4), colorSpace: "srgb" } as ImageData;
+    core.uploadTexture("hero", img);
+    expect(core.listAssets()).toEqual([{ id: "hero", width: 16, height: 8 }]);
+  });
 });

@@ -1,5 +1,3 @@
-import type { PpuCore } from "../../ppu/core";
-
 /** A user-uploaded image. `id` is the string referenced from Lua as
  *  bg[n].source / obj.sheet. */
 export interface Asset {
@@ -32,11 +30,15 @@ export function assetId(filename: string, taken: Iterable<string>): string {
   return `${base}_${n}`;
 }
 
-/** Register a decoded image: mint an id, push it into the core's VRAM via the
- *  seam, and return the Asset record for the UI list. */
-export function registerAsset(core: PpuCore, existing: Asset[], decoded: DecodedImage): Asset {
+/** Register a decoded image: mint an id, push its pixels into VRAM via the
+ *  supplied uploader, and return the Asset record for the UI list. */
+export function registerAsset(
+  upload: (slot: string, image: ImageData) => void,
+  existing: Asset[],
+  decoded: DecodedImage,
+): Asset {
   const id = assetId(decoded.name, existing.map((a) => a.id));
-  core.uploadTexture(id, decoded.imageData);
+  upload(id, decoded.imageData);
   return {
     id,
     name: decoded.name,
