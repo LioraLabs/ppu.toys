@@ -15,7 +15,7 @@ export function SpritesTab({ frame }: { frame: FrameResult | null }) {
       </div>
       <div className="oam-grid">
         {Array.from({ length: SLOTS }, (_, i) => {
-          const color = cgram15ToCss(frame.cgram[objBase + (i % 128)] ?? 0);
+          const color = cgram15ToCss(frame.cgram[objBase + i] ?? 0);
           return (
             <div className="oam-cell" key={i} title={`OBJ ${i}`}>
               <span className="oam-chip" style={{ background: color }} />

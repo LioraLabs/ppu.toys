@@ -8,7 +8,10 @@ export function RegistersTab({ frame }: { frame: FrameResult | null }) {
       {frame.registers.map((r) => (
         <div
           className={"reg-row" + (r.changed ? " reg-row--flash" : "")}
-          key={r.addr}
+          // key includes the value so a changed register remounts the row,
+          // restarting the flash keyframe even when it changes every frame
+          // (React won't touch the DOM node if only the className is stable).
+          key={`${r.addr}:${r.value}`}
         >
           <span className="reg-addr">{formatAddr(r.addr)}</span>
           <span className="reg-name">{r.name}</span>

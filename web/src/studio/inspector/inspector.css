@@ -1,6 +1,7 @@
-/* Inspector panels — complements the insp / reg / palette rules already in
-   studio.css. Scoped to NEW classes only (no edits to studio.css). */
+/* Inspector panels — new classes plus a couple additive properties on existing
+   insp / reg classes. Lives here so studio.css stays untouched. */
 
+/* additive: existing .insp-tab is defined in studio.css */
 .insp-tab { user-select: none; }
 
 .insp-empty {
@@ -32,8 +33,8 @@
   color: var(--text-dim2);
 }
 
-/* registers flash: re-applied each frame the value changes, so the keyframe
-   restarts and the row pulses. */
+/* registers flash: RegistersTab keys each row by addr+value, so a changed
+   register remounts the row and this keyframe replays from the start. */
 .reg-row--flash { animation: reg-flash 0.5s ease-out; }
 @keyframes reg-flash {
   from { background: rgba(255, 149, 64, 0.28); }
