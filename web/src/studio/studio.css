@@ -113,6 +113,17 @@
 .output { padding: 12px 14px 14px; flex: none; }
 .output-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .pill { font-family: var(--font-mono); font-size: 10px; padding: 2px 7px; border-radius: 4px; background: var(--bg-pill); color: var(--text-mid); }
+.fx-toggle {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: .04em;
+  padding: 2px 7px; border-radius: var(--radius-pill);
+  background: var(--bg-pill); color: var(--text-dim);
+  border: 1px solid var(--border-button); cursor: pointer;
+}
+.fx-toggle:hover { color: var(--text-mid); border-color: var(--border-button-hover); }
+.fx-toggle--active {
+  color: #1a0f06; background: var(--accent-orange);
+  border-color: var(--accent-orange);
+}
 .display { position: relative; background: var(--bg-display); border: 1px solid var(--border-display); border-radius: 6px; overflow: hidden; aspect-ratio: 8 / 7; }
 .display-canvas { width: 100%; height: 100%; display: block; image-rendering: pixelated; }
 .display-badge { position: absolute; top: 6px; left: 6px; font-family: var(--font-mono); font-size: 9px; color: rgba(255,255,255,.45); background: rgba(0,0,0,.35); padding: 2px 5px; border-radius: 3px; }
