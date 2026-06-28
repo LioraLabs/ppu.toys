@@ -3,7 +3,8 @@
 //! math internally (the DSL passes f32). Nearest-neighbor, wraps over the
 //! source — the namesake receding "floor". Brightness/compositing live in E5.
 
-use crate::registers::Mode7;
+use crate::memory::Source;
+use crate::registers::{LineTableRow, Mode7};
 
 /// Fixed-point fractional bits. `1.0 == 1 << FIX_SHIFT` (Q8 mirrors the SNES
 /// 1.7.8 Mode 7 matrix format).
@@ -36,6 +37,41 @@ pub fn mode7_texel(m7: &Mode7, scroll_x: f32, scroll_y: f32, x: i32, y: i32) -> 
     (u >> FIX_SHIFT, v >> FIX_SHIFT)
 }
 
+/// Sample the Mode 7 floor for scanline `y` into `out` (length must be
+/// `width * 4`). Uses `row.m7` and `row.bg[0]` scroll (DSL `bg[1]`). Wraps over
+/// `src`, nearest-neighbor. An empty source produces a transparent scanline.
+/// This is the seam the E5 compositor calls per scanline when `row.mode == 7`.
+pub fn render_mode7_scanline(row: &LineTableRow, src: &Source, y: usize, out: &mut [u8]) {
+    let width = out.len() / 4;
+    if src.width == 0 || src.height == 0 || src.rgba.is_empty() {
+        out.iter_mut().for_each(|b| *b = 0);
+        return;
+    }
+    let bg = &row.bg[0];
+    let sw = src.width as i64;
+    let sh = src.height as i64;
+    for x in 0..width {
+        let (tx, ty) = mode7_texel(&row.m7, bg.scroll_x, bg.scroll_y, x as i32, y as i32);
+        let sx = tx.rem_euclid(sw) as usize;
+        let sy = ty.rem_euclid(sh) as usize;
+        let si = (sy * src.width as usize + sx) * 4;
+        let oi = x * 4;
+        out[oi..oi + 4].copy_from_slice(&src.rgba[si..si + 4]);
+    }
+}
+
+/// Render every scanline of a resolved line table as Mode 7 over `src` into a
+/// fresh `width * height * 4` RGBA buffer. Convenience for the golden test and a
+/// pure full-frame floor; the compositor composes scanlines itself.
+pub fn render_mode7(lt: &crate::linetable::LineTable, src: &Source, width: usize, height: usize) -> Vec<u8> {
+    let mut fb = vec![0u8; width * height * 4];
+    for y in 0..height {
+        let off = y * width * 4;
+        render_mode7_scanline(&lt.rows[y], src, y, &mut fb[off..off + width * 4]);
+    }
+    fb
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,5 +101,58 @@ mod tests {
         let m = Mode7 { a: 2.0, d: 2.0, cx: 128.0, cy: 0.0, ..Mode7::default() };
         let (tx, _) = mode7_texel(&m, 0.0, 0.0, 128, 0);
         assert_eq!(tx, 128);
+    }
+
+    use crate::linetable::LineTableBuilder;
+
+    // 2x2 source, four distinct colors: (0,0)=red (1,0)=green (0,1)=blue (1,1)=white.
+    fn tiny_source() -> Source {
+        Source {
+            width: 2,
+            height: 2,
+            rgba: vec![
+                255, 0, 0, 255,   0, 255, 0, 255,
+                0, 0, 255, 255,   255, 255, 255, 255,
+            ],
+        }
+    }
+
+    #[test]
+    fn identity_scanline_copies_source_row() {
+        let row = LineTableRow::default(); // identity m7, scroll 0
+        let src = tiny_source();
+        let mut out = [0u8; 8]; // width 2
+        render_mode7_scanline(&row, &src, 0, &mut out);
+        assert_eq!(out, [255, 0, 0, 255, 0, 255, 0, 255]); // source row 0
+        render_mode7_scanline(&row, &src, 1, &mut out);
+        assert_eq!(out, [0, 0, 255, 255, 255, 255, 255, 255]); // source row 1
+    }
+
+    #[test]
+    fn sampling_wraps_past_source_width() {
+        let row = LineTableRow::default();
+        let src = tiny_source();
+        let mut out = [0u8; 16]; // width 4 over a 2-wide source
+        render_mode7_scanline(&row, &src, 0, &mut out);
+        // x=2,3 wrap back to x=0,1.
+        assert_eq!(&out[8..16], &out[0..8]);
+    }
+
+    #[test]
+    fn empty_source_yields_transparent_scanline() {
+        let row = LineTableRow::default();
+        let src = Source { width: 0, height: 0, rgba: vec![] };
+        let mut out = [9u8; 8];
+        render_mode7_scanline(&row, &src, 0, &mut out);
+        assert_eq!(out, [0u8; 8]);
+    }
+
+    #[test]
+    fn render_mode7_fills_whole_frame() {
+        let b = LineTableBuilder::new(LineTableRow::default());
+        let lt = b.build(2);
+        let fb = render_mode7(&lt, &tiny_source(), 2, 2);
+        assert_eq!(fb.len(), 2 * 2 * 4);
+        assert_eq!(&fb[0..4], &[255, 0, 0, 255]); // (0,0) red under identity
     }
 }
