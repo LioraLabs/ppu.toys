@@ -1,4 +1,4 @@
-import { PpuCore, FrameResult, RegisterView, WIDTH, HEIGHT } from "./core";
+import { PpuCore, FrameResult, RegisterView, OamSprite, AssetInfo, WIDTH, HEIGHT } from "./core";
 
 /** Animated placeholder PpuCore for the UI track. Runs no Lua — it synthesizes
  *  a time-varying framebuffer, registers, and CGRAM so the Studio visibly moves
@@ -24,6 +24,14 @@ export class MockPpuCore implements PpuCore {
 
   uploadTexture(slot: string, imageData: ImageData) {
     this.assets.set(slot, imageData);
+  }
+
+  listAssets(): AssetInfo[] {
+    return Array.from(this.assets, ([id, img]) => ({
+      id,
+      width: img.width,
+      height: img.height,
+    }));
   }
 
   frame(t: number, f: number): FrameResult {
@@ -95,7 +103,25 @@ export class MockPpuCore implements PpuCore {
       cgram[0x40 + i] = hslTo15((t * 90 + i * 24) % 360, 0.7, 0.5);
     }
 
-    return { framebuffer, registers, cgram };
+    // oam: 24 active sprites orbiting the center; rest are off. Honors obj layer.
+    const oam: OamSprite[] = [];
+    for (let i = 0; i < 128; i++) {
+      const baseOn = i < 24;
+      const ang = t * 1.5 + i * 0.5;
+      oam.push({
+        x: baseOn ? Math.round(WIDTH / 2 + Math.cos(ang) * 90) & 0x1ff : 0,
+        y: baseOn ? Math.round(HEIGHT / 2 + Math.sin(ang) * 70) & 0xff : 0,
+        tile: (i + (f >> 3)) & 0xff,
+        pal: i % 8,
+        prio: i % 4,
+        size: i % 2,
+        flipX: ((f >> 4) & 1) === 1 && i % 3 === 0,
+        flipY: false,
+        on: baseOn && objOn,
+      });
+    }
+
+    return { framebuffer, registers, cgram, oam };
   }
 }
 
