@@ -12,6 +12,11 @@ export const assetStore = {
     assets = [...assets, a];
     for (const l of listeners) l();
   },
+  set(a: Asset) {
+    const i = assets.findIndex((x) => x.id === a.id);
+    assets = i === -1 ? [...assets, a] : assets.map((x) => (x.id === a.id ? a : x));
+    for (const l of listeners) l();
+  },
   subscribe(cb: () => void) {
     listeners.add(cb);
     return () => listeners.delete(cb);
