@@ -99,7 +99,10 @@ export class Presenter {
     // Shaders are owned by the program once linked; free our handles.
     gl.deleteShader(vs);
     gl.deleteShader(fs);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return this.initFallback(canvas);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      gl.deleteProgram(prog);
+      return this.initFallback(canvas);
+    }
     gl.useProgram(prog);
 
     this.buf = gl.createBuffer();
