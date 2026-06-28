@@ -37,9 +37,18 @@ export function AssetsPanel() {
           e.preventDefault();
           setOver(true);
         }}
-        onDragLeave={() => setOver(false)}
+        onDragLeave={(e) => {
+          // Ignore dragleave fired when crossing into a child element.
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) setOver(false);
+        }}
         onDrop={onDrop}
         onClick={() => inputRef.current?.click()}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            inputRef.current?.click();
+          }
+        }}
         role="button"
         tabIndex={0}
       >
