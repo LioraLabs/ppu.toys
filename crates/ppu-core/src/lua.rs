@@ -6,8 +6,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use piccolo::{
-    Callback, CallbackReturn, Closure, Executor, Lua, PrototypeError, StashedFunction,
-    StaticError, Table, Value,
+    Callback, CallbackReturn, Closure, Executor, Lua, PrototypeError, StashedFunction, StaticError,
+    Table, Value,
 };
 
 use crate::{rgb15, LineTable, LineTableBuilder, LineTableRow, Memory, HEIGHT};
@@ -231,7 +231,14 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
 
     // m7
     let m7 = Table::new(&ctx);
-    for (k, v) in [("a", 1.0), ("b", 0.0), ("c", 0.0), ("d", 1.0), ("cx", 0.0), ("cy", 0.0)] {
+    for (k, v) in [
+        ("a", 1.0),
+        ("b", 0.0),
+        ("c", 0.0),
+        ("d", 1.0),
+        ("cx", 0.0),
+        ("cy", 0.0),
+    ] {
         m7.set(ctx, k, v).unwrap();
     }
     ctx.set_global("m7", m7).unwrap();
@@ -261,7 +268,9 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
 
     // math aliases as flat globals
     if let Value::Table(m) = ctx.get_global("math") {
-        for name in ["sin", "cos", "tan", "floor", "ceil", "abs", "sqrt", "min", "max"] {
+        for name in [
+            "sin", "cos", "tan", "floor", "ceil", "abs", "sqrt", "min", "max",
+        ] {
             let f = m.get(ctx, name);
             ctx.set_global(name, f).unwrap();
         }
@@ -322,7 +331,10 @@ fn static_error_to_lua(e: StaticError) -> LuaError {
     } else {
         None
     };
-    LuaError { message: e.to_string(), line }
+    LuaError {
+        message: e.to_string(),
+        line,
+    }
 }
 
 fn value_to_string(v: Value<'_>) -> Option<String> {
@@ -362,12 +374,24 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
         }
     }
     if let Value::Table(m7) = ctx.get_global("m7") {
-        if let Some(v) = m7.get(ctx, "a").to_number() { row.m7.a = v as f32; }
-        if let Some(v) = m7.get(ctx, "b").to_number() { row.m7.b = v as f32; }
-        if let Some(v) = m7.get(ctx, "c").to_number() { row.m7.c = v as f32; }
-        if let Some(v) = m7.get(ctx, "d").to_number() { row.m7.d = v as f32; }
-        if let Some(v) = m7.get(ctx, "cx").to_number() { row.m7.cx = v as f32; }
-        if let Some(v) = m7.get(ctx, "cy").to_number() { row.m7.cy = v as f32; }
+        if let Some(v) = m7.get(ctx, "a").to_number() {
+            row.m7.a = v as f32;
+        }
+        if let Some(v) = m7.get(ctx, "b").to_number() {
+            row.m7.b = v as f32;
+        }
+        if let Some(v) = m7.get(ctx, "c").to_number() {
+            row.m7.c = v as f32;
+        }
+        if let Some(v) = m7.get(ctx, "d").to_number() {
+            row.m7.d = v as f32;
+        }
+        if let Some(v) = m7.get(ctx, "cx").to_number() {
+            row.m7.cx = v as f32;
+        }
+        if let Some(v) = m7.get(ctx, "cy").to_number() {
+            row.m7.cy = v as f32;
+        }
     }
     row
 }

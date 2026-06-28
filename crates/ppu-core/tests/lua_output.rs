@@ -14,9 +14,7 @@ fn approx(a: f32, b: f32) {
 
 #[test]
 fn bare_assignments_become_frame_wide_defaults() {
-    let mut e = engine(
-        "function frame(t,f) mode=7; brightness=8; bg[1].scroll.x=10; m7.a=2.5 end",
-    );
+    let mut e = engine("function frame(t,f) mode=7; brightness=8; bg[1].scroll.x=10; m7.a=2.5 end");
     let lt = e.frame(0.0, 0).unwrap();
     assert_eq!(lt.rows.len(), 224);
     for y in [0usize, 100, 223] {
@@ -49,9 +47,8 @@ fn cgram_and_obj_writes_land_in_memory() {
 
 #[test]
 fn hdma_hook_overrides_only_covered_scanlines_and_varies_per_line() {
-    let mut e = engine(
-        "function frame(t,f) mode=7; hdma(96,223, function(y) m7.a = (y-95)*2 end) end",
-    );
+    let mut e =
+        engine("function frame(t,f) mode=7; hdma(96,223, function(y) m7.a = (y-95)*2 end) end");
     let lt = e.frame(0.0, 0).unwrap();
     approx(lt.rows[50].m7.a, 1.0); // default (uncovered)
     approx(lt.rows[96].m7.a, 2.0); // (96-95)*2
