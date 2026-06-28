@@ -75,6 +75,31 @@ pub fn render_bg_layer_scanline(
     out
 }
 
+/// Composite the four Mode-1 BG layers for scanline `y` into opaque RGBA pixels.
+/// Paints back-to-front (BG4, BG3, BG2, BG1) over the backdrop (`cgram[0]`); the
+/// topmost non-transparent layer wins each pixel. Brightness applies to every
+/// layer and the backdrop. Convenience entry for the E5 compositor / golden test;
+/// sprite + per-tile priority compositing is E5's job.
+pub fn render_bg_scanline(
+    row: &LineTableRow,
+    mem: &Memory,
+    y: usize,
+    width: usize,
+) -> Vec<[u8; 4]> {
+    let backdrop = attenuate(unpack_rgb15(mem.cgram[0]), row.brightness);
+    let mut out = vec![backdrop; width];
+    // row.bg[0] = BG1 (topmost). Paint BG4..BG1 so BG1 lands last / on top.
+    for layer in row.bg.iter().rev() {
+        let line = render_bg_layer_scanline(layer, mem, row.brightness, y, width);
+        for (slot, px) in out.iter_mut().zip(line) {
+            if let Some(c) = px {
+                *slot = c;
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,5 +193,42 @@ mod tests {
         l.scroll_x = -1.0; // x=0 -> col -1 -> wraps to col 1 (idx2 green) on row 0
         let line = render_bg_layer_scanline(&l, &m, 15, 0, 1);
         assert_eq!(line[0], Some([0, 255, 0, 255]));
+    }
+
+    #[test]
+    fn composite_shows_backdrop_where_transparent() {
+        let mut m = fixture_mem();
+        m.cgram[0] = rgb15(10, 20, 30); // backdrop
+        let mut row = LineTableRow::default();
+        row.brightness = 15;
+        row.bg[0] = layer("bg"); // bg1; other layers default (no source)
+        // scanline y=1 of source is fully transparent -> backdrop everywhere.
+        let line = render_bg_scanline(&row, &m, 1, 2);
+        let bd = unpack_rgb15(rgb15(10, 20, 30));
+        assert_eq!(line[0], bd);
+        assert_eq!(line[1], bd);
+    }
+
+    #[test]
+    fn composite_topmost_layer_wins() {
+        let mut m = fixture_mem();
+        m.cgram[0] = rgb15(0, 0, 0);
+        let mut row = LineTableRow::default();
+        row.brightness = 15;
+        // bg1 and bg2 both opaque on col0 of row0; bg1 (idx 0 in array) is topmost.
+        row.bg[0] = layer("bg"); // bg1 topmost
+        row.bg[1] = layer("bg"); // bg2 below
+        let line = render_bg_scanline(&row, &m, 0, 1);
+        assert_eq!(line[0], [255, 0, 0, 255]); // bg1 idx1 red wins
+    }
+
+    #[test]
+    fn composite_applies_brightness_to_backdrop() {
+        let mut m = fixture_mem();
+        m.cgram[0] = rgb15(200, 200, 200);
+        let mut row = LineTableRow::default();
+        row.brightness = 0; // everything black
+        let line = render_bg_scanline(&row, &m, 0, 2);
+        assert_eq!(line[0], [0, 0, 0, 255]);
     }
 }
