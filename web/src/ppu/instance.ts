@@ -9,6 +9,15 @@ import type { PpuCore } from "./core";
  *  `ppuCore.<method>()` at call time observe the swap. */
 export let ppuCore: PpuCore = new MockPpuCore();
 
+export type CoreKind = "mock" | "wasm";
+
+/** Which core is live. Set once by bootstrapCore before first render, so reading
+ *  it at render time (not import time) reflects the actual selection. */
+let kind: CoreKind = "mock";
+export function coreKind(): CoreKind {
+  return kind;
+}
+
 /** Select the real WASM core when VITE_USE_WASM is set (see Cookfile
  *  `dev-wasm`, which builds the wasm pkg and runs Vite with the flag). No-op —
  *  stays on the mock — otherwise. Call once before rendering the app. The wasm
@@ -17,5 +26,6 @@ export async function bootstrapCore(): Promise<void> {
   if (import.meta.env.VITE_USE_WASM) {
     const { createWasmPpuCore } = await import("./wasm");
     ppuCore = await createWasmPpuCore();
+    kind = "wasm";
   }
 }

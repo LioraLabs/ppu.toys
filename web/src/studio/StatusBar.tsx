@@ -1,5 +1,6 @@
 import { useTransport } from "./transport/transport";
 import { useSharedAssets } from "./assets/sharedAssets";
+import { coreKind } from "../ppu/instance";
 
 /** Live status bar: play state, transport clock, fps, asset count. */
 export function StatusBar() {
@@ -20,7 +21,7 @@ export function StatusBar() {
       <span className="tb-spacer" />
       <span className="sb-item">{fps} fps</span>
       <span className="sb-item">256×224</span>
-      <span className="sb-item sb-item--dim">mock-ppu</span>
+      <span className="sb-item sb-item--dim">{coreKind() === "wasm" ? "wasm-ppu" : "mock-ppu"}</span>
     </footer>
   );
 }

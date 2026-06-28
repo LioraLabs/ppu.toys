@@ -4,6 +4,7 @@ import { clockToScrub, integerScale } from "./clock";
 import { transport, useTransport } from "../transport/transport";
 import { Presenter } from "./presenter";
 import { loadFx, saveFx, type PresentFx } from "./fx";
+import { coreKind } from "../../ppu/instance";
 
 /** Right-column Output: presents the SHARED core's framebuffer through a WebGL
  *  present pass (integer upscale + toggleable CRT/scanline/pixel-grid FX) and
@@ -78,7 +79,7 @@ export function OutputCanvas() {
           width={WIDTH}
           height={HEIGHT}
         />
-        <span className="display-badge">mock-ppu</span>
+        <span className="display-badge">{coreKind() === "wasm" ? "wasm-ppu" : "mock-ppu"}</span>
       </div>
       <div className="transport">
         <button
