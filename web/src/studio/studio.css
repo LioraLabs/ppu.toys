@@ -15,3 +15,41 @@
 .dock { width: var(--dock-w); flex: none; overflow-y: auto; }
 .editor { flex: 1; min-width: 0; }
 .right { width: var(--right-w); flex: none; }
+
+.toolbar {
+  display: flex; align-items: center; gap: 16px; padding: 0 16px;
+  background: var(--bg-bar);
+  border-bottom: 1px solid var(--border-primary);
+}
+.logo-mark {
+  width: 22px; height: 22px; border-radius: 5px;
+  background: linear-gradient(135deg, #ff9540, #ff4d9d);
+  display: grid; place-items: center;
+  font-family: var(--font-mono); font-weight: 700; font-size: 12px;
+  color: var(--bg-bar);
+}
+.wordmark { font-family: var(--font-mono); font-weight: 600; font-size: 15px; color: var(--text-hi); }
+.wordmark .dot { color: var(--accent-orange); }
+.tb-divider { width: 1px; height: 20px; background: var(--divider); }
+.project { display: flex; align-items: center; gap: 7px; }
+.project-name { font-family: var(--font-sans); font-size: 13px; color: var(--text-mid); }
+.saved-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-green); }
+.tb-spacer { flex: 1; }
+.social { display: flex; gap: 14px; font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); }
+.btn-ghost {
+  height: 30px; padding: 0 12px; border: 1px solid var(--border-button);
+  background: transparent; color: var(--text-code); border-radius: 6px;
+  font-family: var(--font-sans); font-size: 13px; cursor: pointer;
+}
+.btn-ghost:hover { background: var(--bg-hover-rail); border-color: var(--border-button-hover); }
+.btn-solid {
+  height: 30px; padding: 0 14px; border: none; background: var(--accent-orange);
+  color: #1a0f06; font-weight: 600; border-radius: 6px;
+  font-family: var(--font-sans); font-size: 13px; cursor: pointer;
+}
+.btn-solid:hover { background: var(--accent-orange-hover); }
+.avatar {
+  width: 30px; height: 30px; border-radius: 50%;
+  background: linear-gradient(135deg, #3a414f, #22262f);
+  border: 1px solid var(--border-button);
+}
