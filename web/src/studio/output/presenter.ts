@@ -35,7 +35,10 @@ void main() {
     return;
   }
 
-  vec3 col = texture2D(uTex, uv).rgb;
+  // Flip V: framebuffer row 0 is the top of the image; GL texture v=0 is the
+  // bottom of the screen quad. (Done in-shader rather than via
+  // UNPACK_FLIP_Y_WEBGL, which is unreliable for ArrayBufferView uploads.)
+  vec3 col = texture2D(uTex, vec2(uv.x, 1.0 - uv.y)).rgb;
 
   float scan = max(uScanline, uCrt);
   if (scan > 0.5) {
@@ -106,7 +109,6 @@ export class Presenter {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
 
     this.u = {
       uTex: gl.getUniformLocation(prog, "uTex"),
