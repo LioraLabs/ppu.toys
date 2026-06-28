@@ -11,7 +11,6 @@ void main() {
 }`;
 
 const FRAG_SRC = `\
-#extension GL_OES_standard_derivatives : enable
 precision mediump float;
 varying vec2 vUv;
 uniform sampler2D uTex;
@@ -19,6 +18,7 @@ uniform vec2 uNative;
 uniform float uCrt;
 uniform float uScanline;
 uniform float uGrid;
+uniform float uGridW;   // grid line half-width in uv*uNative units = 1.0 / scale
 
 vec2 barrel(vec2 uv, float amt) {
   vec2 cc = uv - 0.5;
@@ -48,7 +48,7 @@ void main() {
 
   if (uGrid > 0.5) {
     vec2 g = abs(fract(uv * uNative) - 0.5);
-    float line = step(0.5 - fwidth(uv.x * uNative.x), max(g.x, g.y));
+    float line = step(0.5 - uGridW, max(g.x, g.y));
     col *= 1.0 - 0.5 * line;
   }
 
@@ -78,6 +78,7 @@ export class Presenter {
   private ctx2d: CanvasRenderingContext2D | null = null;
   private image: ImageData | null = null;
   private program: WebGLProgram | null = null;
+  private buf: WebGLBuffer | null = null;
   private tex: WebGLTexture | null = null;
   private u: Record<string, WebGLUniformLocation | null> = {};
   private k = 1;
@@ -85,19 +86,24 @@ export class Presenter {
   /** @returns true if WebGL succeeded, false if it fell back to Canvas2D. */
   init(canvas: HTMLCanvasElement): boolean {
     this.canvas = canvas;
-    const gl = (canvas.getContext("webgl", { antialias: false, alpha: false })
-      ?? canvas.getContext("experimental-webgl")) as WebGLRenderingContext | null;
+    const opts: WebGLContextAttributes = { antialias: false, alpha: false };
+    const gl = (canvas.getContext("webgl", opts)
+      ?? canvas.getContext("experimental-webgl", opts)) as WebGLRenderingContext | null;
     if (!gl) return this.initFallback(canvas);
-    gl.getExtension("OES_standard_derivatives");
     const prog = gl.createProgram()!;
-    gl.attachShader(prog, compile(gl, gl.VERTEX_SHADER, VERT_SRC));
-    gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, FRAG_SRC));
+    const vs = compile(gl, gl.VERTEX_SHADER, VERT_SRC);
+    const fs = compile(gl, gl.FRAGMENT_SHADER, FRAG_SRC);
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
     gl.linkProgram(prog);
+    // Shaders are owned by the program once linked; free our handles.
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return this.initFallback(canvas);
     gl.useProgram(prog);
 
-    const buf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    this.buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
     const aPos = gl.getAttribLocation(prog, "aPos");
     gl.enableVertexAttribArray(aPos);
@@ -116,9 +122,11 @@ export class Presenter {
       uCrt: gl.getUniformLocation(prog, "uCrt"),
       uScanline: gl.getUniformLocation(prog, "uScanline"),
       uGrid: gl.getUniformLocation(prog, "uGrid"),
+      uGridW: gl.getUniformLocation(prog, "uGridW"),
     };
     gl.uniform1i(this.u.uTex, 0);
     gl.uniform2f(this.u.uNative, WIDTH, HEIGHT);
+    gl.uniform1f(this.u.uGridW, 1 / this.k);
     this.program = prog;
     this.gl = gl;
     return true;
@@ -132,11 +140,12 @@ export class Presenter {
 
   /** Size the drawing buffer to an exact integer multiple of native (crisp). */
   resize(k: number): void {
-    this.k = Math.max(1, k);
+    this.k = Math.max(1, Math.round(k));
     if (this.gl) {
       this.canvas.width = WIDTH * this.k;
       this.canvas.height = HEIGHT * this.k;
       this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+      this.gl.uniform1f(this.u.uGridW, 1 / this.k);
     } else {
       this.canvas.width = WIDTH;
       this.canvas.height = HEIGHT;
@@ -168,6 +177,7 @@ export class Presenter {
     const gl = this.gl;
     if (!gl) return;
     if (this.program) gl.deleteProgram(this.program);
+    if (this.buf) gl.deleteBuffer(this.buf);
     if (this.tex) gl.deleteTexture(this.tex);
     const ext = gl.getExtension("WEBGL_lose_context");
     ext?.loseContext();
