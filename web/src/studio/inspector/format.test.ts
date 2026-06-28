@@ -16,6 +16,8 @@ describe("inspector format", () => {
     expect(cgram15ToCss(0x7fff)).toBe("rgb(255, 255, 255)");
     // pure red: R=31 -> 0x001f
     expect(cgram15ToCss(0x001f)).toBe("rgb(255, 0, 0)");
+    // pure green: G=31 -> 0x03e0
+    expect(cgram15ToCss(0x03e0)).toBe("rgb(0, 255, 0)");
     // pure blue: B=31 -> 0x7c00
     expect(cgram15ToCss(0x7c00)).toBe("rgb(0, 0, 255)");
   });

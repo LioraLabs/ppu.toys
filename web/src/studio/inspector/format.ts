@@ -7,8 +7,7 @@ export function formatAddr(addr: number): string {
 
 /** Register value -> uppercase hex, at least 2 digits (matches mock/design). */
 export function formatValue(value: number): string {
-  const h = value.toString(16).toUpperCase();
-  return h.length < 2 ? h.padStart(2, "0") : h;
+  return value.toString(16).toUpperCase().padStart(2, "0");
 }
 
 /** Packed 15-bit SNES colour (0bBBBBB_GGGGG_RRRRR, bit15 unused) -> css rgb(). */
