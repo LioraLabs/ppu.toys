@@ -41,7 +41,7 @@ pub struct Obj {
     pub x: f32,
     pub y: f32,
     pub tile: u16,
-    pub pal: u8,  // 0..7
+    pub pal: u8,  // 0..7; NO-OP in v1 (direct-RGBA sheets), reserved for v2 per-palette recolor
     pub prio: u8, // 0..3
     pub size: u8, // sprite size selector
     pub flip_x: bool,
