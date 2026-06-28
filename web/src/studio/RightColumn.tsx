@@ -1,4 +1,4 @@
-import { WIDTH, HEIGHT } from "../ppu/core";
+import { OutputCanvas } from "./output/OutputCanvas";
 
 const REGS: { addr: string; name: string; value: string; changed?: boolean }[] = [
   { addr: "$2100", name: "INIDISP", value: "0F" },
@@ -20,28 +20,7 @@ const REGS: { addr: string; name: string; value: string; changed?: boolean }[] =
 export function RightColumn() {
   return (
     <aside className="right">
-      <div className="output">
-        <div className="output-header">
-          <span className="section-header" style={{ padding: 0 }}>OUTPUT</span>
-          <div className="tb-spacer" />
-          <span className="pill">MODE 1</span>
-          <span className="pill">256×224</span>
-        </div>
-        <div className="display">
-          {/* Canvas slot — WASM PPU output wired by a later ticket. */}
-          <canvas className="display-canvas" width={WIDTH} height={HEIGHT} />
-          <span className="display-badge">webgl · wasm-ppu</span>
-        </div>
-        <div className="transport">
-          <button className="play-btn" aria-label="Play">▶</button>
-          <div className="scrubber">
-            <div className="scrubber-fill" />
-            <div className="scrubber-handle" />
-          </div>
-          <span className="time">t=6.4s</span>
-          <span className="fullscreen">⛶</span>
-        </div>
-      </div>
+      <OutputCanvas />
       <div className="inspector">
         <div className="insp-tabs">
           <div className="insp-tab insp-tab--active">REGISTERS</div>
