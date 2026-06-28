@@ -3,13 +3,16 @@ import { useSharedAssets } from "./assets/sharedAssets";
 
 /** Live status bar: play state, transport clock, fps, asset count. */
 export function StatusBar() {
-  const { t, f, playing, fps } = useTransport();
+  const { t, f, playing, fps, runtimeError } = useTransport();
   const assets = useSharedAssets();
   return (
     <footer className="statusbar">
-      <span className="sb-item">
-        <span className="sb-dot" />
-        lua
+      <span
+        className={`sb-item${runtimeError ? " sb-item--error" : ""}`}
+        title={runtimeError?.message}
+      >
+        <span className={`sb-dot${runtimeError ? " sb-dot--error" : ""}`} />
+        {runtimeError ? `lua error${runtimeError.line ? `: line ${runtimeError.line}` : ""}` : "lua"}
       </span>
       <span className="sb-item">{playing ? "▶ playing" : "⏸ paused"}</span>
       <span className="sb-item">t={t.toFixed(2)}s · f={f}</span>

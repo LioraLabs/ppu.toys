@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { transport } from "./transport";
+import { transport, Transport } from "./transport";
+import type { PpuCore, FrameResult } from "../../ppu/core";
 import { LOOP_SECONDS } from "../output/clock";
 
 describe("transport store", () => {
@@ -50,5 +51,51 @@ describe("transport store", () => {
     const fb = transport.getSnapshot().frame.framebuffer;
     expect(fb[0]).toBe(0);
     transport.setLayerVisible("bg1", true);
+  });
+});
+
+function fakeFrame(): FrameResult {
+  return { framebuffer: new Uint8ClampedArray(4), registers: [], cgram: new Uint16Array(0), oam: [] };
+}
+
+function makeCore(state: { throwing: boolean }): PpuCore {
+  return {
+    setSource: () => ({ ok: true }),
+    frame: () => {
+      if (state.throwing) throw { message: "attempt to index a nil value", line: 3 };
+      return fakeFrame();
+    },
+    uploadTexture: () => {},
+    setLayerVisible: () => {},
+    listAssets: () => [],
+  };
+}
+
+describe("transport runtime-error guard", () => {
+  it("catches a thrown runtime error, surfaces it, and keeps the loop alive", () => {
+    const state = { throwing: true };
+    const tr = new Transport(() => makeCore(state));
+    expect(() => tr.step(16)).not.toThrow();
+    const err = tr.getSnapshot().runtimeError;
+    expect(err?.message).toContain("nil value");
+    expect(err?.line).toBe(3);
+  });
+
+  it("keeps the same error object identity while the error is unchanged", () => {
+    const tr = new Transport(() => makeCore({ throwing: true }));
+    tr.step(16);
+    const a = tr.getSnapshot().runtimeError;
+    tr.step(16);
+    expect(tr.getSnapshot().runtimeError).toBe(a);
+  });
+
+  it("clears runtimeError once frame() succeeds again", () => {
+    const state = { throwing: true };
+    const tr = new Transport(() => makeCore(state));
+    tr.step(16);
+    expect(tr.getSnapshot().runtimeError).toBeDefined();
+    state.throwing = false;
+    tr.step(16);
+    expect(tr.getSnapshot().runtimeError).toBeUndefined();
   });
 });

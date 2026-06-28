@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { MockPpuCore } from "../ppu/mock";
 import type { LuaError } from "../ppu/core";
 import { CodeEditor } from "./editor/CodeEditor";
+import { useTransportRuntimeError } from "./transport/transport";
 
 const SAMPLE = `-- ppu.toys :: dusk-parallax
 local SPEED = 12
@@ -25,6 +26,7 @@ export function EditorPane({ onSource }: EditorPaneProps) {
   // local fallback core so setSource is genuinely exercised standalone
   const fallback = useMemo(() => new MockPpuCore(), []);
   const sink = onSource ?? ((src: string) => fallback.setSource(src));
+  const runtimeError = useTransportRuntimeError();
 
   return (
     <section className="editor">
@@ -38,7 +40,7 @@ export function EditorPane({ onSource }: EditorPaneProps) {
         <div className="etab-status">vim · Lua 5.4</div>
       </div>
       <div className="editor-body" data-editor-slot>
-        <CodeEditor initialDoc={SAMPLE} onSource={sink} />
+        <CodeEditor initialDoc={SAMPLE} onSource={sink} runtimeError={runtimeError} />
       </div>
     </section>
   );
