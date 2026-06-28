@@ -111,6 +111,20 @@ pub fn render_scanline(mem: &Memory, y: usize, width: usize) -> Vec<Option<Sprit
     row
 }
 
+/// Full-frame sprite raster over the CGRAM backdrop (`cgram[0]`), for golden
+/// tests. The real compositor (E5) overlays [`render_scanline`] onto BG layers
+/// instead of this flat backdrop.
+pub fn render_sprites(mem: &Memory, width: usize, height: usize) -> Vec<u8> {
+    let backdrop = unpack_rgb15(mem.cgram[0]);
+    let mut fb = Vec::with_capacity(width * height * 4);
+    for y in 0..height {
+        for cell in render_scanline(mem, y, width) {
+            fb.extend_from_slice(&cell.map_or(backdrop, |p| p.rgba));
+        }
+    }
+    fb
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,5 +305,17 @@ mod tests {
         // With flip_y: scanline 0 samples bottom row -> index 2; scanline 7 -> index 1.
         assert_eq!(render_scanline(&mem, 0, 32)[0].unwrap().rgba, c2);
         assert_eq!(render_scanline(&mem, 7, 32)[0].unwrap().rgba, c1);
+    }
+
+    #[test]
+    fn render_sprites_is_full_size_opaque_and_uses_backdrop() {
+        let mut mem = mem_with_sheet(2, 2, 1);
+        mem.cgram[0] = rgb15(0, 0, 40); // backdrop
+        mem.oam[0] = Obj { on: true, x: 4.0, y: 4.0, size: 0, ..Obj::default() };
+        let fb = render_sprites(&mem, 32, 32);
+        assert_eq!(fb.len(), 32 * 32 * 4);
+        assert!(fb.chunks(4).all(|px| px[3] == 255));
+        // top-left corner is backdrop (sprite starts at 4,4).
+        assert_eq!(&fb[0..4], &unpack_rgb15(rgb15(0, 0, 40)));
     }
 }
