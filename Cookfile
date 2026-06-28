@@ -1,0 +1,90 @@
+# Cookfile for ppu.toys — a ShaderToy-style web playground for an emulated SNES PPU.
+#
+# Monorepo shape: a pure, headless Rust core (crates/ppu-core) compiled to WASM via
+# wasm-pack, consumed by a React + Vite app (web/) behind the `PpuCore` TS seam.
+#
+#   ── build ──────────────────────────────────────────────────────────────────
+#   cook             full build (default): WASM module + web/dist
+#   cook build       same as above
+#   cook wasm        (re)build the WASM module into web/src/wasm/pkg  [content-cached]
+#   cook web         production web build -> web/dist
+#   cook deps        npm install in web/
+#
+#   ── run ──────────────────────────────────────────────────────────────────────
+#   cook dev         Vite dev server, mock core (no WASM build needed)
+#   cook dev-wasm    Vite dev server against the real WASM core
+#
+#   ── verify ─────────────────────────────────────────────────────────────────
+#   cook test-core   cargo test (core unit + golden framebuffer compare)
+#   cook test-web    vitest (the MockPpuCore tests)
+#   cook typecheck   tsc --noEmit over the web app
+#   cook check       typecheck + both test suites (pre-commit umbrella)
+#   cook fmt         cargo fmt
+#
+#   ── housekeeping ─────────────────────────────────────────────────────────────
+#   cook clean       remove build artifacts (target, dist, wasm pkg, .cook cache)
+#   cook distclean   clean + remove web/node_modules
+#
+# Caching: `wasm` is the one content-cached recipe — wasm-pack emits a small set
+# of deterministic files, so cook hashes the Rust sources and rebuilds the module
+# only when they change. `deps` and `web` are chores: npm's node_modules and Vite's
+# content-hashed dist are large and/or non-deterministic, so they don't round-trip
+# as declared file outputs — npm and vite keep their own incremental state instead.
+#
+# Cook gotcha: one command per line; a multi-step shell line needs `sh -c "a && b"`.
+
+# ── WASM: rebuild the module only when the Rust core or its manifests change.
+#    The four files Vite + tsc consume are declared as outputs, so a cache hit
+#    restores the whole set. wasm-pack's --out-dir is relative to the crate dir.
+recipe wasm
+    ingredients "crates/ppu-core/src/**/*.rs" "crates/ppu-core/Cargo.toml" "Cargo.toml" "Cargo.lock"
+    cook "web/src/wasm/pkg/ppu_core.js"
+         "web/src/wasm/pkg/ppu_core_bg.wasm"
+         "web/src/wasm/pkg/ppu_core.d.ts"
+         "web/src/wasm/pkg/ppu_core_bg.wasm.d.ts" {
+        wasm-pack build crates/ppu-core --target web --out-dir ../../web/src/wasm/pkg
+    }
+
+# ── DEPS: install node_modules. Idempotent — a no-op when the lockfile is current.
+chore deps
+    npm --prefix web install --no-audit --no-fund
+
+# ── WEB: production bundle -> web/dist. Needs the wasm pkg (dep: wasm) and the
+#    installed deps (dep: deps); `build:app` is tsc + vite build (no wasm rebuild —
+#    cook already owns that via the wasm dep).
+chore web: wasm deps
+    npm --prefix web run build:app
+
+# ── BUILD: the default target — the whole pipeline.
+chore build: web
+
+# ── DEV SERVERS: long-running, interactive. Mock core by default; dev-wasm builds
+#    the real module first and selects it via VITE_USE_WASM=1.
+chore dev: deps
+    npm --prefix web run dev
+
+chore dev-wasm: wasm deps
+    VITE_USE_WASM=1 npm --prefix web run dev
+
+# ── TESTS ────────────────────────────────────────────────────────────────────
+chore test-core
+    cargo test
+
+chore test-web: deps
+    npm --prefix web test
+
+chore typecheck: deps
+    npm --prefix web run typecheck
+
+# Pre-commit umbrella: types + both suites.
+chore check: typecheck test-core test-web
+
+chore fmt
+    cargo fmt
+
+# ── HOUSEKEEPING ─────────────────────────────────────────────────────────────
+chore clean
+    rm -rf target web/dist web/src/wasm/pkg .cook
+
+chore distclean: clean
+    rm -rf web/node_modules

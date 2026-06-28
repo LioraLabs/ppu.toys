@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build:wasm": "wasm-pack build ../crates/ppu-core --target web --out-dir ../../web/src/wasm/pkg",
-    "build": "npm run build:wasm && tsc && vite build",
+    "build:app": "tsc && vite build",
+    "build": "npm run build:wasm && npm run build:app",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
