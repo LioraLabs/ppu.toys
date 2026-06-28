@@ -57,6 +57,60 @@ pub fn sprites_on_line(mem: &Memory, y: usize) -> Vec<usize> {
     out
 }
 
+/// Composite every visible sprite for scanline `y` into a `width`-long row.
+/// `Some(px)` where a sprite pixel shows; `None` where none does. Higher `prio`
+/// wins; ties break to the lower OAM index. This is the function the E5
+/// compositor overlays onto BG layers.
+pub fn render_scanline(mem: &Memory, y: usize, width: usize) -> Vec<Option<SpritePixel>> {
+    let mut row = vec![None; width];
+    let Some(sheet) = mem.obj_sheet.as_ref().and_then(|id| mem.sources.get(id)) else {
+        return row;
+    };
+    if sheet.width < TILE || sheet.height < TILE {
+        return row;
+    }
+    let tiles_per_row = (sheet.width / TILE).max(1);
+
+    for i in sprites_on_line(mem, y) {
+        let o = &mem.oam[i];
+        let dim = sprite_dim(o.size);
+        let origin_x = (o.tile as u32 % tiles_per_row) * TILE;
+        let origin_y = (o.tile as u32 / tiles_per_row) * TILE;
+
+        let local_y = (y as i64 - o.y.floor() as i64) as u32; // 0..dim by binning
+        let sample_y = if o.flip_y { dim - 1 - local_y } else { local_y };
+        let sy = origin_y + sample_y;
+        if sy >= sheet.height {
+            continue;
+        }
+        let pal_base = OBJ_CGRAM_BASE + (o.pal.min(7) as usize) * PALETTE_LEN;
+        let left = o.x.floor() as i64;
+
+        for local_x in 0..dim {
+            let px = left + local_x as i64;
+            if px < 0 || px as usize >= width {
+                continue;
+            }
+            let sample_x = if o.flip_x { dim - 1 - local_x } else { local_x };
+            let sx = origin_x + sample_x;
+            if sx >= sheet.width {
+                continue;
+            }
+            let red = sheet.rgba[((sy * sheet.width + sx) * 4) as usize];
+            let index = (red & 0x0f) as usize;
+            if index == 0 {
+                continue; // transparent
+            }
+            let dst = &mut row[px as usize];
+            if dst.map_or(true, |cur| o.prio > cur.prio) {
+                let color = unpack_rgb15(mem.cgram[pal_base + index]);
+                *dst = Some(SpritePixel { rgba: color, prio: o.prio });
+            }
+        }
+    }
+    row
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,5 +167,73 @@ mod tests {
         assert_eq!(on.len(), MAX_SPRITES_PER_LINE);
         assert_eq!(on.first(), Some(&0));
         assert_eq!(on.last(), Some(&(MAX_SPRITES_PER_LINE - 1)));
+    }
+
+    #[test]
+    fn off_sprite_renders_nothing() {
+        let mut mem = mem_with_sheet(2, 2, 1);
+        mem.oam[0] = Obj { on: false, x: 0.0, y: 0.0, size: 0, ..Obj::default() };
+        assert!(render_scanline(&mem, 0, 32).iter().all(|p| p.is_none()));
+    }
+
+    #[test]
+    fn opaque_pixels_resolve_through_pal_and_cgram() {
+        // Sheet index 5 everywhere; pal 0 -> colour at cgram[128 + 0*16 + 5].
+        let mut mem = mem_with_sheet(2, 2, 5);
+        mem.oam[0] = Obj { on: true, x: 3.0, y: 0.0, size: 0, pal: 0, ..Obj::default() };
+        let row = render_scanline(&mem, 0, 32);
+        let expected = unpack_rgb15(mem.cgram[128 + 5]);
+        // covered: x in 3..11; uncovered elsewhere.
+        assert_eq!(row[2], None);
+        assert_eq!(row[3].unwrap().rgba, expected);
+        assert_eq!(row[10].unwrap().rgba, expected);
+        assert_eq!(row[11], None);
+    }
+
+    #[test]
+    fn pal_selects_a_different_cgram_window() {
+        let mut mem = mem_with_sheet(2, 2, 5);
+        // Make pal 1's index-5 entry distinct from pal 0's.
+        mem.cgram[128 + 16 + 5] = rgb15(255, 0, 0);
+        mem.oam[0] = Obj { on: true, x: 0.0, y: 0.0, size: 0, pal: 1, ..Obj::default() };
+        assert_eq!(render_scanline(&mem, 0, 32)[0].unwrap().rgba, unpack_rgb15(rgb15(255, 0, 0)));
+    }
+
+    #[test]
+    fn index_zero_is_transparent() {
+        let mut mem = mem_with_sheet(2, 2, 0); // every sheet pixel index 0
+        mem.oam[0] = Obj { on: true, x: 0.0, y: 0.0, size: 0, ..Obj::default() };
+        assert!(render_scanline(&mem, 0, 32).iter().all(|p| p.is_none()));
+    }
+
+    #[test]
+    fn flips_mirror_within_the_sprite_block() {
+        // 8x8 tile: left half index 1, right half index 2 (distinct colours).
+        let w = 16u32;
+        let mut rgba = vec![0u8; (w * 16 * 4) as usize];
+        for y in 0..16u32 {
+            for x in 0..16u32 {
+                let i = ((y * w + x) * 4) as usize;
+                rgba[i] = if x % 8 < 4 { 1 } else { 2 };
+                rgba[i + 3] = 255;
+            }
+        }
+        let mut mem = Memory::new();
+        mem.sources.insert("sheet".into(), Source { width: w, height: 16, rgba });
+        mem.obj_sheet = Some("sheet".into());
+        mem.cgram[128 + 1] = rgb15(10, 10, 10);
+        mem.cgram[128 + 2] = rgb15(250, 250, 250);
+        let c1 = unpack_rgb15(rgb15(10, 10, 10));
+        let c2 = unpack_rgb15(rgb15(250, 250, 250));
+
+        mem.oam[0] = Obj { on: true, x: 0.0, y: 0.0, size: 0, ..Obj::default() };
+        let row = render_scanline(&mem, 0, 32);
+        assert_eq!(row[0].unwrap().rgba, c1); // left = index 1
+        assert_eq!(row[7].unwrap().rgba, c2); // right = index 2
+
+        mem.oam[0].flip_x = true;
+        let row = render_scanline(&mem, 0, 32);
+        assert_eq!(row[0].unwrap().rgba, c2); // mirrored
+        assert_eq!(row[7].unwrap().rgba, c1);
     }
 }
