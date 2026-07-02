@@ -18,13 +18,13 @@ use crate::bg::{apply_brightness, render_bg_layer_scanline};
 use crate::linetable::LineTable;
 use crate::memory::{unpack_rgb15, Memory};
 use crate::mode7::render_mode7_scanline;
-use crate::registers::LineTableRow;
+use crate::registers::RegRow;
 use crate::sprite::render_scanline as render_sprite_scanline;
 use crate::{HEIGHT, WIDTH};
 
 /// Composite one scanline `y` of `row` into `line` (length `WIDTH`), backdrop +
 /// BG + sprites, UN-attenuated. Brightness is applied by the caller.
-fn composite_line(row: &LineTableRow, mem: &Memory, y: usize, line: &mut [[u8; 4]]) {
+fn composite_line(row: &RegRow, mem: &Memory, y: usize, line: &mut [[u8; 4]]) {
     // 1. backdrop (opaque base).
     let backdrop = unpack_rgb15(mem.cgram[0]);
     for px in line.iter_mut() {
@@ -92,7 +92,7 @@ mod tests {
     use super::*;
     use crate::linetable::LineTableBuilder;
     use crate::memory::{rgb15, Source};
-    use crate::registers::{Bg, Obj};
+    use crate::registers::{Bg, LineTableRow, Obj};
 
     fn solid_source(color: [u8; 4]) -> Source {
         Source { width: 1, height: 1, rgba: color.to_vec() }
@@ -175,7 +175,7 @@ mod tests {
             } },
         );
         mem.obj_sheet = Some("sheet".into());
-        mem.oam[0] = Obj { on: true, x: 0.0, y: 0.0, tile: 0, size: 0, ..Obj::default() };
+        mem.oam[0] = Obj { on: true, x: 0, y: 0, tile: 0, size: 0, ..Obj::default() };
         let mut def = LineTableRow::default();
         def.brightness = 15;
         def.bg[0] = Bg { scroll_x: 0.0, scroll_y: 0.0, source: Some("bg".into()), visible: true };

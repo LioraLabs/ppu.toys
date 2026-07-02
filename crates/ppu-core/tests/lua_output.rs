@@ -8,10 +8,6 @@ fn engine(src: &str) -> LuaEngine {
     e
 }
 
-fn approx(a: f32, b: f32) {
-    assert!((a - b).abs() < 1e-3, "expected {b}, got {a}");
-}
-
 #[test]
 fn bare_assignments_become_frame_wide_defaults() {
     let mut e = engine("function frame(t,f) mode=7; brightness=8; bg[1].scroll.x=10; m7.a=2.5 end");
@@ -20,8 +16,8 @@ fn bare_assignments_become_frame_wide_defaults() {
     for y in [0usize, 100, 223] {
         assert_eq!(lt.rows[y].mode, 7);
         assert_eq!(lt.rows[y].brightness, 8);
-        approx(lt.rows[y].bg[0].scroll_x, 10.0);
-        approx(lt.rows[y].m7.a, 2.5);
+        assert_eq!(lt.rows[y].bg[0].scroll_x, 10); // whole-px absolute
+        assert_eq!(lt.rows[y].m7.a, 640); // 2.5 in Q8
     }
 }
 
@@ -39,7 +35,7 @@ fn cgram_and_obj_writes_land_in_memory() {
     assert_eq!(m.cgram[0], rgb15(255, 0, 0));
     assert_eq!(m.obj_sheet.as_deref(), Some("sprites"));
     assert_eq!(m.oam[0].tile, 4);
-    approx(m.oam[0].x, 120.0);
+    assert_eq!(m.oam[0].x, 120);
     assert_eq!(m.oam[0].pal, 2);
     assert!(m.oam[0].on);
     assert!(!m.oam[1].on);
@@ -50,9 +46,9 @@ fn hdma_hook_overrides_only_covered_scanlines_and_varies_per_line() {
     let mut e =
         engine("function frame(t,f) mode=7; hdma(96,223, function(y) m7.a = (y-95)*2 end) end");
     let lt = e.frame(0.0, 0).unwrap();
-    approx(lt.rows[50].m7.a, 1.0); // default (uncovered)
-    approx(lt.rows[96].m7.a, 2.0); // (96-95)*2
-    approx(lt.rows[100].m7.a, 10.0); // (100-95)*2
+    assert_eq!(lt.rows[50].m7.a, 256); // default 1.0 (uncovered), Q8
+    assert_eq!(lt.rows[96].m7.a, 512); // (96-95)*2 = 2.0, Q8
+    assert_eq!(lt.rows[100].m7.a, 2560); // (100-95)*2 = 10.0, Q8
     assert_eq!(lt.rows[223].mode, 7);
 }
 
@@ -98,14 +94,15 @@ end
     assert_eq!(r.brightness, 15);
     assert_eq!(r.bg[0].source.as_deref(), Some("sky"));
     assert_eq!(r.bg[1].source.as_deref(), Some("hills"));
-    approx(r.bg[0].scroll_x, 12.0);
-    approx(r.bg[1].scroll_x, 36.0);
+    assert_eq!(r.bg[0].scroll_x, 12); // t*SPEED = 12, whole px
+    assert_eq!(r.bg[1].scroll_x, 36); // t*SPEED*3 = 36, whole px
     let m = e.memory();
     assert_ne!(m.cgram[0x40], 0); // color-cycle wrote palette
     assert_eq!(m.oam[0].tile, 4);
     assert_eq!(m.oam[0].pal, 2);
-    approx(m.oam[0].x, 120.0);
-    approx(m.oam[0].y, 132.0 + (3.0f64).sin() as f32 * 4.0);
+    assert_eq!(m.oam[0].x, 120);
+    // Lua: 132 + sin(1.0*3)*4 ≈ 132.56 -> sprite_y rounds to 133
+    assert_eq!(m.oam[0].y, 133);
 }
 
 #[test]
@@ -125,13 +122,13 @@ end
     let lt = e.frame(1.0, 0).unwrap();
     // Above the horizon: frame-wide defaults (mode 7, identity-ish m7.a default 1.0).
     assert_eq!(lt.rows[0].mode, 7);
-    approx(lt.rows[0].m7.a, 1.0);
+    assert_eq!(lt.rows[0].m7.a, 256); // default 1.0, Q8
     // On the horizon line and below: per-scanline affine.
-    approx(lt.rows[96].m7.a, 64.0); // 64/(96-95)
-    approx(lt.rows[96].m7.d, 64.0);
-    approx(lt.rows[96].m7.cx, 128.0);
-    approx(lt.rows[120].m7.a, 64.0 / 25.0);
-    approx(lt.rows[120].bg[0].scroll_y, 80.0 * (64.0 / 25.0));
+    assert_eq!(lt.rows[96].m7.a, 16384); // 64/(96-95) = 64.0, Q8
+    assert_eq!(lt.rows[96].m7.d, 16384);
+    assert_eq!(lt.rows[96].m7.cx, 128); // whole-px center
+    assert_eq!(lt.rows[120].m7.a, 655); // 64/25 = 2.56 -> round(2.56*256)
+    assert_eq!(lt.rows[120].bg[0].scroll_y, 205); // 80*(64/25) = 204.8 -> whole px
     assert_eq!(e.memory().obj_sheet, None);
 }
 
@@ -159,11 +156,11 @@ fn sticky_defaults_survive_hook_mutation_across_frames() {
     let src = "function frame(t,f)\n  if f == 0 then m7.a = 5 end\n  hdma(100,223, function(y) m7.a = 99 end)\nend";
     let mut e = engine(src);
     let lt0 = e.frame(0.0, 0).unwrap();
-    approx(lt0.rows[0].m7.a, 5.0); // uncovered: frame-wide default
-    approx(lt0.rows[150].m7.a, 99.0); // covered: hook override
+    assert_eq!(lt0.rows[0].m7.a, 1280); // uncovered: frame-wide default 5.0, Q8
+    assert_eq!(lt0.rows[150].m7.a, 25344); // covered: hook override 99.0, Q8
     let lt1 = e.frame(0.0, 1).unwrap();
-    approx(lt1.rows[0].m7.a, 5.0); // sticky restore held; not stomped to 99
-    approx(lt1.rows[150].m7.a, 99.0);
+    assert_eq!(lt1.rows[0].m7.a, 1280); // sticky restore held; not stomped to 99
+    assert_eq!(lt1.rows[150].m7.a, 25344);
 }
 
 #[test]

@@ -11,6 +11,10 @@ describe("inspector format", () => {
     expect(formatValue(0xc8)).toBe("C8");
     expect(formatValue(0x3def)).toBe("3DEF");
   });
+  it("formats multi-digit register values (absolute scroll)", () => {
+    expect(formatValue(419)).toBe("1A3");
+    expect(formatValue(0)).toBe("00");
+  });
   it("expands 15-bit BGR cgram to an rgb() css string", () => {
     expect(cgram15ToCss(0x0000)).toBe("rgb(0, 0, 0)");
     expect(cgram15ToCss(0x7fff)).toBe("rgb(255, 255, 255)");

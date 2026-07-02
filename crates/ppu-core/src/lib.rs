@@ -30,16 +30,20 @@ pub use compositor::*;
 mod lua;
 pub use lua::*;
 
+mod quantize;
+pub use quantize::*;
+
 /// Native SNES PPU output dimensions (the only resolution v1 targets).
 pub const WIDTH: usize = 256;
 pub const HEIGHT: usize = 224;
 
-/// A single PPU register's mirrored value, surfaced to the UI inspector.
+/// A single PPU register's mirrored value (the absolute bit pattern), surfaced to
+/// the UI inspector.
 #[derive(Clone, Debug, Serialize)]
 pub struct Register {
     pub addr: u16,
     pub name: String,
-    pub value: u8,
+    pub value: i32,
     pub changed: bool,
 }
 
@@ -78,8 +82,8 @@ pub struct OamSprite {
 impl From<&Obj> for OamSprite {
     fn from(o: &Obj) -> Self {
         OamSprite {
-            x: o.x.round() as i32,
-            y: o.y.round() as i32,
+            x: o.x as i32,
+            y: o.y as i32,
             tile: o.tile,
             pal: o.pal,
             prio: o.prio,
@@ -99,14 +103,15 @@ pub struct AssetInfo {
     pub height: u32,
 }
 
-/// Derive the inspector register list from the resolved frame-wide row. `changed`
-/// is true when `prev` held a different value for that addr (false on first frame).
-pub fn derive_registers(row: &LineTableRow, prev: &HashMap<u16, u8>) -> Vec<Register> {
-    let scroll = |v: f32| (v as i64).rem_euclid(256) as u8;
-    let m7 = |v: f32| ((v * 256.0) as i64).rem_euclid(256) as u8;
-    let entries: [(u16, &str, u8); 14] = [
-        (0x2100, "INIDISP", row.brightness),
-        (0x2105, "BGMODE", row.mode),
+/// Derive the inspector register list from the resolved absolute row. Values are
+/// the register bit pattern (masked to the register's display width); `changed`
+/// is true when `prev` held a different value for that addr.
+pub fn derive_registers(row: &RegRow, prev: &HashMap<u16, i32>) -> Vec<Register> {
+    let scroll = |v: i16| (v as u16 & 0x1fff) as i32; // 13-bit display width; ponytail: real BG H/VOFS are 10-bit, uniform 13-bit mask is a v1 inspector simplification
+    let m7 = |v: i16| (v as u16) as i32; // raw Q8 bit pattern (16-bit)
+    let entries: [(u16, &str, i32); 14] = [
+        (0x2100, "INIDISP", row.brightness as i32),
+        (0x2105, "BGMODE", row.mode as i32),
         (0x210d, "BG1HOFS", scroll(row.bg[0].scroll_x)),
         (0x210e, "BG1VOFS", scroll(row.bg[0].scroll_y)),
         (0x210f, "BG2HOFS", scroll(row.bg[1].scroll_x)),
@@ -137,14 +142,15 @@ mod wasm;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::registers::LineTableRow;
+    use crate::registers::{LineTableRow, RegRow};
     use std::collections::HashMap;
 
     #[test]
     fn derive_registers_reports_inidisp_and_bgmode() {
-        let mut row = LineTableRow::default();
-        row.brightness = 7;
-        row.mode = 3;
+        let mut ltr = LineTableRow::default();
+        ltr.brightness = 7;
+        ltr.mode = 3;
+        let row = RegRow::from(&ltr);
         let regs = derive_registers(&row, &HashMap::new());
         let inidisp = regs.iter().find(|r| r.name == "INIDISP").unwrap();
         assert_eq!(inidisp.addr, 0x2100);
@@ -155,15 +161,34 @@ mod tests {
 
     #[test]
     fn derive_registers_changed_flag_tracks_prev() {
-        let row = LineTableRow::default(); // brightness 15
+        let row = RegRow::from(&LineTableRow::default()); // brightness 15, mode 1
         let first = derive_registers(&row, &HashMap::new());
         assert!(first.iter().all(|r| !r.changed));
         let mut prev = HashMap::new();
-        prev.insert(0x2100u16, 7u8);
-        prev.insert(0x2105u16, 1u8);
+        prev.insert(0x2100u16, 7i32);
+        prev.insert(0x2105u16, 1i32);
         let next = derive_registers(&row, &prev);
         assert!(next.iter().find(|r| r.addr == 0x2100).unwrap().changed);
         assert!(!next.iter().find(|r| r.addr == 0x2105).unwrap().changed);
+    }
+
+    #[test]
+    fn derive_registers_shows_absolute_scroll() {
+        let mut row = RegRow::from(&LineTableRow::default());
+        row.bg[0].scroll_x = 419; // absolute, already quantized
+        let regs = derive_registers(&row, &HashMap::new());
+        let bg1hofs = regs.iter().find(|r| r.name == "BG1HOFS").unwrap();
+        assert_eq!(bg1hofs.value, 419); // truthful, matches what renders
+    }
+
+    #[test]
+    fn derive_registers_masks_negative_scroll_to_13_bit() {
+        let mut row = RegRow::from(&LineTableRow::default());
+        row.bg[0].scroll_x = -256; // absolute i16
+        let regs = derive_registers(&row, &HashMap::new());
+        let bg1hofs = regs.iter().find(|r| r.name == "BG1HOFS").unwrap();
+        // (-256i16 as u16) & 0x1fff = 0xFF00 & 0x1FFF = 0x1F00 = 7936
+        assert_eq!(bg1hofs.value, 7936);
     }
 
     #[test]

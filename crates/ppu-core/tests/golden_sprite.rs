@@ -34,14 +34,14 @@ fn fixture() -> Memory {
     mem.cgram[0] = rgb15(8, 8, 24); // backdrop only
 
     // A spread of sprites (pal is a no-op in v1; kept for surface parity).
-    mem.oam[0] = Obj { on: true, x: 20.0, y: 30.0, tile: 0, pal: 0, size: 0, ..Obj::default() };
-    mem.oam[1] = Obj { on: true, x: 40.0, y: 30.0, tile: 1, pal: 0, size: 0, ..Obj::default() };
-    mem.oam[2] = Obj { on: true, x: 60.0, y: 30.0, tile: 2, pal: 0, size: 0, ..Obj::default() };
-    mem.oam[3] = Obj { on: true, x: 90.0, y: 60.0, tile: 0, pal: 1, size: 1, ..Obj::default() };
-    mem.oam[4] = Obj { on: true, x: 120.0, y: 30.0, tile: 3, pal: 0, size: 0, ..Obj::default() };
-    mem.oam[5] = Obj { on: true, x: 130.0, y: 30.0, tile: 3, pal: 0, size: 0, flip_x: true, ..Obj::default() };
-    mem.oam[6] = Obj { on: true, x: 160.0, y: 30.0, tile: 0, pal: 0, prio: 0, size: 0, ..Obj::default() };
-    mem.oam[7] = Obj { on: true, x: 164.0, y: 34.0, tile: 2, pal: 1, prio: 3, size: 0, ..Obj::default() };
+    mem.oam[0] = Obj { on: true, x: 20, y: 30, tile: 0, pal: 0, size: 0, ..Obj::default() };
+    mem.oam[1] = Obj { on: true, x: 40, y: 30, tile: 1, pal: 0, size: 0, ..Obj::default() };
+    mem.oam[2] = Obj { on: true, x: 60, y: 30, tile: 2, pal: 0, size: 0, ..Obj::default() };
+    mem.oam[3] = Obj { on: true, x: 90, y: 60, tile: 0, pal: 1, size: 1, ..Obj::default() };
+    mem.oam[4] = Obj { on: true, x: 120, y: 30, tile: 3, pal: 0, size: 0, ..Obj::default() };
+    mem.oam[5] = Obj { on: true, x: 130, y: 30, tile: 3, pal: 0, size: 0, flip_x: true, ..Obj::default() };
+    mem.oam[6] = Obj { on: true, x: 160, y: 30, tile: 0, pal: 0, prio: 0, size: 0, ..Obj::default() };
+    mem.oam[7] = Obj { on: true, x: 164, y: 34, tile: 2, pal: 1, prio: 3, size: 0, ..Obj::default() };
 
     mem
 }

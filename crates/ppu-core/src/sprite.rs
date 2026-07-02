@@ -40,7 +40,7 @@ pub fn sprites_on_line(mem: &Memory, y: usize) -> Vec<usize> {
         if !o.on {
             continue;
         }
-        let top = o.y.floor() as i64;
+        let top = o.y as i64;
         let dim = sprite_dim(o.size) as i64;
         if y >= top && y < top + dim {
             out.push(i);
@@ -72,13 +72,13 @@ pub fn render_scanline(mem: &Memory, y: usize, width: usize) -> Vec<Option<Sprit
         let origin_x = (o.tile as u32 % tiles_per_row) * TILE;
         let origin_y = (o.tile as u32 / tiles_per_row) * TILE;
 
-        let local_y = (y as i64 - o.y.floor() as i64) as u32; // 0..dim by binning
+        let local_y = (y as i64 - o.y as i64) as u32; // 0..dim by binning
         let sample_y = if o.flip_y { dim - 1 - local_y } else { local_y };
         let sy = origin_y + sample_y;
         if sy >= sheet.height {
             continue;
         }
-        let left = o.x.floor() as i64;
+        let left = o.x as i64;
 
         for local_x in 0..dim {
             let px = left + local_x as i64;
@@ -127,6 +127,13 @@ mod tests {
     use crate::registers::Obj;
 
     #[test]
+    fn obj_coords_are_integer_registers() {
+        let mut mem = mem_with_sheet(2, 2, [255, 255, 255, 255]);
+        mem.oam[0] = Obj { on: true, x: 5, y: 10, size: 0, ..Obj::default() };
+        assert_eq!(sprites_on_line(&mem, 10), vec![0]);
+    }
+
+    #[test]
     fn sprite_dim_maps_size_selector() {
         assert_eq!(sprite_dim(0), 8);
         assert_eq!(sprite_dim(1), 16);
@@ -153,9 +160,9 @@ mod tests {
     #[test]
     fn binning_selects_only_on_sprites_covering_the_line() {
         let mut mem = mem_with_sheet(2, 2, [255, 255, 255, 255]);
-        mem.oam[0] = Obj { on: true, x: 0.0, y: 10.0, size: 0, ..Obj::default() }; // rows 10..18
-        mem.oam[1] = Obj { on: false, x: 0.0, y: 10.0, size: 0, ..Obj::default() }; // off
-        mem.oam[2] = Obj { on: true, x: 0.0, y: 100.0, size: 0, ..Obj::default() }; // elsewhere
+        mem.oam[0] = Obj { on: true, x: 0, y: 10, size: 0, ..Obj::default() }; // rows 10..18
+        mem.oam[1] = Obj { on: false, x: 0, y: 10, size: 0, ..Obj::default() }; // off
+        mem.oam[2] = Obj { on: true, x: 0, y: 100, size: 0, ..Obj::default() }; // elsewhere
         assert_eq!(sprites_on_line(&mem, 12), vec![0]);
         assert_eq!(sprites_on_line(&mem, 9), Vec::<usize>::new());
         assert_eq!(sprites_on_line(&mem, 18), Vec::<usize>::new()); // exclusive bottom
@@ -165,7 +172,7 @@ mod tests {
     fn binning_caps_at_max_per_line_keeping_lowest_indices() {
         let mut mem = mem_with_sheet(2, 2, [255, 255, 255, 255]);
         for i in 0..40usize {
-            mem.oam[i] = Obj { on: true, x: 0.0, y: 0.0, size: 0, ..Obj::default() };
+            mem.oam[i] = Obj { on: true, x: 0, y: 0, size: 0, ..Obj::default() };
         }
         let on = sprites_on_line(&mem, 0);
         assert_eq!(on.len(), MAX_SPRITES_PER_LINE);
@@ -176,14 +183,14 @@ mod tests {
     #[test]
     fn off_sprite_renders_nothing() {
         let mut mem = mem_with_sheet(2, 2, [255, 255, 255, 255]);
-        mem.oam[0] = Obj { on: false, x: 0.0, y: 0.0, size: 0, ..Obj::default() };
+        mem.oam[0] = Obj { on: false, x: 0, y: 0, size: 0, ..Obj::default() };
         assert!(render_scanline(&mem, 0, 32).iter().all(|p| p.is_none()));
     }
 
     #[test]
     fn opaque_pixels_sample_direct_sheet_color() {
         let mut mem = mem_with_sheet(2, 2, [10, 200, 30, 255]);
-        mem.oam[0] = Obj { on: true, x: 3.0, y: 0.0, size: 0, ..Obj::default() };
+        mem.oam[0] = Obj { on: true, x: 3, y: 0, size: 0, ..Obj::default() };
         let row = render_scanline(&mem, 0, 32);
         // covered: x in 3..11; uncovered elsewhere.
         assert_eq!(row[2], None);
@@ -195,9 +202,9 @@ mod tests {
     #[test]
     fn pal_is_a_noop_in_v1() {
         let mut a = mem_with_sheet(2, 2, [10, 200, 30, 255]);
-        a.oam[0] = Obj { on: true, x: 0.0, y: 0.0, size: 0, pal: 0, ..Obj::default() };
+        a.oam[0] = Obj { on: true, x: 0, y: 0, size: 0, pal: 0, ..Obj::default() };
         let mut b = mem_with_sheet(2, 2, [10, 200, 30, 255]);
-        b.oam[0] = Obj { on: true, x: 0.0, y: 0.0, size: 0, pal: 7, ..Obj::default() };
+        b.oam[0] = Obj { on: true, x: 0, y: 0, size: 0, pal: 7, ..Obj::default() };
         assert_eq!(
             render_scanline(&a, 0, 32)[0].unwrap().rgba,
             render_scanline(&b, 0, 32)[0].unwrap().rgba
@@ -207,7 +214,7 @@ mod tests {
     #[test]
     fn alpha_zero_is_transparent() {
         let mut mem = mem_with_sheet(2, 2, [200, 0, 0, 0]); // alpha 0 everywhere
-        mem.oam[0] = Obj { on: true, x: 0.0, y: 0.0, size: 0, ..Obj::default() };
+        mem.oam[0] = Obj { on: true, x: 0, y: 0, size: 0, ..Obj::default() };
         assert!(render_scanline(&mem, 0, 32).iter().all(|p| p.is_none()));
     }
 
@@ -228,7 +235,7 @@ mod tests {
         mem.sources.insert("sheet".into(), Source { width: w, height: 16, rgba });
         mem.obj_sheet = Some("sheet".into());
 
-        mem.oam[0] = Obj { on: true, x: 0.0, y: 0.0, size: 0, ..Obj::default() };
+        mem.oam[0] = Obj { on: true, x: 0, y: 0, size: 0, ..Obj::default() };
         let row = render_scanline(&mem, 0, 32);
         assert_eq!(row[0].unwrap().rgba, a); // left
         assert_eq!(row[7].unwrap().rgba, bcol); // right
@@ -242,8 +249,8 @@ mod tests {
     #[test]
     fn higher_prio_sprite_wins_overlap() {
         let mut mem = mem_with_sheet(2, 2, [10, 0, 0, 255]);
-        mem.oam[0] = Obj { on: true, x: 0.0, y: 0.0, size: 0, prio: 0, ..Obj::default() };
-        mem.oam[1] = Obj { on: true, x: 0.0, y: 0.0, size: 0, prio: 3, ..Obj::default() };
+        mem.oam[0] = Obj { on: true, x: 0, y: 0, size: 0, prio: 0, ..Obj::default() };
+        mem.oam[1] = Obj { on: true, x: 0, y: 0, size: 0, prio: 3, ..Obj::default() };
         assert_eq!(render_scanline(&mem, 0, 32)[0].unwrap().prio, 3);
     }
 
@@ -265,8 +272,8 @@ mod tests {
         mem.obj_sheet = Some("sheet".into());
         // oam[0] reads tile 0 (left color); oam[1] reads tile 1 (right color),
         // both placed at x=0, equal prio -> lower index (oam[0]) wins.
-        mem.oam[0] = Obj { on: true, x: 0.0, y: 0.0, tile: 0, size: 0, prio: 2, ..Obj::default() };
-        mem.oam[1] = Obj { on: true, x: 0.0, y: 0.0, tile: 1, size: 0, prio: 2, ..Obj::default() };
+        mem.oam[0] = Obj { on: true, x: 0, y: 0, tile: 0, size: 0, prio: 2, ..Obj::default() };
+        mem.oam[1] = Obj { on: true, x: 0, y: 0, tile: 1, size: 0, prio: 2, ..Obj::default() };
         let px = render_scanline(&mem, 0, 32)[0].unwrap();
         assert_eq!(px.rgba, left); // oam[0] kept on tie
         assert_eq!(px.prio, 2);
@@ -289,7 +296,7 @@ mod tests {
         mem.sources.insert("sheet".into(), Source { width: w, height: 16, rgba });
         mem.obj_sheet = Some("sheet".into());
 
-        mem.oam[0] = Obj { on: true, x: 0.0, y: 0.0, size: 0, ..Obj::default() };
+        mem.oam[0] = Obj { on: true, x: 0, y: 0, size: 0, ..Obj::default() };
         assert_eq!(render_scanline(&mem, 0, 32)[0].unwrap().rgba, a);
         assert_eq!(render_scanline(&mem, 7, 32)[0].unwrap().rgba, bcol);
 
@@ -302,7 +309,7 @@ mod tests {
     fn render_sprites_is_full_size_opaque_and_uses_backdrop() {
         let mut mem = mem_with_sheet(2, 2, [255, 255, 255, 255]);
         mem.cgram[0] = rgb15(0, 0, 40); // backdrop
-        mem.oam[0] = Obj { on: true, x: 4.0, y: 4.0, size: 0, ..Obj::default() };
+        mem.oam[0] = Obj { on: true, x: 4, y: 4, size: 0, ..Obj::default() };
         let fb = render_sprites(&mem, 32, 32);
         assert_eq!(fb.len(), 32 * 32 * 4);
         assert!(fb.chunks(4).all(|px| px[3] == 255));

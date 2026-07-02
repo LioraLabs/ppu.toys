@@ -2,7 +2,8 @@
 //! paletted BG layer through CGRAM with brightness attenuation. Mirrors the
 //! golden.rs pattern but with its own fixture + PNG.
 use ppu_core::{
-    rgb15, render_bg_scanline, unpack_rgb15, Bg, LineTableRow, Memory, Source, HEIGHT, WIDTH,
+    rgb15, render_bg_scanline, unpack_rgb15, Bg, LineTableRow, Memory, RegRow, Source, HEIGHT,
+    WIDTH,
 };
 use std::path::Path;
 
@@ -39,7 +40,7 @@ fn fixture_row() -> LineTableRow {
 
 fn render_frame() -> Vec<u8> {
     let m = fixture_mem();
-    let row = fixture_row();
+    let row = RegRow::from(&fixture_row());
     let mut fb = Vec::with_capacity(WIDTH * HEIGHT * 4);
     for y in 0..HEIGHT {
         for px in render_bg_scanline(&row, &m, y, WIDTH) {
@@ -65,7 +66,7 @@ fn brightness_attenuates_backdrop_correctly() {
     let mut m = fixture_mem();
     m.cgram[0] = rgb15(150, 150, 150);
     let bd = unpack_rgb15(rgb15(150, 150, 150));
-    let mut row = LineTableRow::default();
+    let mut row = RegRow::from(&LineTableRow::default());
     row.brightness = 0;
     assert_eq!(render_bg_scanline(&row, &m, 0, 1)[0], [0, 0, 0, 255]);
     row.brightness = 15;
