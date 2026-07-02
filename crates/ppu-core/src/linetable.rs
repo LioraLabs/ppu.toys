@@ -2,7 +2,7 @@
 //! 224 `LineTableRow`s. Mirrors the spec frame lifecycle: start from defaults,
 //! apply each covering hook in registration order (later call wins).
 
-use crate::registers::LineTableRow;
+use crate::registers::{LineTableRow, RegRow};
 
 /// A per-scanline override hook registered for the inclusive line range
 /// `[y0, y1]`. The closure pokes the working row exactly as a Lua hook pokes
@@ -43,15 +43,16 @@ impl LineTableBuilder {
         row
     }
 
-    /// Resolve all `height` scanlines into a line table.
+    /// Resolve all `height` scanlines, then quantize each to its absolute
+    /// register state (quantize-on-write happens HERE, once per line).
     pub fn build(&self, height: usize) -> LineTable {
-        LineTable { rows: (0..height).map(|y| self.resolve(y)).collect() }
+        LineTable { rows: (0..height).map(|y| RegRow::from(&self.resolve(y))).collect() }
     }
 }
 
-/// The resolved per-scanline register state for a whole frame.
+/// The resolved per-scanline register state for a whole frame (absolute values).
 pub struct LineTable {
-    pub rows: Vec<LineTableRow>,
+    pub rows: Vec<RegRow>,
 }
 
 /// Deterministic placeholder rasterizer. The real Phase-2 compositor (CGRAM +
@@ -69,7 +70,7 @@ pub fn rasterize(lt: &LineTable, width: usize, height: usize) -> Vec<u8> {
     fb
 }
 
-fn line_debug_color(row: &LineTableRow) -> [u8; 4] {
+fn line_debug_color(row: &RegRow) -> [u8; 4] {
     [
         row.mode,
         row.brightness,
@@ -121,6 +122,14 @@ mod tests {
         b.hdma(96, 223, |_, r| r.mode = 7);
         assert_eq!(b.resolve(0).mode, 1);
         assert_eq!(b.resolve(120).mode, 7);
+    }
+
+    #[test]
+    fn build_quantizes_fractional_scroll_to_whole_px() {
+        let mut def = LineTableRow::default();
+        def.bg[0].scroll_x = 30.7;
+        let lt = LineTableBuilder::new(def).build(2);
+        assert_eq!(lt.rows[0].bg[0].scroll_x, 31); // stored absolute, rounded
     }
 
     #[test]

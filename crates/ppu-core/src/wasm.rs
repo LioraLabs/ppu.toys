@@ -19,7 +19,7 @@ pub struct PpuCore {
     registers: Vec<Register>,
     cgram: Vec<u16>,
     oam: Vec<OamSprite>,
-    prev_reg: HashMap<u16, u8>,
+    prev_reg: HashMap<u16, i32>,
     /// Layer-visibility overrides: bg[0..3] = bg1..bg4, plus obj. `None` = leave
     /// whatever the Lua program set; `Some(v)` forces the layer on/off.
     bg_visible: [Option<bool>; 4],

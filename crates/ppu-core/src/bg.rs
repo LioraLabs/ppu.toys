@@ -8,7 +8,7 @@
 //! compositor; the per-layer primitive here returns un-attenuated color.
 
 use crate::memory::{unpack_rgb15, Memory};
-use crate::registers::{Bg, LineTableRow};
+use crate::registers::{RegBg, RegRow};
 
 /// Attenuate one 8-bit channel by INIDISP brightness (0..=15). 15 is identity,
 /// 0 is black. Integer + deterministic; values above 15 clamp to identity.
@@ -33,7 +33,7 @@ fn attenuate(mut px: [u8; 4], brightness: u8) -> [u8; 4] {
 /// the whole source image). Returns DIRECT, un-attenuated source RGBA; the
 /// compositor applies brightness once.
 pub fn render_bg_layer_scanline(
-    layer: &Bg,
+    layer: &RegBg,
     mem: &Memory,
     y: usize,
     width: usize,
@@ -53,9 +53,9 @@ pub fn render_bg_layer_scanline(
     }
     let sw = src.width as i64;
     let sh = src.height as i64;
-    let sy = ((y as f32 + layer.scroll_y).floor() as i64).rem_euclid(sh);
+    let sy = (y as i64 + layer.scroll_y as i64).rem_euclid(sh);
     for (x, slot) in out.iter_mut().enumerate() {
-        let sx = ((x as f32 + layer.scroll_x).floor() as i64).rem_euclid(sw);
+        let sx = (x as i64 + layer.scroll_x as i64).rem_euclid(sw);
         let base = ((sy * sw + sx) * 4) as usize;
         if src.rgba[base + 3] == 0 {
             continue; // alpha 0 -> transparent
@@ -76,7 +76,7 @@ pub fn render_bg_layer_scanline(
 /// itself via `render_bg_layer_scanline` and applies brightness once globally,
 /// so it never calls this (no double-attenuation).
 pub fn render_bg_scanline(
-    row: &LineTableRow,
+    row: &RegRow,
     mem: &Memory,
     y: usize,
     width: usize,
@@ -116,6 +116,7 @@ mod tests {
     }
 
     use crate::memory::{rgb15, Source};
+    use crate::registers::{LineTableRow, RegRow};
 
     // A 2x2 direct-RGBA source:
     // row0: (0,0)=red opaque, (1,0)=green opaque
@@ -132,8 +133,8 @@ mod tests {
         m
     }
 
-    fn layer(source: &str) -> Bg {
-        Bg { scroll_x: 0.0, scroll_y: 0.0, source: Some(source.into()), visible: true }
+    fn layer(source: &str) -> RegBg {
+        RegBg { scroll_x: 0, scroll_y: 0, source: Some(source.into()), visible: true }
     }
 
     #[test]
@@ -142,7 +143,7 @@ mod tests {
         let mut off = layer("bg");
         off.visible = false;
         assert!(render_bg_layer_scanline(&off, &m, 0, 4).iter().all(|p| p.is_none()));
-        let no_src = Bg { source: None, ..layer("bg") };
+        let no_src = RegBg { source: None, ..layer("bg") };
         assert!(render_bg_layer_scanline(&no_src, &m, 0, 4).iter().all(|p| p.is_none()));
         let bad = layer("missing");
         assert!(render_bg_layer_scanline(&bad, &m, 0, 4).iter().all(|p| p.is_none()));
@@ -172,7 +173,7 @@ mod tests {
     fn scroll_offsets_the_sample() {
         let m = fixture_mem();
         let mut l = layer("bg");
-        l.scroll_x = 1.0; // x=0 samples source col 1 (green) on row 0
+        l.scroll_x = 1; // x=0 samples source col 1 (green) on row 0
         assert_eq!(render_bg_layer_scanline(&l, &m, 0, 1)[0], Some([0, 255, 0, 255]));
     }
 
@@ -180,7 +181,7 @@ mod tests {
     fn negative_scroll_wraps() {
         let m = fixture_mem();
         let mut l = layer("bg");
-        l.scroll_x = -1.0; // x=0 -> col -1 -> wraps to col 1 (green) on row 0
+        l.scroll_x = -1; // x=0 -> col -1 -> wraps to col 1 (green) on row 0
         assert_eq!(render_bg_layer_scanline(&l, &m, 0, 1)[0], Some([0, 255, 0, 255]));
     }
 
@@ -188,7 +189,7 @@ mod tests {
     fn composite_shows_backdrop_where_transparent() {
         let mut m = fixture_mem();
         m.cgram[0] = rgb15(10, 20, 30); // backdrop
-        let mut row = LineTableRow::default();
+        let mut row = RegRow::from(&LineTableRow::default());
         row.brightness = 15;
         row.bg[0] = layer("bg");
         // row 1 col 0 of source is alpha0 -> backdrop shows through there.
@@ -201,7 +202,7 @@ mod tests {
     fn composite_topmost_layer_wins() {
         let mut m = fixture_mem();
         m.cgram[0] = rgb15(0, 0, 0);
-        let mut row = LineTableRow::default();
+        let mut row = RegRow::from(&LineTableRow::default());
         row.brightness = 15;
         row.bg[0] = layer("bg"); // bg1 topmost
         row.bg[1] = layer("bg"); // bg2 below
@@ -213,7 +214,7 @@ mod tests {
     fn composite_applies_brightness_to_backdrop() {
         let mut m = fixture_mem();
         m.cgram[0] = rgb15(200, 200, 200);
-        let mut row = LineTableRow::default();
+        let mut row = RegRow::from(&LineTableRow::default());
         row.brightness = 0; // everything black
         assert_eq!(render_bg_scanline(&row, &m, 0, 2)[0], [0, 0, 0, 255]);
     }

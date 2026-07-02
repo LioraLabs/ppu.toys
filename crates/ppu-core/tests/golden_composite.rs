@@ -63,7 +63,7 @@ fn fixture_mem() -> Memory {
     m.sources.insert("sheet".into(), sprite_sheet());
     m.obj_sheet = Some("sheet".into());
     // A HUD sprite living in the top (Mode 1) band.
-    m.oam[0] = Obj { on: true, x: 120.0, y: 40.0, tile: 0, size: 1, ..Obj::default() };
+    m.oam[0] = Obj { on: true, x: 120, y: 40, tile: 0, size: 1, ..Obj::default() };
     m
 }
 

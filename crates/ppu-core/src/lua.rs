@@ -355,10 +355,10 @@ fn value_to_string(v: Value<'_>) -> Option<String> {
 fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
     let mut row = LineTableRow::default();
     if let Some(m) = ctx.get_global("mode").to_integer() {
-        row.mode = m.clamp(0, 7) as u8;
+        row.mode = m as u8; // wrap; quantize::mode masks to 3 bits at build
     }
     if let Some(b) = ctx.get_global("brightness").to_integer() {
-        row.brightness = b.clamp(0, 15) as u8;
+        row.brightness = b as u8; // wrap; quantize::brightness masks to 4 bits
     }
     if let Value::Table(bg) = ctx.get_global("bg") {
         for i in 0..4 {
@@ -453,8 +453,8 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
         for i in 0..128 {
             if let Value::Table(o) = obj.get(ctx, i as i64) {
                 let e = &mut mem.oam[i];
-                e.x = o.get(ctx, "x").to_number().unwrap_or(0.0) as f32;
-                e.y = o.get(ctx, "y").to_number().unwrap_or(0.0) as f32;
+                e.x = crate::quantize::sprite_x(o.get(ctx, "x").to_number().unwrap_or(0.0) as f32);
+                e.y = crate::quantize::sprite_y(o.get(ctx, "y").to_number().unwrap_or(0.0) as f32);
                 e.tile = o.get(ctx, "tile").to_integer().unwrap_or(0) as u16;
                 e.pal = o.get(ctx, "pal").to_integer().unwrap_or(0) as u8;
                 e.prio = o.get(ctx, "prio").to_integer().unwrap_or(0) as u8;
