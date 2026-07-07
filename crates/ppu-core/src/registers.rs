@@ -124,6 +124,10 @@ pub struct RegBg {
     pub screen_size: u8,
     /// Snapped char base VRAM word address (multiple of 0x1000, in-VRAM).
     pub char_base: u16,
+    /// Bits per pixel this layer renders at in the row's mode, resolved from
+    /// the mode table (modes.rs) at quantize time; 0 = the layer does not
+    /// exist in this mode (renders transparent).
+    pub bpp: u8,
 }
 
 impl From<&Bg> for RegBg {
@@ -137,6 +141,7 @@ impl From<&Bg> for RegBg {
             map_base: quantize::bg_map_base(b.map_base),
             screen_size: quantize::bg_screen_size(b.screen_size),
             char_base: quantize::bg_char_base(b.char_base),
+            bpp: 0, // resolved from the mode table by RegRow::from (needs the row's mode)
         }
     }
 }
@@ -185,10 +190,16 @@ pub struct RegRow {
 
 impl From<&LineTableRow> for RegRow {
     fn from(r: &LineTableRow) -> Self {
+        let mode = quantize::mode(r.mode);
+        let bpp = crate::modes::mode_info(mode).map_or([0; 4], |m| m.bpp);
         RegRow {
-            mode: quantize::mode(r.mode),
+            mode,
             brightness: quantize::brightness(r.brightness),
-            bg: std::array::from_fn(|i| RegBg::from(&r.bg[i])),
+            bg: std::array::from_fn(|i| {
+                let mut b = RegBg::from(&r.bg[i]);
+                b.bpp = bpp[i];
+                b
+            }),
             m7: RegM7::from(&r.m7),
         }
     }
@@ -263,6 +274,20 @@ mod tests {
         let m = Mode7::default();
         assert_eq!(m.repeat, 0);
         assert!(!m.flip_x && !m.flip_y);
+    }
+
+    #[test]
+    fn regbg_bpp_resolved_from_mode_table() {
+        // Mode 1: BG1/BG2 4bpp, BG3 2bpp, BG4 absent.
+        let reg = RegRow::from(&LineTableRow::default());
+        assert_eq!([reg.bg[0].bpp, reg.bg[1].bpp, reg.bg[2].bpp, reg.bg[3].bpp], [4, 4, 2, 0]);
+        // Unshipped mode (mode_info -> None): every layer bpp 0 (renders transparent).
+        let mut src = LineTableRow::default();
+        src.mode = 0;
+        assert!(RegRow::from(&src).bg.iter().all(|b| b.bpp == 0));
+        // Mode 7: the table's BG1 row is 8bpp (tile-BG rasterizer ignores it; mode7.rs owns it).
+        src.mode = 7;
+        assert_eq!(RegRow::from(&src).bg[0].bpp, 8);
     }
 
     #[test]
