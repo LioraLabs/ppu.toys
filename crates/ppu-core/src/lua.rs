@@ -11,6 +11,7 @@ use piccolo::{
     Table, Value,
 };
 
+use crate::import::obj::{apply_obj_import, import_obj_sheet, ObjImport};
 use crate::import::{BudgetReport, ImportCache, ImportKey, ImportOptions};
 use crate::import_m7::{import_mode7, Mode7Import, Mode7ImportReport};
 use crate::{rgb15, LineTable, LineTableBuilder, LineTableRow, Memory, HEIGHT};
@@ -37,6 +38,8 @@ pub enum ImportBudget {
     Tile { layer: usize, report: BudgetReport },
     #[serde(rename = "m7")]
     Mode7 { layer: usize, report: Mode7ImportReport },
+    #[serde(rename = "obj")]
+    Obj { report: BudgetReport },
 }
 
 /// Compile/runtime error surfaced to the editor, matching the TS `LuaError` shape.
@@ -60,6 +63,10 @@ pub struct LuaEngine {
     import_cache: ImportCache,
     /// Memoized Mode 7 imports, keyed by (asset, generation).
     m7_cache: HashMap<(String, u64), Mode7Import>,
+    /// Memoized OBJ-sheet imports (m4/importer), keyed by
+    /// (asset, generation, snapped char_base) so re-upload / a char-base move
+    /// re-quantizes but a hot 60fps key only re-copies words.
+    obj_imports: HashMap<(String, u64, u16), ObjImport>,
     /// Monotonic upload counter feeding `ImportAsset::generation`.
     next_generation: u64,
     /// Per-layer import budgets produced by the most recent `frame()`.
@@ -84,6 +91,7 @@ impl LuaEngine {
             assets: HashMap::new(),
             import_cache: ImportCache::default(),
             m7_cache: HashMap::new(),
+            obj_imports: HashMap::new(),
             next_generation: 0,
             reports: Vec::new(),
         }
@@ -105,6 +113,7 @@ impl LuaEngine {
         let generation = self.next_generation;
         self.import_cache.invalidate_asset(&slot);
         self.m7_cache.retain(|(s, _), _| s != &slot);
+        self.obj_imports.retain(|(s, _, _), _| s != &slot);
         self.assets.insert(slot, ImportAsset { width, height, rgba, generation });
     }
 
@@ -204,6 +213,13 @@ impl LuaEngine {
                     &self.assets,
                     &mut self.import_cache,
                     &mut self.m7_cache,
+                    &mut self.reports,
+                    &mut self.memory,
+                );
+                apply_obj_sheet(
+                    ctx,
+                    &self.assets,
+                    &mut self.obj_imports,
                     &mut self.reports,
                     &mut self.memory,
                 );
@@ -674,6 +690,37 @@ fn apply_imports(
             reports.push(ImportBudget::Tile { layer: i, report: imp.report.clone() });
         }
     }
+}
+
+/// Run the `obj.sheet =` OBJ-sheet importer if the frame binds an uploaded
+/// sheet. The OBJ analog of `apply_imports`: reads `obj.sheet` (asset id) +
+/// `obj.char_base` straight from the Lua ctx (NOT `memory.obsel`, which
+/// `read_memory` only fills LATER), snaps char_base with `quantize::obj_char_base`
+/// to match, memoizes `import_obj_sheet` keyed by asset+generation+char_base
+/// (never re-quantizes at 60fps; re-quantizes on re-upload or a char-base move),
+/// and lays OBJ char words at char_base + OBJ palettes (CGRAM 128..) into `mem`.
+/// Runs in the same bootstrap slot as the BG imports, so the poke flush's
+/// structured pokes and raw `vram[]` stay the final authority. Appends its
+/// budget to the same `reports` vec (surfaced via `import_reports()`); assumes
+/// `apply_imports` already `clear()`ed and pushed the BG reports first.
+fn apply_obj_sheet(
+    ctx: piccolo::Context<'_>,
+    assets: &HashMap<String, ImportAsset>,
+    cache: &mut HashMap<(String, u64, u16), ObjImport>,
+    reports: &mut Vec<ImportBudget>,
+    mem: &mut Memory,
+) {
+    let Value::Table(obj) = ctx.get_global("obj") else { return };
+    let Some(slot) = value_to_string(obj.get(ctx, "sheet")) else { return };
+    let Some(asset) = assets.get(&slot) else { return };
+    let char_base = crate::quantize::obj_char_base(
+        obj.get(ctx, "char_base").to_integer().unwrap_or(0).max(0) as u32,
+    );
+    let imp = cache
+        .entry((slot.clone(), asset.generation, char_base))
+        .or_insert_with(|| import_obj_sheet(&asset.rgba, asset.width, asset.height));
+    apply_obj_import(mem, imp, char_base);
+    reports.push(ImportBudget::Obj { report: imp.report.clone() });
 }
 
 /// VRAM word address of the tilemap entry for tile column `tx`, row `ty` at a
