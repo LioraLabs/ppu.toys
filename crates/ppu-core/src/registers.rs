@@ -108,6 +108,8 @@ pub struct LineTableRow {
     pub brightness: u8, // 0..15
     pub bg: [Bg; 4],    // bg[1..4] in the DSL -> indices 0..3 here
     pub m7: Mode7,
+    /// BGMODE bit 3: BG3-priority, lifts BG3 above BG1/BG2 in Mode 1.
+    pub bg3_priority: bool,
 }
 
 impl Default for LineTableRow {
@@ -117,6 +119,7 @@ impl Default for LineTableRow {
             brightness: 15,
             bg: std::array::from_fn(|_| Bg::default()),
             m7: Mode7::default(),
+            bg3_priority: false,
         }
     }
 }
@@ -201,6 +204,7 @@ pub struct RegRow {
     pub brightness: u8,
     pub bg: [RegBg; 4],
     pub m7: RegM7,
+    pub bg3_priority: bool,
 }
 
 impl From<&LineTableRow> for RegRow {
@@ -216,6 +220,7 @@ impl From<&LineTableRow> for RegRow {
                 b
             }),
             m7: RegM7::from(&r.m7),
+            bg3_priority: r.bg3_priority,
         }
     }
 }
@@ -303,6 +308,14 @@ mod tests {
         // Mode 7: the table's BG1 row is 8bpp (tile-BG rasterizer ignores it; mode7.rs owns it).
         src.mode = 7;
         assert_eq!(RegRow::from(&src).bg[0].bpp, 8);
+    }
+
+    #[test]
+    fn bg3_priority_bit_defaults_off_and_round_trips() {
+        assert!(!LineTableRow::default().bg3_priority);
+        let mut src = LineTableRow::default();
+        src.bg3_priority = true;
+        assert!(RegRow::from(&src).bg3_priority);
     }
 
     #[test]

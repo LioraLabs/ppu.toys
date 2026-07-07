@@ -122,8 +122,9 @@ pub struct AssetInfo {
 pub fn derive_registers(row: &RegRow, prev: &HashMap<u16, i32>) -> Vec<Register> {
     let scroll = |v: i16| (v as u16 & 0x1fff) as i32; // 13-bit display width; ponytail: real BG H/VOFS are 10-bit, uniform 13-bit mask is a v1 inspector simplification
     let m7 = |v: i16| (v as u16) as i32; // raw Q8 bit pattern (16-bit)
-    // BGMODE: mode bits 0-2 | BG1..BG4 16x16-tile flags in bits 4-7.
+    // BGMODE: mode bits 0-2 | BG3-priority bit 3 | BG1..BG4 16x16-tile flags in bits 4-7.
     let bgmode = row.mode as i32
+        | ((row.bg3_priority as i32) << 3)
         | (row.bg.iter().enumerate())
             .map(|(i, b)| ((b.tile_size == 16) as i32) << (4 + i))
             .sum::<i32>();
