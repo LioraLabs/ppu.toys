@@ -26,12 +26,12 @@ fn attenuate(mut px: [u8; 4], brightness: u8) -> [u8; 4] {
     px
 }
 
-/// Palette index of pixel (`fx`, `fy`) inside the 8x8 char whose bitplane
-/// data starts at VRAM word `addr`. SNES layout: word `addr + fy` holds
-/// plane 0 (low byte) and plane 1 (high byte) of row `fy`; 4bpp adds planes
-/// 2/3 in word `addr + 8 + fy`. Bit 7 is the leftmost pixel. Fetches wrap
-/// mod VRAM (0x8000 words).
-fn char_pixel_index(mem: &Memory, addr: u16, bpp: u8, fx: u32, fy: u32) -> u8 {
+/// (shared with sprite.rs) Palette index of pixel (`fx`, `fy`) inside the 8x8
+/// char whose bitplane data starts at VRAM word `addr`. SNES layout: word
+/// `addr + fy` holds plane 0 (low byte) and plane 1 (high byte) of row `fy`;
+/// 4bpp adds planes 2/3 in word `addr + 8 + fy`. Bit 7 is the leftmost pixel.
+/// Fetches wrap mod VRAM (0x8000 words).
+pub(crate) fn char_pixel_index(mem: &Memory, addr: u16, bpp: u8, fx: u32, fy: u32) -> u8 {
     let bit = 7 - (fx & 7);
     let plane_pair = |w: u16| (((w as u8) >> bit) & 1) | ((((w >> 8) as u8) >> bit) & 1) << 1;
     let word = |off: u32| mem.vram[((addr as u32 + off) & 0x7fff) as usize];
