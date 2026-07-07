@@ -43,6 +43,22 @@ fn char_pixel_index(mem: &Memory, addr: u16, bpp: u8, fx: u32, fy: u32) -> u8 {
     index
 }
 
+/// VRAM word address of the tilemap entry for tile column `tx`, row `ty`
+/// (already wrapped to the layer's total tile extent). A tilemap is 1, 2, or
+/// 4 32x32-entry screens of 0x400 words, arranged per the BGnSC screen size:
+/// 0 = 32x32; 1 = 64x32 (screen 1 right); 2 = 32x64 (screen 1 below);
+/// 3 = 64x64 (screens 0|1 over 2|3). Wraps mod VRAM.
+fn map_entry_addr(map_base: u16, screen_size: u8, tx: u32, ty: u32) -> u16 {
+    let screen = match screen_size {
+        1 => tx / 32,
+        2 => ty / 32,
+        3 => (ty / 32) * 2 + tx / 32,
+        _ => 0,
+    };
+    let off = screen * 0x400 + (ty % 32) * 32 + (tx % 32);
+    ((map_base as u32 + off) & 0x7fff) as u16
+}
+
 /// Render one BG layer for scanline `y` into `width` pixel candidates.
 /// `None` = transparent at that x (lower layer / backdrop shows through).
 ///
@@ -168,5 +184,32 @@ mod tests {
         // Row 1 of a char based at the last VRAM word wraps to 0x0000.
         m.vram[0x0000] = 0b1000_0000; // plane 0, bit 7
         assert_eq!(char_pixel_index(&m, 0x7fff, 2, 0, 1), 1);
+    }
+
+    #[test]
+    fn map_entry_addr_walks_one_screen() {
+        assert_eq!(map_entry_addr(0x0000, 0, 0, 0), 0x0000);
+        assert_eq!(map_entry_addr(0x0000, 0, 31, 0), 31);
+        assert_eq!(map_entry_addr(0x0000, 0, 0, 1), 32);
+        assert_eq!(map_entry_addr(0x7c00, 0, 5, 3), 0x7c00 + 3 * 32 + 5);
+    }
+
+    #[test]
+    fn map_entry_addr_selects_screens_per_size() {
+        // 64x32: tile column 32+ lands in screen 1.
+        assert_eq!(map_entry_addr(0x0000, 1, 32, 0), 0x0400);
+        assert_eq!(map_entry_addr(0x0000, 1, 63, 31), 0x0400 + 31 * 32 + 31);
+        // 32x64: tile row 32+ lands in screen 1.
+        assert_eq!(map_entry_addr(0x0000, 2, 0, 32), 0x0400);
+        // 64x64 quadrants: 0|1 over 2|3.
+        assert_eq!(map_entry_addr(0x1000, 3, 32, 0), 0x1400);
+        assert_eq!(map_entry_addr(0x1000, 3, 0, 32), 0x1800);
+        assert_eq!(map_entry_addr(0x1000, 3, 32, 32), 0x1c00);
+    }
+
+    #[test]
+    fn map_entry_addr_wraps_vram() {
+        // map_base at the top of VRAM: screen 1 wraps around to word 0.
+        assert_eq!(map_entry_addr(0x7c00, 1, 32, 0), 0x0000);
     }
 }
