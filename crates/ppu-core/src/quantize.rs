@@ -98,6 +98,22 @@ pub fn m7_repeat(v: u8) -> u8 {
     v & 0x03
 }
 
+/// OBSEL OBJ char (name) base: a VRAM word address snapped DOWN to the
+/// 0x2000-word (16KB) hardware step and masked into VRAM (2-bit name-base
+/// field, 0/0x2000/0x4000/0x6000). Stored as the snapped EFFECTIVE word
+/// address, same spirit as `bg_char_base`.
+#[inline]
+pub fn obj_char_base(v: u32) -> u16 {
+    (((v >> 13) & 0x03) << 13) as u16
+}
+
+/// OBSEL sprite-size selector (bits 5-7): the friendly small/large size-pair
+/// index 0..7. Masks (wraps) to 3 bits like the other size/enum registers.
+#[inline]
+pub fn obj_size_sel(v: u8) -> u8 {
+    v & 0x07
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,5 +193,22 @@ mod tests {
         assert_eq!(m7_repeat(0), 0);
         assert_eq!(m7_repeat(3), 3);
         assert_eq!(m7_repeat(5), 1); // wraps (mask), NOT clamp
+    }
+
+    #[test]
+    fn obj_char_base_snaps_to_16k_word_steps() {
+        // OBSEL name base: 0x2000-word (16KB) steps, 2-bit field (0/0x2000/0x4000/0x6000).
+        assert_eq!(obj_char_base(0), 0);
+        assert_eq!(obj_char_base(0x2000), 0x2000);
+        assert_eq!(obj_char_base(0x3fff), 0x2000); // snaps down to the step
+        assert_eq!(obj_char_base(0x6000), 0x6000); // top of the 2-bit field
+        assert_eq!(obj_char_base(0x8000), 0); // wraps past VRAM (2-bit mask)
+    }
+
+    #[test]
+    fn obj_size_sel_masks_to_3_bits() {
+        assert_eq!(obj_size_sel(0), 0);
+        assert_eq!(obj_size_sel(3), 3);
+        assert_eq!(obj_size_sel(8), 0); // wraps (mask), NOT clamp
     }
 }
