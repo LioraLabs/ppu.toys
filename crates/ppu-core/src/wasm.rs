@@ -9,8 +9,19 @@ use wasm_bindgen::prelude::*;
 
 use crate::{
     derive_registers, render_frame, AssetInfo, LuaEngine, LuaErrorView, OamSprite, Register,
-    SetSourceResult, Source, HEIGHT, WIDTH,
+    SetSourceResult, HEIGHT, WIDTH,
 };
+
+/// A decoded uploaded image (ImageData), staged as importer input. Uploads are
+/// app-level assets, NOT PPU memory: the importer (m4/importer) quantizes an
+/// asset into real VRAM/CGRAM words when a layer binds it (m4/dsl).
+struct Asset {
+    width: u32,
+    height: u32,
+    /// Raw RGBA pixels, consumed by the importer (m4/importer).
+    #[allow(dead_code)]
+    rgba: Vec<u8>,
+}
 
 #[wasm_bindgen]
 pub struct PpuCore {
@@ -24,6 +35,10 @@ pub struct PpuCore {
     /// whatever the Lua program set; `Some(v)` forces the layer on/off.
     bg_visible: [Option<bool>; 4],
     obj_visible: Option<bool>,
+    /// Uploaded image assets, keyed by slot id. App-level, NOT PPU memory —
+    /// survives recompiles untouched (unlike `LuaEngine::memory`, which is
+    /// reset by `set_source`).
+    assets: HashMap<String, Asset>,
 }
 
 #[wasm_bindgen]
@@ -39,13 +54,12 @@ impl PpuCore {
             prev_reg: HashMap::new(),
             bg_visible: [None; 4],
             obj_visible: None,
+            assets: HashMap::new(),
         }
     }
 
     #[wasm_bindgen(js_name = setSource)]
     pub fn set_source(&mut self, src: &str) -> Result<JsValue, JsValue> {
-        // Preserve uploaded sources across recompiles (LuaEngine resets Memory).
-        let saved = std::mem::take(&mut self.engine.memory_mut().sources);
         let res = match self.engine.set_source(src) {
             Ok(()) => SetSourceResult { ok: true, error: None },
             Err(e) => SetSourceResult {
@@ -53,7 +67,6 @@ impl PpuCore {
                 error: Some(LuaErrorView { message: e.message, line: e.line }),
             },
         };
-        self.engine.memory_mut().sources = saved;
         serde_wasm_bindgen::to_value(&res).map_err(Into::into)
     }
 
@@ -116,11 +129,9 @@ impl PpuCore {
     #[wasm_bindgen(js_name = listAssets)]
     pub fn list_assets(&self) -> Result<JsValue, JsValue> {
         let mut assets: Vec<AssetInfo> = self
-            .engine
-            .memory()
-            .sources
+            .assets
             .iter()
-            .map(|(id, s)| AssetInfo { id: id.clone(), width: s.width, height: s.height })
+            .map(|(id, a)| AssetInfo { id: id.clone(), width: a.width, height: a.height })
             .collect();
         assets.sort_by(|a, b| a.id.cmp(&b.id)); // stable order for the inspector
         serde_wasm_bindgen::to_value(&assets).map_err(Into::into)
@@ -136,10 +147,7 @@ impl PpuCore {
         if width == 0 || height == 0 || rgba.len() != (width * height * 4) as usize {
             return; // malformed ImageData -> ignore
         }
-        self.engine
-            .memory_mut()
-            .sources
-            .insert(slot, Source { width, height, rgba });
+        self.assets.insert(slot, Asset { width, height, rgba });
     }
 
     #[wasm_bindgen(js_name = setLayerVisible)]

@@ -12,7 +12,8 @@
 //!
 //! Brightness single-application point: HERE. The scanline primitives this
 //! compositor calls all return un-attenuated direct RGBA, so brightness is never
-//! double-applied.
+//! double-applied. (BG and sprite pixel sampling are stubbed during the M4
+//! substrate rewrite.)
 
 use crate::bg::{apply_brightness, render_bg_layer_scanline};
 use crate::linetable::LineTable;
@@ -33,16 +34,13 @@ fn composite_line(row: &RegRow, mem: &Memory, y: usize, line: &mut [[u8; 4]]) {
 
     // 2. BG.
     if row.mode == 7 {
-        let bg = &row.bg[0];
-        if bg.visible {
-            if let Some(src) = bg.source.as_deref().and_then(|id| mem.sources.get(id)) {
-                let mut tmp = vec![0u8; WIDTH * 4];
-                render_mode7_scanline(row, src, y, &mut tmp);
-                for (x, slot) in line.iter_mut().enumerate() {
-                    let p = &tmp[x * 4..x * 4 + 4];
-                    if p[3] != 0 {
-                        *slot = [p[0], p[1], p[2], 255];
-                    }
+        if row.bg[0].visible {
+            let mut tmp = vec![0u8; WIDTH * 4];
+            render_mode7_scanline(row, mem, y, &mut tmp);
+            for (x, slot) in line.iter_mut().enumerate() {
+                let p = &tmp[x * 4..x * 4 + 4];
+                if p[3] != 0 {
+                    *slot = [p[0], p[1], p[2], 255];
                 }
             }
         }
@@ -91,12 +89,8 @@ pub fn render_frame(lt: &LineTable, mem: &Memory) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::linetable::LineTableBuilder;
-    use crate::memory::{rgb15, Source};
-    use crate::registers::{Bg, LineTableRow, Obj};
-
-    fn solid_source(color: [u8; 4]) -> Source {
-        Source { width: 1, height: 1, rgba: color.to_vec() }
-    }
+    use crate::memory::rgb15;
+    use crate::registers::LineTableRow;
 
     #[test]
     fn frame_is_full_size_and_opaque() {
@@ -118,13 +112,15 @@ mod tests {
         assert_eq!(&fb[last..last + 4], &bd);
     }
 
+    // TODO(m4/bg-raster, m4/mode7, m4/compositing): the BG/Mode-7/sprite compositing tests were
+    // deleted with the v1 direct-RGBA `Source` model; they return as VRAM-backed
+    // goldens once the rasterizers land.
+
     #[test]
-    fn brightness_applied_once_uniformly() {
-        // A solid red BG source at brightness 0 -> black; at 15 -> red.
+    fn brightness_applied_once_to_backdrop() {
         let mut mem = Memory::new();
-        mem.sources.insert("bg".into(), solid_source([200, 0, 0, 255]));
+        mem.cgram[0] = rgb15(200, 200, 200);
         let mut def = LineTableRow::default();
-        def.bg[0] = Bg { source: Some("bg".into()), ..Bg::default() };
         def.brightness = 0;
         let lt = LineTableBuilder::new(def.clone()).build(HEIGHT);
         let fb = render_frame(&lt, &mem);
@@ -133,57 +129,6 @@ mod tests {
         def.brightness = 15;
         let lt = LineTableBuilder::new(def).build(HEIGHT);
         let fb = render_frame(&lt, &mem);
-        assert_eq!(&fb[0..4], &[200, 0, 0, 255]); // brightness 15 -> identity
-    }
-
-    #[test]
-    fn per_line_mode_switch_composites_split_screen() {
-        // Mode 1 top band (red BG), Mode 7 bottom band (green floor).
-        let mut mem = Memory::new();
-        mem.sources.insert("hud".into(), solid_source([200, 0, 0, 255]));
-        mem.sources.insert("floor".into(), solid_source([0, 200, 0, 255]));
-        let mut def = LineTableRow::default();
-        def.mode = 1;
-        def.brightness = 15;
-        def.bg[0] = Bg { source: Some("hud".into()), ..Bg::default() };
-        let mut b = LineTableBuilder::new(def);
-        b.hdma(112, 223, |_, r| {
-            r.mode = 7;
-            r.bg[0].source = Some("floor".into());
-            r.m7 = crate::registers::Mode7::default();
-        });
-        let lt = b.build(HEIGHT);
-        let fb = render_frame(&lt, &mem);
-        // top band -> red (Mode 1); bottom band -> green (Mode 7).
-        let top = (10 * WIDTH + 5) * 4;
-        let bot = (200 * WIDTH + 5) * 4;
-        assert_eq!(&fb[top..top + 4], &[200, 0, 0, 255]);
-        assert_eq!(&fb[bot..bot + 4], &[0, 200, 0, 255]);
-    }
-
-    #[test]
-    fn sprites_composite_over_bg() {
-        let mut mem = Memory::new();
-        mem.sources.insert("bg".into(), solid_source([0, 0, 200, 255]));
-        // 8x8 sheet, solid yellow opaque.
-        mem.sources.insert(
-            "sheet".into(),
-            Source { width: 8, height: 8, rgba: {
-                let mut v = vec![0u8; 8 * 8 * 4];
-                for px in v.chunks_mut(4) { px.copy_from_slice(&[200, 200, 0, 255]); }
-                v
-            } },
-        );
-        mem.obj_sheet = Some("sheet".into());
-        mem.oam[0] = Obj { on: true, x: 0, y: 0, tile: 0, size: 0, ..Obj::default() };
-        let mut def = LineTableRow::default();
-        def.brightness = 15;
-        def.bg[0] = Bg { source: Some("bg".into()), ..Bg::default() };
-        let lt = LineTableBuilder::new(def).build(HEIGHT);
-        let fb = render_frame(&lt, &mem);
-        // (0,0) covered by sprite -> yellow; far pixel -> blue BG.
-        assert_eq!(&fb[0..4], &[200, 200, 0, 255]);
-        let far = (100 * WIDTH + 100) * 4;
-        assert_eq!(&fb[far..far + 4], &[0, 0, 200, 255]);
+        assert_eq!(&fb[0..4], &unpack_rgb15(rgb15(200, 200, 200)));
     }
 }
