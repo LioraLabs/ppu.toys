@@ -223,6 +223,32 @@ fn manual_pokes_override_source_import() {
 }
 
 #[test]
+fn obj_sheet_triggers_obj_import_into_vram_and_obj_cgram() {
+    let mut e = LuaEngine::new();
+    // 16x8: left 12px red, right 4px blue -> two OBJ tiles, one OBJ palette (8).
+    let mut rgba = Vec::new();
+    for _y in 0..8 {
+        for x in 0..16 {
+            rgba.extend_from_slice(if x < 12 { &[255, 0, 0, 255] } else { &[0, 0, 255, 255] });
+        }
+    }
+    e.upload_asset("hero".into(), 16, 8, rgba);
+    e.set_source("function frame(t,f) mode=1; obj.sheet='hero'; obj.char_base=0x2000 end").unwrap();
+    e.frame(0.0, 0).unwrap();
+    let m = e.memory();
+    // OBJ palettes land in CGRAM base 128 (sub-palette 8, indices 1/2).
+    assert_eq!(m.cgram[129], rgb15(255, 0, 0));
+    assert_eq!(m.cgram[130], rgb15(0, 0, 255));
+    // OBJ char data lands at the snapped OBJ char base (tile 0 = reserved blank,
+    // tile 1 = all-red -> row0 plane0 = 0x00ff at char_base + 1*16).
+    assert_eq!(m.vram[0x2000], 0); // reserved blank tile 0
+    assert_eq!(m.vram[0x2000 + 16], 0x00ff);
+    assert_eq!(m.obsel.char_base, 0x2000); // obsel echoes the same snapped base
+    // Budget report surfaced through the shared import_reports() path.
+    assert_eq!(e.import_reports().len(), 1);
+}
+
+#[test]
 fn scanline_is_an_alias_for_hdma() {
     let mut e = engine("function frame(t,f) scanline(0,223, function(y) brightness=3 end) end");
     let lt = e.frame(0.0, 0).unwrap();
