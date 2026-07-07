@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { wrapWasmCore, type WasmCoreLike } from "./wasm";
+import type { ImportReport } from "./core";
 
 function fakeCore(over: Partial<WasmCoreLike> = {}): WasmCoreLike {
   return {
@@ -43,7 +44,7 @@ describe("wrapWasmCore", () => {
   });
 
   it("forwards live VRAM words and import reports", () => {
-    const reports = [
+    const reports: ImportReport[] = [
       {
         mode: "tile",
         layer: 0,

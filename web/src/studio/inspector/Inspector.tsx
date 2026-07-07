@@ -30,7 +30,7 @@ export function Inspector() {
       </div>
       {tab === "registers" && <RegistersTab frame={frame} />}
       {tab === "sprites" && <SpritesTab frame={frame} />}
-      {tab === "vram" && <VramTab />}
+      {tab === "vram" && <VramTab frame={frame} />}
     </div>
   );
 }
