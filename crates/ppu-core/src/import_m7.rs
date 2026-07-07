@@ -53,14 +53,17 @@ fn median_cut(rgba: &[u8], max_colors: usize) -> Vec<[u8; 3]> {
             for ch in 0..3 {
                 let lo = b.iter().map(|(c, _)| c[ch]).min().unwrap();
                 let hi = b.iter().map(|(c, _)| c[ch]).max().unwrap();
-                if best.map_or(true, |(_, _, r)| hi - lo > r) {
+                if best.is_none_or(|(_, _, r)| hi - lo > r) {
                     best = Some((i, ch, hi - lo));
                 }
             }
         }
         let Some((i, ch, _)) = best else { break }; // nothing splittable left
         let mut lo = buckets.swap_remove(i);
-        lo.sort_unstable_by_key(|(c, _)| c[ch]);
+        // Total order (channel, then full color): tied channel values must not
+        // depend on std's unstable-sort internals, or goldens drift on a
+        // toolchain upgrade.
+        lo.sort_unstable_by_key(|(c, _)| (c[ch], *c));
         let hi = lo.split_off(lo.len() / 2);
         buckets.push(lo);
         buckets.push(hi);
