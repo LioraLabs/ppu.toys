@@ -19,9 +19,44 @@ use crate::bg::{apply_brightness, render_bg_layer_scanline};
 use crate::linetable::LineTable;
 use crate::memory::{unpack_rgb15, Memory};
 use crate::mode7::render_mode7_scanline;
+use crate::modes::mode_info;
 use crate::registers::RegRow;
 use crate::sprite::render_scanline as render_sprite_scanline;
 use crate::{HEIGHT, WIDTH};
+
+/// One rung of the per-pixel priority ladder: a BG layer at a given tilemap
+/// priority bit, or the OBJ layer at a given sprite-priority level.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Slot {
+    Bg { layer: usize, prio: bool },
+    Obj { prio: u8 },
+}
+
+/// Authentic Mode-1 priority ladder, front (index 0) to back. BG participants
+/// come from the mode table's `priority_order` ([BG1,BG2,BG3]); the OBJ-prio
+/// slots and the BG3-priority-bit lift are Mode-1 hardware semantics. `bg3_high`
+/// = BGMODE.3 set: BG3 tile-priority-1 pixels jump above every other layer.
+fn mode1_ladder(bg3_high: bool) -> Vec<Slot> {
+    let ord = mode_info(1).map_or(&[0u8, 1, 2][..], |m| m.priority_order);
+    let (bg1, bg2, bg3) = (ord[0] as usize, ord[1] as usize, ord[2] as usize);
+    let mut l = Vec::with_capacity(10);
+    if bg3_high {
+        l.push(Slot::Bg { layer: bg3, prio: true });
+    }
+    l.push(Slot::Obj { prio: 3 });
+    l.push(Slot::Bg { layer: bg1, prio: true });
+    l.push(Slot::Bg { layer: bg2, prio: true });
+    l.push(Slot::Obj { prio: 2 });
+    l.push(Slot::Bg { layer: bg1, prio: false });
+    l.push(Slot::Bg { layer: bg2, prio: false });
+    l.push(Slot::Obj { prio: 1 });
+    if !bg3_high {
+        l.push(Slot::Bg { layer: bg3, prio: true });
+    }
+    l.push(Slot::Obj { prio: 0 });
+    l.push(Slot::Bg { layer: bg3, prio: false });
+    l
+}
 
 /// Composite one scanline `y` of `row` into `line` (length `WIDTH`), backdrop +
 /// BG + sprites, UN-attenuated. Brightness is applied by the caller.
@@ -115,6 +150,16 @@ mod tests {
     // TODO(m4/bg-raster, m4/mode7, m4/compositing): the BG/Mode-7/sprite compositing tests were
     // deleted with the v1 direct-RGBA `Source` model; they return as VRAM-backed
     // goldens once the rasterizers land.
+
+    #[test]
+    fn mode1_ladder_orders_front_to_back() {
+        let l = mode1_ladder(false);
+        assert_eq!(l.first(), Some(&Slot::Obj { prio: 3 }));
+        assert_eq!(l.last(), Some(&Slot::Bg { layer: 2, prio: false }));
+        assert!(!l.contains(&Slot::Bg { layer: 3, prio: true })); // BG4 absent in Mode 1
+        // bit set: BG3 tile-prio1 lifted to the very front.
+        assert_eq!(mode1_ladder(true).first(), Some(&Slot::Bg { layer: 2, prio: true }));
+    }
 
     #[test]
     fn brightness_applied_once_to_backdrop() {
