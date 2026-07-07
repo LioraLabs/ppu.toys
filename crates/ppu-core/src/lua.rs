@@ -3,6 +3,7 @@
 //! LineTable by invoking each covering hook per scanline (later call wins).
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use piccolo::{
@@ -10,7 +11,33 @@ use piccolo::{
     Table, Value,
 };
 
+use crate::import::{BudgetReport, ImportCache, ImportKey, ImportOptions};
+use crate::import_m7::{import_mode7, Mode7Import, Mode7ImportReport};
 use crate::{rgb15, LineTable, LineTableBuilder, LineTableRow, Memory, HEIGHT};
+
+/// Decoded RGBA staged for the importer, keyed by slot id. App-level (survives
+/// recompiles), unlike `Memory` which `set_source` resets. The importer
+/// (m4/importer) quantizes it into real VRAM/CGRAM words when a layer binds it.
+#[derive(Clone)]
+pub struct ImportAsset {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+    /// Bumped on every re-upload; part of the import cache key so a re-upload
+    /// re-quantizes.
+    pub generation: u64,
+}
+
+/// One BG layer's import budget from the most recent `frame()`, surfaced to the
+/// UI (m4/inspector). Tagged by importer flavor.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(tag = "mode")]
+pub enum ImportBudget {
+    #[serde(rename = "tile")]
+    Tile { layer: usize, report: BudgetReport },
+    #[serde(rename = "m7")]
+    Mode7 { layer: usize, report: Mode7ImportReport },
+}
 
 /// Compile/runtime error surfaced to the editor, matching the TS `LuaError` shape.
 #[derive(Debug, Clone, PartialEq)]
@@ -26,6 +53,17 @@ pub struct LuaEngine {
     frame_fn: Option<StashedFunction>,
     init_fn: Option<StashedFunction>,
     memory: Memory,
+    /// Uploaded image assets, keyed by slot id. Consumed by the `source =`
+    /// importer; NOT PPU memory (survives recompiles).
+    assets: HashMap<String, ImportAsset>,
+    /// Memoized tile-BG imports (m4/importer); keyed by asset+generation+options.
+    import_cache: ImportCache,
+    /// Memoized Mode 7 imports, keyed by (asset, generation).
+    m7_cache: HashMap<(String, u64), Mode7Import>,
+    /// Monotonic upload counter feeding `ImportAsset::generation`.
+    next_generation: u64,
+    /// Per-layer import budgets produced by the most recent `frame()`.
+    reports: Vec<ImportBudget>,
 }
 
 impl Default for LuaEngine {
@@ -43,12 +81,47 @@ impl LuaEngine {
             frame_fn: None,
             init_fn: None,
             memory: Memory::new(),
+            assets: HashMap::new(),
+            import_cache: ImportCache::default(),
+            m7_cache: HashMap::new(),
+            next_generation: 0,
+            reports: Vec::new(),
         }
     }
 
     /// Mirrored PPU memory after the most recent `frame()`.
     pub fn memory(&self) -> &Memory {
         &self.memory
+    }
+
+    /// Stage a decoded RGBA asset for the importer. Bumps the upload generation
+    /// and drops stale cached imports so a re-upload re-quantizes. Malformed
+    /// ImageData (zero dims or wrong buffer length) is ignored.
+    pub fn upload_asset(&mut self, slot: String, width: u32, height: u32, rgba: Vec<u8>) {
+        if width == 0 || height == 0 || rgba.len() != (width * height * 4) as usize {
+            return;
+        }
+        self.next_generation += 1;
+        let generation = self.next_generation;
+        self.import_cache.invalidate_asset(&slot);
+        self.m7_cache.retain(|(s, _), _| s != &slot);
+        self.assets.insert(slot, ImportAsset { width, height, rgba, generation });
+    }
+
+    /// Asset ids + dimensions, sorted by id (stable order for the inspector).
+    pub fn assets(&self) -> Vec<(String, u32, u32)> {
+        let mut v: Vec<_> = self
+            .assets
+            .iter()
+            .map(|(id, a)| (id.clone(), a.width, a.height))
+            .collect();
+        v.sort_by(|a, b| a.0.cmp(&b.0));
+        v
+    }
+
+    /// Per-layer import budgets from the most recent `frame()` (m4/inspector).
+    pub fn import_reports(&self) -> &[ImportBudget] {
+        &self.reports
     }
 
     /// Mutable mirrored memory — used by the wasm shim (e.g. to clear OAM on-flags
