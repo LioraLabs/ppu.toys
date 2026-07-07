@@ -12,7 +12,7 @@ pub struct ModeInfo {
     /// in this mode.
     pub bpp: [u8; 4],
     /// Fixed front-to-back BG order at equal tile priority (0-based indices).
-    /// Per-tile priority interleaving is m4/compositing's compositing concern.
+    /// Per-tile priority interleaving is the m4/compositing pass's concern.
     pub priority_order: &'static [u8],
 }
 
