@@ -133,6 +133,16 @@ end
 }
 
 #[test]
+fn vram_raw_word_poke_lands_in_memory() {
+    let mut e = engine("function frame(t,f) vram[0]=0xbeef; vram[0x7fff]=0x1234 end");
+    e.frame(0.0, 0).unwrap();
+    let m = e.memory();
+    assert_eq!(m.vram[0], 0xbeef);
+    assert_eq!(m.vram[0x7fff], 0x1234);
+    assert_eq!(m.vram[1], 0); // untouched
+}
+
+#[test]
 fn scanline_is_an_alias_for_hdma() {
     let mut e = engine("function frame(t,f) scanline(0,223, function(y) brightness=3 end) end");
     let lt = e.frame(0.0, 0).unwrap();

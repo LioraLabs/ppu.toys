@@ -191,10 +191,22 @@ impl LuaEngine {
             }
         }
 
-        // Read frame-wide defaults + frame-global memory.
+        // Read frame-wide defaults + frame-global memory. VRAM is rebuilt fresh
+        // each frame so the flush order is deterministic: zero -> imports
+        // (source= bootstrap) -> structured pokes -> raw vram[] (final authority).
         let defaults = {
             let mut l = self.lua.borrow_mut();
             l.enter(|ctx| {
+                self.memory.vram = [0u16; 0x8000];
+                self.memory.cgram = [0u16; 256];
+                apply_imports(
+                    ctx,
+                    &self.assets,
+                    &mut self.import_cache,
+                    &mut self.m7_cache,
+                    &mut self.reports,
+                    &mut self.memory,
+                );
                 read_memory(ctx, &mut self.memory);
                 read_state(ctx)
             })
@@ -324,6 +336,9 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
 
     // cgram (scalar table, written by user)
     ctx.set_global("cgram", Table::new(&ctx)).unwrap();
+
+    // vram (raw 16-bit word poke table: vram[addr] = word, 0..0x7FFF)
+    ctx.set_global("vram", Table::new(&ctx)).unwrap();
 
     // obj[0..127] + obj.sheet
     let obj = Table::new(&ctx);
@@ -510,15 +525,106 @@ fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
     }
 }
 
-/// Read cgram / obj / obj.sheet globals into `Memory` (frame-global, read once).
+/// Run the `bg[n].source =` importer for every layer that binds an uploaded
+/// asset, honoring the frame-wide `mode`. Writes real VRAM char + tilemap +
+/// CGRAM (the bootstrap the poke flush then composes on top of) and echoes the
+/// resulting binding registers back into the layer globals so `read_state`, the
+/// rasterizer, and the inspector all agree. Cached (m4/importer): a hot key
+/// re-copies words, never re-quantizes. Assumes VRAM/CGRAM were zeroed by the
+/// caller; refreshes `reports` for the UI.
+#[allow(clippy::too_many_arguments)]
+fn apply_imports(
+    ctx: piccolo::Context<'_>,
+    assets: &HashMap<String, ImportAsset>,
+    import_cache: &mut ImportCache,
+    m7_cache: &mut HashMap<(String, u64), Mode7Import>,
+    reports: &mut Vec<ImportBudget>,
+    mem: &mut Memory,
+) {
+    reports.clear();
+    let mode = crate::quantize::mode(ctx.get_global("mode").to_integer().unwrap_or(1) as u8);
+    let Value::Table(bg) = ctx.get_global("bg") else { return };
+    for i in 0..4usize {
+        let Value::Table(layer) = bg.get(ctx, (i + 1) as i64) else { continue };
+        let Some(slot) = value_to_string(layer.get(ctx, "source")) else { continue };
+        let Some(asset) = assets.get(&slot) else { continue };
+        if mode == 7 {
+            // Mode 7 is a single 8bpp BG1 plane over the interleaved region.
+            if i != 0 {
+                continue;
+            }
+            let imp = m7_cache
+                .entry((slot.clone(), asset.generation))
+                .or_insert_with(|| {
+                    import_mode7(&asset.rgba, asset.width as usize, asset.height as usize)
+                });
+            imp.apply(mem);
+            reports.push(ImportBudget::Mode7 { layer: i, report: imp.report.clone() });
+        } else {
+            // Tile BG (Mode 1): bit-depth from the mode table; only 2/4bpp
+            // tile layers import.
+            let bpp = crate::modes::mode_info(mode).map_or(0, |m| m.bpp[i]);
+            if !matches!(bpp, 2 | 4) {
+                continue;
+            }
+            // Placement bases: honor user-set map_base/char_base, else the
+            // importer defaults (map_base 0, char_base 0x1000).
+            let char_base = layer.get(ctx, "char_base").to_integer().unwrap_or(0) as u32;
+            let opts = ImportOptions {
+                bit_depth: bpp,
+                tile_size: layer.get(ctx, "tile_size").to_integer().unwrap_or(8) as u8,
+                map_base: crate::quantize::bg_map_base(
+                    layer.get(ctx, "map_base").to_integer().unwrap_or(0) as u32,
+                ),
+                char_base: if char_base == 0 {
+                    0x1000
+                } else {
+                    crate::quantize::bg_char_base(char_base)
+                },
+            };
+            let key = ImportKey {
+                asset: slot.clone(),
+                generation: asset.generation,
+                options: opts,
+            };
+            let imp = import_cache.get_or_import(key, &asset.rgba, asset.width, asset.height);
+            let cb = imp.registers.char_base as usize;
+            for (o, &w) in imp.char_words.iter().enumerate() {
+                mem.vram[(cb + o) & 0x7fff] = w;
+            }
+            let mb = imp.registers.map_base as usize;
+            for (o, &w) in imp.tilemap_words.iter().enumerate() {
+                mem.vram[(mb + o) & 0x7fff] = w;
+            }
+            for &(idx, c) in &imp.cgram {
+                mem.cgram[idx as usize] = c;
+            }
+            layer.set(ctx, "map_base", imp.registers.map_base as i64).unwrap();
+            layer.set(ctx, "char_base", imp.registers.char_base as i64).unwrap();
+            layer.set(ctx, "screen_size", imp.registers.screen_size as i64).unwrap();
+            layer.set(ctx, "tile_size", imp.registers.tile_size as i64).unwrap();
+            reports.push(ImportBudget::Tile { layer: i, report: imp.report.clone() });
+        }
+    }
+}
+
+/// Flush the DSL memory-poke surfaces into `Memory`. Runs AFTER `apply_imports`
+/// has laid down any `source =` bootstrap, so manual pokes compose on top under
+/// last-write-wins. Order: structured tilemap/char pokes, then the raw `vram[]`
+/// table as the FINAL authority (a raw word write always wins). `cgram[]` is
+/// applied as an override on top of the import palette (only set entries).
+/// VRAM is NOT zeroed here — `frame()` zeroes it before imports.
 fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
+    // cgram[] overrides the import palette: apply only the entries the user
+    // actually set, so a `source =` import's colors survive where unpoked.
+    // (mem.cgram was zeroed and any import palette written before this runs.)
     if let Value::Table(cg) = ctx.get_global("cgram") {
-        for i in 0..256 {
-            mem.cgram[i] = cg
-                .get(ctx, i as i64)
-                .to_integer()
-                .map(|v| (v as u16) & 0x7fff)
-                .unwrap_or(0);
+        for (k, v) in cg {
+            if let (Some(i), Some(c)) = (k.to_integer(), v.to_integer()) {
+                if (0..256).contains(&i) {
+                    mem.cgram[i as usize] = (c as u16) & 0x7fff;
+                }
+            }
         }
     }
     if let Value::Table(obj) = ctx.get_global("obj") {
@@ -535,6 +641,19 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
                 e.flip_x = o.get(ctx, "flip_x").to_bool();
                 e.flip_y = o.get(ctx, "flip_y").to_bool();
                 e.on = o.get(ctx, "on").to_bool();
+            }
+        }
+    }
+
+    // Raw `vram[addr] = word` pokes — the FINAL authority (applied after imports
+    // and structured pokes, so a raw word write always wins). Iterate only the
+    // set entries (sparse) rather than scanning 0..0x8000.
+    if let Value::Table(vt) = ctx.get_global("vram") {
+        for (k, v) in vt {
+            if let (Some(addr), Some(word)) = (k.to_integer(), v.to_integer()) {
+                if (0..0x8000).contains(&addr) {
+                    mem.vram[addr as usize] = word as u16;
+                }
             }
         }
     }
