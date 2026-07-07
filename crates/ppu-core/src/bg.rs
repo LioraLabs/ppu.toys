@@ -1,10 +1,9 @@
-//! Mode-1 tile background rasterizer.
+//! Mode-1 tile background rasterizer over byte-accurate VRAM.
 //!
-//! The v1 direct-RGBA `Source` contract is gone (deleted by m4/memory): a BG
-//! layer no longer names a whole-image asset. `render_bg_layer_scanline` is a
-//! STUB — every layer renders transparent — until m4/bg-raster rewrites it as
-//! the real tilemap/char/palette pipeline over byte-accurate VRAM. Brightness
-//! is applied once by the E5 compositor; the per-layer primitive here returns
+//! A BG pixel resolves the real PPU indirection: tilemap entry (at
+//! `map_base`, screen-size wrapped) -> char bitplane data (at `char_base`,
+//! 2bpp/4bpp per the mode table) -> palette index -> CGRAM color. Brightness
+//! is applied once by the compositor; the per-layer primitive here returns
 //! un-attenuated color.
 
 use crate::memory::{unpack_rgb15, Memory};
@@ -59,22 +58,81 @@ fn map_entry_addr(map_base: u16, screen_size: u8, tx: u32, ty: u32) -> u16 {
     ((map_base as u32 + off) & 0x7fff) as u16
 }
 
+/// One rasterized BG pixel candidate: the resolved CGRAM color plus the
+/// tilemap entry's priority bit, so the compositor's priority pass
+/// (m4/compositing) can interleave it with layer order and sprites.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BgPixel {
+    pub rgba: [u8; 4],
+    pub prio: bool,
+}
+
+/// Render one BG layer for scanline `y` into `width` pixel candidates with
+/// their tilemap priority bit; `None` = transparent at that x. The real
+/// Mode-1 pipeline over byte-accurate VRAM: scroll -> tilemap fetch at
+/// `map_base` (screen-size wrap) -> entry decode (tile#, palette, priority,
+/// H/V flip) -> char bitplane decode at `char_base` (16x16 tiles = four 8x8
+/// quadrant chars) -> CGRAM sub-palette (index 0 = transparent). Layers whose
+/// mode-table bpp is not 2/4 render transparent: bpp 0 = absent in this mode,
+/// bpp 8 = Mode 3 tile BGs (unshipped) / Mode 7 (own rasterizer, mode7.rs).
+pub fn render_bg_layer_scanline_px(
+    layer: &RegBg,
+    mem: &Memory,
+    y: usize,
+    width: usize,
+) -> Vec<Option<BgPixel>> {
+    if !layer.visible || !matches!(layer.bpp, 2 | 4) {
+        return vec![None; width];
+    }
+    let ts = layer.tile_size as u32; // pixel edge: 8 or 16
+    let (tiles_w, tiles_h): (u32, u32) = match layer.screen_size {
+        1 => (64, 32),
+        2 => (32, 64),
+        3 => (64, 64),
+        _ => (32, 32),
+    };
+    let words_per_char = layer.bpp as u32 * 4; // 2bpp = 8 words, 4bpp = 16
+    let wy = (y as i64 + layer.scroll_y as i64).rem_euclid((tiles_h * ts) as i64) as u32;
+    (0..width)
+        .map(|x| {
+            let wx = (x as i64 + layer.scroll_x as i64).rem_euclid((tiles_w * ts) as i64) as u32;
+            let entry = mem.vram
+                [map_entry_addr(layer.map_base, layer.screen_size, wx / ts, wy / ts) as usize];
+            let (mut fx, mut fy) = (wx % ts, wy % ts);
+            if entry & 0x4000 != 0 {
+                fx = ts - 1 - fx; // H flip
+            }
+            if entry & 0x8000 != 0 {
+                fy = ts - 1 - fy; // V flip
+            }
+            // 16x16 tiles are four 8x8 chars: n, n+1 (right), n+16, n+17 (below).
+            let char_index = ((entry & 0x03ff) as u32 + fx / 8 + (fy / 8) * 16) & 0x03ff;
+            let addr = ((layer.char_base as u32 + char_index * words_per_char) & 0x7fff) as u16;
+            let index = char_pixel_index(mem, addr, layer.bpp, fx % 8, fy % 8);
+            if index == 0 {
+                return None; // color 0 = transparent
+            }
+            let pal = ((entry >> 10) & 0x07) as usize;
+            let color = mem.cgram[pal * (1 << layer.bpp) + index as usize]; // 4bpp p*16, 2bpp p*4
+            Some(BgPixel { rgba: unpack_rgb15(color), prio: entry & 0x2000 != 0 })
+        })
+        .collect()
+}
+
 /// Render one BG layer for scanline `y` into `width` pixel candidates.
 /// `None` = transparent at that x (lower layer / backdrop shows through).
-///
-/// TODO(m4/bg-raster): STUB during the M4 substrate rewrite — the v1 direct-RGBA
-/// `Source` path was deleted by m4/memory. m4/bg-raster rewrites this as the real
-/// pipeline: tilemap fetch at `layer.map_base` (screen-size wrap) -> char
-/// bitplane decode at `layer.char_base` -> CGRAM sub-palette lookup. Until
-/// then every BG layer renders transparent.
+/// The compositor seam: [`render_bg_layer_scanline_px`] minus the priority
+/// bit, which the v1 compositor does not consume yet (m4/compositing).
 pub fn render_bg_layer_scanline(
     layer: &RegBg,
-    _mem: &Memory,
-    _y: usize,
+    mem: &Memory,
+    y: usize,
     width: usize,
 ) -> Vec<Option<[u8; 4]>> {
-    let _ = layer.visible; // keeps the seam's inputs obvious for m4/bg-raster
-    vec![None; width]
+    render_bg_layer_scanline_px(layer, mem, y, width)
+        .into_iter()
+        .map(|p| p.map(|c| c.rgba))
+        .collect()
 }
 
 /// Standalone Mode-1 BG raster: backdrop (`cgram[0]`) + the four layers
@@ -125,14 +183,188 @@ mod tests {
     use crate::memory::rgb15;
     use crate::registers::{LineTableRow, RegRow};
 
-    // TODO(m4/bg-raster): the direct-RGBA sampling tests were deleted with the v1
-    // `Source` model; m4/bg-raster adds VRAM-backed tilemap/char/palette tests.
+    /// A Mode-1 layer to mutate per test: index 0 = BG1 (4bpp), 2 = BG3 (2bpp).
+    fn layer(i: usize) -> RegBg {
+        RegRow::from(&LineTableRow::default()).bg[i].clone()
+    }
 
     #[test]
-    fn stub_layer_is_all_transparent() {
+    fn empty_vram_is_all_transparent() {
         let m = Memory::new();
-        let row = RegRow::from(&LineTableRow::default());
-        assert!(render_bg_layer_scanline(&row.bg[0], &m, 0, 8).iter().all(|p| p.is_none()));
+        // Entry 0 -> tile 0 -> all-zero planes -> index 0 everywhere.
+        assert!(render_bg_layer_scanline(&layer(0), &m, 0, 8).iter().all(|p| p.is_none()));
+    }
+
+    #[test]
+    fn renders_4bpp_tile_through_cgram_subpalette() {
+        let mut m = Memory::new();
+        m.cgram[2 * 16 + 1] = rgb15(255, 0, 0); // sub-palette 2, index 1
+        // Char 1 at char_base 0x1000 (16 words/char): pixel (0,0) = index 1.
+        m.vram[0x1000 + 16] = 0b1000_0000;
+        // Map entry (0,0): tile 1, palette 2.
+        m.vram[0] = 1 | (2 << 10);
+        let mut l = layer(0);
+        l.char_base = 0x1000;
+        let line = render_bg_layer_scanline_px(&l, &m, 0, 4);
+        let px = line[0].expect("pixel (0,0) set");
+        assert_eq!(px.rgba, unpack_rgb15(rgb15(255, 0, 0)));
+        assert!(!px.prio);
+        assert!(line[1].is_none()); // index 0 = transparent
+        // y=1 row of the tile is empty.
+        assert!(render_bg_layer_scanline_px(&l, &m, 1, 4)[0].is_none());
+    }
+
+    #[test]
+    fn renders_2bpp_tile_with_2bpp_palette_base() {
+        let mut m = Memory::new();
+        m.cgram[3 * 4 + 2] = rgb15(0, 255, 0); // 2bpp: sub-palette 3 base = 12
+        // Char 1 at char_base 0x2000 (8 words/char): pixel (0,0) = index 2 (plane 1).
+        m.vram[0x2000 + 8] = 0b1000_0000 << 8;
+        m.vram[0] = 1 | (3 << 10);
+        let mut l = layer(2); // BG3: bpp 2
+        l.char_base = 0x2000;
+        let line = render_bg_layer_scanline_px(&l, &m, 0, 2);
+        assert_eq!(line[0].unwrap().rgba, unpack_rgb15(rgb15(0, 255, 0)));
+    }
+
+    #[test]
+    fn hflip_and_vflip_mirror_the_subtile() {
+        let mut m = Memory::new();
+        m.cgram[1] = rgb15(255, 255, 255);
+        // Char 1: only pixel (0,0) set (index 1).
+        m.vram[0x1000 + 16] = 0b1000_0000;
+        let mut l = layer(0);
+        l.char_base = 0x1000;
+        m.vram[0] = 1 | (1 << 14); // H flip -> shows at x=7
+        let line = render_bg_layer_scanline_px(&l, &m, 0, 8);
+        assert!(line[0].is_none());
+        assert!(line[7].is_some());
+        m.vram[0] = 1 | (1 << 15); // V flip -> shows at y=7
+        assert!(render_bg_layer_scanline_px(&l, &m, 0, 8)[0].is_none());
+        assert!(render_bg_layer_scanline_px(&l, &m, 7, 8)[0].is_some());
+        m.vram[0] = 1 | (1 << 14) | (1 << 15); // HV -> (7,7)
+        assert!(render_bg_layer_scanline_px(&l, &m, 7, 8)[7].is_some());
+    }
+
+    #[test]
+    fn priority_bit_carried_and_dropped_by_wrapper() {
+        let mut m = Memory::new();
+        m.cgram[1] = rgb15(10, 20, 30);
+        m.vram[0x1000 + 16] = 0b1000_0000;
+        m.vram[0] = 1 | (1 << 13); // priority set
+        let mut l = layer(0);
+        l.char_base = 0x1000;
+        assert!(render_bg_layer_scanline_px(&l, &m, 0, 1)[0].unwrap().prio);
+        // Contract wrapper: same color, priority dropped.
+        assert_eq!(
+            render_bg_layer_scanline(&l, &m, 0, 1)[0],
+            Some(unpack_rgb15(rgb15(10, 20, 30)))
+        );
+    }
+
+    #[test]
+    fn scroll_wraps_with_negative_values() {
+        let mut m = Memory::new();
+        m.cgram[1] = rgb15(255, 255, 255);
+        m.vram[0x1000 + 16] = 0b1000_0000; // char 1, pixel (0,0)
+        m.vram[0] = 1; // map cell (0,0)
+        let mut l = layer(0);
+        l.char_base = 0x1000;
+        l.scroll_x = -8; // 32x32 extent = 256 px: world x 0 appears at screen x 8
+        let line = render_bg_layer_scanline_px(&l, &m, 0, 16);
+        assert!(line[0].is_none());
+        assert!(line[8].is_some());
+        l.scroll_x = -264; // -264.rem_euclid(256) == 248 -> same as -8
+        assert!(render_bg_layer_scanline_px(&l, &m, 0, 16)[8].is_some());
+        l.scroll_x = 0;
+        l.scroll_y = -3; // pixel row 0 of the tile appears at screen y 3
+        assert!(render_bg_layer_scanline_px(&l, &m, 3, 1)[0].is_some());
+        assert!(render_bg_layer_scanline_px(&l, &m, 2, 1)[0].is_none());
+    }
+
+    #[test]
+    fn invisible_or_absent_layers_are_transparent() {
+        let mut m = Memory::new();
+        m.cgram[1] = rgb15(255, 255, 255);
+        m.vram[0x1000 + 16] = 0b1000_0000;
+        m.vram[0] = 1;
+        let mut l = layer(0);
+        l.char_base = 0x1000;
+        l.visible = false;
+        assert!(render_bg_layer_scanline_px(&l, &m, 0, 8).iter().all(|p| p.is_none()));
+        // BG4 does not exist in Mode 1 (bpp 0) even though visible defaults true.
+        let bg4 = layer(3);
+        assert!(bg4.visible && bg4.bpp == 0);
+        assert!(render_bg_layer_scanline_px(&bg4, &m, 0, 8).iter().all(|p| p.is_none()));
+    }
+
+    #[test]
+    fn tile16_selects_quadrant_chars() {
+        let mut m = Memory::new();
+        for i in 1..=4u16 {
+            m.cgram[i as usize] = rgb15(i as u8 * 40, 0, 0);
+        }
+        let cb = 0x1000usize;
+        // Pixel (0,0) of each quadrant char of 16x16 tile 2: distinct indices.
+        m.vram[cb + 2 * 16] = 0x0080; // char 2  (top-left)     -> index 1
+        m.vram[cb + 3 * 16] = 0x8000; // char 3  (top-right)    -> index 2
+        m.vram[cb + 18 * 16] = 0x8080; // char 18 (bottom-left)  -> index 3
+        m.vram[cb + 19 * 16 + 8] = 0x0080; // char 19 (bottom-right) -> index 4 (plane 2)
+        m.vram[0] = 2;
+        let mut l = layer(0);
+        l.char_base = cb as u16;
+        l.tile_size = 16;
+        let idx_at = |mm: &Memory, y: usize, x: usize| {
+            render_bg_layer_scanline_px(&l, mm, y, 16)[x].map(|p| p.rgba)
+        };
+        assert_eq!(idx_at(&m, 0, 0), Some(unpack_rgb15(rgb15(40, 0, 0))));
+        assert_eq!(idx_at(&m, 0, 8), Some(unpack_rgb15(rgb15(80, 0, 0))));
+        assert_eq!(idx_at(&m, 8, 0), Some(unpack_rgb15(rgb15(120, 0, 0))));
+        assert_eq!(idx_at(&m, 8, 8), Some(unpack_rgb15(rgb15(160, 0, 0))));
+        assert_eq!(idx_at(&m, 0, 1), None); // rest of each quadrant is empty
+        // H flip swaps quadrant columns: (0,0) of char 3 lands at x=7.
+        m.vram[0] = 2 | (1 << 14);
+        assert_eq!(idx_at(&m, 0, 7), Some(unpack_rgb15(rgb15(80, 0, 0))));
+        assert_eq!(idx_at(&m, 0, 15), Some(unpack_rgb15(rgb15(40, 0, 0))));
+    }
+
+    #[test]
+    fn screen_size_1_reads_the_second_screen() {
+        let mut m = Memory::new();
+        m.cgram[1] = rgb15(255, 255, 255);
+        m.vram[0x1000 + 16] = 0b1000_0000; // char 1, pixel (0,0)
+        m.vram[0x0400] = 1; // tile cell (32,0) lives in screen 1
+        let mut l = layer(0);
+        l.char_base = 0x1000;
+        l.screen_size = 1; // 64x32 -> 512px wide extent
+        l.scroll_x = 256; // screen x 0 -> world x 256 -> tile col 32
+        assert!(render_bg_layer_scanline_px(&l, &m, 0, 1)[0].is_some());
+        // The 64-tile extent wraps: scroll 512 aliases scroll 0 (empty cell 0,0).
+        l.scroll_x = 512;
+        assert!(render_bg_layer_scanline_px(&l, &m, 0, 1)[0].is_none());
+    }
+
+    #[test]
+    fn composite_helper_stacks_bg1_over_bg3() {
+        let mut m = Memory::new();
+        m.cgram[0] = rgb15(0, 0, 64); // backdrop
+        m.cgram[1] = rgb15(255, 0, 0); // BG1 color (pal 0, idx 1)
+        m.cgram[2] = rgb15(0, 255, 0); // BG3 color (pal 0, idx 2)
+        // BG1: 4bpp char 1 at 0x1000, pixel (0,0); BG3: 2bpp char 1 at 0x2000,
+        // pixels (0,0) and (1,0) = index 2.
+        m.vram[0x1000 + 16] = 0b1000_0000;
+        m.vram[0x2000 + 8] = 0b1100_0000 << 8;
+        m.vram[0x0000] = 1; // BG1 map at 0x0000
+        m.vram[0x0800] = 1; // BG3 map at 0x0800
+        let mut src = LineTableRow::default();
+        src.bg[0].char_base = 0x1000;
+        src.bg[2].char_base = 0x2000;
+        src.bg[2].map_base = 0x0800;
+        let row = RegRow::from(&src);
+        let line = render_bg_scanline(&row, &m, 0, 3);
+        assert_eq!(line[0], unpack_rgb15(rgb15(255, 0, 0))); // BG1 wins over BG3
+        assert_eq!(line[1], unpack_rgb15(rgb15(0, 255, 0))); // BG3 over backdrop
+        assert_eq!(line[2], unpack_rgb15(rgb15(0, 0, 64))); // backdrop
     }
 
     #[test]
