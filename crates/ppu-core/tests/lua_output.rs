@@ -133,6 +133,96 @@ end
 }
 
 #[test]
+fn vram_raw_word_poke_lands_in_memory() {
+    let mut e = engine("function frame(t,f) vram[0]=0xbeef; vram[0x7fff]=0x1234 end");
+    e.frame(0.0, 0).unwrap();
+    let m = e.memory();
+    assert_eq!(m.vram[0], 0xbeef);
+    assert_eq!(m.vram[0x7fff], 0x1234);
+    assert_eq!(m.vram[1], 0); // untouched
+}
+
+#[test]
+fn bg_map_cell_packs_tilemap_word() {
+    let mut e = engine(
+        "function frame(t,f) bg[1].map_base=0; \
+         bg[1].map[0]={} bg[1].map[0][0]={tile=5,pal=3,prio=1,flip_x=true,flip_y=false}; \
+         bg[1].map[1]={} bg[1].map[1][2]={tile=1} end",
+    );
+    e.frame(0.0, 0).unwrap();
+    let m = e.memory();
+    // (col=0,row=0): 5 | 3<<10 | 1<<13 | 1<<14
+    assert_eq!(m.vram[0], 5 | (3 << 10) | (1 << 13) | (1 << 14));
+    // (col=1,row=2): addr = row*32 + col = 65
+    assert_eq!(m.vram[2 * 32 + 1], 1);
+}
+
+#[test]
+fn m7_map_and_char_write_correct_lanes() {
+    let mut e = engine("function frame(t,f) m7.map[0]={} m7.map[0][1]=7; m7pixel(2, 3, 1, 200) end");
+    e.frame(0.0, 0).unwrap();
+    let m = e.memory();
+    assert_eq!(m.vram[1] & 0x00ff, 7); // map low byte at ty=0,tx=1
+    assert_eq!(m.vram[1] >> 8, 0); // char lane untouched
+    assert_eq!(m.vram[2 * 64 + 11] >> 8, 200); // char high byte, off = 1*8 + 3
+    assert_eq!(m.vram[2 * 64 + 11] & 0x00ff, 0); // map lane untouched
+}
+
+#[test]
+fn source_triggers_tile_bg_import_into_vram_cgram() {
+    let mut e = LuaEngine::new();
+    // 16x8: left 12px red, right 4px blue -> two tiles, one palette.
+    let mut rgba = Vec::new();
+    for _y in 0..8 {
+        for x in 0..16 {
+            rgba.extend_from_slice(if x < 12 { &[255, 0, 0, 255] } else { &[0, 0, 255, 255] });
+        }
+    }
+    e.upload_asset("sky".into(), 16, 8, rgba);
+    e.set_source("function frame(t,f) mode=1; bg[1].source='sky' end").unwrap();
+    let lt = e.frame(0.0, 0).unwrap();
+    let m = e.memory();
+    assert_eq!(m.cgram[1], rgb15(255, 0, 0)); // sub-palette 0 idx 1
+    assert_eq!(m.cgram[2], rgb15(0, 0, 255)); // idx 2
+    assert_eq!(m.vram[0], 0x0001); // tilemap cell 0 = tile 1
+    assert_eq!(m.vram[1], 0x0002); // cell 1 = tile 2
+    assert_eq!(m.vram[0x1000 + 16], 0x00ff); // char base 0x1000, tile 1 row0 plane0
+    assert_eq!(lt.rows[0].bg[0].char_base, 0x1000); // echoed binding register
+    assert_eq!(lt.rows[0].bg[0].map_base, 0x0000);
+    assert_eq!(e.import_reports().len(), 1); // budget surfaced
+}
+
+#[test]
+fn source_triggers_mode7_import_interleaved() {
+    let mut e = LuaEngine::new();
+    let rgba = [255u8, 0, 0, 255].repeat(64); // 8x8 solid red = 256 bytes
+    e.upload_asset("track".into(), 8, 8, rgba);
+    e.set_source("function frame(t,f) mode=7; bg[1].source='track' end").unwrap();
+    e.frame(0.0, 0).unwrap();
+    let m = e.memory();
+    assert_eq!(m.cgram[1], rgb15(255, 0, 0));
+    assert_eq!(m.vram[0] >> 8, 1); // char lane index 1
+    assert_eq!(m.vram[0] & 0x00ff, 0); // map cell 0 = tile 0
+}
+
+#[test]
+fn manual_pokes_override_source_import() {
+    let mut e = LuaEngine::new();
+    let mut rgba = Vec::new();
+    for _ in 0..64 {
+        rgba.extend_from_slice(&[255, 0, 0, 255]);
+    }
+    e.upload_asset("sky".into(), 8, 8, rgba);
+    e.set_source(
+        "function frame(t,f) mode=1; bg[1].source='sky'; vram[0]=0xabcd; cgram[1]=rgb(0,255,0) end",
+    )
+    .unwrap();
+    e.frame(0.0, 0).unwrap();
+    assert_eq!(e.memory().vram[0], 0xabcd); // raw vram wins over the tilemap
+    assert_eq!(e.memory().cgram[1], rgb15(0, 255, 0)); // cgram poke wins over import
+}
+
+#[test]
 fn scanline_is_an_alias_for_hdma() {
     let mut e = engine("function frame(t,f) scanline(0,223, function(y) brightness=3 end) end");
     let lt = e.frame(0.0, 0).unwrap();
