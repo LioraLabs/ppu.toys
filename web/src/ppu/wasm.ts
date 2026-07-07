@@ -1,5 +1,13 @@
 import init, { PpuCore as WasmCore } from "../wasm/pkg/ppu_core.js";
-import { PpuCore, FrameResult, RegisterView, LuaError, OamSprite, AssetInfo } from "./core";
+import {
+  PpuCore,
+  FrameResult,
+  RegisterView,
+  LuaError,
+  OamSprite,
+  AssetInfo,
+  ImportReport,
+} from "./core";
 
 /** The slice of the wasm-bindgen core the adapter calls. Extracted so the adapter
  *  is unit-testable without instantiating the real wasm module. `frame()` returns
@@ -10,8 +18,10 @@ export interface WasmCoreLike {
   framebuffer(): ArrayLike<number>;
   registers(): unknown;
   cgram(): Uint16Array;
+  vram?: () => Uint16Array;
   oam?: () => OamSprite[];
   listAssets?: () => AssetInfo[];
+  importReports?: () => ImportReport[];
   uploadTexture(slot: string, imageData: ImageData): void;
   setLayerVisible(id: string, visible: boolean): void;
 }
@@ -41,6 +51,12 @@ export function wrapWasmCore(core: WasmCoreLike): PpuCore {
     },
     listAssets(): AssetInfo[] {
       return core.listAssets?.() ?? [];
+    },
+    vram(): Uint16Array {
+      return core.vram?.() ?? new Uint16Array(0);
+    },
+    importReports(): ImportReport[] {
+      return core.importReports?.() ?? [];
     },
   };
 }

@@ -68,6 +68,8 @@ function makeCore(state: { throwing: boolean }): PpuCore {
     uploadTexture: () => {},
     setLayerVisible: () => {},
     listAssets: () => [],
+    vram: () => new Uint16Array(0),
+    importReports: () => [],
   };
 }
 

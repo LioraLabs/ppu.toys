@@ -28,6 +28,36 @@ export interface AssetInfo {
   height: number;
 }
 
+export type ImportOverflow =
+  | { kind: "Cropped"; max_px: number }
+  | { kind: "Colors"; unique: number; budget: number }
+  | { kind: "Palettes"; needed: number; remapped_tiles: number }
+  | { kind: "Tiles"; unique: number; kept: number }
+  | { kind: "TileSize16" };
+
+export interface TileImportBudget {
+  colors_used: number;
+  palettes_used: number;
+  tile_cells: number;
+  unique_tiles: number;
+  vram_words: number;
+  overflows: ImportOverflow[];
+}
+
+export interface Mode7ImportBudget {
+  colors: number;
+  unique_tiles: number;
+  tile_capacity: number;
+  overflow_tiles: number;
+  map_tiles_w: number;
+  map_tiles_h: number;
+}
+
+export type ImportReport =
+  | { mode: "tile"; layer: number; report: TileImportBudget }
+  | { mode: "m7"; layer: number; report: Mode7ImportBudget }
+  | { mode: "obj"; report: TileImportBudget };
+
 export interface FrameResult {
   framebuffer: Uint8ClampedArray; // 256*224*4 RGBA
   registers: RegisterView[];
@@ -44,6 +74,10 @@ export interface PpuCore {
   setLayerVisible(id: string, visible: boolean): void;
   /** Enumerate uploaded sources resident in VRAM -> VRAM inspector. */
   listAssets(): AssetInfo[];
+  /** Mirrored PPU VRAM words from the most recent frame. */
+  vram(): Uint16Array;
+  /** Per-import budget/overflow reports from the most recent frame. */
+  importReports(): ImportReport[];
 }
 
 export const WIDTH = 256;

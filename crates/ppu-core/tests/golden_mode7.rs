@@ -33,7 +33,13 @@ fn track() -> Memory {
         for fx in 0..8 {
             set_char(&mut mem, 1, fx, fy, 1);
             set_char(&mut mem, 2, fx, fy, 2);
-            set_char(&mut mem, 3, fx, fy, if ((fx / 2) + (fy / 2)) % 2 == 0 { 3 } else { 4 });
+            set_char(
+                &mut mem,
+                3,
+                fx,
+                fy,
+                if ((fx / 2) + (fy / 2)) % 2 == 0 { 3 } else { 4 },
+            );
         }
     }
     for ty in 0..128 {
@@ -89,7 +95,10 @@ fn mode7_floor_matches_golden_png() {
     let actual = floor_framebuffer();
     let expected = decode_png(GOLDEN);
     assert_eq!(actual.len(), WIDTH * HEIGHT * 4);
-    assert_eq!(actual, expected, "Mode 7 floor framebuffer differs from golden PNG");
+    assert_eq!(
+        actual, expected,
+        "Mode 7 floor framebuffer differs from golden PNG"
+    );
 }
 
 #[test]
@@ -101,5 +110,9 @@ fn regen_mode7_golden() {
     let mut encoder = png::Encoder::new(file, WIDTH as u32, HEIGHT as u32);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
-    encoder.write_header().unwrap().write_image_data(&fb).unwrap();
+    encoder
+        .write_header()
+        .unwrap()
+        .write_image_data(&fb)
+        .unwrap();
 }

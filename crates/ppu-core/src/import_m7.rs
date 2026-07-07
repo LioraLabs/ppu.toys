@@ -79,7 +79,11 @@ fn median_cut(rgba: &[u8], max_colors: usize) -> Vec<[u8; 3]> {
                     sum[ch] += c[ch] as u64 * *n as u64;
                 }
             }
-            [(sum[0] / total) as u8, (sum[1] / total) as u8, (sum[2] / total) as u8]
+            [
+                (sum[0] / total) as u8,
+                (sum[1] / total) as u8,
+                (sum[2] / total) as u8,
+            ]
         })
         .collect();
     palette.sort_unstable();
@@ -192,7 +196,11 @@ impl Mode7Import {
 /// byte-interleaved VRAM region. The image map is placed at the tilemap's
 /// top-left; uncovered cells stay tile 0.
 pub fn import_mode7(rgba: &[u8], width: usize, height: usize) -> Mode7Import {
-    assert_eq!(rgba.len(), width * height * 4, "rgba buffer/dimensions mismatch");
+    assert_eq!(
+        rgba.len(),
+        width * height * 4,
+        "rgba buffer/dimensions mismatch"
+    );
     let palette = median_cut(rgba, 255);
     // Index every pixel: 0 = transparent, palette entry i -> index i+1.
     let mut indexed = vec![0u8; width * height];
@@ -232,7 +240,9 @@ pub fn import_mode7(rgba: &[u8], width: usize, height: usize) -> Mode7Import {
             colors: palette.len() as u16,
             unique_tiles: unique_total.min(u16::MAX as usize) as u16,
             tile_capacity: M7_MAX_TILES as u16,
-            overflow_tiles: unique_total.saturating_sub(M7_MAX_TILES).min(u16::MAX as usize) as u16,
+            overflow_tiles: unique_total
+                .saturating_sub(M7_MAX_TILES)
+                .min(u16::MAX as usize) as u16,
             map_tiles_w: tiles_w as u16,
             map_tiles_h: tiles_h as u16,
         },
@@ -245,7 +255,10 @@ mod tests {
 
     /// Build an RGBA buffer from a list of (r,g,b) pixels (all opaque).
     fn rgba_of(pixels: &[[u8; 3]]) -> Vec<u8> {
-        pixels.iter().flat_map(|c| [c[0], c[1], c[2], 255]).collect()
+        pixels
+            .iter()
+            .flat_map(|c| [c[0], c[1], c[2], 255])
+            .collect()
     }
 
     #[test]
@@ -272,8 +285,11 @@ mod tests {
         let pal = median_cut(&rgba, 4);
         assert_eq!(pal.len(), 4);
         assert_eq!(pal, median_cut(&rgba, 4)); // deterministic across runs
-        // Buckets are 64-gray runs; count-weighted means truncate: 31.5 -> 31, ...
-        assert_eq!(pal, vec![[31, 31, 31], [95, 95, 95], [159, 159, 159], [223, 223, 223]]);
+                                               // Buckets are 64-gray runs; count-weighted means truncate: 31.5 -> 31, ...
+        assert_eq!(
+            pal,
+            vec![[31, 31, 31], [95, 95, 95], [159, 159, 159], [223, 223, 223]]
+        );
     }
 
     #[test]
@@ -371,7 +387,11 @@ mod tests {
         let mut rgba = Vec::new();
         for _y in 0..8 {
             for x in 0..8 {
-                rgba.extend_from_slice(if x < 4 { &[255, 255, 255, 255] } else { &[0, 0, 0, 0] });
+                rgba.extend_from_slice(if x < 4 {
+                    &[255, 255, 255, 255]
+                } else {
+                    &[0, 0, 0, 0]
+                });
             }
         }
         let out = import_mode7(&rgba, 8, 8);

@@ -93,12 +93,12 @@ function hero(): DemoAsset {
 }
 
 function track(): DemoAsset {
-  const w = 64, h = 64;
+  const w = 1024, h = 1024;
   const data = new Uint8ClampedArray(w * h * 4);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      const cx = Math.floor(x / 8);
-      const cy = Math.floor(y / 8);
+      const cx = Math.floor(x / 8) % 8;
+      const cy = Math.floor(y / 8) % 8;
       const i = (y * w + x) * 4;
       data[i] = cx * 32;
       data[i + 1] = cy * 32;
@@ -115,11 +115,12 @@ local SPEED = 12
 function frame(t, f)
   mode = 1; brightness = 15
   bg[1].source = "sky";   bg[2].source = "hills"
+  bg[2].map_base = 0x0800; bg[2].char_base = 0x4000
   bg[1].scroll.x = t * SPEED
   bg[2].scroll.x = t * SPEED * 3
   for i = 0, 7 do cgram[0x40 + i] = hsl((t*40 + i*12) % 360, 0.6, 0.5) end
-  obj[0].tile = 4; obj[0].pal = 2; obj[0].x = 120; obj[0].y = 132 + sin(t*3) * 4
-  obj.sheet = "hero"; obj[0].on = true
+  obj[0].tile = 4; obj[0].pal = 0; obj[0].prio = 3; obj[0].x = 120; obj[0].y = 132 + sin(t*3) * 4
+  obj.char_base = 0x6000; obj.sheet = "hero"; obj[0].on = true
 end
 `;
 
