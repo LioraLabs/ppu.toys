@@ -166,6 +166,7 @@ pub struct Mode7ImportReport {
 
 /// Result of a Mode 7 import: the interleaved VRAM region, the flat CGRAM
 /// palette, and the budget report.
+#[derive(Clone)]
 pub struct Mode7Import {
     /// The full interleaved region, words 0..0x4000:
     /// `vram[i] = (char_byte[i] << 8) | map_byte[i]`.
