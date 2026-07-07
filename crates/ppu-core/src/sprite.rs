@@ -63,8 +63,9 @@ pub fn render_scanline(mem: &Memory, y: usize, width: usize) -> Vec<Option<Sprit
 }
 
 /// Full-frame sprite raster over the CGRAM backdrop (`cgram[0]`), for golden
-/// tests. The real compositor (E5) overlays [`render_scanline`] onto BG layers
-/// instead of this flat backdrop.
+/// tests (disabled pending m4/compositing, m4/demos — while [`render_scanline`]
+/// is a stub this renders backdrop only). The real compositor (E5) overlays
+/// [`render_scanline`] onto BG layers instead of this flat backdrop.
 pub fn render_sprites(mem: &Memory, width: usize, height: usize) -> Vec<u8> {
     let backdrop = unpack_rgb15(mem.cgram[0]);
     let mut fb = Vec::with_capacity(width * height * 4);
