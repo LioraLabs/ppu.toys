@@ -7,7 +7,8 @@ use ppu_core::LuaEngine;
 #[test]
 fn fractional_scroll_write_is_quantized_in_the_linetable() {
     let mut e = LuaEngine::new();
-    e.set_source("function frame(t, f) bg[1].scroll.x = 10.7 end").unwrap();
+    e.set_source("function frame(t, f) bg[1].scroll.x = 10.7 end")
+        .unwrap();
     let lt = e.frame(0.0, 0).unwrap();
     assert_eq!(lt.rows[0].bg[0].scroll_x, 11); // rounded, absolute
 }
@@ -28,10 +29,29 @@ fn scroll_global_keeps_the_float_across_frames() {
 }
 
 #[test]
+fn binding_registers_quantize_on_write_via_dsl() {
+    let mut e = LuaEngine::new();
+    e.set_source(
+        "function frame(t,f) bg[1].tile_size=16; bg[1].map_base=0x07ff; \
+         bg[1].screen_size=5; bg[1].char_base=0x1fff; m7.wrap=6; m7.flip_x=true end",
+    )
+    .unwrap();
+    let lt = e.frame(0.0, 0).unwrap();
+    let b = &lt.rows[0].bg[0];
+    assert_eq!(b.tile_size, 16);
+    assert_eq!(b.map_base, 0x0400); // snapped down to the 0x400-word step
+    assert_eq!(b.screen_size, 1); // 5 & 3
+    assert_eq!(b.char_base, 0x1000); // snapped down to the 0x1000-word step
+    assert_eq!(lt.rows[0].m7.repeat, 2); // m7.wrap=6 -> repeat 6 & 3
+    assert!(lt.rows[0].m7.flip_x && !lt.rows[0].m7.flip_y);
+}
+
+#[test]
 fn mode_and_brightness_wrap_not_clamp() {
     // Locked decision: out-of-range register writes WRAP (mask), not clamp.
     let mut e = LuaEngine::new();
-    e.set_source("function frame(t, f) mode = 8; brightness = 20 end").unwrap();
+    e.set_source("function frame(t, f) mode = 8; brightness = 20 end")
+        .unwrap();
     let lt = e.frame(0.0, 0).unwrap();
     assert_eq!(lt.rows[0].mode, 0); // 8 & 7 = 0 (NOT clamped to 7)
     assert_eq!(lt.rows[0].brightness, 4); // 20 & 0x0f = 4 (NOT clamped to 15)

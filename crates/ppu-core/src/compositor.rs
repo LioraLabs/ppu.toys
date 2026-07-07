@@ -4,23 +4,81 @@
 //! Per scanline `y`:
 //!   1. select the active mode from that row (per-line `mode` -> split-screen);
 //!   2. start from the backdrop `unpack_rgb15(cgram[0])` (opaque);
-//!   3. paint BG: Mode 7 floor (mode7.rs) when `row.mode == 7`, else the Mode-1
-//!      tile layers BG4..BG1 (bg.rs), topmost non-transparent wins;
-//!   4. overlay sprites (sprite.rs) on top (v1: sprites always above BG; sprite
-//!      `prio` orders sprites among themselves, handled in `render_scanline`);
-//!   5. apply INIDISP brightness ONCE to the final pixel (`apply_brightness`).
+//!   3. resolve BG + OBJ:
+//!      - Mode 7: the single Mode-7 BG floor (mode7.rs), then sprites overlaid on
+//!        top (sprites ordered among themselves by `prio` in `render_scanline`);
+//!      - Mode 1: authentic per-pixel priority via [`mode1_ladder`] — each BG
+//!        layer's tilemap priority bit interleaved with the mode's layer order
+//!        and OBJ priority (0-3), honoring the BG3-priority bit (BGMODE.3);
+//!   4. apply INIDISP brightness ONCE to the final pixel (`apply_brightness`).
 //!
 //! Brightness single-application point: HERE. The scanline primitives this
 //! compositor calls all return un-attenuated direct RGBA, so brightness is never
 //! double-applied.
 
-use crate::bg::{apply_brightness, render_bg_layer_scanline};
+use crate::bg::{apply_brightness, render_bg_layer_scanline_px, BgPixel};
 use crate::linetable::LineTable;
 use crate::memory::{unpack_rgb15, Memory};
 use crate::mode7::render_mode7_scanline;
+use crate::modes::mode_info;
 use crate::registers::RegRow;
 use crate::sprite::render_scanline as render_sprite_scanline;
 use crate::{HEIGHT, WIDTH};
+
+/// One rung of the per-pixel priority ladder: a BG layer at a given tilemap
+/// priority bit, or the OBJ layer at a given sprite-priority level.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Slot {
+    Bg { layer: usize, prio: bool },
+    Obj { prio: u8 },
+}
+
+/// Authentic Mode-1 priority ladder, front (index 0) to back. BG participants
+/// come from the mode table's `priority_order` ([BG1,BG2,BG3]); the OBJ-prio
+/// slots and the BG3-priority-bit lift are Mode-1 hardware semantics. `bg3_high`
+/// = BGMODE.3 set: BG3 tile-priority-1 pixels jump above every other layer.
+fn mode1_ladder(bg3_high: bool) -> Vec<Slot> {
+    let ord = mode_info(1).map_or(&[0u8, 1, 2][..], |m| m.priority_order);
+    let (bg1, bg2, bg3) = (ord[0] as usize, ord[1] as usize, ord[2] as usize);
+    let mut l = Vec::with_capacity(10);
+    if bg3_high {
+        l.push(Slot::Bg {
+            layer: bg3,
+            prio: true,
+        });
+    }
+    l.push(Slot::Obj { prio: 3 });
+    l.push(Slot::Bg {
+        layer: bg1,
+        prio: true,
+    });
+    l.push(Slot::Bg {
+        layer: bg2,
+        prio: true,
+    });
+    l.push(Slot::Obj { prio: 2 });
+    l.push(Slot::Bg {
+        layer: bg1,
+        prio: false,
+    });
+    l.push(Slot::Bg {
+        layer: bg2,
+        prio: false,
+    });
+    l.push(Slot::Obj { prio: 1 });
+    if !bg3_high {
+        l.push(Slot::Bg {
+            layer: bg3,
+            prio: true,
+        });
+    }
+    l.push(Slot::Obj { prio: 0 });
+    l.push(Slot::Bg {
+        layer: bg3,
+        prio: false,
+    });
+    l
+}
 
 /// Composite one scanline `y` of `row` into `line` (length `WIDTH`), backdrop +
 /// BG + sprites, UN-attenuated. Brightness is applied by the caller.
@@ -31,36 +89,50 @@ fn composite_line(row: &RegRow, mem: &Memory, y: usize, line: &mut [[u8; 4]]) {
         *px = backdrop;
     }
 
-    // 2. BG.
+    // 2. BG + OBJ.
     if row.mode == 7 {
-        let bg = &row.bg[0];
-        if bg.visible {
-            if let Some(src) = bg.source.as_deref().and_then(|id| mem.sources.get(id)) {
-                let mut tmp = vec![0u8; WIDTH * 4];
-                render_mode7_scanline(row, src, y, &mut tmp);
-                for (x, slot) in line.iter_mut().enumerate() {
-                    let p = &tmp[x * 4..x * 4 + 4];
-                    if p[3] != 0 {
-                        *slot = [p[0], p[1], p[2], 255];
-                    }
+        // Mode 7 is a single BG layer (mode7.rs owns its own compositing);
+        // sprites still overlay on top, ordered among themselves by prio.
+        if row.bg[0].visible {
+            let mut tmp = vec![0u8; WIDTH * 4];
+            render_mode7_scanline(row, mem, y, &mut tmp);
+            for (x, slot) in line.iter_mut().enumerate() {
+                let p = &tmp[x * 4..x * 4 + 4];
+                if p[3] != 0 {
+                    *slot = [p[0], p[1], p[2], 255];
                 }
+            }
+        }
+        for (slot, sp) in line.iter_mut().zip(render_sprite_scanline(mem, y, WIDTH)) {
+            if let Some(s) = sp {
+                *slot = s.rgba;
             }
         }
     } else {
-        // Mode 1 (and any non-7 mode in v1): tile layers BG4..BG1.
-        for layer in row.bg.iter().rev() {
-            for (slot, px) in line.iter_mut().zip(render_bg_layer_scanline(layer, mem, y, WIDTH)) {
-                if let Some(c) = px {
-                    *slot = c;
+        // Mode 1: authentic per-pixel priority resolution. Each BG layer and the
+        // OBJ layer produce one candidate per x; the ladder (front->back) picks
+        // the frontmost occupied rung, interleaving tilemap priority bit x mode
+        // layer order x sprite priority. Backdrop shows through if no rung hits.
+        let bgs: Vec<Vec<Option<BgPixel>>> = row
+            .bg
+            .iter()
+            .map(|l| render_bg_layer_scanline_px(l, mem, y, WIDTH))
+            .collect();
+        let obj = render_sprite_scanline(mem, y, WIDTH);
+        let ladder = mode1_ladder(row.bg3_priority);
+        for (x, slot) in line.iter_mut().enumerate() {
+            for rung in &ladder {
+                let hit = match *rung {
+                    Slot::Bg { layer, prio } => {
+                        bgs[layer][x].filter(|p| p.prio == prio).map(|p| p.rgba)
+                    }
+                    Slot::Obj { prio } => obj[x].filter(|s| s.prio == prio).map(|s| s.rgba),
+                };
+                if let Some(rgba) = hit {
+                    *slot = rgba;
+                    break;
                 }
             }
-        }
-    }
-
-    // 3. sprites on top (v1: above all BG).
-    for (slot, sp) in line.iter_mut().zip(render_sprite_scanline(mem, y, WIDTH)) {
-        if let Some(s) = sp {
-            *slot = s.rgba;
         }
     }
 }
@@ -91,11 +163,114 @@ pub fn render_frame(lt: &LineTable, mem: &Memory) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::linetable::LineTableBuilder;
-    use crate::memory::{rgb15, Source};
-    use crate::registers::{Bg, LineTableRow, Obj};
+    use crate::memory::rgb15;
+    use crate::registers::{LineTableRow, Obj};
 
-    fn solid_source(color: [u8; 4]) -> Source {
-        Source { width: 1, height: 1, rgba: color.to_vec() }
+    /// Set pixel (0,0) of 4bpp char `c` (at VRAM word `char_base`) to palette
+    /// index 1 (plane-0 bit 7 of the char's row 0). A char is 16 words at 4bpp.
+    fn put_px(m: &mut Memory, char_base: usize, c: usize) {
+        m.vram[char_base + c * 16] = 0x0080;
+    }
+
+    #[test]
+    fn tile_priority_bit_lifts_bg2_over_bg1() {
+        // BG1 (pal 1 = red) and BG2 (pal 0 = green) both draw index 1 at (0,0).
+        // At equal tile priority BG1 wins (front of BG2); setting BG2's tilemap
+        // priority bit lifts BG2 above BG1.
+        let mut m = Memory::new();
+        m.cgram[0] = rgb15(0, 0, 0);
+        m.cgram[16 + 1] = rgb15(255, 0, 0); // BG1 sub-palette 1, index 1
+        m.cgram[1] = rgb15(0, 255, 0); // BG2 sub-palette 0, index 1
+        put_px(&mut m, 0x1000, 1); // shared char 1
+        m.vram[0x0000] = 1 | (1 << 10); // BG1 map(0,0): tile 1, pal 1, prio 0
+        let mut src = LineTableRow::default();
+        src.bg[0].char_base = 0x1000;
+        src.bg[1].char_base = 0x1000;
+        src.bg[1].map_base = 0x0400;
+        // BG2 priority 0 -> BG1 (red) wins at equal priority.
+        m.vram[0x0400] = 1; // BG2 map(0,0): tile 1, pal 0, prio 0
+        let lt = LineTableBuilder::new(src.clone()).build(HEIGHT);
+        assert_eq!(
+            &render_frame(&lt, &m)[0..4],
+            &unpack_rgb15(rgb15(255, 0, 0))
+        );
+        // BG2 priority 1 -> BG2 (green) lifts above BG1.
+        m.vram[0x0400] = 1 | (1 << 13);
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        assert_eq!(
+            &render_frame(&lt, &m)[0..4],
+            &unpack_rgb15(rgb15(0, 255, 0))
+        );
+    }
+
+    #[test]
+    fn bg3_priority_bit_lifts_bg3_over_bg1() {
+        // BG1 (red) draws index 1 at (0,0); BG3 (blue, tilemap-priority set) also
+        // draws index 1. Normally BG3's priority-1 rung sits below BG1; the
+        // BGMODE.3 BG3-priority bit lifts BG3 priority-1 above every layer.
+        let mut m = Memory::new();
+        m.cgram[0] = rgb15(0, 0, 0);
+        m.cgram[1] = rgb15(255, 0, 0); // BG1 sub-palette 0, index 1
+        m.cgram[4 + 1] = rgb15(0, 0, 255); // BG3 2bpp sub-palette 1 (base 4), index 1
+        put_px(&mut m, 0x1000, 1); // BG1 4bpp char 1
+        m.vram[0x2000 + 8] = 0x0080; // BG3 2bpp char 1 (8 words/char), pixel (0,0) = 1
+        m.vram[0x0000] = 1; // BG1 map(0,0): tile 1, pal 0, prio 0
+        m.vram[0x0800] = 1 | (1 << 10) | (1 << 13); // BG3 map: tile 1, pal 1, prio 1
+        let mut src = LineTableRow::default();
+        src.bg[0].char_base = 0x1000;
+        src.bg[2].char_base = 0x2000;
+        src.bg[2].map_base = 0x0800;
+        // Bit clear: BG1 (red) wins over BG3's low-slung priority-1 rung.
+        let lt = LineTableBuilder::new(src.clone()).build(HEIGHT);
+        assert_eq!(
+            &render_frame(&lt, &m)[0..4],
+            &unpack_rgb15(rgb15(255, 0, 0))
+        );
+        // Bit set: BG3 priority-1 (blue) jumps to the very front.
+        src.bg3_priority = true;
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        assert_eq!(
+            &render_frame(&lt, &m)[0..4],
+            &unpack_rgb15(rgb15(0, 0, 255))
+        );
+    }
+
+    #[test]
+    fn sprite_priority_interleaves_with_bg() {
+        // BG1 draws index 1 (red) with its tilemap priority bit set. A sprite
+        // (yellow) at the same pixel sits above BG1 when OBJ prio 3, below when
+        // OBJ prio 0 — the ladder interleaves OBJ priority with the BG rungs.
+        let mut m = Memory::new();
+        m.cgram[0] = rgb15(0, 0, 0);
+        m.cgram[1] = rgb15(255, 0, 0); // BG1 pal 0, index 1
+        m.cgram[128 + 1] = rgb15(255, 255, 0); // OBJ pal 0, index 1
+        put_px(&mut m, 0x1000, 1);
+        m.vram[0x0000] = 1 | (1 << 13); // BG1 map(0,0): tile 1, priority 1
+        m.obsel.char_base = 0x4000;
+        m.vram[0x4000 + 16] = 0x0080; // OBJ char 1 (16 words), pixel (0,0) = 1
+        let mut src = LineTableRow::default();
+        src.bg[0].char_base = 0x1000;
+        m.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 1,
+            prio: 3,
+            ..Obj::default()
+        };
+        // OBJ prio 3 is above BG1 priority-1: sprite (yellow) wins.
+        let lt = LineTableBuilder::new(src.clone()).build(HEIGHT);
+        assert_eq!(
+            &render_frame(&lt, &m)[0..4],
+            &unpack_rgb15(rgb15(255, 255, 0))
+        );
+        // OBJ prio 0 is below BG1 priority-1: BG1 (red) wins.
+        m.oam[0].prio = 0;
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        assert_eq!(
+            &render_frame(&lt, &m)[0..4],
+            &unpack_rgb15(rgb15(255, 0, 0))
+        );
     }
 
     #[test]
@@ -118,13 +293,40 @@ mod tests {
         assert_eq!(&fb[last..last + 4], &bd);
     }
 
+    // TODO(m4/bg-raster, m4/mode7, m4/compositing): the BG/Mode-7/sprite compositing tests were
+    // deleted with the v1 direct-RGBA `Source` model; they return as VRAM-backed
+    // goldens once the rasterizers land.
+
     #[test]
-    fn brightness_applied_once_uniformly() {
-        // A solid red BG source at brightness 0 -> black; at 15 -> red.
+    fn mode1_ladder_orders_front_to_back() {
+        let l = mode1_ladder(false);
+        assert_eq!(l.first(), Some(&Slot::Obj { prio: 3 }));
+        assert_eq!(
+            l.last(),
+            Some(&Slot::Bg {
+                layer: 2,
+                prio: false
+            })
+        );
+        assert!(!l.contains(&Slot::Bg {
+            layer: 3,
+            prio: true
+        })); // BG4 absent in Mode 1
+             // bit set: BG3 tile-prio1 lifted to the very front.
+        assert_eq!(
+            mode1_ladder(true).first(),
+            Some(&Slot::Bg {
+                layer: 2,
+                prio: true
+            })
+        );
+    }
+
+    #[test]
+    fn brightness_applied_once_to_backdrop() {
         let mut mem = Memory::new();
-        mem.sources.insert("bg".into(), solid_source([200, 0, 0, 255]));
+        mem.cgram[0] = rgb15(200, 200, 200);
         let mut def = LineTableRow::default();
-        def.bg[0] = Bg { scroll_x: 0.0, scroll_y: 0.0, source: Some("bg".into()), visible: true };
         def.brightness = 0;
         let lt = LineTableBuilder::new(def.clone()).build(HEIGHT);
         let fb = render_frame(&lt, &mem);
@@ -133,57 +335,6 @@ mod tests {
         def.brightness = 15;
         let lt = LineTableBuilder::new(def).build(HEIGHT);
         let fb = render_frame(&lt, &mem);
-        assert_eq!(&fb[0..4], &[200, 0, 0, 255]); // brightness 15 -> identity
-    }
-
-    #[test]
-    fn per_line_mode_switch_composites_split_screen() {
-        // Mode 1 top band (red BG), Mode 7 bottom band (green floor).
-        let mut mem = Memory::new();
-        mem.sources.insert("hud".into(), solid_source([200, 0, 0, 255]));
-        mem.sources.insert("floor".into(), solid_source([0, 200, 0, 255]));
-        let mut def = LineTableRow::default();
-        def.mode = 1;
-        def.brightness = 15;
-        def.bg[0] = Bg { scroll_x: 0.0, scroll_y: 0.0, source: Some("hud".into()), visible: true };
-        let mut b = LineTableBuilder::new(def);
-        b.hdma(112, 223, |_, r| {
-            r.mode = 7;
-            r.bg[0].source = Some("floor".into());
-            r.m7 = crate::registers::Mode7::default();
-        });
-        let lt = b.build(HEIGHT);
-        let fb = render_frame(&lt, &mem);
-        // top band -> red (Mode 1); bottom band -> green (Mode 7).
-        let top = (10 * WIDTH + 5) * 4;
-        let bot = (200 * WIDTH + 5) * 4;
-        assert_eq!(&fb[top..top + 4], &[200, 0, 0, 255]);
-        assert_eq!(&fb[bot..bot + 4], &[0, 200, 0, 255]);
-    }
-
-    #[test]
-    fn sprites_composite_over_bg() {
-        let mut mem = Memory::new();
-        mem.sources.insert("bg".into(), solid_source([0, 0, 200, 255]));
-        // 8x8 sheet, solid yellow opaque.
-        mem.sources.insert(
-            "sheet".into(),
-            Source { width: 8, height: 8, rgba: {
-                let mut v = vec![0u8; 8 * 8 * 4];
-                for px in v.chunks_mut(4) { px.copy_from_slice(&[200, 200, 0, 255]); }
-                v
-            } },
-        );
-        mem.obj_sheet = Some("sheet".into());
-        mem.oam[0] = Obj { on: true, x: 0, y: 0, tile: 0, size: 0, ..Obj::default() };
-        let mut def = LineTableRow::default();
-        def.brightness = 15;
-        def.bg[0] = Bg { scroll_x: 0.0, scroll_y: 0.0, source: Some("bg".into()), visible: true };
-        let lt = LineTableBuilder::new(def).build(HEIGHT);
-        let fb = render_frame(&lt, &mem);
-        // (0,0) covered by sprite -> yellow; far pixel -> blue BG.
-        assert_eq!(&fb[0..4], &[200, 200, 0, 255]);
-        let far = (100 * WIDTH + 100) * 4;
-        assert_eq!(&fb[far..far + 4], &[0, 0, 200, 255]);
+        assert_eq!(&fb[0..4], &unpack_rgb15(rgb15(200, 200, 200)));
     }
 }
