@@ -450,6 +450,11 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
     }
     if let Value::Table(obj) = ctx.get_global("obj") {
         mem.obj_sheet = value_to_string(obj.get(ctx, "sheet"));
+        mem.obsel.char_base = crate::quantize::obj_char_base(
+            obj.get(ctx, "char_base").to_integer().unwrap_or(0).max(0) as u32,
+        );
+        mem.obsel.size_sel =
+            crate::quantize::obj_size_sel(obj.get(ctx, "size_sel").to_integer().unwrap_or(0) as u8);
         for i in 0..128 {
             if let Value::Table(o) = obj.get(ctx, i as i64) {
                 let e = &mut mem.oam[i];
