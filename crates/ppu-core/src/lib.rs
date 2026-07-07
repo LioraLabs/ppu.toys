@@ -36,6 +36,11 @@ pub use quantize::*;
 mod modes;
 pub use modes::*;
 
+// m4/importer: Mode 7 importer. Named `import_m7` to avoid a module
+// name collision with the shared tile-BG importer at integration.
+mod import_m7;
+pub use import_m7::*;
+
 /// Native SNES PPU output dimensions (the only resolution v1 targets).
 pub const WIDTH: usize = 256;
 pub const HEIGHT: usize = 224;
