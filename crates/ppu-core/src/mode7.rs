@@ -1,7 +1,7 @@
 //! Mode 7 affine rasterizer: per-scanline sampling through the m7 matrix
 //! (a,b,c,d) about center (cx,cy), with Q8 fixed-point math internally (the
-//! DSL passes f32). Nearest-neighbor, wraps over the source — the namesake
-//! receding "floor". Brightness/compositing live in E5.
+//! DSL passes f32) — the namesake receding "floor". Brightness/compositing
+//! live in E5.
 //!
 //! `render_mode7_scanline`/`render_mode7` are STUBs (tag m4/mode7): the v1
 //! direct-RGBA `Source` path was deleted by m4/memory. `mode7_texel` (the
