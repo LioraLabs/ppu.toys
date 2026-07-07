@@ -150,8 +150,11 @@ pub fn region_fit(tile_palettes: &[Vec<u16>], max_palettes: usize, capacity: usi
         }
         match best {
             Some((_, pi)) => {
-                let add: Vec<u16> =
-                    tp.iter().copied().filter(|c| !palettes[pi].contains(c)).collect();
+                let add: Vec<u16> = tp
+                    .iter()
+                    .copied()
+                    .filter(|c| !palettes[pi].contains(c))
+                    .collect();
                 palettes[pi].extend(add);
                 palettes[pi].sort_unstable();
                 assignment[ti] = pi as u8;
@@ -168,11 +171,16 @@ pub fn region_fit(tile_palettes: &[Vec<u16>], max_palettes: usize, capacity: usi
                     .unwrap_or(0);
                 assignment[ti] = pi as u8;
                 // shadow bookkeeping for the honest "needs N palettes" count
-                let vslot = virtual_extra.iter().position(|p| p.len() + missing(p, tp) <= capacity);
+                let vslot = virtual_extra
+                    .iter()
+                    .position(|p| p.len() + missing(p, tp) <= capacity);
                 match vslot {
                     Some(vi) => {
-                        let add: Vec<u16> =
-                            tp.iter().copied().filter(|c| !virtual_extra[vi].contains(c)).collect();
+                        let add: Vec<u16> = tp
+                            .iter()
+                            .copied()
+                            .filter(|c| !virtual_extra[vi].contains(c))
+                            .collect();
                         virtual_extra[vi].extend(add);
                         virtual_extra[vi].sort_unstable();
                     }
@@ -260,8 +268,8 @@ mod tests {
         let tiles = vec![
             vec![1u16, 2, 3],
             vec![4u16, 5, 6],
-            vec![7u16, 8, 9],    // no room -> overflow
-            vec![2u16, 3, 10],   // also overflow; best overlap = palette 0
+            vec![7u16, 8, 9],  // no room -> overflow
+            vec![2u16, 3, 10], // also overflow; best overlap = palette 0
         ];
         let fit = region_fit(&tiles, 2, 3);
         assert_eq!(fit.palettes.len(), 2);

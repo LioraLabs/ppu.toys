@@ -43,7 +43,10 @@ fn golden_small_png_4bpp_bytes() {
 #[test]
 fn golden_small_png_2bpp_bytes() {
     let (rgba, w, h) = load_png("importer_4bpp.png");
-    let opts = ImportOptions { bit_depth: 2, ..Default::default() };
+    let opts = ImportOptions {
+        bit_depth: 2,
+        ..Default::default()
+    };
     let out = import_tile_bg(&rgba, w, h, &opts);
     assert_eq!(out.cgram, vec![(1, 0x001f), (2, 0x7c00)]); // 2bpp pal 0 base 0
     let mut expect_char = vec![0u16; 8];
@@ -61,7 +64,10 @@ fn overbudget_png_reports_palette_overflow_honestly() {
     assert_eq!(out.report.palettes_used, 8); // hard cap respected
     assert_eq!(
         out.report.overflows,
-        vec![Overflow::Palettes { needed: 9, remapped_tiles: 1 }]
+        vec![Overflow::Palettes {
+            needed: 9,
+            remapped_tiles: 1
+        }]
     );
     // every tile has the same index-grid relative to its own sorted palette,
     // so char dedup collapses all 9 cells onto one stored tile
