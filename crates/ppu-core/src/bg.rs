@@ -116,7 +116,7 @@ mod tests {
     }
 
     use crate::memory::{rgb15, Source};
-    use crate::registers::{LineTableRow, RegRow};
+    use crate::registers::{Bg, LineTableRow, RegRow};
 
     // A 2x2 direct-RGBA source:
     // row0: (0,0)=red opaque, (1,0)=green opaque
@@ -134,7 +134,7 @@ mod tests {
     }
 
     fn layer(source: &str) -> RegBg {
-        RegBg { scroll_x: 0, scroll_y: 0, source: Some(source.into()), visible: true }
+        RegBg::from(&Bg { source: Some(source.into()), ..Bg::default() })
     }
 
     #[test]

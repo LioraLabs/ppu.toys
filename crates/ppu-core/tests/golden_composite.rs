@@ -74,14 +74,14 @@ fn fixture_linetable() -> ppu_core::LineTable {
     let mut def = LineTableRow::default();
     def.mode = 1;
     def.brightness = 15;
-    def.bg[0] = Bg { scroll_x: 4.0, scroll_y: 2.0, source: Some("hud".into()), visible: true };
+    def.bg[0] = Bg { scroll_x: 4.0, scroll_y: 2.0, source: Some("hud".into()), ..Bg::default() };
     let mut b = LineTableBuilder::new(def);
     b.hdma(112, 223, move |y, r| {
         let d = 64.0 / (y as f32 - 111.0); // receding floor from the split line
         r.mode = 7;
         r.brightness = 15;
-        r.bg[0] = Bg { scroll_x: 0.0, scroll_y: (t * 80.0) * d, source: Some("track".into()), visible: true };
-        r.m7 = Mode7 { a: d, b: 0.0, c: 0.0, d, cx: 128.0, cy: 0.0 };
+        r.bg[0] = Bg { scroll_y: (t * 80.0) * d, source: Some("track".into()), ..Bg::default() };
+        r.m7 = Mode7 { a: d, b: 0.0, c: 0.0, d, cx: 128.0, cy: 0.0, ..Mode7::default() };
     });
     b.build(HEIGHT)
 }

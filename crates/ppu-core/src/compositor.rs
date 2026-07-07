@@ -124,7 +124,7 @@ mod tests {
         let mut mem = Memory::new();
         mem.sources.insert("bg".into(), solid_source([200, 0, 0, 255]));
         let mut def = LineTableRow::default();
-        def.bg[0] = Bg { scroll_x: 0.0, scroll_y: 0.0, source: Some("bg".into()), visible: true };
+        def.bg[0] = Bg { source: Some("bg".into()), ..Bg::default() };
         def.brightness = 0;
         let lt = LineTableBuilder::new(def.clone()).build(HEIGHT);
         let fb = render_frame(&lt, &mem);
@@ -145,7 +145,7 @@ mod tests {
         let mut def = LineTableRow::default();
         def.mode = 1;
         def.brightness = 15;
-        def.bg[0] = Bg { scroll_x: 0.0, scroll_y: 0.0, source: Some("hud".into()), visible: true };
+        def.bg[0] = Bg { source: Some("hud".into()), ..Bg::default() };
         let mut b = LineTableBuilder::new(def);
         b.hdma(112, 223, |_, r| {
             r.mode = 7;
@@ -178,7 +178,7 @@ mod tests {
         mem.oam[0] = Obj { on: true, x: 0, y: 0, tile: 0, size: 0, ..Obj::default() };
         let mut def = LineTableRow::default();
         def.brightness = 15;
-        def.bg[0] = Bg { scroll_x: 0.0, scroll_y: 0.0, source: Some("bg".into()), visible: true };
+        def.bg[0] = Bg { source: Some("bg".into()), ..Bg::default() };
         let lt = LineTableBuilder::new(def).build(HEIGHT);
         let fb = render_frame(&lt, &mem);
         // (0,0) covered by sprite -> yellow; far pixel -> blue BG.
