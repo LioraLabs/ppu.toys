@@ -1,7 +1,7 @@
 //! E7 sanity: drive the real LuaEngine -> compositor pipeline end-to-end the way
 //! the wasm shim does, without wasm-bindgen.
-use std::collections::HashMap;
 use ppu_core::{derive_registers, render_frame, LuaEngine, OamSprite, WIDTH};
+use std::collections::HashMap;
 
 #[test]
 fn lua_source_drives_backdrop_through_compositor() {
@@ -51,7 +51,9 @@ fn lua_oam_maps_to_sprite_views() {
 #[test]
 fn setsource_reports_compile_error() {
     let mut engine = LuaEngine::new();
-    let err = engine.set_source("function frame(t,f) this is not lua end").unwrap_err();
+    let err = engine
+        .set_source("function frame(t,f) this is not lua end")
+        .unwrap_err();
     assert!(!err.message.is_empty());
 }
 

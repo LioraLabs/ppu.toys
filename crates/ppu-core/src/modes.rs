@@ -24,10 +24,18 @@ impl ModeInfo {
 }
 
 /// Mode 1: BG1/BG2 4bpp, BG3 2bpp. (The BG3-priority BGMODE bit is m4/compositing.)
-const MODE_1: ModeInfo = ModeInfo { mode: 1, bpp: [4, 4, 2, 0], priority_order: &[0, 1, 2] };
+const MODE_1: ModeInfo = ModeInfo {
+    mode: 1,
+    bpp: [4, 4, 2, 0],
+    priority_order: &[0, 1, 2],
+};
 
 /// Mode 7: one 8bpp affine BG over the interleaved VRAM layout (m4/mode7).
-const MODE_7: ModeInfo = ModeInfo { mode: 7, bpp: [8, 0, 0, 0], priority_order: &[0] };
+const MODE_7: ModeInfo = ModeInfo {
+    mode: 7,
+    bpp: [8, 0, 0, 0],
+    priority_order: &[0],
+};
 
 /// Look up a mode's static capabilities. Modes 0/2/3 are trivial future rows
 /// (one `ModeInfo` each); unsupported modes return `None`.

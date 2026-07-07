@@ -103,7 +103,11 @@ mod tests {
 
     #[test]
     fn uniform_scale_multiplies_coords() {
-        let m = RegM7::from(&Mode7 { a: 2.0, d: 2.0, ..Mode7::default() });
+        let m = RegM7::from(&Mode7 {
+            a: 2.0,
+            d: 2.0,
+            ..Mode7::default()
+        });
         assert_eq!(mode7_texel(&m, 0, 0, 10, 5), (20, 10));
     }
 
@@ -116,7 +120,13 @@ mod tests {
     #[test]
     fn center_is_the_fixed_point_of_scaling() {
         // With cx=128 and a=2, screen x=128 must map back to texel x=128.
-        let m = RegM7::from(&Mode7 { a: 2.0, d: 2.0, cx: 128.0, cy: 0.0, ..Mode7::default() });
+        let m = RegM7::from(&Mode7 {
+            a: 2.0,
+            d: 2.0,
+            cx: 128.0,
+            cy: 0.0,
+            ..Mode7::default()
+        });
         let (tx, _) = mode7_texel(&m, 0, 0, 128, 0);
         assert_eq!(tx, 128);
     }
@@ -248,7 +258,7 @@ mod tests {
         let mut out = [0u8; 8];
         render_mode7_scanline(&row_scrolled_left(3), &mem, 0, &mut out);
         assert_eq!(&out[0..4], &unpack_rgb15(rgb15(0, 255, 0))); // tile-0 fill
-        // u=0 is in-field: normal sampling (tile 1), NOT tile-0 fill.
+                                                                 // u=0 is in-field: normal sampling (tile 1), NOT tile-0 fill.
         assert_eq!(&out[4..8], &unpack_rgb15(rgb15(255, 0, 0)));
     }
 

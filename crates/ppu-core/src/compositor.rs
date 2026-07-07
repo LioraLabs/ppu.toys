@@ -42,20 +42,41 @@ fn mode1_ladder(bg3_high: bool) -> Vec<Slot> {
     let (bg1, bg2, bg3) = (ord[0] as usize, ord[1] as usize, ord[2] as usize);
     let mut l = Vec::with_capacity(10);
     if bg3_high {
-        l.push(Slot::Bg { layer: bg3, prio: true });
+        l.push(Slot::Bg {
+            layer: bg3,
+            prio: true,
+        });
     }
     l.push(Slot::Obj { prio: 3 });
-    l.push(Slot::Bg { layer: bg1, prio: true });
-    l.push(Slot::Bg { layer: bg2, prio: true });
+    l.push(Slot::Bg {
+        layer: bg1,
+        prio: true,
+    });
+    l.push(Slot::Bg {
+        layer: bg2,
+        prio: true,
+    });
     l.push(Slot::Obj { prio: 2 });
-    l.push(Slot::Bg { layer: bg1, prio: false });
-    l.push(Slot::Bg { layer: bg2, prio: false });
+    l.push(Slot::Bg {
+        layer: bg1,
+        prio: false,
+    });
+    l.push(Slot::Bg {
+        layer: bg2,
+        prio: false,
+    });
     l.push(Slot::Obj { prio: 1 });
     if !bg3_high {
-        l.push(Slot::Bg { layer: bg3, prio: true });
+        l.push(Slot::Bg {
+            layer: bg3,
+            prio: true,
+        });
     }
     l.push(Slot::Obj { prio: 0 });
-    l.push(Slot::Bg { layer: bg3, prio: false });
+    l.push(Slot::Bg {
+        layer: bg3,
+        prio: false,
+    });
     l
 }
 
@@ -92,8 +113,11 @@ fn composite_line(row: &RegRow, mem: &Memory, y: usize, line: &mut [[u8; 4]]) {
         // OBJ layer produce one candidate per x; the ladder (front->back) picks
         // the frontmost occupied rung, interleaving tilemap priority bit x mode
         // layer order x sprite priority. Backdrop shows through if no rung hits.
-        let bgs: Vec<Vec<Option<BgPixel>>> =
-            row.bg.iter().map(|l| render_bg_layer_scanline_px(l, mem, y, WIDTH)).collect();
+        let bgs: Vec<Vec<Option<BgPixel>>> = row
+            .bg
+            .iter()
+            .map(|l| render_bg_layer_scanline_px(l, mem, y, WIDTH))
+            .collect();
         let obj = render_sprite_scanline(mem, y, WIDTH);
         let ladder = mode1_ladder(row.bg3_priority);
         for (x, slot) in line.iter_mut().enumerate() {
@@ -166,11 +190,17 @@ mod tests {
         // BG2 priority 0 -> BG1 (red) wins at equal priority.
         m.vram[0x0400] = 1; // BG2 map(0,0): tile 1, pal 0, prio 0
         let lt = LineTableBuilder::new(src.clone()).build(HEIGHT);
-        assert_eq!(&render_frame(&lt, &m)[0..4], &unpack_rgb15(rgb15(255, 0, 0)));
+        assert_eq!(
+            &render_frame(&lt, &m)[0..4],
+            &unpack_rgb15(rgb15(255, 0, 0))
+        );
         // BG2 priority 1 -> BG2 (green) lifts above BG1.
         m.vram[0x0400] = 1 | (1 << 13);
         let lt = LineTableBuilder::new(src).build(HEIGHT);
-        assert_eq!(&render_frame(&lt, &m)[0..4], &unpack_rgb15(rgb15(0, 255, 0)));
+        assert_eq!(
+            &render_frame(&lt, &m)[0..4],
+            &unpack_rgb15(rgb15(0, 255, 0))
+        );
     }
 
     #[test]
@@ -192,11 +222,17 @@ mod tests {
         src.bg[2].map_base = 0x0800;
         // Bit clear: BG1 (red) wins over BG3's low-slung priority-1 rung.
         let lt = LineTableBuilder::new(src.clone()).build(HEIGHT);
-        assert_eq!(&render_frame(&lt, &m)[0..4], &unpack_rgb15(rgb15(255, 0, 0)));
+        assert_eq!(
+            &render_frame(&lt, &m)[0..4],
+            &unpack_rgb15(rgb15(255, 0, 0))
+        );
         // Bit set: BG3 priority-1 (blue) jumps to the very front.
         src.bg3_priority = true;
         let lt = LineTableBuilder::new(src).build(HEIGHT);
-        assert_eq!(&render_frame(&lt, &m)[0..4], &unpack_rgb15(rgb15(0, 0, 255)));
+        assert_eq!(
+            &render_frame(&lt, &m)[0..4],
+            &unpack_rgb15(rgb15(0, 0, 255))
+        );
     }
 
     #[test]
@@ -214,14 +250,27 @@ mod tests {
         m.vram[0x4000 + 16] = 0x0080; // OBJ char 1 (16 words), pixel (0,0) = 1
         let mut src = LineTableRow::default();
         src.bg[0].char_base = 0x1000;
-        m.oam[0] = Obj { on: true, x: 0, y: 0, tile: 1, prio: 3, ..Obj::default() };
+        m.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 1,
+            prio: 3,
+            ..Obj::default()
+        };
         // OBJ prio 3 is above BG1 priority-1: sprite (yellow) wins.
         let lt = LineTableBuilder::new(src.clone()).build(HEIGHT);
-        assert_eq!(&render_frame(&lt, &m)[0..4], &unpack_rgb15(rgb15(255, 255, 0)));
+        assert_eq!(
+            &render_frame(&lt, &m)[0..4],
+            &unpack_rgb15(rgb15(255, 255, 0))
+        );
         // OBJ prio 0 is below BG1 priority-1: BG1 (red) wins.
         m.oam[0].prio = 0;
         let lt = LineTableBuilder::new(src).build(HEIGHT);
-        assert_eq!(&render_frame(&lt, &m)[0..4], &unpack_rgb15(rgb15(255, 0, 0)));
+        assert_eq!(
+            &render_frame(&lt, &m)[0..4],
+            &unpack_rgb15(rgb15(255, 0, 0))
+        );
     }
 
     #[test]
@@ -252,10 +301,25 @@ mod tests {
     fn mode1_ladder_orders_front_to_back() {
         let l = mode1_ladder(false);
         assert_eq!(l.first(), Some(&Slot::Obj { prio: 3 }));
-        assert_eq!(l.last(), Some(&Slot::Bg { layer: 2, prio: false }));
-        assert!(!l.contains(&Slot::Bg { layer: 3, prio: true })); // BG4 absent in Mode 1
-        // bit set: BG3 tile-prio1 lifted to the very front.
-        assert_eq!(mode1_ladder(true).first(), Some(&Slot::Bg { layer: 2, prio: true }));
+        assert_eq!(
+            l.last(),
+            Some(&Slot::Bg {
+                layer: 2,
+                prio: false
+            })
+        );
+        assert!(!l.contains(&Slot::Bg {
+            layer: 3,
+            prio: true
+        })); // BG4 absent in Mode 1
+             // bit set: BG3 tile-prio1 lifted to the very front.
+        assert_eq!(
+            mode1_ladder(true).first(),
+            Some(&Slot::Bg {
+                layer: 2,
+                prio: true
+            })
+        );
     }
 
     #[test]

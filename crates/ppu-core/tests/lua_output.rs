@@ -123,7 +123,7 @@ end
     // Above the horizon: frame-wide defaults (mode 7, identity-ish m7.a default 1.0).
     assert_eq!(lt.rows[0].mode, 7);
     assert_eq!(lt.rows[0].m7.a, 256); // default 1.0, Q8
-    // On the horizon line and below: per-scanline affine.
+                                      // On the horizon line and below: per-scanline affine.
     assert_eq!(lt.rows[96].m7.a, 16384); // 64/(96-95) = 64.0, Q8
     assert_eq!(lt.rows[96].m7.d, 16384);
     assert_eq!(lt.rows[96].m7.cx, 128); // whole-px center
@@ -159,7 +159,8 @@ fn bg_map_cell_packs_tilemap_word() {
 
 #[test]
 fn m7_map_and_char_write_correct_lanes() {
-    let mut e = engine("function frame(t,f) m7.map[0]={} m7.map[0][1]=7; m7pixel(2, 3, 1, 200) end");
+    let mut e =
+        engine("function frame(t,f) m7.map[0]={} m7.map[0][1]=7; m7pixel(2, 3, 1, 200) end");
     e.frame(0.0, 0).unwrap();
     let m = e.memory();
     assert_eq!(m.vram[1] & 0x00ff, 7); // map low byte at ty=0,tx=1
@@ -175,11 +176,16 @@ fn source_triggers_tile_bg_import_into_vram_cgram() {
     let mut rgba = Vec::new();
     for _y in 0..8 {
         for x in 0..16 {
-            rgba.extend_from_slice(if x < 12 { &[255, 0, 0, 255] } else { &[0, 0, 255, 255] });
+            rgba.extend_from_slice(if x < 12 {
+                &[255, 0, 0, 255]
+            } else {
+                &[0, 0, 255, 255]
+            });
         }
     }
     e.upload_asset("sky".into(), 16, 8, rgba);
-    e.set_source("function frame(t,f) mode=1; bg[1].source='sky' end").unwrap();
+    e.set_source("function frame(t,f) mode=1; bg[1].source='sky' end")
+        .unwrap();
     let lt = e.frame(0.0, 0).unwrap();
     let m = e.memory();
     assert_eq!(m.cgram[1], rgb15(255, 0, 0)); // sub-palette 0 idx 1
@@ -197,7 +203,8 @@ fn source_triggers_mode7_import_interleaved() {
     let mut e = LuaEngine::new();
     let rgba = [255u8, 0, 0, 255].repeat(64); // 8x8 solid red = 256 bytes
     e.upload_asset("track".into(), 8, 8, rgba);
-    e.set_source("function frame(t,f) mode=7; bg[1].source='track' end").unwrap();
+    e.set_source("function frame(t,f) mode=7; bg[1].source='track' end")
+        .unwrap();
     e.frame(0.0, 0).unwrap();
     let m = e.memory();
     assert_eq!(m.cgram[1], rgb15(255, 0, 0));
@@ -229,11 +236,16 @@ fn obj_sheet_triggers_obj_import_into_vram_and_obj_cgram() {
     let mut rgba = Vec::new();
     for _y in 0..8 {
         for x in 0..16 {
-            rgba.extend_from_slice(if x < 12 { &[255, 0, 0, 255] } else { &[0, 0, 255, 255] });
+            rgba.extend_from_slice(if x < 12 {
+                &[255, 0, 0, 255]
+            } else {
+                &[0, 0, 255, 255]
+            });
         }
     }
     e.upload_asset("hero".into(), 16, 8, rgba);
-    e.set_source("function frame(t,f) mode=1; obj.sheet='hero'; obj.char_base=0x2000 end").unwrap();
+    e.set_source("function frame(t,f) mode=1; obj.sheet='hero'; obj.char_base=0x2000 end")
+        .unwrap();
     e.frame(0.0, 0).unwrap();
     let m = e.memory();
     // OBJ palettes land in CGRAM base 128 (sub-palette 8, indices 1/2).
@@ -244,7 +256,7 @@ fn obj_sheet_triggers_obj_import_into_vram_and_obj_cgram() {
     assert_eq!(m.vram[0x2000], 0); // reserved blank tile 0
     assert_eq!(m.vram[0x2000 + 16], 0x00ff);
     assert_eq!(m.obsel.char_base, 0x2000); // obsel echoes the same snapped base
-    // Budget report surfaced through the shared import_reports() path.
+                                           // Budget report surfaced through the shared import_reports() path.
     assert_eq!(e.import_reports().len(), 1);
 }
 

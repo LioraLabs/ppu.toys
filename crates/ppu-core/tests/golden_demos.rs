@@ -1,5 +1,5 @@
 //! Flagship demo golden tests through the real Lua/importer/render pipeline.
-use ppu_core::{render_frame, ImportBudget, LuaEngine, WIDTH, HEIGHT};
+use ppu_core::{render_frame, ImportBudget, LuaEngine, HEIGHT, WIDTH};
 use std::path::Path;
 
 const DUSK_GOLDEN: &str = "tests/fixtures/golden_dusk_parallax.png";
@@ -146,17 +146,32 @@ fn write_png(path: &str, fb: &[u8]) {
     let mut encoder = png::Encoder::new(file, WIDTH as u32, HEIGHT as u32);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
-    encoder.write_header().unwrap().write_image_data(fb).unwrap();
+    encoder
+        .write_header()
+        .unwrap()
+        .write_image_data(fb)
+        .unwrap();
 }
 
 #[test]
 fn dusk_parallax_uses_bg_imports_and_obj_import() {
     let (fb, e) = render_demo(DUSK_SRC);
-    assert!(e.import_reports().iter().any(|r| matches!(r, ImportBudget::Tile { layer: 0, .. })));
-    assert!(e.import_reports().iter().any(|r| matches!(r, ImportBudget::Tile { layer: 1, .. })));
-    assert!(e.import_reports().iter().any(|r| matches!(r, ImportBudget::Obj { .. })));
+    assert!(e
+        .import_reports()
+        .iter()
+        .any(|r| matches!(r, ImportBudget::Tile { layer: 0, .. })));
+    assert!(e
+        .import_reports()
+        .iter()
+        .any(|r| matches!(r, ImportBudget::Tile { layer: 1, .. })));
+    assert!(e
+        .import_reports()
+        .iter()
+        .any(|r| matches!(r, ImportBudget::Obj { .. })));
     assert!(e.memory().oam[0].on);
-    assert!(fb.chunks_exact(4).any(|px| px[3] == 255 && px[..3] != [0, 0, 0]));
+    assert!(fb
+        .chunks_exact(4)
+        .any(|px| px[3] == 255 && px[..3] != [0, 0, 0]));
 }
 
 #[test]
@@ -175,13 +190,19 @@ fn dusk_parallax_draws_obj_sprite_over_hills() {
             p[0] > 180 && p[1] > 150 && p[2] < 80 && p[3] == 255
         })
     });
-    assert!(lower_half_has_sprite_yellow, "OBJ sprite was hidden by BG layers");
+    assert!(
+        lower_half_has_sprite_yellow,
+        "OBJ sprite was hidden by BG layers"
+    );
 }
 
 #[test]
 fn mode7_floor_uses_interleaved_mode7_import() {
     let (_fb, e) = render_demo(MODE7_SRC);
-    assert!(e.import_reports().iter().any(|r| matches!(r, ImportBudget::Mode7 { layer: 0, .. })));
+    assert!(e
+        .import_reports()
+        .iter()
+        .any(|r| matches!(r, ImportBudget::Mode7 { layer: 0, .. })));
     assert!(e.memory().vram[..64].iter().any(|w| (w >> 8) != 0));
 }
 
@@ -198,7 +219,10 @@ fn dusk_parallax_demo_matches_golden_png() {
     let (actual, _) = render_demo(DUSK_SRC);
     let expected = decode_png(DUSK_GOLDEN);
     assert_eq!(actual.len(), expected.len());
-    assert!(actual == expected, "dusk demo framebuffer differs from golden PNG");
+    assert!(
+        actual == expected,
+        "dusk demo framebuffer differs from golden PNG"
+    );
 }
 
 #[test]
@@ -207,7 +231,10 @@ fn mode7_floor_demo_matches_golden_png() {
     let (actual, _) = render_demo(MODE7_SRC);
     let expected = decode_png(MODE7_GOLDEN);
     assert_eq!(actual.len(), expected.len());
-    assert!(actual == expected, "mode7 demo framebuffer differs from golden PNG");
+    assert!(
+        actual == expected,
+        "mode7 demo framebuffer differs from golden PNG"
+    );
 }
 
 #[test]
