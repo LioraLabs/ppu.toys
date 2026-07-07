@@ -38,6 +38,11 @@ pub struct Source {
 /// named image sources referenced by `bg[n].source` / `obj.sheet`.
 #[derive(Clone, Debug)]
 pub struct Memory {
+    /// VRAM: 64KB as 32K 16-bit words, word-addressed like hardware
+    /// ($0000-$7FFF). Holds tile char data AND tilemaps, bound by the
+    /// BGnSC/BGnNBA binding registers. Mode 7 uses the byte-interleaved layout
+    /// at word 0 (low byte = tilemap, high byte = char; m4/mode7).
+    pub vram: [u16; 0x8000],
     /// CGRAM: 256 palette entries, each a 15-bit BGR555 color. Entry 0 is the
     /// backdrop.
     pub cgram: [u16; 256],
@@ -52,6 +57,7 @@ pub struct Memory {
 impl Default for Memory {
     fn default() -> Self {
         Memory {
+            vram: [0; 0x8000],
             cgram: [0; 256],
             oam: [Obj::default(); 128],
             obj_sheet: None,
@@ -107,5 +113,21 @@ mod tests {
         );
         assert_eq!(m.sources.get("sky").unwrap().width, 2);
         assert!(m.sources.get("missing").is_none());
+    }
+
+    #[test]
+    fn vram_is_32k_words_zeroed() {
+        let m = Memory::new();
+        assert_eq!(m.vram.len(), 0x8000); // 64KB, word-addressed
+        assert!(m.vram.iter().all(|&w| w == 0));
+    }
+
+    #[test]
+    fn vram_reads_return_stored_words() {
+        let mut m = Memory::new();
+        m.vram[0x0000] = 0xbeef;
+        m.vram[0x7fff] = 0x1234;
+        assert_eq!(m.vram[0x0000], 0xbeef); // memory, not a write-only latch
+        assert_eq!(m.vram[0x7fff], 0x1234);
     }
 }
