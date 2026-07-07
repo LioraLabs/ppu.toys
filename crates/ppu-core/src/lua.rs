@@ -316,6 +316,11 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
         scroll.set(ctx, "y", 0.0).unwrap();
         layer.set(ctx, "scroll", scroll).unwrap();
         layer.set(ctx, "visible", true).unwrap();
+        // Binding registers (BGMODE tile-size / BGnSC / BGnNBA), quantize-on-write.
+        layer.set(ctx, "tile_size", 8).unwrap();
+        layer.set(ctx, "map_base", 0).unwrap();
+        layer.set(ctx, "screen_size", 0).unwrap();
+        layer.set(ctx, "char_base", 0).unwrap();
         bg.set(ctx, i, layer).unwrap();
     }
     ctx.set_global("bg", bg).unwrap();
@@ -332,6 +337,11 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     ] {
         m7.set(ctx, k, v).unwrap();
     }
+    // M7SEL binding registers. `wrap` names M7SEL's screen-over field (spec's
+    // `m7.repeat`, renamed because `repeat` is a reserved Lua keyword).
+    m7.set(ctx, "wrap", 0).unwrap();
+    m7.set(ctx, "flip_x", false).unwrap();
+    m7.set(ctx, "flip_y", false).unwrap();
     ctx.set_global("m7", m7).unwrap();
 
     // cgram (scalar table, written by user)
@@ -464,6 +474,19 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
                     Value::Nil => true,
                     v => v.to_bool(),
                 };
+                // Binding registers (quantize-on-write at RegRow build time).
+                if let Some(v) = layer.get(ctx, "tile_size").to_integer() {
+                    row.bg[i].tile_size = v as u8;
+                }
+                if let Some(v) = layer.get(ctx, "map_base").to_integer() {
+                    row.bg[i].map_base = v as u32;
+                }
+                if let Some(v) = layer.get(ctx, "screen_size").to_integer() {
+                    row.bg[i].screen_size = v as u8;
+                }
+                if let Some(v) = layer.get(ctx, "char_base").to_integer() {
+                    row.bg[i].char_base = v as u32;
+                }
             }
         }
     }
@@ -486,6 +509,12 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
         if let Some(v) = m7.get(ctx, "cy").to_number() {
             row.m7.cy = v as f32;
         }
+        // M7SEL binding registers (`wrap` = spec's `m7.repeat`, keyword-renamed).
+        if let Some(v) = m7.get(ctx, "wrap").to_integer() {
+            row.m7.repeat = v as u8;
+        }
+        row.m7.flip_x = m7.get(ctx, "flip_x").to_bool();
+        row.m7.flip_y = m7.get(ctx, "flip_y").to_bool();
     }
     row
 }
@@ -512,6 +541,10 @@ fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
                     }
                 };
                 layer.set(ctx, "visible", row.bg[i].visible).unwrap();
+                layer.set(ctx, "tile_size", row.bg[i].tile_size as i64).unwrap();
+                layer.set(ctx, "map_base", row.bg[i].map_base as i64).unwrap();
+                layer.set(ctx, "screen_size", row.bg[i].screen_size as i64).unwrap();
+                layer.set(ctx, "char_base", row.bg[i].char_base as i64).unwrap();
             }
         }
     }
@@ -522,6 +555,9 @@ fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
         m7.set(ctx, "d", row.m7.d as f64).unwrap();
         m7.set(ctx, "cx", row.m7.cx as f64).unwrap();
         m7.set(ctx, "cy", row.m7.cy as f64).unwrap();
+        m7.set(ctx, "wrap", row.m7.repeat as i64).unwrap();
+        m7.set(ctx, "flip_x", row.m7.flip_x).unwrap();
+        m7.set(ctx, "flip_y", row.m7.flip_y).unwrap();
     }
 }
 
