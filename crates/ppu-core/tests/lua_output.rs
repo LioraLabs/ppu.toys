@@ -143,6 +143,21 @@ fn vram_raw_word_poke_lands_in_memory() {
 }
 
 #[test]
+fn bg_map_cell_packs_tilemap_word() {
+    let mut e = engine(
+        "function frame(t,f) bg[1].map_base=0; \
+         bg[1].map[0]={} bg[1].map[0][0]={tile=5,pal=3,prio=1,flip_x=true,flip_y=false}; \
+         bg[1].map[1]={} bg[1].map[1][2]={tile=1} end",
+    );
+    e.frame(0.0, 0).unwrap();
+    let m = e.memory();
+    // (col=0,row=0): 5 | 3<<10 | 1<<13 | 1<<14
+    assert_eq!(m.vram[0], 5 | (3 << 10) | (1 << 13) | (1 << 14));
+    // (col=1,row=2): addr = row*32 + col = 65
+    assert_eq!(m.vram[2 * 32 + 1], 1);
+}
+
+#[test]
 fn scanline_is_an_alias_for_hdma() {
     let mut e = engine("function frame(t,f) scanline(0,223, function(y) brightness=3 end) end");
     let lt = e.frame(0.0, 0).unwrap();
