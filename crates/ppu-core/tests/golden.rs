@@ -56,5 +56,9 @@ fn regen_golden() {
     let mut encoder = png::Encoder::new(file, WIDTH as u32, HEIGHT as u32);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
-    encoder.write_header().unwrap().write_image_data(&fb).unwrap();
+    encoder
+        .write_header()
+        .unwrap()
+        .write_image_data(&fb)
+        .unwrap();
 }

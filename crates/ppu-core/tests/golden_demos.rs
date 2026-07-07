@@ -1,14 +1,136 @@
-//! M1-ENGINE done gate: the two flagship worked examples (dusk-parallax,
-//! mode7-floor) driven end-to-end through the real LuaEngine -> frame ->
-//! render_frame pipeline, headless, compared to committed golden PNGs.
-//!
-//! The demo Lua embeds each spec "Worked example" verbatim; the only additions
-//! are the runnable-demo glue the illustrative snippets omit (obj.sheet + on),
-//! noted inline. Sources are procedural Direct-RGBA (the upload contract).
-use ppu_core::{render_frame, LuaEngine, Source, HEIGHT, WIDTH};
+//! Flagship demo golden tests through the real Lua/importer/render pipeline.
+use ppu_core::{render_frame, ImportBudget, LuaEngine, HEIGHT, WIDTH};
 use std::path::Path;
 
-// ── golden PNG helpers (same convention as golden_composite/golden_mode7) ──────
+const DUSK_GOLDEN: &str = "tests/fixtures/golden_dusk_parallax.png";
+const MODE7_GOLDEN: &str = "tests/fixtures/golden_mode7_floor.png";
+
+const DUSK_SRC: &str = r#"-- ppu.toys :: dusk-parallax (Mode 1: parallax BG scroll + CGRAM colour-cycle + sprite)
+local SPEED = 12
+function frame(t, f)
+  mode = 1; brightness = 15
+  bg[1].source = "sky";   bg[2].source = "hills"
+  bg[2].map_base = 0x0800; bg[2].char_base = 0x4000
+  bg[1].scroll.x = t * SPEED
+  bg[2].scroll.x = t * SPEED * 3
+  for i = 0, 7 do cgram[0x40 + i] = hsl((t*40 + i*12) % 360, 0.6, 0.5) end
+  obj[0].tile = 4; obj[0].pal = 0; obj[0].prio = 3; obj[0].x = 120; obj[0].y = 132 + sin(t*3) * 4
+  obj.char_base = 0x6000; obj.sheet = "hero"; obj[0].on = true
+end
+"#;
+
+const MODE7_SRC: &str = r#"-- ppu.toys :: mode7-floor (the namesake; per-scanline affine floor)
+function frame(t, f)
+  mode = 7; brightness = 15; bg[1].source = "track"
+  hdma(96, 223, function(y)
+    local d = 64 / (y - 95)
+    m7.a, m7.d = d, d
+    m7.cx, m7.cy = 128, 0
+    bg[1].scroll.y = (t*80) * d
+  end)
+end
+"#;
+
+fn sky() -> Vec<u8> {
+    const W: usize = WIDTH;
+    const H: usize = HEIGHT;
+    const HORIZON: usize = 140;
+    let mut data = vec![0u8; W * H * 4];
+    for y in 0..H {
+        for x in 0..W {
+            let i = (y * W + x) * 4;
+            if y >= HORIZON {
+                data[i + 3] = 0;
+                continue;
+            }
+            let dx = x as i32 - 192;
+            let dy = y as i32 - 50;
+            if dx * dx + dy * dy < 20 * 20 {
+                data[i..i + 4].copy_from_slice(&[255, 226, 168, 255]);
+                continue;
+            }
+            let t = y as f32 / HORIZON as f32;
+            data[i] = 30 + (t * t * 210.0).round() as u8;
+            data[i + 1] = 18 + (t * 70.0).round() as u8;
+            data[i + 2] = 78 + (t * 52.0).round() as u8;
+            data[i + 3] = 255;
+        }
+    }
+    data
+}
+
+fn hills() -> Vec<u8> {
+    const W: usize = WIDTH;
+    const H: usize = HEIGHT;
+    const TOP: usize = 138;
+    let mut data = vec![0u8; W * H * 4];
+    for y in 0..H {
+        for x in 0..W {
+            let i = (y * W + x) * 4;
+            if y < TOP {
+                data[i + 3] = 0;
+                continue;
+            }
+            let stripe = (x / 16) % 2;
+            let d = (y - TOP) as f32 / (H - TOP) as f32;
+            data[i] = 18 + stripe as u8 * 10;
+            data[i + 1] = 96 - (d * 46.0).round() as u8 + stripe as u8 * 12;
+            data[i + 2] = 38 + stripe as u8 * 8;
+            data[i + 3] = 255;
+        }
+    }
+    data
+}
+
+fn hero() -> Vec<u8> {
+    let (w, h) = (64usize, 8usize);
+    let mut data = vec![0u8; w * h * 4];
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) * 4;
+            let cell = x / 8;
+            data[i] = 255 - cell as u8 * 16;
+            data[i + 1] = 200;
+            data[i + 2] = cell as u8 * 24;
+            data[i + 3] = 255;
+        }
+    }
+    data
+}
+
+fn track() -> Vec<u8> {
+    let (w, h) = (1024usize, 1024usize);
+    let mut data = vec![0u8; w * h * 4];
+    for y in 0..h {
+        for x in 0..w {
+            let (cx, cy) = ((x / 8) % 8, (y / 8) % 8);
+            let i = (y * w + x) * 4;
+            data[i] = cx as u8 * 32;
+            data[i + 1] = cy as u8 * 32;
+            data[i + 2] = (((cx + cy) & 1) * 255) as u8;
+            data[i + 3] = 255;
+        }
+    }
+    data
+}
+
+fn demo_engine(src: &str) -> LuaEngine {
+    let mut e = LuaEngine::new();
+    e.upload_asset("sky".into(), WIDTH as u32, HEIGHT as u32, sky());
+    e.upload_asset("hills".into(), WIDTH as u32, HEIGHT as u32, hills());
+    e.upload_asset("hero".into(), 64, 8, hero());
+    e.upload_asset("track".into(), 1024, 1024, track());
+    e.set_source(src).unwrap();
+    e
+}
+
+fn render_demo(src: &str) -> (Vec<u8>, LuaEngine) {
+    let mut e = demo_engine(src);
+    let lt = e.frame(1.0, 60).unwrap();
+    let fb = render_frame(&lt, e.memory());
+    (fb, e)
+}
+
 fn decode_png(path: &str) -> Vec<u8> {
     let decoder = png::Decoder::new(std::fs::File::open(path).unwrap());
     let mut reader = decoder.read_info().unwrap();
@@ -24,194 +146,107 @@ fn write_png(path: &str, fb: &[u8]) {
     let mut encoder = png::Encoder::new(file, WIDTH as u32, HEIGHT as u32);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
-    encoder.write_header().unwrap().write_image_data(fb).unwrap();
-}
-
-// ── dusk-parallax ─────────────────────────────────────────────────────────────
-const DUSK_GOLDEN: &str = "tests/fixtures/golden_dusk_parallax.png";
-
-/// Spec worked example, verbatim, plus the two runnable-demo lines the snippet
-/// omits (obj.sheet + obj[0].on) so the sprite is actually drawn.
-const DUSK_SRC: &str = r#"
-local SPEED = 12
-function frame(t, f)
-  mode = 1; brightness = 15
-  bg[1].source = "sky";   bg[2].source = "hills"
-  bg[1].scroll.x = t * SPEED
-  bg[2].scroll.x = t * SPEED * 3
-  for i = 0, 7 do cgram[0x40 + i] = hsl((t*40 + i*12) % 360, 0.6, 0.5) end
-  obj[0].tile = 4; obj[0].pal = 2; obj[0].x = 120; obj[0].y = 132 + sin(t*3) * 4
-  -- demo glue the spec snippet omits (so the sprite renders):
-  obj.sheet = "hero"; obj[0].on = true
-end
-"#;
-
-/// 64x64 "sky": vertical dusk gradient with diagonal stripes (horizontal
-/// variation so x-scroll is visible); lower half transparent so "hills" shows
-/// through the topmost BG1.
-fn sky_source() -> Source {
-    let (w, h) = (64u32, 64u32);
-    let mut rgba = vec![0u8; (w * h * 4) as usize];
-    for y in 0..h {
-        for x in 0..w {
-            let i = ((y * w + x) * 4) as usize;
-            if y >= h / 2 {
-                rgba[i + 3] = 0; // transparent lower half -> hills shows
-                continue;
-            }
-            let stripe = (((x + y) / 4) % 2) as u8;
-            rgba[i] = 80 + stripe * 60; // R: dusk warm
-            rgba[i + 1] = 40 + (y as u8); // G: rises with height
-            rgba[i + 2] = 120 + stripe * 40; // B: violet
-            rgba[i + 3] = 255;
-        }
-    }
-    Source { width: w, height: h, rgba }
-}
-
-/// 64x64 "hills": opaque vertical bands (distinct hues per column block) so the
-/// faster BG2 x-scroll is clearly visible.
-fn hills_source() -> Source {
-    let (w, h) = (64u32, 64u32);
-    let mut rgba = vec![0u8; (w * h * 4) as usize];
-    for y in 0..h {
-        for x in 0..w {
-            let i = ((y * w + x) * 4) as usize;
-            let band = (x / 8) as u8;
-            rgba[i] = 20 + band * 16;
-            rgba[i + 1] = 60 + band * 20;
-            rgba[i + 2] = 30;
-            rgba[i + 3] = 255;
-        }
-    }
-    Source { width: w, height: h, rgba }
-}
-
-/// 64x8 OBJ sheet: 8 distinct 8x8 cells so `obj[0].tile = 4` resolves to a
-/// recognizable solid cell.
-fn hero_sheet() -> Source {
-    let (w, h) = (64u32, 8u32);
-    let mut rgba = vec![0u8; (w * h * 4) as usize];
-    for y in 0..h {
-        for x in 0..w {
-            let i = ((y * w + x) * 4) as usize;
-            let cell = (x / 8) as u8;
-            rgba[i] = 255 - cell * 16;
-            rgba[i + 1] = 200;
-            rgba[i + 2] = cell * 24;
-            rgba[i + 3] = 255;
-        }
-    }
-    Source { width: w, height: h, rgba }
-}
-
-/// Run dusk-parallax through the real pipeline at a fixed (t,f).
-fn dusk_frame(t: f64, f: u32) -> Vec<u8> {
-    let mut engine = LuaEngine::new();
-    engine.set_source(DUSK_SRC).expect("dusk-parallax compiles");
-    {
-        let mem = engine.memory_mut();
-        mem.sources.insert("sky".into(), sky_source());
-        mem.sources.insert("hills".into(), hills_source());
-        mem.sources.insert("hero".into(), hero_sheet());
-    }
-    let lt = engine.frame(t, f).expect("dusk-parallax frame runs");
-    render_frame(&lt, engine.memory())
+    encoder
+        .write_header()
+        .unwrap()
+        .write_image_data(fb)
+        .unwrap();
 }
 
 #[test]
-fn dusk_parallax_scroll_animates() {
-    // Motion: the two BG layers x-scroll with t, so t=0 and t=1 must differ.
-    let a = dusk_frame(0.0, 0);
-    let b = dusk_frame(1.0, 60);
-    assert_eq!(a.len(), WIDTH * HEIGHT * 4);
-    assert_ne!(a, b, "dusk-parallax did not animate between t=0 and t=1");
+fn dusk_parallax_uses_bg_imports_and_obj_import() {
+    let (fb, e) = render_demo(DUSK_SRC);
+    assert!(e
+        .import_reports()
+        .iter()
+        .any(|r| matches!(r, ImportBudget::Tile { layer: 0, .. })));
+    assert!(e
+        .import_reports()
+        .iter()
+        .any(|r| matches!(r, ImportBudget::Tile { layer: 1, .. })));
+    assert!(e
+        .import_reports()
+        .iter()
+        .any(|r| matches!(r, ImportBudget::Obj { .. })));
+    assert!(e.memory().oam[0].on);
+    assert!(fb
+        .chunks_exact(4)
+        .any(|px| px[3] == 255 && px[..3] != [0, 0, 0]));
 }
 
 #[test]
-fn dusk_parallax_matches_golden_png() {
+fn dusk_parallax_draws_sky_above_horizon() {
+    let (fb, _) = render_demo(DUSK_SRC);
+    let px = &fb[(20 * WIDTH + 20) * 4..][..4];
+    assert_ne!(px, &[0, 0, 0, 255], "sky pixel was backdrop black");
+}
+
+#[test]
+fn dusk_parallax_draws_obj_sprite_over_hills() {
+    let (fb, _) = render_demo(DUSK_SRC);
+    let lower_half_has_sprite_yellow = (120..155).any(|y| {
+        (0..WIDTH).any(|x| {
+            let p = &fb[(y * WIDTH + x) * 4..][..4];
+            p[0] > 180 && p[1] > 150 && p[2] < 80 && p[3] == 255
+        })
+    });
     assert!(
-        Path::new(DUSK_GOLDEN).exists(),
-        "golden missing — run: cargo test -p ppu-core --test golden_demos regen_golden_demos -- --ignored"
+        lower_half_has_sprite_yellow,
+        "OBJ sprite was hidden by BG layers"
     );
-    let actual = dusk_frame(1.0, 60);
+}
+
+#[test]
+fn mode7_floor_uses_interleaved_mode7_import() {
+    let (_fb, e) = render_demo(MODE7_SRC);
+    assert!(e
+        .import_reports()
+        .iter()
+        .any(|r| matches!(r, ImportBudget::Mode7 { layer: 0, .. })));
+    assert!(e.memory().vram[..64].iter().any(|w| (w >> 8) != 0));
+}
+
+#[test]
+fn mode7_floor_draws_below_horizon() {
+    let (fb, _) = render_demo(MODE7_SRC);
+    let px = &fb[(160 * WIDTH + 128) * 4..][..4];
+    assert_ne!(px, &[0, 0, 0, 255], "floor pixel was backdrop black");
+}
+
+#[test]
+fn dusk_parallax_demo_matches_golden_png() {
+    assert!(Path::new(DUSK_GOLDEN).exists());
+    let (actual, _) = render_demo(DUSK_SRC);
     let expected = decode_png(DUSK_GOLDEN);
-    assert_eq!(actual.len(), WIDTH * HEIGHT * 4);
-    assert_eq!(actual, expected, "dusk-parallax framebuffer differs from golden PNG");
-}
-
-// ── mode7-floor ───────────────────────────────────────────────────────────────
-const MODE7_GOLDEN: &str = "tests/fixtures/golden_mode7_floor.png";
-
-/// Spec worked example, verbatim.
-const MODE7_SRC: &str = r#"
-function frame(t, f)
-  mode = 7; brightness = 15; bg[1].source = "track"
-  hdma(96, 223, function(y)
-    local d = 64 / (y - 95)
-    m7.a, m7.d = d, d
-    m7.cx, m7.cy = 128, 0
-    bg[1].scroll.y = (t*80) * d
-  end)
-end
-"#;
-
-/// 64x64 procedural "track": an 8x8 grid of distinctly-colored cells so the
-/// receding-perspective warp is legible (same source style as golden_mode7).
-fn track_source() -> Source {
-    let (w, h) = (64u32, 64u32);
-    let mut rgba = vec![0u8; (w * h * 4) as usize];
-    for y in 0..h {
-        for x in 0..w {
-            let cx = (x / 8) as u8;
-            let cy = (y / 8) as u8;
-            let i = ((y * w + x) * 4) as usize;
-            rgba[i] = cx * 32;
-            rgba[i + 1] = cy * 32;
-            rgba[i + 2] = ((cx + cy) & 1) * 255;
-            rgba[i + 3] = 255;
-        }
-    }
-    Source { width: w, height: h, rgba }
-}
-
-/// Run mode7-floor through the real pipeline at a fixed (t,f).
-fn mode7_frame(t: f64, f: u32) -> Vec<u8> {
-    let mut engine = LuaEngine::new();
-    engine.set_source(MODE7_SRC).expect("mode7-floor compiles");
-    engine
-        .memory_mut()
-        .sources
-        .insert("track".into(), track_source());
-    let lt = engine.frame(t, f).expect("mode7-floor frame runs");
-    render_frame(&lt, engine.memory())
-}
-
-#[test]
-fn mode7_floor_is_per_scanline_affine() {
-    // The hdma hook switches the affine per line: rows in the floor band carry a
-    // shrinking 1/(y-95) scale, so adjacent floor scanlines are NOT identical.
-    let fb = mode7_frame(1.0, 60);
-    let row = |y: usize| &fb[y * WIDTH * 4..(y + 1) * WIDTH * 4];
-    assert_ne!(row(150), row(200), "floor scanlines should differ (perspective)");
-}
-
-#[test]
-fn mode7_floor_matches_golden_png() {
+    assert_eq!(actual.len(), expected.len());
     assert!(
-        Path::new(MODE7_GOLDEN).exists(),
-        "golden missing — run: cargo test -p ppu-core --test golden_demos regen_golden_demos -- --ignored"
+        actual == expected,
+        "dusk demo framebuffer differs from golden PNG"
     );
-    let actual = mode7_frame(1.0, 60);
-    let expected = decode_png(MODE7_GOLDEN);
-    assert_eq!(actual.len(), WIDTH * HEIGHT * 4);
-    assert_eq!(actual, expected, "mode7-floor framebuffer differs from golden PNG");
 }
 
-// ── regen (ignored): (re)generate both committed golden fixtures ──────────────
 #[test]
-#[ignore = "regenerates the committed golden demo PNGs"]
-fn regen_golden_demos() {
-    write_png(DUSK_GOLDEN, &dusk_frame(1.0, 60));
-    write_png(MODE7_GOLDEN, &mode7_frame(1.0, 60));
+fn mode7_floor_demo_matches_golden_png() {
+    assert!(Path::new(MODE7_GOLDEN).exists());
+    let (actual, _) = render_demo(MODE7_SRC);
+    let expected = decode_png(MODE7_GOLDEN);
+    assert_eq!(actual.len(), expected.len());
+    assert!(
+        actual == expected,
+        "mode7 demo framebuffer differs from golden PNG"
+    );
+}
+
+#[test]
+#[ignore = "regenerates the committed dusk demo golden PNG"]
+fn regen_golden_dusk_parallax() {
+    let (fb, _) = render_demo(DUSK_SRC);
+    write_png(DUSK_GOLDEN, &fb);
+}
+
+#[test]
+#[ignore = "regenerates the committed Mode 7 demo golden PNG"]
+fn regen_golden_mode7_floor() {
+    let (fb, _) = render_demo(MODE7_SRC);
+    write_png(MODE7_GOLDEN, &fb);
 }

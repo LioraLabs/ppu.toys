@@ -75,3 +75,96 @@
   font-size: 10px;
 }
 .oam-field { color: var(--text-dim2); }
+
+.vram-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.vram-toolbar .insp-subhead { flex: 1; }
+.vram-toolbar select {
+  height: 24px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-grid);
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.vram-budget,
+.vram-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.vram-budget span,
+.vram-meta span {
+  padding: 3px 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-grid);
+  color: var(--text-dim2);
+}
+.vram-grid { display: grid; gap: 4px; }
+.vram-grid--tiles { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+.vram-grid--map { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.vram-tile {
+  display: grid;
+  gap: 2px;
+  place-items: center;
+  padding: 4px 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-grid);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-dim2);
+}
+.vram-tile-px {
+  display: grid;
+  grid-template-columns: repeat(8, 3px);
+  grid-template-rows: repeat(8, 3px);
+  gap: 0;
+  image-rendering: pixelated;
+}
+.vram-tile-px span { width: 3px; height: 3px; }
+.vram-map-cell {
+  min-height: 32px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-content: center;
+  gap: 1px 4px;
+  padding: 3px 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-grid);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-dim2);
+}
+.vram-map-cell--prio { border-color: var(--accent); color: var(--text-main); }
+.palette-banks {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 3px;
+}
+.palette-bank {
+  display: grid;
+  grid-template-columns: 14px repeat(16, 1fr);
+  gap: 2px;
+  align-items: center;
+}
+.palette-bank span {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-dim2);
+}
+.palette-bank i {
+  display: block;
+  height: 12px;
+  border: 1px solid var(--border-palette);
+  border-radius: 2px;
+}

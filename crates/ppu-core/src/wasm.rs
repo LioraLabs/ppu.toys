@@ -9,7 +9,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::{
     derive_registers, render_frame, AssetInfo, LuaEngine, LuaErrorView, OamSprite, Register,
-    SetSourceResult, Source, HEIGHT, WIDTH,
+    SetSourceResult, HEIGHT, WIDTH,
 };
 
 #[wasm_bindgen]
@@ -44,16 +44,19 @@ impl PpuCore {
 
     #[wasm_bindgen(js_name = setSource)]
     pub fn set_source(&mut self, src: &str) -> Result<JsValue, JsValue> {
-        // Preserve uploaded sources across recompiles (LuaEngine resets Memory).
-        let saved = std::mem::take(&mut self.engine.memory_mut().sources);
         let res = match self.engine.set_source(src) {
-            Ok(()) => SetSourceResult { ok: true, error: None },
+            Ok(()) => SetSourceResult {
+                ok: true,
+                error: None,
+            },
             Err(e) => SetSourceResult {
                 ok: false,
-                error: Some(LuaErrorView { message: e.message, line: e.line }),
+                error: Some(LuaErrorView {
+                    message: e.message,
+                    line: e.line,
+                }),
             },
         };
-        self.engine.memory_mut().sources = saved;
         serde_wasm_bindgen::to_value(&res).map_err(Into::into)
     }
 
@@ -65,7 +68,10 @@ impl PpuCore {
         let mut lt = match self.engine.frame(t, f) {
             Ok(lt) => lt,
             Err(e) => {
-                let view = LuaErrorView { message: e.message, line: e.line };
+                let view = LuaErrorView {
+                    message: e.message,
+                    line: e.line,
+                };
                 return Err(serde_wasm_bindgen::to_value(&view)?);
             }
         };
@@ -105,6 +111,10 @@ impl PpuCore {
         self.cgram.clone()
     }
 
+    pub fn vram(&self) -> Vec<u16> {
+        self.engine.memory().vram.to_vec()
+    }
+
     pub fn registers(&self) -> Result<JsValue, JsValue> {
         serde_wasm_bindgen::to_value(&self.registers).map_err(Into::into)
     }
@@ -115,14 +125,12 @@ impl PpuCore {
 
     #[wasm_bindgen(js_name = listAssets)]
     pub fn list_assets(&self) -> Result<JsValue, JsValue> {
-        let mut assets: Vec<AssetInfo> = self
+        let assets: Vec<AssetInfo> = self
             .engine
-            .memory()
-            .sources
-            .iter()
-            .map(|(id, s)| AssetInfo { id: id.clone(), width: s.width, height: s.height })
-            .collect();
-        assets.sort_by(|a, b| a.id.cmp(&b.id)); // stable order for the inspector
+            .assets()
+            .into_iter()
+            .map(|(id, width, height)| AssetInfo { id, width, height })
+            .collect(); // already sorted by id (stable order for the inspector)
         serde_wasm_bindgen::to_value(&assets).map_err(Into::into)
     }
 
@@ -133,13 +141,16 @@ impl PpuCore {
         let height = get("height").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
         let Some(data) = get("data") else { return };
         let rgba = Uint8ClampedArray::new(&data).to_vec();
-        if width == 0 || height == 0 || rgba.len() != (width * height * 4) as usize {
-            return; // malformed ImageData -> ignore
-        }
-        self.engine
-            .memory_mut()
-            .sources
-            .insert(slot, Source { width, height, rgba });
+        // The engine owns the asset store + import cache and validates malformed
+        // ImageData (zero dims / wrong buffer length) internally.
+        self.engine.upload_asset(slot, width, height, rgba);
+    }
+
+    /// Per-layer import budget reports from the most recent `frame()`
+    /// (m4/importer -> m4/inspector).
+    #[wasm_bindgen(js_name = importReports)]
+    pub fn import_reports(&self) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(self.engine.import_reports()).map_err(Into::into)
     }
 
     #[wasm_bindgen(js_name = setLayerVisible)]

@@ -1,7 +1,7 @@
 //! E7 sanity: drive the real LuaEngine -> compositor pipeline end-to-end the way
 //! the wasm shim does, without wasm-bindgen.
-use std::collections::HashMap;
 use ppu_core::{derive_registers, render_frame, LuaEngine, OamSprite, WIDTH};
+use std::collections::HashMap;
 
 #[test]
 fn lua_source_drives_backdrop_through_compositor() {
@@ -51,8 +51,22 @@ fn lua_oam_maps_to_sprite_views() {
 #[test]
 fn setsource_reports_compile_error() {
     let mut engine = LuaEngine::new();
-    let err = engine.set_source("function frame(t,f) this is not lua end").unwrap_err();
+    let err = engine
+        .set_source("function frame(t,f) this is not lua end")
+        .unwrap_err();
     assert!(!err.message.is_empty());
+}
+
+#[test]
+fn upload_asset_lists_and_dedups_generation() {
+    let mut e = LuaEngine::new();
+    e.upload_asset("sky".into(), 2, 1, vec![255, 0, 0, 255, 0, 0, 255, 255]);
+    e.upload_asset("hills".into(), 1, 1, vec![0, 255, 0, 255]);
+    let a = e.assets();
+    assert_eq!(a.len(), 2);
+    assert_eq!(a[0], ("hills".into(), 1, 1)); // sorted by id
+    e.upload_asset("bad".into(), 4, 4, vec![0; 3]); // malformed -> ignored
+    assert_eq!(e.assets().len(), 2);
 }
 
 #[test]

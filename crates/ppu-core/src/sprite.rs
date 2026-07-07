@@ -1,13 +1,8 @@
-//! Sprite (OBJ) rasterizer: per-scanline binning over the 128-entry OAM,
-//! indexed into the global `obj.sheet`, composited by priority.
-//!
-//! Direct-RGBA contract (v1): the OBJ sheet's actual RGBA *is* the graphic.
-//! `obj[i].tile` indexes the sheet in 8x8 cells; a sprite samples a
-//! `dim x dim` block from there. `rgba[3] == 0` (alpha 0) is transparent.
-//! CGRAM is NOT consulted for sprite pixels in v1. `Obj::pal` is a NO-OP in v1
-//! (the field is kept for the DSL surface; per-palette recolor is v2).
-//! Brightness is applied once by the E5 compositor.
+//! Sprite (OBJ) rasterizer: per-scanline OAM binning, then 4bpp pixel
+//! sampling from the OBSEL char base in VRAM through OBJ CGRAM (palettes
+//! 8-15). Brightness is applied once by the E5 compositor.
 
+use crate::bg::char_pixel_index;
 use crate::memory::{unpack_rgb15, Memory};
 
 /// SNES OBJ-per-scanline limit. Sprites beyond this many covering a line are
@@ -52,63 +47,60 @@ pub fn sprites_on_line(mem: &Memory, y: usize) -> Vec<usize> {
     out
 }
 
-/// Composite every visible sprite for scanline `y` into a `width`-long row.
-/// `Some(px)` where a sprite pixel shows; `None` where none does. Higher `prio`
-/// wins; ties break to the lower OAM index. This is the function the E5
-/// compositor overlays onto BG layers.
+/// One OBJ tile is 4bpp: 16 VRAM words. Sprites index the OBJ name table 16
+/// tiles wide (right = +1, down = +16), masked to 9 bits.
+const OBJ_WORDS_PER_TILE: u32 = 16;
+
+/// Composite every visible sprite for scanline `y` into a `width`-long row of
+/// `Option<SpritePixel>` (`None` = transparent). Real OBJ pixel sampling: per
+/// covering sprite (lowest OAM index first), fetch its 4bpp char from the OBSEL
+/// char base in VRAM, apply flip/size, decode the palette index, and map index
+/// 0 = transparent / else `cgram[128 + pal*16 + index]` (OBJ palettes 8-15).
+/// `SpritePixel.prio` carries the sprite's priority for the BG/OBJ compositor.
+/// Un-attenuated; brightness is applied by the compositor.
 pub fn render_scanline(mem: &Memory, y: usize, width: usize) -> Vec<Option<SpritePixel>> {
-    let mut row = vec![None; width];
-    let Some(sheet) = mem.obj_sheet.as_ref().and_then(|id| mem.sources.get(id)) else {
-        return row;
-    };
-    if sheet.width < TILE || sheet.height < TILE {
-        return row;
-    }
-    let tiles_per_row = (sheet.width / TILE).max(1);
-
+    let mut out = vec![None; width];
+    let char_base = mem.obsel.char_base as u32;
     for i in sprites_on_line(mem, y) {
-        let o = &mem.oam[i];
+        let o = mem.oam[i];
         let dim = sprite_dim(o.size);
-        let origin_x = (o.tile as u32 % tiles_per_row) * TILE;
-        let origin_y = (o.tile as u32 / tiles_per_row) * TILE;
-
-        let local_y = (y as i64 - o.y as i64) as u32; // 0..dim by binning
-        let sample_y = if o.flip_y { dim - 1 - local_y } else { local_y };
-        let sy = origin_y + sample_y;
-        if sy >= sheet.height {
-            continue;
-        }
-        let left = o.x as i64;
-
-        for local_x in 0..dim {
-            let px = left + local_x as i64;
-            if px < 0 || px as usize >= width {
+        let row = (y as i64 - o.y as i64) as u32; // 0..dim (binning guarantees in-range)
+        let pal_base = 128 + (o.pal as usize & 7) * 16;
+        for sx in 0..dim {
+            let screen_x = o.x as i64 + sx as i64;
+            if screen_x < 0 || screen_x >= width as i64 {
                 continue;
             }
-            let sample_x = if o.flip_x { dim - 1 - local_x } else { local_x };
-            let sx = origin_x + sample_x;
-            if sx >= sheet.width {
-                continue;
+            let slot = &mut out[screen_x as usize];
+            if slot.is_some() {
+                continue; // a lower OAM index already painted this pixel
             }
-            let si = ((sy * sheet.width + sx) * 4) as usize;
-            if sheet.rgba[si + 3] == 0 {
-                continue; // alpha 0 -> transparent
+            let px = if o.flip_x { dim - 1 - sx } else { sx };
+            let py = if o.flip_y { dim - 1 - row } else { row };
+            // Name-table walk: +1 per column, +16 per row (masked to 9 bits).
+            // Hardware wraps the column within the tile's own 16-wide row
+            // (`(tile & 0x1f0) | ((tile + col) & 0xf)`); the simpler carry here
+            // only diverges when a wide sprite's base column nibble + width
+            // crosses 16 — acceptable for this educational core.
+            let tile_index = (o.tile as u32 + px / 8 + (py / 8) * 16) & 0x1ff;
+            let addr = ((char_base + tile_index * OBJ_WORDS_PER_TILE) & 0x7fff) as u16;
+            let index = char_pixel_index(mem, addr, 4, px % 8, py % 8);
+            if index == 0 {
+                continue; // color 0 = transparent
             }
-            let dst = &mut row[px as usize];
-            if dst.is_none_or(|cur| o.prio > cur.prio) {
-                *dst = Some(SpritePixel {
-                    rgba: [sheet.rgba[si], sheet.rgba[si + 1], sheet.rgba[si + 2], 255],
-                    prio: o.prio,
-                });
-            }
+            *slot = Some(SpritePixel {
+                rgba: unpack_rgb15(mem.cgram[pal_base + index as usize]),
+                prio: o.prio,
+            });
         }
     }
-    row
+    out
 }
 
-/// Full-frame sprite raster over the CGRAM backdrop (`cgram[0]`), for golden
-/// tests. The real compositor (E5) overlays [`render_scanline`] onto BG layers
-/// instead of this flat backdrop.
+/// Full-frame sprite raster over the CGRAM backdrop (`cgram[0]`), for sprite
+/// unit tests: [`render_scanline`] sampled over a flat backdrop. The real E5
+/// compositor overlays [`render_scanline`] onto BG layers instead of this
+/// flat backdrop.
 pub fn render_sprites(mem: &Memory, width: usize, height: usize) -> Vec<u8> {
     let backdrop = unpack_rgb15(mem.cgram[0]);
     let mut fb = Vec::with_capacity(width * height * 4);
@@ -123,13 +115,23 @@ pub fn render_sprites(mem: &Memory, width: usize, height: usize) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::{rgb15, Source};
+    use crate::memory::rgb15;
     use crate::registers::Obj;
+
+    fn mem() -> Memory {
+        Memory::new()
+    }
 
     #[test]
     fn obj_coords_are_integer_registers() {
-        let mut mem = mem_with_sheet(2, 2, [255, 255, 255, 255]);
-        mem.oam[0] = Obj { on: true, x: 5, y: 10, size: 0, ..Obj::default() };
+        let mut mem = mem();
+        mem.oam[0] = Obj {
+            on: true,
+            x: 5,
+            y: 10,
+            size: 0,
+            ..Obj::default()
+        };
         assert_eq!(sprites_on_line(&mem, 10), vec![0]);
     }
 
@@ -142,27 +144,30 @@ mod tests {
         assert_eq!(sprite_dim(9), 64); // clamped
     }
 
-    /// Build a Memory with a `tpr*8` x `rows*8` sheet of a single solid RGBA
-    /// `color` (alpha from `color[3]`), and an OBJ sheet selector.
-    fn mem_with_sheet(tpr: u32, rows: u32, color: [u8; 4]) -> Memory {
-        let (w, h) = (tpr * 8, rows * 8);
-        let mut rgba = vec![0u8; (w * h * 4) as usize];
-        for px in rgba.chunks_mut(4) {
-            px.copy_from_slice(&color);
-        }
-        let mut mem = Memory::new();
-        mem.sources
-            .insert("sheet".into(), Source { width: w, height: h, rgba });
-        mem.obj_sheet = Some("sheet".into());
-        mem
-    }
-
     #[test]
     fn binning_selects_only_on_sprites_covering_the_line() {
-        let mut mem = mem_with_sheet(2, 2, [255, 255, 255, 255]);
-        mem.oam[0] = Obj { on: true, x: 0, y: 10, size: 0, ..Obj::default() }; // rows 10..18
-        mem.oam[1] = Obj { on: false, x: 0, y: 10, size: 0, ..Obj::default() }; // off
-        mem.oam[2] = Obj { on: true, x: 0, y: 100, size: 0, ..Obj::default() }; // elsewhere
+        let mut mem = mem();
+        mem.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 10,
+            size: 0,
+            ..Obj::default()
+        }; // rows 10..18
+        mem.oam[1] = Obj {
+            on: false,
+            x: 0,
+            y: 10,
+            size: 0,
+            ..Obj::default()
+        }; // off
+        mem.oam[2] = Obj {
+            on: true,
+            x: 0,
+            y: 100,
+            size: 0,
+            ..Obj::default()
+        }; // elsewhere
         assert_eq!(sprites_on_line(&mem, 12), vec![0]);
         assert_eq!(sprites_on_line(&mem, 9), Vec::<usize>::new());
         assert_eq!(sprites_on_line(&mem, 18), Vec::<usize>::new()); // exclusive bottom
@@ -170,9 +175,15 @@ mod tests {
 
     #[test]
     fn binning_caps_at_max_per_line_keeping_lowest_indices() {
-        let mut mem = mem_with_sheet(2, 2, [255, 255, 255, 255]);
+        let mut mem = mem();
         for i in 0..40usize {
-            mem.oam[i] = Obj { on: true, x: 0, y: 0, size: 0, ..Obj::default() };
+            mem.oam[i] = Obj {
+                on: true,
+                x: 0,
+                y: 0,
+                size: 0,
+                ..Obj::default()
+            };
         }
         let on = sprites_on_line(&mem, 0);
         assert_eq!(on.len(), MAX_SPRITES_PER_LINE);
@@ -180,140 +191,202 @@ mod tests {
         assert_eq!(on.last(), Some(&(MAX_SPRITES_PER_LINE - 1)));
     }
 
-    #[test]
-    fn off_sprite_renders_nothing() {
-        let mut mem = mem_with_sheet(2, 2, [255, 255, 255, 255]);
-        mem.oam[0] = Obj { on: false, x: 0, y: 0, size: 0, ..Obj::default() };
-        assert!(render_scanline(&mem, 0, 32).iter().all(|p| p.is_none()));
+    /// Write a 4bpp OBJ char (16 words) at OBJ char base 0x2000, tile `n`,
+    /// from an 8x8 index grid (index 0..15).
+    fn put_obj_char(mem: &mut Memory, n: usize, grid: [[u8; 8]; 8]) {
+        let base = 0x2000 + n * 16;
+        for y in 0..8 {
+            let (mut p01, mut p23) = (0u16, 0u16);
+            for x in 0..8 {
+                let v = grid[y][x] as u16;
+                let bit = 7 - x;
+                p01 |= (v & 1) << bit | ((v >> 1) & 1) << (bit + 8);
+                p23 |= ((v >> 2) & 1) << bit | ((v >> 3) & 1) << (bit + 8);
+            }
+            mem.vram[base + y] = p01;
+            mem.vram[base + 8 + y] = p23;
+        }
+    }
+
+    fn obj_mem() -> Memory {
+        let mut mem = Memory::new();
+        mem.obsel.char_base = 0x2000;
+        mem
     }
 
     #[test]
-    fn opaque_pixels_sample_direct_sheet_color() {
-        let mut mem = mem_with_sheet(2, 2, [10, 200, 30, 255]);
-        mem.oam[0] = Obj { on: true, x: 3, y: 0, size: 0, ..Obj::default() };
-        let row = render_scanline(&mem, 0, 32);
-        // covered: x in 3..11; uncovered elsewhere.
-        assert_eq!(row[2], None);
-        assert_eq!(row[3].unwrap().rgba, [10, 200, 30, 255]);
-        assert_eq!(row[10].unwrap().rgba, [10, 200, 30, 255]);
-        assert_eq!(row[11], None);
+    fn samples_4bpp_obj_tile_through_obj_cgram() {
+        let mut mem = obj_mem();
+        mem.cgram[128 + 1] = rgb15(255, 0, 0);
+        let mut g = [[0u8; 8]; 8];
+        g[0][0] = 1;
+        put_obj_char(&mut mem, 1, g);
+        mem.oam[0] = Obj {
+            on: true,
+            x: 10,
+            y: 5,
+            tile: 1,
+            size: 0,
+            ..Obj::default()
+        };
+        let line = render_scanline(&mem, 5, crate::WIDTH);
+        let px = line[10].expect("sprite pixel at (10,5)");
+        assert_eq!(px.rgba, unpack_rgb15(rgb15(255, 0, 0)));
+        assert_eq!(px.prio, 0);
+        assert!(line[11].is_none());
+        assert!(render_scanline(&mem, 6, crate::WIDTH)[10].is_none());
     }
 
     #[test]
-    fn pal_is_a_noop_in_v1() {
-        let mut a = mem_with_sheet(2, 2, [10, 200, 30, 255]);
-        a.oam[0] = Obj { on: true, x: 0, y: 0, size: 0, pal: 0, ..Obj::default() };
-        let mut b = mem_with_sheet(2, 2, [10, 200, 30, 255]);
-        b.oam[0] = Obj { on: true, x: 0, y: 0, size: 0, pal: 7, ..Obj::default() };
+    fn palette_select_indexes_obj_cgram_bank() {
+        let mut mem = obj_mem();
+        mem.cgram[128 + 3 * 16 + 1] = rgb15(0, 255, 0);
+        let mut g = [[0u8; 8]; 8];
+        g[0][0] = 1;
+        put_obj_char(&mut mem, 1, g);
+        mem.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 1,
+            pal: 3,
+            ..Obj::default()
+        };
         assert_eq!(
-            render_scanline(&a, 0, 32)[0].unwrap().rgba,
-            render_scanline(&b, 0, 32)[0].unwrap().rgba
+            render_scanline(&mem, 0, crate::WIDTH)[0].unwrap().rgba,
+            unpack_rgb15(rgb15(0, 255, 0))
         );
     }
 
     #[test]
-    fn alpha_zero_is_transparent() {
-        let mut mem = mem_with_sheet(2, 2, [200, 0, 0, 0]); // alpha 0 everywhere
-        mem.oam[0] = Obj { on: true, x: 0, y: 0, size: 0, ..Obj::default() };
-        assert!(render_scanline(&mem, 0, 32).iter().all(|p| p.is_none()));
-    }
-
-    #[test]
-    fn flips_mirror_within_the_sprite_block() {
-        // 8x8 tile: left half color A, right half color B (distinct, opaque).
-        let w = 16u32;
-        let a = [10, 10, 10, 255];
-        let bcol = [250, 250, 250, 255];
-        let mut rgba = vec![0u8; (w * 16 * 4) as usize];
-        for y in 0..16u32 {
-            for x in 0..16u32 {
-                let i = ((y * w + x) * 4) as usize;
-                rgba[i..i + 4].copy_from_slice(if x % 8 < 4 { &a } else { &bcol });
-            }
-        }
-        let mut mem = Memory::new();
-        mem.sources.insert("sheet".into(), Source { width: w, height: 16, rgba });
-        mem.obj_sheet = Some("sheet".into());
-
-        mem.oam[0] = Obj { on: true, x: 0, y: 0, size: 0, ..Obj::default() };
-        let row = render_scanline(&mem, 0, 32);
-        assert_eq!(row[0].unwrap().rgba, a); // left
-        assert_eq!(row[7].unwrap().rgba, bcol); // right
-
-        mem.oam[0].flip_x = true;
-        let row = render_scanline(&mem, 0, 32);
-        assert_eq!(row[0].unwrap().rgba, bcol); // mirrored
-        assert_eq!(row[7].unwrap().rgba, a);
-    }
-
-    #[test]
-    fn higher_prio_sprite_wins_overlap() {
-        let mut mem = mem_with_sheet(2, 2, [10, 0, 0, 255]);
-        mem.oam[0] = Obj { on: true, x: 0, y: 0, size: 0, prio: 0, ..Obj::default() };
-        mem.oam[1] = Obj { on: true, x: 0, y: 0, size: 0, prio: 3, ..Obj::default() };
-        assert_eq!(render_scanline(&mem, 0, 32)[0].unwrap().prio, 3);
-    }
-
-    #[test]
-    fn equal_prio_keeps_lower_oam_index() {
-        // Two distinct sheet halves so the winner's color is identifiable.
-        let w = 16u32;
-        let left = [10, 0, 0, 255];
-        let right = [0, 250, 0, 255];
-        let mut rgba = vec![0u8; (w * 16 * 4) as usize];
-        for y in 0..16u32 {
-            for x in 0..16u32 {
-                let i = ((y * w + x) * 4) as usize;
-                rgba[i..i + 4].copy_from_slice(if x % 8 < 4 { &left } else { &right });
-            }
-        }
-        let mut mem = Memory::new();
-        mem.sources.insert("sheet".into(), Source { width: w, height: 16, rgba });
-        mem.obj_sheet = Some("sheet".into());
-        // oam[0] reads tile 0 (left color); oam[1] reads tile 1 (right color),
-        // both placed at x=0, equal prio -> lower index (oam[0]) wins.
-        mem.oam[0] = Obj { on: true, x: 0, y: 0, tile: 0, size: 0, prio: 2, ..Obj::default() };
-        mem.oam[1] = Obj { on: true, x: 0, y: 0, tile: 1, size: 0, prio: 2, ..Obj::default() };
-        let px = render_scanline(&mem, 0, 32)[0].unwrap();
-        assert_eq!(px.rgba, left); // oam[0] kept on tie
-        assert_eq!(px.prio, 2);
-    }
-
-    #[test]
-    fn flip_y_mirrors_vertically_within_the_sprite() {
-        // 8x8 tile: top half color A, bottom half color B.
-        let w = 16u32;
-        let a = [10, 10, 10, 255];
-        let bcol = [250, 250, 250, 255];
-        let mut rgba = vec![0u8; (w * 16 * 4) as usize];
-        for yy in 0..16u32 {
-            for xx in 0..16u32 {
-                let i = ((yy * w + xx) * 4) as usize;
-                rgba[i..i + 4].copy_from_slice(if yy % 8 < 4 { &a } else { &bcol });
-            }
-        }
-        let mut mem = Memory::new();
-        mem.sources.insert("sheet".into(), Source { width: w, height: 16, rgba });
-        mem.obj_sheet = Some("sheet".into());
-
-        mem.oam[0] = Obj { on: true, x: 0, y: 0, size: 0, ..Obj::default() };
-        assert_eq!(render_scanline(&mem, 0, 32)[0].unwrap().rgba, a);
-        assert_eq!(render_scanline(&mem, 7, 32)[0].unwrap().rgba, bcol);
-
+    fn flip_x_and_flip_y_mirror_the_sprite() {
+        let mut mem = obj_mem();
+        mem.cgram[128 + 1] = rgb15(255, 255, 255);
+        let mut g = [[0u8; 8]; 8];
+        g[0][0] = 1;
+        put_obj_char(&mut mem, 1, g);
+        mem.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 1,
+            flip_x: true,
+            ..Obj::default()
+        };
+        let line = render_scanline(&mem, 0, crate::WIDTH);
+        assert!(line[0].is_none());
+        assert!(line[7].is_some());
+        mem.oam[0].flip_x = false;
         mem.oam[0].flip_y = true;
-        assert_eq!(render_scanline(&mem, 0, 32)[0].unwrap().rgba, bcol);
-        assert_eq!(render_scanline(&mem, 7, 32)[0].unwrap().rgba, a);
+        assert!(render_scanline(&mem, 0, crate::WIDTH)[0].is_none());
+        assert!(render_scanline(&mem, 7, crate::WIDTH)[0].is_some());
+    }
+
+    #[test]
+    fn size1_16x16_addresses_four_quadrant_tiles() {
+        let mut mem = obj_mem();
+        for i in 1..=4u16 {
+            mem.cgram[128 + i as usize] = rgb15(i as u8 * 40, 0, 0);
+        }
+        let corner = |v: u8| {
+            let mut g = [[0u8; 8]; 8];
+            g[0][0] = v;
+            g
+        };
+        put_obj_char(&mut mem, 1, corner(1));
+        put_obj_char(&mut mem, 2, corner(2));
+        put_obj_char(&mut mem, 17, corner(3));
+        put_obj_char(&mut mem, 18, corner(4));
+        mem.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 1,
+            size: 1,
+            ..Obj::default()
+        };
+        let at = |mm: &Memory, y: usize, x: usize| {
+            render_scanline(mm, y, crate::WIDTH)[x].map(|p| p.rgba)
+        };
+        assert_eq!(at(&mem, 0, 0), Some(unpack_rgb15(rgb15(40, 0, 0))));
+        assert_eq!(at(&mem, 0, 8), Some(unpack_rgb15(rgb15(80, 0, 0))));
+        assert_eq!(at(&mem, 8, 0), Some(unpack_rgb15(rgb15(120, 0, 0))));
+        assert_eq!(at(&mem, 8, 8), Some(unpack_rgb15(rgb15(160, 0, 0))));
+    }
+
+    #[test]
+    fn priority_field_is_carried() {
+        let mut mem = obj_mem();
+        mem.cgram[128 + 1] = rgb15(1, 2, 3);
+        let mut g = [[0u8; 8]; 8];
+        g[0][0] = 1;
+        put_obj_char(&mut mem, 1, g);
+        mem.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 1,
+            prio: 2,
+            ..Obj::default()
+        };
+        assert_eq!(render_scanline(&mem, 0, crate::WIDTH)[0].unwrap().prio, 2);
+    }
+
+    #[test]
+    fn lower_oam_index_wins_overlap() {
+        let mut mem = obj_mem();
+        mem.cgram[128 + 1] = rgb15(255, 0, 0);
+        mem.cgram[128 + 2] = rgb15(0, 0, 255);
+        let mut g1 = [[0u8; 8]; 8];
+        g1[0][0] = 1;
+        let mut g2 = [[0u8; 8]; 8];
+        g2[0][0] = 2;
+        put_obj_char(&mut mem, 1, g1);
+        put_obj_char(&mut mem, 2, g2);
+        mem.oam[5] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 2,
+            ..Obj::default()
+        };
+        mem.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 1,
+            ..Obj::default()
+        };
+        assert_eq!(
+            render_scanline(&mem, 0, crate::WIDTH)[0].unwrap().rgba,
+            unpack_rgb15(rgb15(255, 0, 0))
+        );
+    }
+
+    #[test]
+    fn negative_x_clips_off_left() {
+        let mut mem = obj_mem();
+        mem.cgram[128 + 1] = rgb15(255, 255, 255);
+        let mut g = [[0u8; 8]; 8];
+        g[7][7] = 1;
+        put_obj_char(&mut mem, 1, g);
+        mem.oam[0] = Obj {
+            on: true,
+            x: -7,
+            y: 0,
+            tile: 1,
+            ..Obj::default()
+        };
+        assert!(render_scanline(&mem, 7, crate::WIDTH)[0].is_some());
     }
 
     #[test]
     fn render_sprites_is_full_size_opaque_and_uses_backdrop() {
-        let mut mem = mem_with_sheet(2, 2, [255, 255, 255, 255]);
+        let mut mem = mem();
         mem.cgram[0] = rgb15(0, 0, 40); // backdrop
-        mem.oam[0] = Obj { on: true, x: 4, y: 4, size: 0, ..Obj::default() };
         let fb = render_sprites(&mem, 32, 32);
         assert_eq!(fb.len(), 32 * 32 * 4);
         assert!(fb.chunks(4).all(|px| px[3] == 255));
-        // top-left corner is backdrop (sprite starts at 4,4).
         assert_eq!(&fb[0..4], &unpack_rgb15(rgb15(0, 0, 40)));
     }
 }

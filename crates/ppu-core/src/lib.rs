@@ -1,7 +1,7 @@
-//! ppu.toys headless PPU core. Phase-1 register model, clean memory model
-//! (CGRAM/OAM/named image sources), defaults->per-line override resolution, and
-//! the Phase-2 compositor. The wasm shim drives the Lua VM -> LineTable ->
-//! `render_frame` pipeline and exposes it over the TS `PpuCore` seam.
+//! ppu.toys headless PPU core. Phase-1 register model, byte-accurate memory model
+//! (VRAM/CGRAM/OAM), defaults->per-line override resolution, and the Phase-2
+//! compositor. The wasm shim drives the Lua VM -> LineTable -> `render_frame`
+//! pipeline and exposes it over the TS `PpuCore` seam.
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -32,6 +32,19 @@ pub use lua::*;
 
 mod quantize;
 pub use quantize::*;
+
+mod modes;
+pub use modes::*;
+
+// m4/importer: shared tile-BG importer + reusable quantize/tiles core.
+pub mod import;
+
+// m4/importer: Mode 7 importer. Named `import_m7` to avoid a module
+// name collision with the shared tile-BG importer. Its local median-cut /
+// nearest / dedup overlap import::quantize/import::tiles; unifying them is a
+// tracked follow-up (a behavioral change that would re-baseline Mode 7 goldens).
+mod import_m7;
+pub use import_m7::*;
 
 /// Native SNES PPU output dimensions (the only resolution v1 targets).
 pub const WIDTH: usize = 256;
@@ -109,9 +122,29 @@ pub struct AssetInfo {
 pub fn derive_registers(row: &RegRow, prev: &HashMap<u16, i32>) -> Vec<Register> {
     let scroll = |v: i16| (v as u16 & 0x1fff) as i32; // 13-bit display width; ponytail: real BG H/VOFS are 10-bit, uniform 13-bit mask is a v1 inspector simplification
     let m7 = |v: i16| (v as u16) as i32; // raw Q8 bit pattern (16-bit)
-    let entries: [(u16, &str, i32); 14] = [
+                                         // BGMODE: mode bits 0-2 | BG3-priority bit 3 | BG1..BG4 16x16-tile flags in bits 4-7.
+    let bgmode = row.mode as i32
+        | ((row.bg3_priority as i32) << 3)
+        | (row.bg.iter().enumerate())
+            .map(|(i, b)| ((b.tile_size == 16) as i32) << (4 + i))
+            .sum::<i32>();
+    // BGnSC: screen size bits 0-1 | tilemap base field bits 2-7.
+    let sc = |b: &RegBg| (b.screen_size as i32) | (((b.map_base >> 10) as i32) << 2);
+    // BGnNBA: two 4-bit char base fields per register.
+    let nba = |lo: &RegBg, hi: &RegBg| {
+        ((lo.char_base >> 12) as i32) | (((hi.char_base >> 12) as i32) << 4)
+    };
+    let m7sel =
+        (row.m7.flip_x as i32) | ((row.m7.flip_y as i32) << 1) | ((row.m7.repeat as i32) << 6);
+    let entries: [(u16, &str, i32); 21] = [
         (0x2100, "INIDISP", row.brightness as i32),
-        (0x2105, "BGMODE", row.mode as i32),
+        (0x2105, "BGMODE", bgmode),
+        (0x2107, "BG1SC", sc(&row.bg[0])),
+        (0x2108, "BG2SC", sc(&row.bg[1])),
+        (0x2109, "BG3SC", sc(&row.bg[2])),
+        (0x210a, "BG4SC", sc(&row.bg[3])),
+        (0x210b, "BG12NBA", nba(&row.bg[0], &row.bg[1])),
+        (0x210c, "BG34NBA", nba(&row.bg[2], &row.bg[3])),
         (0x210d, "BG1HOFS", scroll(row.bg[0].scroll_x)),
         (0x210e, "BG1VOFS", scroll(row.bg[0].scroll_y)),
         (0x210f, "BG2HOFS", scroll(row.bg[1].scroll_x)),
@@ -120,6 +153,7 @@ pub fn derive_registers(row: &RegRow, prev: &HashMap<u16, i32>) -> Vec<Register>
         (0x2112, "BG3VOFS", scroll(row.bg[2].scroll_y)),
         (0x2113, "BG4HOFS", scroll(row.bg[3].scroll_x)),
         (0x2114, "BG4VOFS", scroll(row.bg[3].scroll_y)),
+        (0x211a, "M7SEL", m7sel),
         (0x211b, "M7A", m7(row.m7.a)),
         (0x211c, "M7B", m7(row.m7.b)),
         (0x211d, "M7C", m7(row.m7.c)),
@@ -192,8 +226,68 @@ mod tests {
     }
 
     #[test]
+    fn bgmode_packs_tile_size_bits() {
+        let mut ltr = LineTableRow::default(); // mode 1
+        ltr.bg[0].tile_size = 16; // BGMODE bit 4
+        ltr.bg[3].tile_size = 16; // BGMODE bit 7
+        let row = RegRow::from(&ltr);
+        let regs = derive_registers(&row, &HashMap::new());
+        let bgmode = regs.iter().find(|r| r.name == "BGMODE").unwrap();
+        assert_eq!(bgmode.value, 0x91); // 1 | 1<<4 | 1<<7
+    }
+
+    #[test]
+    fn bgnsc_packs_screen_size_and_map_base() {
+        let mut ltr = LineTableRow::default();
+        ltr.bg[0].screen_size = 3;
+        ltr.bg[0].map_base = 0x0800; // field 2 -> bits 2-7 = 2
+        let row = RegRow::from(&ltr);
+        let regs = derive_registers(&row, &HashMap::new());
+        let bg1sc = regs.iter().find(|r| r.name == "BG1SC").unwrap();
+        assert_eq!(bg1sc.addr, 0x2107);
+        assert_eq!(bg1sc.value, 0x0b); // 3 | 2<<2
+        let bg4sc = regs.iter().find(|r| r.name == "BG4SC").unwrap();
+        assert_eq!(bg4sc.addr, 0x210a);
+        assert_eq!(bg4sc.value, 0);
+    }
+
+    #[test]
+    fn nba_packs_two_char_bases_per_register() {
+        let mut ltr = LineTableRow::default();
+        ltr.bg[0].char_base = 0x1000; // field 1 -> low nibble of BG12NBA
+        ltr.bg[1].char_base = 0x2000; // field 2 -> high nibble of BG12NBA
+        ltr.bg[2].char_base = 0x3000; // field 3 -> low nibble of BG34NBA
+        let row = RegRow::from(&ltr);
+        let regs = derive_registers(&row, &HashMap::new());
+        let nba12 = regs.iter().find(|r| r.name == "BG12NBA").unwrap();
+        assert_eq!(nba12.addr, 0x210b);
+        assert_eq!(nba12.value, 0x21);
+        let nba34 = regs.iter().find(|r| r.name == "BG34NBA").unwrap();
+        assert_eq!(nba34.addr, 0x210c);
+        assert_eq!(nba34.value, 0x03);
+    }
+
+    #[test]
+    fn m7sel_packs_flip_and_repeat() {
+        let mut ltr = LineTableRow::default();
+        ltr.m7.flip_x = true;
+        ltr.m7.repeat = 3;
+        let row = RegRow::from(&ltr);
+        let regs = derive_registers(&row, &HashMap::new());
+        let m7sel = regs.iter().find(|r| r.name == "M7SEL").unwrap();
+        assert_eq!(m7sel.addr, 0x211a);
+        assert_eq!(m7sel.value, 0xc1); // bit0 flip_x | bits6-7 repeat=3
+    }
+
+    #[test]
     fn oam_sprite_serializes_camelcase() {
-        let obj = Obj { on: true, flip_x: true, flip_y: false, tile: 5, ..Obj::default() };
+        let obj = Obj {
+            on: true,
+            flip_x: true,
+            flip_y: false,
+            tile: 5,
+            ..Obj::default()
+        };
         let s = OamSprite::from(&obj);
         let json = serde_json::to_value(&s).unwrap();
         assert_eq!(json["flipX"], true);
