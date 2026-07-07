@@ -140,11 +140,32 @@ fn fixture() -> (ppu_core::LineTable, Memory) {
     // ── Sprites (OAM) ──────────────────────────────────────────────────────
     mem.obsel.char_base = 0x6000;
     // S0 prio 3 over the BG1-prio1 tile (y 16..24) -> sprite yellow wins.
-    mem.oam[0] = Obj { on: true, x: 80, y: 16, tile: 1, prio: 3, ..Obj::default() };
+    mem.oam[0] = Obj {
+        on: true,
+        x: 80,
+        y: 16,
+        tile: 1,
+        prio: 3,
+        ..Obj::default()
+    };
     // S1 prio 0 under the BG1-prio1 tile (y 24..32) -> BG1 red wins.
-    mem.oam[1] = Obj { on: true, x: 80, y: 24, tile: 1, prio: 0, ..Obj::default() };
+    mem.oam[1] = Obj {
+        on: true,
+        x: 80,
+        y: 24,
+        tile: 1,
+        prio: 0,
+        ..Obj::default()
+    };
     // S2 over the Mode-7 floor (bottom band).
-    mem.oam[2] = Obj { on: true, x: 120, y: 180, tile: 1, prio: 2, ..Obj::default() };
+    mem.oam[2] = Obj {
+        on: true,
+        x: 120,
+        y: 180,
+        tile: 1,
+        prio: 2,
+        ..Obj::default()
+    };
 
     // ── Registers / HDMA ───────────────────────────────────────────────────
     let mut def = LineTableRow::default(); // Mode 1, brightness 15
@@ -189,20 +210,40 @@ fn composite_priority_resolves_per_interaction() {
     let fb = render_frame(&lt, &mem);
 
     // Interaction 1: BG2 tilemap-priority bit lifts green over BG1 red.
-    assert_eq!(px(&fb, 18, 18), green(), "BG2 prio-1 should beat BG1 prio-0");
+    assert_eq!(
+        px(&fb, 18, 18),
+        green(),
+        "BG2 prio-1 should beat BG1 prio-0"
+    );
 
     // Interaction 2: BG3-priority bit. Upper half (bit clear) red, lower half
     // (bit set) cyan — BG3 prio-1 lifts above every layer only when the bit is set.
-    assert_eq!(px(&fb, 50, 18), red(), "BG3 prio-1 sits low with BGMODE.3 clear");
-    assert_eq!(px(&fb, 50, 28), cyan(), "BGMODE.3 lifts BG3 prio-1 to the front");
+    assert_eq!(
+        px(&fb, 50, 18),
+        red(),
+        "BG3 prio-1 sits low with BGMODE.3 clear"
+    );
+    assert_eq!(
+        px(&fb, 50, 28),
+        cyan(),
+        "BGMODE.3 lifts BG3 prio-1 to the front"
+    );
 
     // Interaction 3: OBJ priority interleaves with a BG1-prio1 tile.
-    assert_eq!(px(&fb, 82, 18), yellow(), "OBJ prio 3 sits above BG1 prio 1");
+    assert_eq!(
+        px(&fb, 82, 18),
+        yellow(),
+        "OBJ prio 3 sits above BG1 prio 1"
+    );
     assert_eq!(px(&fb, 82, 28), red(), "OBJ prio 0 sits below BG1 prio 1");
 
     // Mode-7 bottom band: purple floor, with a sprite overlaid on top.
     assert_eq!(px(&fb, 8, 180), purple(), "Mode-7 floor missing");
-    assert_eq!(px(&fb, 122, 182), yellow(), "sprite should overlay the Mode-7 floor");
+    assert_eq!(
+        px(&fb, 122, 182),
+        yellow(),
+        "sprite should overlay the Mode-7 floor"
+    );
 
     // Backdrop where nothing is drawn.
     assert_eq!(px(&fb, 200, 100), backdrop(), "backdrop missing");
@@ -231,5 +272,9 @@ fn regen_golden_composite() {
     let mut encoder = png::Encoder::new(file, WIDTH as u32, HEIGHT as u32);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
-    encoder.write_header().unwrap().write_image_data(&fb).unwrap();
+    encoder
+        .write_header()
+        .unwrap()
+        .write_image_data(&fb)
+        .unwrap();
 }

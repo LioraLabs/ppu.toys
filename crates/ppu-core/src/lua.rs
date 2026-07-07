@@ -37,7 +37,10 @@ pub enum ImportBudget {
     #[serde(rename = "tile")]
     Tile { layer: usize, report: BudgetReport },
     #[serde(rename = "m7")]
-    Mode7 { layer: usize, report: Mode7ImportReport },
+    Mode7 {
+        layer: usize,
+        report: Mode7ImportReport,
+    },
     #[serde(rename = "obj")]
     Obj { report: BudgetReport },
 }
@@ -114,7 +117,15 @@ impl LuaEngine {
         self.import_cache.invalidate_asset(&slot);
         self.m7_cache.retain(|(s, _), _| s != &slot);
         self.obj_imports.retain(|(s, _, _), _| s != &slot);
-        self.assets.insert(slot, ImportAsset { width, height, rgba, generation });
+        self.assets.insert(
+            slot,
+            ImportAsset {
+                width,
+                height,
+                rgba,
+                generation,
+            },
+        );
     }
 
     /// Asset ids + dimensions, sorted by id (stable order for the inspector).
@@ -589,10 +600,18 @@ fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
                     }
                 };
                 layer.set(ctx, "visible", row.bg[i].visible).unwrap();
-                layer.set(ctx, "tile_size", row.bg[i].tile_size as i64).unwrap();
-                layer.set(ctx, "map_base", row.bg[i].map_base as i64).unwrap();
-                layer.set(ctx, "screen_size", row.bg[i].screen_size as i64).unwrap();
-                layer.set(ctx, "char_base", row.bg[i].char_base as i64).unwrap();
+                layer
+                    .set(ctx, "tile_size", row.bg[i].tile_size as i64)
+                    .unwrap();
+                layer
+                    .set(ctx, "map_base", row.bg[i].map_base as i64)
+                    .unwrap();
+                layer
+                    .set(ctx, "screen_size", row.bg[i].screen_size as i64)
+                    .unwrap();
+                layer
+                    .set(ctx, "char_base", row.bg[i].char_base as i64)
+                    .unwrap();
             }
         }
     }
@@ -627,11 +646,19 @@ fn apply_imports(
 ) {
     reports.clear();
     let mode = crate::quantize::mode(ctx.get_global("mode").to_integer().unwrap_or(1) as u8);
-    let Value::Table(bg) = ctx.get_global("bg") else { return };
+    let Value::Table(bg) = ctx.get_global("bg") else {
+        return;
+    };
     for i in 0..4usize {
-        let Value::Table(layer) = bg.get(ctx, (i + 1) as i64) else { continue };
-        let Some(slot) = value_to_string(layer.get(ctx, "source")) else { continue };
-        let Some(asset) = assets.get(&slot) else { continue };
+        let Value::Table(layer) = bg.get(ctx, (i + 1) as i64) else {
+            continue;
+        };
+        let Some(slot) = value_to_string(layer.get(ctx, "source")) else {
+            continue;
+        };
+        let Some(asset) = assets.get(&slot) else {
+            continue;
+        };
         if mode == 7 {
             // Mode 7 is a single 8bpp BG1 plane over the interleaved region.
             if i != 0 {
@@ -643,7 +670,10 @@ fn apply_imports(
                     import_mode7(&asset.rgba, asset.width as usize, asset.height as usize)
                 });
             imp.apply(mem);
-            reports.push(ImportBudget::Mode7 { layer: i, report: imp.report.clone() });
+            reports.push(ImportBudget::Mode7 {
+                layer: i,
+                report: imp.report.clone(),
+            });
         } else {
             // Tile BG (Mode 1): bit-depth from the mode table; only 2/4bpp
             // tile layers import.
@@ -683,11 +713,22 @@ fn apply_imports(
             for &(idx, c) in &imp.cgram {
                 mem.cgram[idx as usize] = c;
             }
-            layer.set(ctx, "map_base", imp.registers.map_base as i64).unwrap();
-            layer.set(ctx, "char_base", imp.registers.char_base as i64).unwrap();
-            layer.set(ctx, "screen_size", imp.registers.screen_size as i64).unwrap();
-            layer.set(ctx, "tile_size", imp.registers.tile_size as i64).unwrap();
-            reports.push(ImportBudget::Tile { layer: i, report: imp.report.clone() });
+            layer
+                .set(ctx, "map_base", imp.registers.map_base as i64)
+                .unwrap();
+            layer
+                .set(ctx, "char_base", imp.registers.char_base as i64)
+                .unwrap();
+            layer
+                .set(ctx, "screen_size", imp.registers.screen_size as i64)
+                .unwrap();
+            layer
+                .set(ctx, "tile_size", imp.registers.tile_size as i64)
+                .unwrap();
+            reports.push(ImportBudget::Tile {
+                layer: i,
+                report: imp.report.clone(),
+            });
         }
     }
 }
@@ -710,9 +751,15 @@ fn apply_obj_sheet(
     reports: &mut Vec<ImportBudget>,
     mem: &mut Memory,
 ) {
-    let Value::Table(obj) = ctx.get_global("obj") else { return };
-    let Some(slot) = value_to_string(obj.get(ctx, "sheet")) else { return };
-    let Some(asset) = assets.get(&slot) else { return };
+    let Value::Table(obj) = ctx.get_global("obj") else {
+        return;
+    };
+    let Some(slot) = value_to_string(obj.get(ctx, "sheet")) else {
+        return;
+    };
+    let Some(asset) = assets.get(&slot) else {
+        return;
+    };
     let char_base = crate::quantize::obj_char_base(
         obj.get(ctx, "char_base").to_integer().unwrap_or(0).max(0) as u32,
     );
@@ -720,7 +767,9 @@ fn apply_obj_sheet(
         .entry((slot.clone(), asset.generation, char_base))
         .or_insert_with(|| import_obj_sheet(&asset.rgba, asset.width, asset.height));
     apply_obj_import(mem, imp, char_base);
-    reports.push(ImportBudget::Obj { report: imp.report.clone() });
+    reports.push(ImportBudget::Obj {
+        report: imp.report.clone(),
+    });
 }
 
 /// VRAM word address of the tilemap entry for tile column `tx`, row `ty` at a
@@ -784,18 +833,26 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
     // and screen-size-wrapped exactly as the rasterizer reads it).
     if let Value::Table(bg) = ctx.get_global("bg") {
         for i in 0..4 {
-            let Value::Table(layer) = bg.get(ctx, (i + 1) as i64) else { continue };
+            let Value::Table(layer) = bg.get(ctx, (i + 1) as i64) else {
+                continue;
+            };
             let map_base = crate::quantize::bg_map_base(
                 layer.get(ctx, "map_base").to_integer().unwrap_or(0) as u32,
             );
             let screen_size = crate::quantize::bg_screen_size(
                 layer.get(ctx, "screen_size").to_integer().unwrap_or(0) as u8,
             );
-            let Value::Table(map) = layer.get(ctx, "map") else { continue };
+            let Value::Table(map) = layer.get(ctx, "map") else {
+                continue;
+            };
             for (ck, cv) in map {
-                let (Some(col), Value::Table(rowt)) = (ck.to_integer(), cv) else { continue };
+                let (Some(col), Value::Table(rowt)) = (ck.to_integer(), cv) else {
+                    continue;
+                };
                 for (rk, rv) in rowt {
-                    let (Some(row_i), Value::Table(cell)) = (rk.to_integer(), rv) else { continue };
+                    let (Some(row_i), Value::Table(cell)) = (rk.to_integer(), rv) else {
+                        continue;
+                    };
                     let tile = cell.get(ctx, "tile").to_integer().unwrap_or(0) as u16 & 0x03ff;
                     let pal = cell.get(ctx, "pal").to_integer().unwrap_or(0) as u16 & 0x07;
                     let prio = cell.get(ctx, "prio").to_integer().unwrap_or(0) as u16 & 0x01;
@@ -814,7 +871,9 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
     if let Value::Table(m7) = ctx.get_global("m7") {
         if let Value::Table(map) = m7.get(ctx, "map") {
             for (yk, yv) in map {
-                let (Some(ty), Value::Table(rowt)) = (yk.to_integer(), yv) else { continue };
+                let (Some(ty), Value::Table(rowt)) = (yk.to_integer(), yv) else {
+                    continue;
+                };
                 for (xk, xv) in rowt {
                     if let (Some(tx), Some(tile)) = (xk.to_integer(), xv.to_integer()) {
                         let i = (ty as usize) * 128 + tx as usize;
@@ -828,7 +887,9 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
     }
     if let Value::Table(cb) = ctx.get_global("__m7char") {
         for (tk, tv) in cb {
-            let (Some(tile), Value::Table(pix)) = (tk.to_integer(), tv) else { continue };
+            let (Some(tile), Value::Table(pix)) = (tk.to_integer(), tv) else {
+                continue;
+            };
             for (pk, pv) in pix {
                 if let (Some(off), Some(idx)) = (pk.to_integer(), pv.to_integer()) {
                     let i = (tile as usize) * 64 + off as usize;

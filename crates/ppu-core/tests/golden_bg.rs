@@ -7,8 +7,8 @@
 //! quadrant tiles, 64x32 screen wrap, negative scroll, sub-palette
 //! indirection, and an HDMA scroll band.
 use ppu_core::{
-    render_frame, rgb15, unpack_rgb15, LineTable, LineTableBuilder, LineTableRow, Memory,
-    HEIGHT, WIDTH,
+    render_frame, rgb15, unpack_rgb15, LineTable, LineTableBuilder, LineTableRow, Memory, HEIGHT,
+    WIDTH,
 };
 use std::path::Path;
 
@@ -94,7 +94,7 @@ fn fixture() -> (LineTable, Memory) {
 
     // ── CGRAM ────────────────────────────────────────────────────────────
     mem.cgram[0] = rgb15(16, 24, 48); // backdrop: deep blue
-    // BG1/BG2 4bpp sub-palette 1 (cgram[16..]): indices 1..=9.
+                                      // BG1/BG2 4bpp sub-palette 1 (cgram[16..]): indices 1..=9.
     let pal1 = [
         rgb15(224, 64, 32),
         rgb15(255, 160, 48),
@@ -138,8 +138,13 @@ fn fixture() -> (LineTable, Memory) {
     // HDMA scroll band below).
     for i in 0..28usize {
         let (col, row) = ((i * 3) % 32, i);
-        mem.vram[row * 32 + col] =
-            entry(1, if i % 3 == 0 { 2 } else { 1 }, false, i % 2 == 1, i % 4 == 3);
+        mem.vram[row * 32 + col] = entry(
+            1,
+            if i % 3 == 0 { 2 } else { 1 },
+            false,
+            i % 2 == 1,
+            i % 4 == 3,
+        );
     }
     for row in (1..28).step_by(6) {
         for col in (1..32).step_by(7) {
@@ -193,11 +198,26 @@ fn bg_fixture_draws_all_three_layers() {
     let (lt, mem) = fixture();
     let fb = render_frame(&lt, &mem);
     let count = |c: [u8; 4]| fb.chunks(4).filter(|p| *p == c).count();
-    assert!(count(unpack_rgb15(rgb15(255, 160, 48))) > 0, "BG1 arrow body missing");
-    assert!(count(unpack_rgb15(rgb15(64, 200, 96))) > 0, "BG1 ring (screen 1) missing");
-    assert!(count(unpack_rgb15(rgb15(40, 120, 216))) > 0, "BG2 16x16 block missing");
-    assert!(count(unpack_rgb15(rgb15(255, 255, 255))) > 0, "BG3 stripe missing");
-    assert!(count(unpack_rgb15(rgb15(16, 24, 48))) > 0, "backdrop missing");
+    assert!(
+        count(unpack_rgb15(rgb15(255, 160, 48))) > 0,
+        "BG1 arrow body missing"
+    );
+    assert!(
+        count(unpack_rgb15(rgb15(64, 200, 96))) > 0,
+        "BG1 ring (screen 1) missing"
+    );
+    assert!(
+        count(unpack_rgb15(rgb15(40, 120, 216))) > 0,
+        "BG2 16x16 block missing"
+    );
+    assert!(
+        count(unpack_rgb15(rgb15(255, 255, 255))) > 0,
+        "BG3 stripe missing"
+    );
+    assert!(
+        count(unpack_rgb15(rgb15(16, 24, 48))) > 0,
+        "backdrop missing"
+    );
 }
 
 #[test]
@@ -223,5 +243,9 @@ fn regen_golden_bg() {
     let mut encoder = png::Encoder::new(file, WIDTH as u32, HEIGHT as u32);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
-    encoder.write_header().unwrap().write_image_data(&fb).unwrap();
+    encoder
+        .write_header()
+        .unwrap()
+        .write_image_data(&fb)
+        .unwrap();
 }

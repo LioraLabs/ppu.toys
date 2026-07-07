@@ -61,7 +61,10 @@ pub fn import_obj_sheet(rgba: &[u8], width: u32, height: u32) -> ObjImport {
     }
     let budget = 8 * CAP;
     let global: Option<Vec<u16>> = if hist.len() > budget {
-        overflows.push(Overflow::Colors { unique: hist.len(), budget });
+        overflows.push(Overflow::Colors {
+            unique: hist.len(),
+            budget,
+        });
         let hv: Vec<(u16, u32)> = hist.iter().map(|(&c, &n)| (c, n)).collect();
         Some(median_cut(&hv, budget))
     } else {
@@ -93,7 +96,10 @@ pub fn import_obj_sheet(rgba: &[u8], width: u32, height: u32) -> ObjImport {
                 !tp.is_empty() && tp.iter().any(|c| !fit.palettes[a as usize].contains(c))
             })
             .count();
-        overflows.push(Overflow::Palettes { needed: fit.palettes_needed, remapped_tiles: remapped });
+        overflows.push(Overflow::Palettes {
+            needed: fit.palettes_needed,
+            remapped_tiles: remapped,
+        });
     }
 
     let max_tiles = (0x8000usize / WORDS_PER_TILE).min(512); // OBJ name table = 9-bit tile#
@@ -101,19 +107,31 @@ pub fn import_obj_sheet(rgba: &[u8], width: u32, height: u32) -> ObjImport {
     set.insert([0u8; 64]);
     let mut cells: Vec<ObjCell> = Vec::with_capacity(ptiles.len());
     for (pt, &pal) in ptiles.iter().zip(&fit.assignment) {
-        let palette: &[u16] = fit.palettes.get(pal as usize).map(|v| v.as_slice()).unwrap_or(&[]);
+        let palette: &[u16] = fit
+            .palettes
+            .get(pal as usize)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
         let grid: IndexTile = std::array::from_fn(|i| match pt[i] {
             Some(c) if !palette.is_empty() => nearest(palette, map_color(c)) as u8 + 1,
             _ => 0,
         });
         let (n, hf, vf) = set.insert(grid);
         let tile = if (n as usize) >= max_tiles { 0 } else { n };
-        cells.push(ObjCell { tile, pal: pal & 7, flip_x: hf, flip_y: vf });
+        cells.push(ObjCell {
+            tile,
+            pal: pal & 7,
+            flip_x: hf,
+            flip_y: vf,
+        });
     }
     let unique_tiles = set.len() - 1;
     let kept = set.len().min(max_tiles);
     if set.len() > max_tiles {
-        overflows.push(Overflow::Tiles { unique: unique_tiles, kept: kept - 1 });
+        overflows.push(Overflow::Tiles {
+            unique: unique_tiles,
+            kept: kept - 1,
+        });
     }
 
     let mut char_words = Vec::with_capacity(kept * WORDS_PER_TILE);
@@ -136,7 +154,14 @@ pub fn import_obj_sheet(rgba: &[u8], width: u32, height: u32) -> ObjImport {
         vram_words: char_words.len(),
         overflows,
     };
-    ObjImport { char_words, cgram, cells, cols, rows, report }
+    ObjImport {
+        char_words,
+        cgram,
+        cells,
+        cols,
+        rows,
+        report,
+    }
 }
 
 /// Write an `ObjImport` into real memory: char words at `char_base` (wrapping
@@ -160,8 +185,11 @@ mod tests {
         let mut v = Vec::new();
         for _y in 0..8 {
             for x in 0..16 {
-                if x < 12 { v.extend_from_slice(&[255, 0, 0, 255]); }
-                else { v.extend_from_slice(&[0, 0, 255, 255]); }
+                if x < 12 {
+                    v.extend_from_slice(&[255, 0, 0, 255]);
+                } else {
+                    v.extend_from_slice(&[0, 0, 255, 255]);
+                }
             }
         }
         v
@@ -177,8 +205,24 @@ mod tests {
         assert_eq!(out.char_words[32], 0x0ff0);
         assert_eq!(out.cols, 2);
         assert_eq!(out.rows, 1);
-        assert_eq!(out.cells[0], ObjCell { tile: 1, pal: 0, flip_x: false, flip_y: false });
-        assert_eq!(out.cells[1], ObjCell { tile: 2, pal: 0, flip_x: false, flip_y: false });
+        assert_eq!(
+            out.cells[0],
+            ObjCell {
+                tile: 1,
+                pal: 0,
+                flip_x: false,
+                flip_y: false
+            }
+        );
+        assert_eq!(
+            out.cells[1],
+            ObjCell {
+                tile: 2,
+                pal: 0,
+                flip_x: false,
+                flip_y: false
+            }
+        );
         assert_eq!(out.report.palettes_used, 1);
         assert_eq!(out.report.colors_used, 2);
         assert_eq!(out.report.unique_tiles, 2);
@@ -202,14 +246,25 @@ mod tests {
         for _y in 0..8 {
             for x in 0..16 {
                 let red = if x < 8 { x < 4 } else { x >= 12 };
-                if red { v.extend_from_slice(&[255, 0, 0, 255]); }
-                else { v.extend_from_slice(&[0, 0, 255, 255]); }
+                if red {
+                    v.extend_from_slice(&[255, 0, 0, 255]);
+                } else {
+                    v.extend_from_slice(&[0, 0, 255, 255]);
+                }
             }
         }
         let out = import_obj_sheet(&v, 16, 8);
         assert_eq!(out.report.unique_tiles, 1);
         assert_eq!(out.cells[0].tile, 1);
-        assert_eq!(out.cells[1], ObjCell { tile: 1, pal: 0, flip_x: true, flip_y: false });
+        assert_eq!(
+            out.cells[1],
+            ObjCell {
+                tile: 1,
+                pal: 0,
+                flip_x: true,
+                flip_y: false
+            }
+        );
     }
 
     #[test]
@@ -218,6 +273,14 @@ mod tests {
         assert!(out.cgram.is_empty());
         assert_eq!(out.report.unique_tiles, 0);
         assert_eq!(out.char_words.len(), 16);
-        assert_eq!(out.cells[0], ObjCell { tile: 0, pal: 0, flip_x: false, flip_y: false });
+        assert_eq!(
+            out.cells[0],
+            ObjCell {
+                tile: 0,
+                pal: 0,
+                flip_x: false,
+                flip_y: false
+            }
+        );
     }
 }
