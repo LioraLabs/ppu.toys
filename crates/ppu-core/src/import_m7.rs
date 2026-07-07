@@ -103,6 +103,49 @@ fn nearest_color(palette: &[[u8; 3]], c: [u8; 3]) -> u8 {
     best as u8
 }
 
+/// Split an indexed image (one palette index byte per pixel, row-major) into
+/// 8x8 tiles in scan order, exact-dedup them, and build the tilemap. Partial
+/// edge tiles are padded with index 0. Unique tiles beyond `max_tiles` fall
+/// back to tile 0 in the map (the honest-overflow policy); the true unique
+/// count is returned so the caller can report the overflow.
+///
+/// Returns `(unique_tiles, map, tiles_w, tiles_h, unique_total)` where `map`
+/// is `tiles_w * tiles_h` tile-number bytes.
+#[allow(dead_code)] // used by import_mode7 (next task)
+fn dedup_tiles(
+    indexed: &[u8],
+    width: usize,
+    height: usize,
+    max_tiles: usize,
+) -> (Vec<[u8; M7_TILE_BYTES]>, Vec<u8>, usize, usize, usize) {
+    let tiles_w = width.div_ceil(8).min(M7_MAP_DIM);
+    let tiles_h = height.div_ceil(8).min(M7_MAP_DIM);
+    let mut uniq: Vec<[u8; M7_TILE_BYTES]> = Vec::new();
+    let mut ids: HashMap<[u8; M7_TILE_BYTES], usize> = HashMap::new();
+    let mut map = vec![0u8; tiles_w * tiles_h];
+    for ty in 0..tiles_h {
+        for tx in 0..tiles_w {
+            let mut t = [0u8; M7_TILE_BYTES];
+            for py in 0..8 {
+                for px in 0..8 {
+                    let (x, y) = (tx * 8 + px, ty * 8 + py);
+                    if x < width && y < height {
+                        t[py * 8 + px] = indexed[y * width + x];
+                    }
+                }
+            }
+            let next = ids.len();
+            let id = *ids.entry(t).or_insert(next);
+            if id == next && id < max_tiles {
+                uniq.push(t); // first sighting, still under budget
+            }
+            map[ty * tiles_w + tx] = if id < max_tiles { id as u8 } else { 0 };
+        }
+    }
+    let unique_total = ids.len();
+    (uniq, map, tiles_w, tiles_h, unique_total)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,5 +195,67 @@ mod tests {
         assert_eq!(nearest_color(&pal, [10, 10, 10]), 0);
         assert_eq!(nearest_color(&pal, [190, 190, 190]), 2);
         assert_eq!(nearest_color(&pal, [50, 50, 50]), 0); // equidistant -> lowest index
+    }
+
+    #[test]
+    fn dedup_tiles_dedups_and_maps_in_scan_order() {
+        // 16x16 indexed image, 4 quadrant tiles: A A / B C.
+        let mut indexed = vec![0u8; 16 * 16];
+        for y in 0..16 {
+            for x in 0..16 {
+                indexed[y * 16 + x] = match (x < 8, y < 8) {
+                    (_, true) => 7,      // top half: two identical tiles of index 7
+                    (true, false) => 3,  // bottom-left
+                    (false, false) => 5, // bottom-right
+                };
+            }
+        }
+        let (uniq, map, tw, th, total) = dedup_tiles(&indexed, 16, 16, M7_MAX_TILES);
+        assert_eq!((tw, th, total), (2, 2, 3));
+        assert_eq!(map, vec![0, 0, 1, 2]); // top tiles dedup to id 0
+        assert_eq!(uniq.len(), 3);
+        assert_eq!(uniq[0], [7u8; 64]);
+        assert_eq!(uniq[1], [3u8; 64]);
+        assert_eq!(uniq[2], [5u8; 64]);
+    }
+
+    #[test]
+    fn dedup_tiles_pads_partial_edge_tiles_with_zero() {
+        // 4x4 image of index 9 -> one tile, right/bottom padded with 0.
+        let indexed = vec![9u8; 16];
+        let (uniq, map, tw, th, total) = dedup_tiles(&indexed, 4, 4, M7_MAX_TILES);
+        assert_eq!((tw, th, total), (1, 1, 1));
+        assert_eq!(map, vec![0]);
+        let t = uniq[0];
+        assert_eq!(t[0], 9); // (0,0) inside image
+        assert_eq!(t[4], 0); // (4,0) padding
+        assert_eq!(t[4 * 8], 0); // (0,4) padding
+    }
+
+    #[test]
+    fn dedup_tiles_overflow_falls_back_to_tile_zero_but_counts_honestly() {
+        // 3 unique tiles, budget 2 -> third maps to 0, unique_total still 3.
+        let mut indexed = vec![0u8; 24 * 8]; // 3 tiles in a row
+        for y in 0..8 {
+            for x in 8..16 {
+                indexed[y * 24 + x] = 1;
+            }
+            for x in 16..24 {
+                indexed[y * 24 + x] = 2;
+            }
+        }
+        let (uniq, map, _, _, total) = dedup_tiles(&indexed, 24, 8, 2);
+        assert_eq!(total, 3);
+        assert_eq!(uniq.len(), 2); // only the first two kept
+        assert_eq!(map, vec![0, 1, 0]); // overflow tile -> 0
+    }
+
+    #[test]
+    fn dedup_tiles_clamps_map_to_128() {
+        // 1032px wide (129 tiles) x 8 -> map clamped to 128 wide.
+        let indexed = vec![1u8; 1032 * 8];
+        let (_, map, tw, th, _) = dedup_tiles(&indexed, 1032, 8, M7_MAX_TILES);
+        assert_eq!((tw, th), (128, 1));
+        assert_eq!(map.len(), 128);
     }
 }
