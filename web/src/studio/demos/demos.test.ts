@@ -20,8 +20,8 @@ describe("DEMOS", () => {
   it("mode7-floor carries the track source and mode 7 lua", () => {
     const d = DEMOS.find((x) => x.id === "mode7-floor")!;
     expect(d.assets.map((a) => a.id)).toEqual(["track"]);
-    expect(d.assets[0].width).toBe(64);
-    expect(d.assets[0].height).toBe(64);
+    expect(d.assets[0].width).toBe(1024);
+    expect(d.assets[0].height).toBe(1024);
     expect(d.source).toContain("mode = 7");
     expect(d.source).toContain("hdma(96, 223");
   });
