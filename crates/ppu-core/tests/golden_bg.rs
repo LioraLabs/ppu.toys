@@ -34,7 +34,7 @@ fn fixture_mem() -> Memory {
 fn fixture_row() -> LineTableRow {
     let mut row = LineTableRow::default();
     row.brightness = 11;
-    row.bg[0] = Bg { scroll_x: 9.0, scroll_y: 5.0, source: Some("bg".into()), visible: true };
+    row.bg[0] = Bg { scroll_x: 9.0, scroll_y: 5.0, source: Some("bg".into()), ..Bg::default() };
     row
 }
 
