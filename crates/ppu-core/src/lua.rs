@@ -51,8 +51,8 @@ impl LuaEngine {
         &self.memory
     }
 
-    /// Mutable mirrored memory — used by the wasm shim to insert uploaded
-    /// image sources (Memory.sources) without going through the Lua VM.
+    /// Mutable mirrored memory — used by the wasm shim (e.g. to clear OAM on-flags
+    /// for the layer-visibility override).
     pub fn memory_mut(&mut self) -> &mut Memory {
         &mut self.memory
     }

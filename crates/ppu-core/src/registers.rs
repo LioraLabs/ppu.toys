@@ -3,23 +3,40 @@
 
 use crate::quantize;
 
-/// One background layer. `source` names an uploaded image asset; the engine
-/// auto-tiles / scrolls / (in Mode 7) transforms over it.
+/// One background layer. `source` names an uploaded image asset (importer sugar
+/// from m4/importer + m4/dsl); the binding registers below bind the layer to real VRAM.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Bg {
     pub scroll_x: f32,
     pub scroll_y: f32,
     pub source: Option<String>,
     pub visible: bool,
+    /// Tile size in pixels, 8 or 16 (BGMODE bits 4-7).
+    pub tile_size: u8,
+    /// Tilemap base as a VRAM word address (BGnSC bits 2-7, 0x400-word steps).
+    pub map_base: u32,
+    /// Screen size selector 0..3 = 32x32/64x32/32x64/64x64 (BGnSC bits 0-1).
+    pub screen_size: u8,
+    /// Char (tile data) base as a VRAM word address (BG12/34NBA, 0x1000-word steps).
+    pub char_base: u32,
 }
 
 impl Default for Bg {
     fn default() -> Self {
-        Bg { scroll_x: 0.0, scroll_y: 0.0, source: None, visible: true }
+        Bg {
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            source: None,
+            visible: true,
+            tile_size: 8,
+            map_base: 0,
+            screen_size: 0,
+            char_base: 0,
+        }
     }
 }
 
-/// Mode 7 affine matrix + rotation/scale center.
+/// Mode 7 affine matrix + rotation/scale center + M7SEL bindings.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Mode7 {
     pub a: f32,
@@ -28,12 +45,28 @@ pub struct Mode7 {
     pub d: f32,
     pub cx: f32,
     pub cy: f32,
+    /// M7SEL bits 6-7 screen-over: 0/1 = wrap, 2 = transparent, 3 = tile-0 fill.
+    pub repeat: u8,
+    /// M7SEL bit 0: horizontal flip of the whole 1024x1024 plane.
+    pub flip_x: bool,
+    /// M7SEL bit 1: vertical flip.
+    pub flip_y: bool,
 }
 
 impl Default for Mode7 {
     fn default() -> Self {
-        // Identity transform, origin (0, 0).
-        Mode7 { a: 1.0, b: 0.0, c: 0.0, d: 1.0, cx: 0.0, cy: 0.0 }
+        // Identity transform, origin (0, 0), wrap, no flip.
+        Mode7 {
+            a: 1.0,
+            b: 0.0,
+            c: 0.0,
+            d: 1.0,
+            cx: 0.0,
+            cy: 0.0,
+            repeat: 0,
+            flip_x: false,
+            flip_y: false,
+        }
     }
 }
 
@@ -83,6 +116,14 @@ pub struct RegBg {
     pub scroll_y: i16,
     pub source: Option<String>,
     pub visible: bool,
+    /// Quantized tile size in pixels: exactly 8 or 16.
+    pub tile_size: u8,
+    /// Snapped tilemap base VRAM word address (multiple of 0x400, in-VRAM).
+    pub map_base: u16,
+    /// Screen size selector, masked to 0..3.
+    pub screen_size: u8,
+    /// Snapped char base VRAM word address (multiple of 0x1000, in-VRAM).
+    pub char_base: u16,
 }
 
 impl From<&Bg> for RegBg {
@@ -92,6 +133,10 @@ impl From<&Bg> for RegBg {
             scroll_y: quantize::scroll_reg(b.scroll_y),
             source: b.source.clone(),
             visible: b.visible,
+            tile_size: quantize::bg_tile_size(b.tile_size),
+            map_base: quantize::bg_map_base(b.map_base),
+            screen_size: quantize::bg_screen_size(b.screen_size),
+            char_base: quantize::bg_char_base(b.char_base),
         }
     }
 }
@@ -105,6 +150,10 @@ pub struct RegM7 {
     pub d: i16,
     pub cx: i16,
     pub cy: i16,
+    /// M7SEL screen-over field, masked to 0..3.
+    pub repeat: u8,
+    pub flip_x: bool,
+    pub flip_y: bool,
 }
 
 impl From<&Mode7> for RegM7 {
@@ -116,6 +165,9 @@ impl From<&Mode7> for RegM7 {
             d: quantize::m7_matrix(m.d),
             cx: quantize::m7_center(m.cx),
             cy: quantize::m7_center(m.cy),
+            repeat: quantize::m7_repeat(m.repeat),
+            flip_x: m.flip_x,
+            flip_y: m.flip_y,
         }
     }
 }
@@ -195,5 +247,42 @@ mod tests {
         let o = Obj::default();
         assert!(!o.on && !o.flip_x && !o.flip_y);
         assert_eq!((o.tile, o.pal, o.prio), (0, 0, 0));
+    }
+
+    #[test]
+    fn bg_defaults_include_binding_registers() {
+        let b = Bg::default();
+        assert_eq!(b.tile_size, 8);
+        assert_eq!(b.map_base, 0);
+        assert_eq!(b.screen_size, 0);
+        assert_eq!(b.char_base, 0);
+    }
+
+    #[test]
+    fn m7_defaults_include_binding_registers() {
+        let m = Mode7::default();
+        assert_eq!(m.repeat, 0);
+        assert!(!m.flip_x && !m.flip_y);
+    }
+
+    #[test]
+    fn binding_registers_quantize_on_write() {
+        let mut src = LineTableRow::default();
+        src.bg[0].tile_size = 16;
+        src.bg[0].map_base = 0x07ff; // snaps down to 0x0400
+        src.bg[0].screen_size = 5; // masks to 1
+        src.bg[0].char_base = 0x1fff; // snaps down to 0x1000
+        src.m7.repeat = 6; // masks to 2
+        src.m7.flip_x = true;
+        let reg = RegRow::from(&src);
+        assert_eq!(reg.bg[0].tile_size, 16);
+        assert_eq!(reg.bg[0].map_base, 0x0400);
+        assert_eq!(reg.bg[0].screen_size, 1);
+        assert_eq!(reg.bg[0].char_base, 0x1000);
+        assert_eq!(reg.m7.repeat, 2);
+        assert!(reg.m7.flip_x && !reg.m7.flip_y);
+        // untouched layers keep quantized defaults
+        assert_eq!(reg.bg[1].tile_size, 8);
+        assert_eq!(reg.bg[1].map_base, 0);
     }
 }
