@@ -10,6 +10,7 @@
 //! that duplicate the shared importer core being built in parallel; at
 //! integration these three get repointed at the shared module.
 
+use crate::memory::{rgb15, Memory};
 use std::collections::HashMap;
 
 /// Mode 7 tilemap is 128x128 tile-number bytes (the low lane of words 0..0x4000).
@@ -25,7 +26,6 @@ pub const M7_VRAM_WORDS: usize = 0x4000;
 /// most `max_colors` RGB colors. Deterministic: unique colors are sorted before
 /// bucketing, and when there are <= `max_colors` unique colors the palette is
 /// exactly those colors in sorted order. Returned palette is sorted.
-#[allow(dead_code)] // used by import_mode7 (next task)
 fn median_cut(rgba: &[u8], max_colors: usize) -> Vec<[u8; 3]> {
     let mut counts: HashMap<[u8; 3], u32> = HashMap::new();
     for px in rgba.chunks_exact(4) {
@@ -87,7 +87,6 @@ fn median_cut(rgba: &[u8], max_colors: usize) -> Vec<[u8; 3]> {
 }
 
 /// Nearest palette entry by squared RGB distance; the lowest index wins ties.
-#[allow(dead_code)] // used by import_mode7 (next task)
 fn nearest_color(palette: &[[u8; 3]], c: [u8; 3]) -> u8 {
     let mut best = 0usize;
     let mut best_d = u32::MAX;
@@ -114,7 +113,6 @@ fn nearest_color(palette: &[[u8; 3]], c: [u8; 3]) -> u8 {
 ///
 /// Returns `(unique_tiles, map, tiles_w, tiles_h, unique_total)` where `map`
 /// is `tiles_w * tiles_h` tile-number bytes.
-#[allow(dead_code)] // used by import_mode7 (next task)
 fn dedup_tiles(
     indexed: &[u8],
     width: usize,
@@ -147,6 +145,97 @@ fn dedup_tiles(
     }
     let unique_total = ids.len();
     (uniq, map, tiles_w, tiles_h, unique_total)
+}
+
+/// Budget report for a Mode 7 import — honest numbers, including overflow.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct Mode7ImportReport {
+    /// Opaque palette entries used (`cgram[1..=colors]`; index 0 is reserved
+    /// transparent, so the ceiling is 255).
+    pub colors: u16,
+    /// Distinct 8x8 tiles found in the image (before the 256 cap).
+    pub unique_tiles: u16,
+    /// The 8-bit tile-number ceiling (always 256).
+    pub tile_capacity: u16,
+    /// Unique tiles beyond capacity; their map cells fall back to tile 0.
+    pub overflow_tiles: u16,
+    /// Tilemap cells covered by the image (top-left placement), clamped to 128.
+    pub map_tiles_w: u16,
+    pub map_tiles_h: u16,
+}
+
+/// Result of a Mode 7 import: the interleaved VRAM region, the flat CGRAM
+/// palette, and the budget report.
+pub struct Mode7Import {
+    /// The full interleaved region, words 0..0x4000:
+    /// `vram[i] = (char_byte[i] << 8) | map_byte[i]`.
+    pub vram: Vec<u16>,
+    /// Flat 256-color palette; entry 0 stays 0 (reserved transparent/backdrop).
+    pub cgram: [u16; 256],
+    pub report: Mode7ImportReport,
+}
+
+impl Mode7Import {
+    /// Write the import into PPU memory: the interleaved VRAM region at word 0
+    /// (where the Mode 7 rasterizer samples) and the whole CGRAM.
+    pub fn apply(&self, mem: &mut Memory) {
+        mem.vram[..M7_VRAM_WORDS].copy_from_slice(&self.vram);
+        mem.cgram.copy_from_slice(&self.cgram);
+    }
+}
+
+/// Import a decoded RGBA image (a `PpuCore.assets` entry) as Mode 7 data:
+/// median-cut quantize to a single <=255-color palette (CGRAM 1..; 0 reserved
+/// transparent), split into 8x8 tiles, exact-dedup to <=256 tiles (overflow
+/// reported, overflowing cells fall back to tile 0), and emit the
+/// byte-interleaved VRAM region. The image map is placed at the tilemap's
+/// top-left; uncovered cells stay tile 0.
+pub fn import_mode7(rgba: &[u8], width: usize, height: usize) -> Mode7Import {
+    assert_eq!(rgba.len(), width * height * 4, "rgba buffer/dimensions mismatch");
+    let palette = median_cut(rgba, 255);
+    // Index every pixel: 0 = transparent, palette entry i -> index i+1.
+    let mut indexed = vec![0u8; width * height];
+    if !palette.is_empty() {
+        for (i, px) in rgba.chunks_exact(4).enumerate() {
+            if px[3] >= 128 {
+                indexed[i] = nearest_color(&palette, [px[0], px[1], px[2]]) + 1;
+            }
+        }
+    }
+    let (tiles, map, tiles_w, tiles_h, unique_total) =
+        dedup_tiles(&indexed, width, height, M7_MAX_TILES);
+
+    let mut cgram = [0u16; 256];
+    for (i, c) in palette.iter().enumerate() {
+        cgram[i + 1] = rgb15(c[0], c[1], c[2]);
+    }
+
+    // Interleave. Char lane: tile t's 64 pixels at byte offsets t*64.. (high).
+    // Map lane: 128x128 row-major tile numbers (low), image map top-left.
+    let mut vram = vec![0u16; M7_VRAM_WORDS];
+    for (t, tile) in tiles.iter().enumerate() {
+        for (j, &px) in tile.iter().enumerate() {
+            vram[t * M7_TILE_BYTES + j] |= (px as u16) << 8;
+        }
+    }
+    for ty in 0..tiles_h {
+        for tx in 0..tiles_w {
+            vram[ty * M7_MAP_DIM + tx] |= map[ty * tiles_w + tx] as u16;
+        }
+    }
+
+    Mode7Import {
+        vram,
+        cgram,
+        report: Mode7ImportReport {
+            colors: palette.len() as u16,
+            unique_tiles: unique_total.min(u16::MAX as usize) as u16,
+            tile_capacity: M7_MAX_TILES as u16,
+            overflow_tiles: unique_total.saturating_sub(M7_MAX_TILES).min(u16::MAX as usize) as u16,
+            map_tiles_w: tiles_w as u16,
+            map_tiles_h: tiles_h as u16,
+        },
+    }
 }
 
 #[cfg(test)]
@@ -260,5 +349,45 @@ mod tests {
         let (_, map, tw, th, _) = dedup_tiles(&indexed, 1032, 8, M7_MAX_TILES);
         assert_eq!((tw, th), (128, 1));
         assert_eq!(map.len(), 128);
+    }
+
+    #[test]
+    fn import_reserves_cgram_zero_and_packs_bgr555() {
+        // 8x8 solid red -> 1 color at cgram[1], cgram[0] untouched.
+        let rgba = rgba_of(&[[255, 0, 0]; 64]);
+        let out = import_mode7(&rgba, 8, 8);
+        assert_eq!(out.cgram[0], 0);
+        assert_eq!(out.cgram[1], rgb15(255, 0, 0)); // 0x001f
+        assert_eq!(out.report.colors, 1);
+        // The single tile's char bytes are all index 1 (high lane).
+        assert_eq!(out.vram[0], 1 << 8); // char=1, map cell (0,0) = tile 0
+        assert_eq!(out.vram[63], 1 << 8);
+    }
+
+    #[test]
+    fn import_transparent_pixels_index_zero() {
+        // 8x8: left half opaque white, right half fully transparent.
+        let mut rgba = Vec::new();
+        for _y in 0..8 {
+            for x in 0..8 {
+                rgba.extend_from_slice(if x < 4 { &[255, 255, 255, 255] } else { &[0, 0, 0, 0] });
+            }
+        }
+        let out = import_mode7(&rgba, 8, 8);
+        assert_eq!(out.report.colors, 1);
+        assert_eq!(out.vram[0] >> 8, 1); // opaque -> palette index 1
+        assert_eq!(out.vram[4] >> 8, 0); // transparent -> index 0
+    }
+
+    #[test]
+    fn apply_writes_interleaved_region_and_cgram() {
+        let rgba = rgba_of(&[[0, 255, 0]; 64]);
+        let out = import_mode7(&rgba, 8, 8);
+        let mut mem = Memory::new();
+        mem.vram[M7_VRAM_WORDS] = 0xbeef; // outside the interleaved region
+        out.apply(&mut mem);
+        assert_eq!(mem.vram[..M7_VRAM_WORDS], out.vram[..]);
+        assert_eq!(mem.vram[M7_VRAM_WORDS], 0xbeef); // untouched
+        assert_eq!(mem.cgram[1], rgb15(0, 255, 0));
     }
 }
