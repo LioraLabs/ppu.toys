@@ -19,7 +19,6 @@ struct Asset {
     width: u32,
     height: u32,
     /// Raw RGBA pixels, consumed by the importer (m4/importer).
-    #[allow(dead_code)]
     rgba: Vec<u8>,
 }
 
@@ -39,6 +38,9 @@ pub struct PpuCore {
     /// survives recompiles untouched (unlike `LuaEngine::memory`, which is
     /// reset by `set_source`).
     assets: HashMap<String, Asset>,
+    /// Memoized OBJ sheet imports, keyed by (asset id, char base). Re-run only
+    /// on a cold key so `obj.sheet =` never re-quantizes at 60fps.
+    obj_imports: HashMap<(String, u16), crate::import::obj::ObjImport>,
 }
 
 #[wasm_bindgen]
@@ -55,6 +57,7 @@ impl PpuCore {
             bg_visible: [None; 4],
             obj_visible: None,
             assets: HashMap::new(),
+            obj_imports: HashMap::new(),
         }
     }
 
@@ -95,6 +98,25 @@ impl PpuCore {
         if self.obj_visible == Some(false) {
             for o in self.engine.memory_mut().oam.iter_mut() {
                 o.on = false;
+            }
+        }
+
+        // OBJ sheet import: if the program set `obj.sheet` to an uploaded asset,
+        // quantize it into OBJ VRAM char + OBJ CGRAM palettes (8-15) at the OBSEL
+        // char base. Memoized by (asset, char_base); re-applied every frame since
+        // memory is repopulated from Lua each frame.
+        let sheet = self.engine.memory().obj_sheet.clone();
+        let char_base = self.engine.memory().obsel.char_base;
+        if let Some(id) = sheet {
+            if self.assets.contains_key(&id) {
+                let key = (id.clone(), char_base);
+                if !self.obj_imports.contains_key(&key) {
+                    let asset = &self.assets[&id];
+                    let import = crate::import::obj::import_obj_sheet(&asset.rgba, asset.width, asset.height);
+                    self.obj_imports.insert(key.clone(), import);
+                }
+                let import = self.obj_imports[&key].clone();
+                crate::import::obj::apply_obj_import(self.engine.memory_mut(), &import, char_base);
             }
         }
 
