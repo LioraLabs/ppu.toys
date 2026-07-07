@@ -2,7 +2,7 @@
 //! sprites. VRAM/CGRAM/OAM are memory — reads return stored values — while
 //! the PPU registers stay write-only latches (registers.rs / quantize.rs).
 
-use crate::registers::Obj;
+use crate::registers::{Obj, Obsel};
 
 /// Pack 8-bit-per-channel RGB into a 15-bit SNES BGR555 word
 /// (`0bbbbbgggggrrrrr`). This is the canonical CGRAM color format.
@@ -39,6 +39,8 @@ pub struct Memory {
     pub oam: [Obj; 128],
     /// Asset id of the OBJ tile sheet that `obj[i].tile` indexes.
     pub obj_sheet: Option<String>,
+    /// Frame-global OBJ binding registers (OBSEL $2101): char base + size select.
+    pub obsel: Obsel,
 }
 
 impl Default for Memory {
@@ -48,6 +50,7 @@ impl Default for Memory {
             cgram: [0; 256],
             oam: [Obj::default(); 128],
             obj_sheet: None,
+            obsel: Obsel::default(),
         }
     }
 }
@@ -103,5 +106,12 @@ mod tests {
         m.vram[0x7fff] = 0x1234;
         assert_eq!(m.vram[0x0000], 0xbeef); // memory, not a write-only latch
         assert_eq!(m.vram[0x7fff], 0x1234);
+    }
+
+    #[test]
+    fn obsel_defaults_to_zero() {
+        let m = Memory::new();
+        assert_eq!(m.obsel.char_base, 0);
+        assert_eq!(m.obsel.size_sel, 0);
     }
 }

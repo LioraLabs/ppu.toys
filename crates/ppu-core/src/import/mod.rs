@@ -4,6 +4,7 @@
 
 pub mod quantize;
 pub mod tiles;
+pub mod obj;
 
 use std::collections::BTreeMap;
 
