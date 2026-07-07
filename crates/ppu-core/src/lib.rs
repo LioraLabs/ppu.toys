@@ -36,8 +36,13 @@ pub use quantize::*;
 mod modes;
 pub use modes::*;
 
+// m4/importer: shared tile-BG importer + reusable quantize/tiles core.
+pub mod import;
+
 // m4/importer: Mode 7 importer. Named `import_m7` to avoid a module
-// name collision with the shared tile-BG importer at integration.
+// name collision with the shared tile-BG importer. Its local median-cut /
+// nearest / dedup overlap import::quantize/import::tiles; unifying them is a
+// tracked follow-up (a behavioral change that would re-baseline Mode 7 goldens).
 mod import_m7;
 pub use import_m7::*;
 
