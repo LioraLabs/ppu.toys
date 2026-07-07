@@ -158,6 +158,17 @@ fn bg_map_cell_packs_tilemap_word() {
 }
 
 #[test]
+fn m7_map_and_char_write_correct_lanes() {
+    let mut e = engine("function frame(t,f) m7.map[0]={} m7.map[0][1]=7; m7pixel(2, 3, 1, 200) end");
+    e.frame(0.0, 0).unwrap();
+    let m = e.memory();
+    assert_eq!(m.vram[1] & 0x00ff, 7); // map low byte at ty=0,tx=1
+    assert_eq!(m.vram[1] >> 8, 0); // char lane untouched
+    assert_eq!(m.vram[2 * 64 + 11] >> 8, 200); // char high byte, off = 1*8 + 3
+    assert_eq!(m.vram[2 * 64 + 11] & 0x00ff, 0); // map lane untouched
+}
+
+#[test]
 fn scanline_is_an_alias_for_hdma() {
     let mut e = engine("function frame(t,f) scanline(0,223, function(y) brightness=3 end) end");
     let lt = e.frame(0.0, 0).unwrap();

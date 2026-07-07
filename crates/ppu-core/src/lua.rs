@@ -344,7 +344,37 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     m7.set(ctx, "wrap", 0).unwrap();
     m7.set(ctx, "flip_x", false).unwrap();
     m7.set(ctx, "flip_y", false).unwrap();
+    // Mode 7 tilemap poke: m7.map[ty][tx] = tile# (low byte of the interleaved word).
+    m7.set(ctx, "map", Table::new(&ctx)).unwrap();
     ctx.set_global("m7", m7).unwrap();
+
+    // Hidden Mode 7 char buffer, keyed `__m7char[tile][fy*8+fx] = index`, filled
+    // by `m7pixel` and flushed into the high byte lane at frame time.
+    ctx.set_global("__m7char", Table::new(&ctx)).unwrap();
+
+    // m7pixel(tile, x, y, index): stage a Mode 7 char pixel (8bpp linear). The
+    // flush masks the high VRAM byte lane, leaving the tilemap low byte intact
+    // (raw `vram[]` sets both lanes at once; this helper touches one).
+    let m7pixel = Callback::from_fn(&ctx, |ctx, _, mut stack| {
+        let tile = stack.get(0).to_integer().unwrap_or(0);
+        let x = stack.get(1).to_integer().unwrap_or(0);
+        let y = stack.get(2).to_integer().unwrap_or(0);
+        let idx = stack.get(3).to_integer().unwrap_or(0);
+        stack.clear();
+        if let Value::Table(cb) = ctx.get_global("__m7char") {
+            let sub = match cb.get(ctx, tile) {
+                Value::Table(t) => t,
+                _ => {
+                    let t = Table::new(&ctx);
+                    cb.set(ctx, tile, t).unwrap();
+                    t
+                }
+            };
+            sub.set(ctx, (y & 7) * 8 + (x & 7), idx).unwrap();
+        }
+        Ok(CallbackReturn::Return)
+    });
+    ctx.set_global("m7pixel", m7pixel).unwrap();
 
     // cgram (scalar table, written by user)
     ctx.set_global("cgram", Table::new(&ctx)).unwrap();
@@ -722,6 +752,37 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
                     let word = tile | (pal << 10) | (prio << 13) | (hf << 14) | (vf << 15);
                     let addr = tilemap_addr(map_base, screen_size, col as u32, row_i as u32);
                     mem.vram[addr] = word;
+                }
+            }
+        }
+    }
+
+    // Mode 7 structured pokes. Both mask a single byte lane of the interleaved
+    // word: map = low byte (tile#), char pixels = high byte (8bpp index).
+    if let Value::Table(m7) = ctx.get_global("m7") {
+        if let Value::Table(map) = m7.get(ctx, "map") {
+            for (yk, yv) in map {
+                let (Some(ty), Value::Table(rowt)) = (yk.to_integer(), yv) else { continue };
+                for (xk, xv) in rowt {
+                    if let (Some(tx), Some(tile)) = (xk.to_integer(), xv.to_integer()) {
+                        let i = (ty as usize) * 128 + tx as usize;
+                        if i < 0x8000 {
+                            mem.vram[i] = (mem.vram[i] & 0xff00) | (tile as u16 & 0x00ff);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Value::Table(cb) = ctx.get_global("__m7char") {
+        for (tk, tv) in cb {
+            let (Some(tile), Value::Table(pix)) = (tk.to_integer(), tv) else { continue };
+            for (pk, pv) in pix {
+                if let (Some(off), Some(idx)) = (pk.to_integer(), pv.to_integer()) {
+                    let i = (tile as usize) * 64 + off as usize;
+                    if i < 0x8000 {
+                        mem.vram[i] = (mem.vram[i] & 0x00ff) | ((idx as u16 & 0xff) << 8);
+                    }
                 }
             }
         }
