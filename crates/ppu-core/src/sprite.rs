@@ -77,6 +77,11 @@ pub fn render_scanline(mem: &Memory, y: usize, width: usize) -> Vec<Option<Sprit
             }
             let px = if o.flip_x { dim - 1 - sx } else { sx };
             let py = if o.flip_y { dim - 1 - row } else { row };
+            // Name-table walk: +1 per column, +16 per row (masked to 9 bits).
+            // Hardware wraps the column within the tile's own 16-wide row
+            // (`(tile & 0x1f0) | ((tile + col) & 0xf)`); the simpler carry here
+            // only diverges when a wide sprite's base column nibble + width
+            // crosses 16 — acceptable for this educational core.
             let tile_index = (o.tile as u32 + px / 8 + (py / 8) * 16) & 0x1ff;
             let addr = ((char_base + tile_index * OBJ_WORDS_PER_TILE) & 0x7fff) as u16;
             let index = char_pixel_index(mem, addr, 4, px % 8, py % 8);
@@ -92,10 +97,10 @@ pub fn render_scanline(mem: &Memory, y: usize, width: usize) -> Vec<Option<Sprit
     out
 }
 
-/// Full-frame sprite raster over the CGRAM backdrop (`cgram[0]`), for golden
-/// tests (disabled pending m4/compositing, m4/demos — while [`render_scanline`]
-/// is a stub this renders backdrop only). The real compositor (E5) overlays
-/// [`render_scanline`] onto BG layers instead of this flat backdrop.
+/// Full-frame sprite raster over the CGRAM backdrop (`cgram[0]`), for sprite
+/// unit tests: [`render_scanline`] sampled over a flat backdrop. The real E5
+/// compositor overlays [`render_scanline`] onto BG layers instead of this
+/// flat backdrop.
 pub fn render_sprites(mem: &Memory, width: usize, height: usize) -> Vec<u8> {
     let backdrop = unpack_rgb15(mem.cgram[0]);
     let mut fb = Vec::with_capacity(width * height * 4);

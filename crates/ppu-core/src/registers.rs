@@ -77,9 +77,9 @@ pub struct Obj {
     pub x: i16,
     pub y: u8,
     pub tile: u16,
-    pub pal: u8,  // 0..7; NO-OP in v1 (direct-RGBA sheets), reserved for v2 per-palette recolor
-    pub prio: u8, // 0..3
-    pub size: u8, // sprite size selector
+    pub pal: u8,  // 0..7: selects the OBJ CGRAM sub-palette (cgram[128 + pal*16 + index])
+    pub prio: u8, // 0..3: sprite priority, carried to the compositor
+    pub size: u8, // sprite size selector -> sprite_dim (8/16/32/64)
     pub flip_x: bool,
     pub flip_y: bool,
     pub on: bool,
@@ -94,7 +94,9 @@ pub struct Obj {
 pub struct Obsel {
     /// Snapped OBJ char base VRAM word address (multiple of 0x2000, in-VRAM).
     pub char_base: u16,
-    /// Sprite-size selector, masked to 0..7.
+    /// Sprite-size selector, masked to 0..7. Modeled and quantized for register
+    /// fidelity; the sampler currently sizes sprites from per-OAM `Obj::size`, so
+    /// this is not yet consumed by rendering (forward-looking).
     pub size_sel: u8,
 }
 
