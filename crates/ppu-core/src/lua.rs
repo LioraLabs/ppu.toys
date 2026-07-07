@@ -321,6 +321,8 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
         layer.set(ctx, "map_base", 0).unwrap();
         layer.set(ctx, "screen_size", 0).unwrap();
         layer.set(ctx, "char_base", 0).unwrap();
+        // Per-cell tilemap poke surface: map[col][row] = {tile,pal,prio,flip_x,flip_y}.
+        layer.set(ctx, "map", Table::new(&ctx)).unwrap();
         bg.set(ctx, i, layer).unwrap();
     }
     ctx.set_global("bg", bg).unwrap();
@@ -644,6 +646,20 @@ fn apply_imports(
     }
 }
 
+/// VRAM word address of the tilemap entry for tile column `tx`, row `ty` at a
+/// layer's snapped `map_base` and screen size. Mirrors `bg::map_entry_addr`
+/// (private there) so a `bg[n].map` poke lands exactly where the rasterizer
+/// reads it; the two must stay in lockstep.
+fn tilemap_addr(map_base: u16, screen_size: u8, tx: u32, ty: u32) -> usize {
+    let screen = match screen_size {
+        1 => tx / 32,
+        2 => ty / 32,
+        3 => (ty / 32) * 2 + tx / 32,
+        _ => 0,
+    };
+    ((map_base as u32 + screen * 0x400 + (ty % 32) * 32 + (tx % 32)) & 0x7fff) as usize
+}
+
 /// Flush the DSL memory-poke surfaces into `Memory`. Runs AFTER `apply_imports`
 /// has laid down any `source =` bootstrap, so manual pokes compose on top under
 /// last-write-wins. Order: structured tilemap/char pokes, then the raw `vram[]`
@@ -677,6 +693,36 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
                 e.flip_x = o.get(ctx, "flip_x").to_bool();
                 e.flip_y = o.get(ctx, "flip_y").to_bool();
                 e.on = o.get(ctx, "on").to_bool();
+            }
+        }
+    }
+
+    // Structured tilemap pokes: bg[n].map[col][row] = {tile,pal,prio,flip_x,flip_y}
+    // packs the real 16-bit entry word into VRAM at the layer's map_base (snapped
+    // and screen-size-wrapped exactly as the rasterizer reads it).
+    if let Value::Table(bg) = ctx.get_global("bg") {
+        for i in 0..4 {
+            let Value::Table(layer) = bg.get(ctx, (i + 1) as i64) else { continue };
+            let map_base = crate::quantize::bg_map_base(
+                layer.get(ctx, "map_base").to_integer().unwrap_or(0) as u32,
+            );
+            let screen_size = crate::quantize::bg_screen_size(
+                layer.get(ctx, "screen_size").to_integer().unwrap_or(0) as u8,
+            );
+            let Value::Table(map) = layer.get(ctx, "map") else { continue };
+            for (ck, cv) in map {
+                let (Some(col), Value::Table(rowt)) = (ck.to_integer(), cv) else { continue };
+                for (rk, rv) in rowt {
+                    let (Some(row_i), Value::Table(cell)) = (rk.to_integer(), rv) else { continue };
+                    let tile = cell.get(ctx, "tile").to_integer().unwrap_or(0) as u16 & 0x03ff;
+                    let pal = cell.get(ctx, "pal").to_integer().unwrap_or(0) as u16 & 0x07;
+                    let prio = cell.get(ctx, "prio").to_integer().unwrap_or(0) as u16 & 0x01;
+                    let hf = cell.get(ctx, "flip_x").to_bool() as u16;
+                    let vf = cell.get(ctx, "flip_y").to_bool() as u16;
+                    let word = tile | (pal << 10) | (prio << 13) | (hf << 14) | (vf << 15);
+                    let addr = tilemap_addr(map_base, screen_size, col as u32, row_i as u32);
+                    mem.vram[addr] = word;
+                }
             }
         }
     }
