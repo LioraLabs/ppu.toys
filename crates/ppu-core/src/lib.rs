@@ -33,6 +33,9 @@ pub use lua::*;
 mod quantize;
 pub use quantize::*;
 
+mod modes;
+pub use modes::*;
+
 /// Native SNES PPU output dimensions (the only resolution v1 targets).
 pub const WIDTH: usize = 256;
 pub const HEIGHT: usize = 224;
