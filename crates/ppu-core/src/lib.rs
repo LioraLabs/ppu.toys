@@ -122,7 +122,7 @@ pub struct AssetInfo {
 pub fn derive_registers(row: &RegRow, prev: &HashMap<u16, i32>) -> Vec<Register> {
     let scroll = |v: i16| (v as u16 & 0x1fff) as i32; // 13-bit display width; ponytail: real BG H/VOFS are 10-bit, uniform 13-bit mask is a v1 inspector simplification
     let m7 = |v: i16| (v as u16) as i32; // raw Q8 bit pattern (16-bit)
-    // BGMODE: mode bits 0-2 | BG3-priority bit 3 | BG1..BG4 16x16-tile flags in bits 4-7.
+                                         // BGMODE: mode bits 0-2 | BG3-priority bit 3 | BG1..BG4 16x16-tile flags in bits 4-7.
     let bgmode = row.mode as i32
         | ((row.bg3_priority as i32) << 3)
         | (row.bg.iter().enumerate())
@@ -131,8 +131,11 @@ pub fn derive_registers(row: &RegRow, prev: &HashMap<u16, i32>) -> Vec<Register>
     // BGnSC: screen size bits 0-1 | tilemap base field bits 2-7.
     let sc = |b: &RegBg| (b.screen_size as i32) | (((b.map_base >> 10) as i32) << 2);
     // BGnNBA: two 4-bit char base fields per register.
-    let nba = |lo: &RegBg, hi: &RegBg| ((lo.char_base >> 12) as i32) | (((hi.char_base >> 12) as i32) << 4);
-    let m7sel = (row.m7.flip_x as i32) | ((row.m7.flip_y as i32) << 1) | ((row.m7.repeat as i32) << 6);
+    let nba = |lo: &RegBg, hi: &RegBg| {
+        ((lo.char_base >> 12) as i32) | (((hi.char_base >> 12) as i32) << 4)
+    };
+    let m7sel =
+        (row.m7.flip_x as i32) | ((row.m7.flip_y as i32) << 1) | ((row.m7.repeat as i32) << 6);
     let entries: [(u16, &str, i32); 21] = [
         (0x2100, "INIDISP", row.brightness as i32),
         (0x2105, "BGMODE", bgmode),
@@ -278,7 +281,13 @@ mod tests {
 
     #[test]
     fn oam_sprite_serializes_camelcase() {
-        let obj = Obj { on: true, flip_x: true, flip_y: false, tile: 5, ..Obj::default() };
+        let obj = Obj {
+            on: true,
+            flip_x: true,
+            flip_y: false,
+            tile: 5,
+            ..Obj::default()
+        };
         let s = OamSprite::from(&obj);
         let json = serde_json::to_value(&s).unwrap();
         assert_eq!(json["flipX"], true);

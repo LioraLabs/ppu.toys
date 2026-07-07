@@ -2,9 +2,9 @@
 //! `quantize`/`tiles` are the shared primitives Mode-7 and OBJ import reuse;
 //! this module's own surface is the tile-BG importer.
 
+pub mod obj;
 pub mod quantize;
 pub mod tiles;
-pub mod obj;
 
 use std::collections::BTreeMap;
 

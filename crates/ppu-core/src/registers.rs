@@ -300,7 +300,10 @@ mod tests {
     fn regbg_bpp_resolved_from_mode_table() {
         // Mode 1: BG1/BG2 4bpp, BG3 2bpp, BG4 absent.
         let reg = RegRow::from(&LineTableRow::default());
-        assert_eq!([reg.bg[0].bpp, reg.bg[1].bpp, reg.bg[2].bpp, reg.bg[3].bpp], [4, 4, 2, 0]);
+        assert_eq!(
+            [reg.bg[0].bpp, reg.bg[1].bpp, reg.bg[2].bpp, reg.bg[3].bpp],
+            [4, 4, 2, 0]
+        );
         // Unshipped mode (mode_info -> None): every layer bpp 0 (renders transparent).
         let mut src = LineTableRow::default();
         src.mode = 0;

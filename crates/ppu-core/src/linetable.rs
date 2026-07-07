@@ -22,13 +22,25 @@ pub struct LineTableBuilder {
 
 impl LineTableBuilder {
     pub fn new(defaults: LineTableRow) -> Self {
-        LineTableBuilder { defaults, hooks: Vec::new() }
+        LineTableBuilder {
+            defaults,
+            hooks: Vec::new(),
+        }
     }
 
     /// Register a hook over the inclusive scanline range `[y0, y1]`. Alias of
     /// the DSL `hdma`/`scanline`. Registration order is preserved.
-    pub fn hdma(&mut self, y0: usize, y1: usize, apply: impl Fn(usize, &mut LineTableRow) + 'static) {
-        self.hooks.push(Hook { y0, y1, apply: Box::new(apply) });
+    pub fn hdma(
+        &mut self,
+        y0: usize,
+        y1: usize,
+        apply: impl Fn(usize, &mut LineTableRow) + 'static,
+    ) {
+        self.hooks.push(Hook {
+            y0,
+            y1,
+            apply: Box::new(apply),
+        });
     }
 
     /// Resolve the effective register state for scanline `y`: start from the
@@ -46,7 +58,11 @@ impl LineTableBuilder {
     /// Resolve all `height` scanlines, then quantize each to its absolute
     /// register state (quantize-on-write happens HERE, once per line).
     pub fn build(&self, height: usize) -> LineTable {
-        LineTable { rows: (0..height).map(|y| RegRow::from(&self.resolve(y))).collect() }
+        LineTable {
+            rows: (0..height)
+                .map(|y| RegRow::from(&self.resolve(y)))
+                .collect(),
+        }
     }
 }
 

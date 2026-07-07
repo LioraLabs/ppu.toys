@@ -45,10 +45,16 @@ impl PpuCore {
     #[wasm_bindgen(js_name = setSource)]
     pub fn set_source(&mut self, src: &str) -> Result<JsValue, JsValue> {
         let res = match self.engine.set_source(src) {
-            Ok(()) => SetSourceResult { ok: true, error: None },
+            Ok(()) => SetSourceResult {
+                ok: true,
+                error: None,
+            },
             Err(e) => SetSourceResult {
                 ok: false,
-                error: Some(LuaErrorView { message: e.message, line: e.line }),
+                error: Some(LuaErrorView {
+                    message: e.message,
+                    line: e.line,
+                }),
             },
         };
         serde_wasm_bindgen::to_value(&res).map_err(Into::into)
@@ -62,7 +68,10 @@ impl PpuCore {
         let mut lt = match self.engine.frame(t, f) {
             Ok(lt) => lt,
             Err(e) => {
-                let view = LuaErrorView { message: e.message, line: e.line };
+                let view = LuaErrorView {
+                    message: e.message,
+                    line: e.line,
+                };
                 return Err(serde_wasm_bindgen::to_value(&view)?);
             }
         };
@@ -100,6 +109,10 @@ impl PpuCore {
 
     pub fn cgram(&self) -> Vec<u16> {
         self.cgram.clone()
+    }
+
+    pub fn vram(&self) -> Vec<u16> {
+        self.engine.memory().vram.to_vec()
     }
 
     pub fn registers(&self) -> Result<JsValue, JsValue> {

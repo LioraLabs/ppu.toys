@@ -114,7 +114,10 @@ pub fn render_bg_layer_scanline_px(
             }
             let pal = ((entry >> 10) & 0x07) as usize;
             let color = mem.cgram[pal * (1 << layer.bpp) + index as usize]; // 4bpp p*16, 2bpp p*4
-            Some(BgPixel { rgba: unpack_rgb15(color), prio: entry & 0x2000 != 0 })
+            Some(BgPixel {
+                rgba: unpack_rgb15(color),
+                prio: entry & 0x2000 != 0,
+            })
         })
         .collect()
 }
@@ -140,12 +143,7 @@ pub fn render_bg_layer_scanline(
 /// for the BG golden/unit tests ONLY — the E5 compositor composites layers
 /// itself via `render_bg_layer_scanline` and applies brightness once globally,
 /// so it never calls this (no double-attenuation).
-pub fn render_bg_scanline(
-    row: &RegRow,
-    mem: &Memory,
-    y: usize,
-    width: usize,
-) -> Vec<[u8; 4]> {
+pub fn render_bg_scanline(row: &RegRow, mem: &Memory, y: usize, width: usize) -> Vec<[u8; 4]> {
     let mut out = vec![unpack_rgb15(mem.cgram[0]); width];
     for layer in row.bg.iter().rev() {
         let line = render_bg_layer_scanline(layer, mem, y, width);
@@ -192,14 +190,16 @@ mod tests {
     fn empty_vram_is_all_transparent() {
         let m = Memory::new();
         // Entry 0 -> tile 0 -> all-zero planes -> index 0 everywhere.
-        assert!(render_bg_layer_scanline(&layer(0), &m, 0, 8).iter().all(|p| p.is_none()));
+        assert!(render_bg_layer_scanline(&layer(0), &m, 0, 8)
+            .iter()
+            .all(|p| p.is_none()));
     }
 
     #[test]
     fn renders_4bpp_tile_through_cgram_subpalette() {
         let mut m = Memory::new();
         m.cgram[2 * 16 + 1] = rgb15(255, 0, 0); // sub-palette 2, index 1
-        // Char 1 at char_base 0x1000 (16 words/char): pixel (0,0) = index 1.
+                                                // Char 1 at char_base 0x1000 (16 words/char): pixel (0,0) = index 1.
         m.vram[0x1000 + 16] = 0b1000_0000;
         // Map entry (0,0): tile 1, palette 2.
         m.vram[0] = 1 | (2 << 10);
@@ -210,7 +210,7 @@ mod tests {
         assert_eq!(px.rgba, unpack_rgb15(rgb15(255, 0, 0)));
         assert!(!px.prio);
         assert!(line[1].is_none()); // index 0 = transparent
-        // y=1 row of the tile is empty.
+                                    // y=1 row of the tile is empty.
         assert!(render_bg_layer_scanline_px(&l, &m, 1, 4)[0].is_none());
     }
 
@@ -218,7 +218,7 @@ mod tests {
     fn renders_2bpp_tile_with_2bpp_palette_base() {
         let mut m = Memory::new();
         m.cgram[3 * 4 + 2] = rgb15(0, 255, 0); // 2bpp: sub-palette 3 base = 12
-        // Char 1 at char_base 0x2000 (8 words/char): pixel (0,0) = index 2 (plane 1).
+                                               // Char 1 at char_base 0x2000 (8 words/char): pixel (0,0) = index 2 (plane 1).
         m.vram[0x2000 + 8] = 0b1000_0000 << 8;
         m.vram[0] = 1 | (3 << 10);
         let mut l = layer(2); // BG3: bpp 2
@@ -291,11 +291,15 @@ mod tests {
         let mut l = layer(0);
         l.char_base = 0x1000;
         l.visible = false;
-        assert!(render_bg_layer_scanline_px(&l, &m, 0, 8).iter().all(|p| p.is_none()));
+        assert!(render_bg_layer_scanline_px(&l, &m, 0, 8)
+            .iter()
+            .all(|p| p.is_none()));
         // BG4 does not exist in Mode 1 (bpp 0) even though visible defaults true.
         let bg4 = layer(3);
         assert!(bg4.visible && bg4.bpp == 0);
-        assert!(render_bg_layer_scanline_px(&bg4, &m, 0, 8).iter().all(|p| p.is_none()));
+        assert!(render_bg_layer_scanline_px(&bg4, &m, 0, 8)
+            .iter()
+            .all(|p| p.is_none()));
     }
 
     #[test]
@@ -322,7 +326,7 @@ mod tests {
         assert_eq!(idx_at(&m, 8, 0), Some(unpack_rgb15(rgb15(120, 0, 0))));
         assert_eq!(idx_at(&m, 8, 8), Some(unpack_rgb15(rgb15(160, 0, 0))));
         assert_eq!(idx_at(&m, 0, 1), None); // rest of each quadrant is empty
-        // H flip swaps quadrant columns: (0,0) of char 3 lands at x=7.
+                                            // H flip swaps quadrant columns: (0,0) of char 3 lands at x=7.
         m.vram[0] = 2 | (1 << 14);
         assert_eq!(idx_at(&m, 0, 7), Some(unpack_rgb15(rgb15(80, 0, 0))));
         assert_eq!(idx_at(&m, 0, 15), Some(unpack_rgb15(rgb15(40, 0, 0))));
@@ -350,8 +354,8 @@ mod tests {
         m.cgram[0] = rgb15(0, 0, 64); // backdrop
         m.cgram[1] = rgb15(255, 0, 0); // BG1 color (pal 0, idx 1)
         m.cgram[2] = rgb15(0, 255, 0); // BG3 color (pal 0, idx 2)
-        // BG1: 4bpp char 1 at 0x1000, pixel (0,0); BG3: 2bpp char 1 at 0x2000,
-        // pixels (0,0) and (1,0) = index 2.
+                                       // BG1: 4bpp char 1 at 0x1000, pixel (0,0); BG3: 2bpp char 1 at 0x2000,
+                                       // pixels (0,0) and (1,0) = index 2.
         m.vram[0x1000 + 16] = 0b1000_0000;
         m.vram[0x2000 + 8] = 0b1100_0000 << 8;
         m.vram[0x0000] = 1; // BG1 map at 0x0000
@@ -373,7 +377,10 @@ mod tests {
         m.cgram[0] = rgb15(200, 200, 200);
         let mut row = RegRow::from(&LineTableRow::default());
         row.brightness = 15;
-        assert_eq!(render_bg_scanline(&row, &m, 0, 2)[0], unpack_rgb15(rgb15(200, 200, 200)));
+        assert_eq!(
+            render_bg_scanline(&row, &m, 0, 2)[0],
+            unpack_rgb15(rgb15(200, 200, 200))
+        );
         row.brightness = 0; // everything black
         assert_eq!(render_bg_scanline(&row, &m, 0, 2)[0], [0, 0, 0, 255]);
     }

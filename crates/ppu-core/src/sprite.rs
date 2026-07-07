@@ -125,7 +125,13 @@ mod tests {
     #[test]
     fn obj_coords_are_integer_registers() {
         let mut mem = mem();
-        mem.oam[0] = Obj { on: true, x: 5, y: 10, size: 0, ..Obj::default() };
+        mem.oam[0] = Obj {
+            on: true,
+            x: 5,
+            y: 10,
+            size: 0,
+            ..Obj::default()
+        };
         assert_eq!(sprites_on_line(&mem, 10), vec![0]);
     }
 
@@ -141,9 +147,27 @@ mod tests {
     #[test]
     fn binning_selects_only_on_sprites_covering_the_line() {
         let mut mem = mem();
-        mem.oam[0] = Obj { on: true, x: 0, y: 10, size: 0, ..Obj::default() }; // rows 10..18
-        mem.oam[1] = Obj { on: false, x: 0, y: 10, size: 0, ..Obj::default() }; // off
-        mem.oam[2] = Obj { on: true, x: 0, y: 100, size: 0, ..Obj::default() }; // elsewhere
+        mem.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 10,
+            size: 0,
+            ..Obj::default()
+        }; // rows 10..18
+        mem.oam[1] = Obj {
+            on: false,
+            x: 0,
+            y: 10,
+            size: 0,
+            ..Obj::default()
+        }; // off
+        mem.oam[2] = Obj {
+            on: true,
+            x: 0,
+            y: 100,
+            size: 0,
+            ..Obj::default()
+        }; // elsewhere
         assert_eq!(sprites_on_line(&mem, 12), vec![0]);
         assert_eq!(sprites_on_line(&mem, 9), Vec::<usize>::new());
         assert_eq!(sprites_on_line(&mem, 18), Vec::<usize>::new()); // exclusive bottom
@@ -153,7 +177,13 @@ mod tests {
     fn binning_caps_at_max_per_line_keeping_lowest_indices() {
         let mut mem = mem();
         for i in 0..40usize {
-            mem.oam[i] = Obj { on: true, x: 0, y: 0, size: 0, ..Obj::default() };
+            mem.oam[i] = Obj {
+                on: true,
+                x: 0,
+                y: 0,
+                size: 0,
+                ..Obj::default()
+            };
         }
         let on = sprites_on_line(&mem, 0);
         assert_eq!(on.len(), MAX_SPRITES_PER_LINE);
@@ -191,7 +221,14 @@ mod tests {
         let mut g = [[0u8; 8]; 8];
         g[0][0] = 1;
         put_obj_char(&mut mem, 1, g);
-        mem.oam[0] = Obj { on: true, x: 10, y: 5, tile: 1, size: 0, ..Obj::default() };
+        mem.oam[0] = Obj {
+            on: true,
+            x: 10,
+            y: 5,
+            tile: 1,
+            size: 0,
+            ..Obj::default()
+        };
         let line = render_scanline(&mem, 5, crate::WIDTH);
         let px = line[10].expect("sprite pixel at (10,5)");
         assert_eq!(px.rgba, unpack_rgb15(rgb15(255, 0, 0)));
@@ -207,8 +244,18 @@ mod tests {
         let mut g = [[0u8; 8]; 8];
         g[0][0] = 1;
         put_obj_char(&mut mem, 1, g);
-        mem.oam[0] = Obj { on: true, x: 0, y: 0, tile: 1, pal: 3, ..Obj::default() };
-        assert_eq!(render_scanline(&mem, 0, crate::WIDTH)[0].unwrap().rgba, unpack_rgb15(rgb15(0, 255, 0)));
+        mem.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 1,
+            pal: 3,
+            ..Obj::default()
+        };
+        assert_eq!(
+            render_scanline(&mem, 0, crate::WIDTH)[0].unwrap().rgba,
+            unpack_rgb15(rgb15(0, 255, 0))
+        );
     }
 
     #[test]
@@ -218,7 +265,14 @@ mod tests {
         let mut g = [[0u8; 8]; 8];
         g[0][0] = 1;
         put_obj_char(&mut mem, 1, g);
-        mem.oam[0] = Obj { on: true, x: 0, y: 0, tile: 1, flip_x: true, ..Obj::default() };
+        mem.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 1,
+            flip_x: true,
+            ..Obj::default()
+        };
         let line = render_scanline(&mem, 0, crate::WIDTH);
         assert!(line[0].is_none());
         assert!(line[7].is_some());
@@ -234,13 +288,26 @@ mod tests {
         for i in 1..=4u16 {
             mem.cgram[128 + i as usize] = rgb15(i as u8 * 40, 0, 0);
         }
-        let corner = |v: u8| { let mut g = [[0u8; 8]; 8]; g[0][0] = v; g };
+        let corner = |v: u8| {
+            let mut g = [[0u8; 8]; 8];
+            g[0][0] = v;
+            g
+        };
         put_obj_char(&mut mem, 1, corner(1));
         put_obj_char(&mut mem, 2, corner(2));
         put_obj_char(&mut mem, 17, corner(3));
         put_obj_char(&mut mem, 18, corner(4));
-        mem.oam[0] = Obj { on: true, x: 0, y: 0, tile: 1, size: 1, ..Obj::default() };
-        let at = |mm: &Memory, y: usize, x: usize| render_scanline(mm, y, crate::WIDTH)[x].map(|p| p.rgba);
+        mem.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 1,
+            size: 1,
+            ..Obj::default()
+        };
+        let at = |mm: &Memory, y: usize, x: usize| {
+            render_scanline(mm, y, crate::WIDTH)[x].map(|p| p.rgba)
+        };
         assert_eq!(at(&mem, 0, 0), Some(unpack_rgb15(rgb15(40, 0, 0))));
         assert_eq!(at(&mem, 0, 8), Some(unpack_rgb15(rgb15(80, 0, 0))));
         assert_eq!(at(&mem, 8, 0), Some(unpack_rgb15(rgb15(120, 0, 0))));
@@ -254,7 +321,14 @@ mod tests {
         let mut g = [[0u8; 8]; 8];
         g[0][0] = 1;
         put_obj_char(&mut mem, 1, g);
-        mem.oam[0] = Obj { on: true, x: 0, y: 0, tile: 1, prio: 2, ..Obj::default() };
+        mem.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 1,
+            prio: 2,
+            ..Obj::default()
+        };
         assert_eq!(render_scanline(&mem, 0, crate::WIDTH)[0].unwrap().prio, 2);
     }
 
@@ -269,9 +343,24 @@ mod tests {
         g2[0][0] = 2;
         put_obj_char(&mut mem, 1, g1);
         put_obj_char(&mut mem, 2, g2);
-        mem.oam[5] = Obj { on: true, x: 0, y: 0, tile: 2, ..Obj::default() };
-        mem.oam[0] = Obj { on: true, x: 0, y: 0, tile: 1, ..Obj::default() };
-        assert_eq!(render_scanline(&mem, 0, crate::WIDTH)[0].unwrap().rgba, unpack_rgb15(rgb15(255, 0, 0)));
+        mem.oam[5] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 2,
+            ..Obj::default()
+        };
+        mem.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 1,
+            ..Obj::default()
+        };
+        assert_eq!(
+            render_scanline(&mem, 0, crate::WIDTH)[0].unwrap().rgba,
+            unpack_rgb15(rgb15(255, 0, 0))
+        );
     }
 
     #[test]
@@ -281,7 +370,13 @@ mod tests {
         let mut g = [[0u8; 8]; 8];
         g[7][7] = 1;
         put_obj_char(&mut mem, 1, g);
-        mem.oam[0] = Obj { on: true, x: -7, y: 0, tile: 1, ..Obj::default() };
+        mem.oam[0] = Obj {
+            on: true,
+            x: -7,
+            y: 0,
+            tile: 1,
+            ..Obj::default()
+        };
         assert!(render_scanline(&mem, 7, crate::WIDTH)[0].is_some());
     }
 
