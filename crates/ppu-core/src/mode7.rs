@@ -201,4 +201,63 @@ mod tests {
         assert_eq!(&fb[0..4], &unpack_rgb15(rgb15(255, 255, 255))); // (0,0)
         assert_eq!(&fb[4..8], &[0, 0, 0, 0]); // (1,0) unset char -> transparent
     }
+
+    /// Row with identity matrix and scroll_x = -1: screen x=0 -> plane u=-1
+    /// (out of field), screen x=1 -> plane u=0 (in field).
+    fn row_scrolled_left(repeat: u8) -> RegRow {
+        let mut src = LineTableRow::default();
+        src.bg[0].scroll_x = -1.0;
+        src.m7.repeat = repeat;
+        RegRow::from(&src)
+    }
+
+    #[test]
+    fn repeat_0_wraps_out_of_field_to_far_column() {
+        let mut mem = Memory::new();
+        mem.cgram[1] = rgb15(255, 0, 0);
+        set_map(&mut mem, 127, 0, 1); // rightmost map column
+        set_char(&mut mem, 1, 7, 0, 1); // plane pixel (1023, 0)
+        let mut out = [0u8; 8];
+        render_mode7_scanline(&row_scrolled_left(0), &mem, 0, &mut out);
+        assert_eq!(&out[0..4], &unpack_rgb15(rgb15(255, 0, 0))); // u=-1 wraps to 1023
+        assert_eq!(&out[4..8], &[0, 0, 0, 0]); // u=0 in-field, empty
+    }
+
+    #[test]
+    fn repeat_2_is_transparent_out_of_field() {
+        let mut mem = Memory::new();
+        mem.cgram[1] = rgb15(255, 0, 0);
+        set_map(&mut mem, 127, 0, 1);
+        set_char(&mut mem, 1, 7, 0, 1); // would show under wrap
+        set_map(&mut mem, 0, 0, 1);
+        set_char(&mut mem, 1, 0, 0, 1); // in-field control at plane (0,0)
+        let mut out = [0u8; 8];
+        render_mode7_scanline(&row_scrolled_left(2), &mem, 0, &mut out);
+        assert_eq!(&out[0..4], &[0, 0, 0, 0]); // u=-1: transparent, no wrap
+        assert_eq!(&out[4..8], &unpack_rgb15(rgb15(255, 0, 0))); // u=0 in-field normal
+    }
+
+    #[test]
+    fn repeat_3_fills_out_of_field_with_tile_0() {
+        let mut mem = Memory::new();
+        mem.cgram[4] = rgb15(0, 255, 0);
+        set_char(&mut mem, 0, 7, 0, 4); // tile 0 pixel (7,0): u=-1 -> fx=7
+        let mut out = [0u8; 8];
+        render_mode7_scanline(&row_scrolled_left(3), &mem, 0, &mut out);
+        assert_eq!(&out[0..4], &unpack_rgb15(rgb15(0, 255, 0))); // tile-0 fill
+        // u=0 is in-field: map cell (0,0) is tile 0 too, pixel (0,0) unset.
+        assert_eq!(&out[4..8], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn repeat_1_also_wraps() {
+        // Hardware treats M7SEL screen-over 0 and 1 identically (wrap).
+        let mut mem = Memory::new();
+        mem.cgram[1] = rgb15(255, 0, 0);
+        set_map(&mut mem, 127, 0, 1);
+        set_char(&mut mem, 1, 7, 0, 1);
+        let mut out = [0u8; 4];
+        render_mode7_scanline(&row_scrolled_left(1), &mem, 0, &mut out);
+        assert_eq!(&out[0..4], &unpack_rgb15(rgb15(255, 0, 0)));
+    }
 }
