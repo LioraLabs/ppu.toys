@@ -114,6 +114,80 @@ pub fn median_cut(hist: &[(u16, u32)], max: usize) -> Vec<u16> {
     out
 }
 
+/// Result of the greedy multi-palette region fit.
+pub struct RegionFit {
+    /// Final sub-palettes: sorted, deduped, each len <= capacity.
+    pub palettes: Vec<Vec<u16>>,
+    /// Palette index assigned to each input tile.
+    pub assignment: Vec<u8>,
+    /// Palettes an uncapped greedy pass would have used (> max = overflow).
+    pub palettes_needed: usize,
+}
+
+/// Greedy region fit: merge per-tile color sets (sorted, deduped, each already
+/// <= capacity) into at most `max_palettes` palettes of `capacity` colors,
+/// choosing the palette needing the fewest added colors (ties: lowest index).
+/// Once no palette can take a tile and all slots are open, the tile is
+/// assigned to the palette missing the fewest of its colors; the CALLER remaps
+/// its pixels via `nearest` (honest overflow — sealed palettes never mutate
+/// past capacity). `palettes_needed` counts an uncapped virtual overflow run
+/// so the budget report can say "needs N palettes".
+pub fn region_fit(tile_palettes: &[Vec<u16>], max_palettes: usize, capacity: usize) -> RegionFit {
+    let mut palettes: Vec<Vec<u16>> = Vec::new();
+    let mut virtual_extra: Vec<Vec<u16>> = Vec::new(); // uncapped shadow, for reporting
+    let mut assignment = vec![0u8; tile_palettes.len()];
+    let missing = |p: &[u16], tp: &[u16]| tp.iter().filter(|c| !p.contains(c)).count();
+    for (ti, tp) in tile_palettes.iter().enumerate() {
+        if tp.is_empty() {
+            continue; // fully transparent tile: any palette (0) works
+        }
+        let mut best: Option<(usize, usize)> = None; // (added, palette idx)
+        for (pi, p) in palettes.iter().enumerate() {
+            let added = missing(p, tp);
+            if p.len() + added <= capacity && best.map_or(true, |(ba, _)| added < ba) {
+                best = Some((added, pi));
+            }
+        }
+        match best {
+            Some((_, pi)) => {
+                let add: Vec<u16> =
+                    tp.iter().copied().filter(|c| !palettes[pi].contains(c)).collect();
+                palettes[pi].extend(add);
+                palettes[pi].sort_unstable();
+                assignment[ti] = pi as u8;
+            }
+            None if palettes.len() < max_palettes => {
+                assignment[ti] = palettes.len() as u8;
+                palettes.push(tp.clone());
+            }
+            None => {
+                // best-overlap fallback among sealed palettes (fewest missing,
+                // ties: lowest index); pixels get remapped by the caller.
+                let pi = (0..palettes.len())
+                    .min_by_key(|&pi| missing(&palettes[pi], tp))
+                    .unwrap_or(0);
+                assignment[ti] = pi as u8;
+                // shadow bookkeeping for the honest "needs N palettes" count
+                let vslot = virtual_extra.iter().position(|p| p.len() + missing(p, tp) <= capacity);
+                match vslot {
+                    Some(vi) => {
+                        let add: Vec<u16> =
+                            tp.iter().copied().filter(|c| !virtual_extra[vi].contains(c)).collect();
+                        virtual_extra[vi].extend(add);
+                        virtual_extra[vi].sort_unstable();
+                    }
+                    None => virtual_extra.push(tp.clone()),
+                }
+            }
+        }
+    }
+    RegionFit {
+        palettes_needed: palettes.len() + virtual_extra.len(),
+        palettes,
+        assignment,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,5 +229,54 @@ mod tests {
         let a = median_cut(&hist, 5);
         hist.reverse();
         assert_eq!(median_cut(&hist, 5), a);
+    }
+
+    #[test]
+    fn region_fit_merges_overlapping_tiles_into_one_palette() {
+        // two tiles sharing colors, union fits capacity 15
+        let t0 = vec![0x0001u16, 0x0002, 0x0003];
+        let t1 = vec![0x0002u16, 0x0003, 0x0004];
+        let fit = region_fit(&[t0, t1], 8, 15);
+        assert_eq!(fit.palettes.len(), 1);
+        assert_eq!(fit.assignment, vec![0, 0]);
+        assert_eq!(fit.palettes[0], vec![0x0001, 0x0002, 0x0003, 0x0004]);
+        assert_eq!(fit.palettes_needed, 1);
+    }
+
+    #[test]
+    fn region_fit_opens_new_palette_when_capacity_would_overflow() {
+        // capacity 3: t0 uses all 3; t1 disjoint -> second palette
+        let t0 = vec![1u16, 2, 3];
+        let t1 = vec![4u16, 5, 6];
+        let fit = region_fit(&[t0, t1], 8, 3);
+        assert_eq!(fit.palettes.len(), 2);
+        assert_eq!(fit.assignment, vec![0, 1]);
+    }
+
+    #[test]
+    fn region_fit_overflow_assigns_best_overlap_and_counts_needed() {
+        // max 2 palettes of capacity 3; three mutually disjoint tiles + one
+        // that overlaps t0 by 2 colors
+        let tiles = vec![
+            vec![1u16, 2, 3],
+            vec![4u16, 5, 6],
+            vec![7u16, 8, 9],    // no room -> overflow
+            vec![2u16, 3, 10],   // also overflow; best overlap = palette 0
+        ];
+        let fit = region_fit(&tiles, 2, 3);
+        assert_eq!(fit.palettes.len(), 2);
+        assert_eq!(fit.assignment[0], 0);
+        assert_eq!(fit.assignment[1], 1);
+        assert_eq!(fit.assignment[3], 0); // overlap {2,3} beats palette 1's {}
+        assert!(fit.palettes_needed > 2);
+        // sealed palettes never exceed capacity
+        assert!(fit.palettes.iter().all(|p| p.len() <= 3));
+    }
+
+    #[test]
+    fn region_fit_empty_tile_palette_never_opens_a_palette() {
+        let fit = region_fit(&[vec![], vec![1u16, 2]], 8, 3);
+        assert_eq!(fit.palettes.len(), 1);
+        assert_eq!(fit.assignment, vec![0, 0]);
     }
 }
