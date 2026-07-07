@@ -102,6 +102,10 @@ impl PpuCore {
         self.cgram.clone()
     }
 
+    pub fn vram(&self) -> Vec<u16> {
+        self.engine.memory().vram.to_vec()
+    }
+
     pub fn registers(&self) -> Result<JsValue, JsValue> {
         serde_wasm_bindgen::to_value(&self.registers).map_err(Into::into)
     }

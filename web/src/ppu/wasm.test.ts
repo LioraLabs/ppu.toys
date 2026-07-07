@@ -8,6 +8,8 @@ function fakeCore(over: Partial<WasmCoreLike> = {}): WasmCoreLike {
     framebuffer: () => new Uint8ClampedArray(4),
     registers: () => [],
     cgram: () => new Uint16Array(0),
+    vram: () => new Uint16Array(0),
+    importReports: () => [],
     uploadTexture: () => {},
     setLayerVisible: () => {},
     ...over,
@@ -38,5 +40,30 @@ describe("wrapWasmCore", () => {
       expect((e as { message: string }).message).toContain("nil value");
       expect((e as { line: number }).line).toBe(3);
     }
+  });
+
+  it("forwards live VRAM words and import reports", () => {
+    const reports = [
+      {
+        mode: "tile",
+        layer: 0,
+        report: {
+          colors_used: 2,
+          palettes_used: 1,
+          tile_cells: 1,
+          unique_tiles: 1,
+          vram_words: 17,
+          overflows: [],
+        },
+      },
+    ];
+    const ppu = wrapWasmCore(
+      fakeCore({
+        vram: () => new Uint16Array([0x1234, 0xabcd]),
+        importReports: () => reports,
+      }),
+    );
+    expect(Array.from(ppu.vram())).toEqual([0x1234, 0xabcd]);
+    expect(ppu.importReports()).toEqual(reports);
   });
 });

@@ -1,4 +1,13 @@
-import { PpuCore, FrameResult, RegisterView, OamSprite, AssetInfo, WIDTH, HEIGHT } from "./core";
+import {
+  PpuCore,
+  FrameResult,
+  RegisterView,
+  OamSprite,
+  AssetInfo,
+  ImportReport,
+  WIDTH,
+  HEIGHT,
+} from "./core";
 
 /** Animated placeholder PpuCore for the UI track. Runs no Lua — it synthesizes
  *  a time-varying framebuffer, registers, and CGRAM so the Studio visibly moves
@@ -32,6 +41,28 @@ export class MockPpuCore implements PpuCore {
       width: img.width,
       height: img.height,
     }));
+  }
+
+  vram(): Uint16Array {
+    return new Uint16Array(0x8000);
+  }
+
+  importReports(): ImportReport[] {
+    if (this.assets.size === 0) return [];
+    return [
+      {
+        mode: "tile",
+        layer: 0,
+        report: {
+          colors_used: 8,
+          palettes_used: 1,
+          tile_cells: 4,
+          unique_tiles: 4,
+          vram_words: 68,
+          overflows: [],
+        },
+      },
+    ];
   }
 
   frame(t: number, f: number): FrameResult {
