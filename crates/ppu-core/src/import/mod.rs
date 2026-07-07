@@ -3,3 +3,4 @@
 //! this module's own surface is the tile-BG importer.
 
 pub mod quantize;
+pub mod tiles;
