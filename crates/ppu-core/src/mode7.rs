@@ -241,12 +241,15 @@ mod tests {
     fn repeat_3_fills_out_of_field_with_tile_0() {
         let mut mem = Memory::new();
         mem.cgram[4] = rgb15(0, 255, 0);
+        mem.cgram[1] = rgb15(255, 0, 0);
         set_char(&mut mem, 0, 7, 0, 4); // tile 0 pixel (7,0): u=-1 -> fx=7
+        set_map(&mut mem, 0, 0, 1); // in-field control: map (0,0) -> tile 1
+        set_char(&mut mem, 1, 0, 0, 1);
         let mut out = [0u8; 8];
         render_mode7_scanline(&row_scrolled_left(3), &mem, 0, &mut out);
         assert_eq!(&out[0..4], &unpack_rgb15(rgb15(0, 255, 0))); // tile-0 fill
-        // u=0 is in-field: map cell (0,0) is tile 0 too, pixel (0,0) unset.
-        assert_eq!(&out[4..8], &[0, 0, 0, 0]);
+        // u=0 is in-field: normal sampling (tile 1), NOT tile-0 fill.
+        assert_eq!(&out[4..8], &unpack_rgb15(rgb15(255, 0, 0)));
     }
 
     #[test]
@@ -259,5 +262,78 @@ mod tests {
         let mut out = [0u8; 4];
         render_mode7_scanline(&row_scrolled_left(1), &mem, 0, &mut out);
         assert_eq!(&out[0..4], &unpack_rgb15(rgb15(255, 0, 0)));
+    }
+
+    #[test]
+    fn flip_x_mirrors_the_screen_horizontally() {
+        let mut mem = Memory::new();
+        mem.cgram[1] = rgb15(255, 0, 0);
+        set_map(&mut mem, 31, 0, 1); // plane pixel (255, 0): cell (31,0), fx=7
+        set_char(&mut mem, 1, 7, 0, 1);
+        let mut src = LineTableRow::default();
+        src.m7.flip_x = true;
+        let row = RegRow::from(&src);
+        let mut out = [0u8; 8];
+        render_mode7_scanline(&row, &mem, 0, &mut out);
+        // Screen x=0 samples plane x = 255 - 0 = 255.
+        assert_eq!(&out[0..4], &unpack_rgb15(rgb15(255, 0, 0)));
+        // Screen x=1 samples plane x = 254 (unset).
+        assert_eq!(&out[4..8], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn flip_y_mirrors_the_screen_vertically() {
+        let mut mem = Memory::new();
+        mem.cgram[1] = rgb15(0, 0, 255);
+        set_map(&mut mem, 0, 31, 1); // plane pixel (0, 255): cell (0,31), fy=7
+        set_char(&mut mem, 1, 0, 7, 1);
+        let mut src = LineTableRow::default();
+        src.m7.flip_y = true;
+        let row = RegRow::from(&src);
+        let mut out = [0u8; 4];
+        // Screen y=0 samples plane y = 255 - 0 = 255.
+        render_mode7_scanline(&row, &mem, 0, &mut out);
+        assert_eq!(&out[0..4], &unpack_rgb15(rgb15(0, 0, 255)));
+        // Screen y=1 samples plane y = 254 (unset).
+        render_mode7_scanline(&row, &mem, 1, &mut out);
+        assert_eq!(&out[0..4], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn flip_applies_before_the_affine_transform() {
+        // Hardware XORs the SCREEN coordinate, so with a=2 (scale) and flip_x,
+        // screen x=0 must sample plane u = 2 * 255 = 510, not 255.
+        let mut mem = Memory::new();
+        mem.cgram[1] = rgb15(255, 255, 255);
+        set_map(&mut mem, 63, 0, 1); // plane pixel (510, 0): cell (63,0), fx=6
+        set_char(&mut mem, 1, 6, 0, 1);
+        let mut src = LineTableRow::default();
+        src.m7.a = 2.0;
+        src.m7.flip_x = true;
+        let row = RegRow::from(&src);
+        let mut out = [0u8; 4];
+        render_mode7_scanline(&row, &mem, 0, &mut out);
+        assert_eq!(&out[0..4], &unpack_rgb15(rgb15(255, 255, 255)));
+    }
+
+    #[test]
+    fn out_of_field_applies_to_the_v_axis_too() {
+        // scroll_y = -1: screen y=0 -> plane v=-1 (out of field). Under
+        // repeat=2 that pixel is transparent even though u=0 is in field.
+        let mut mem = Memory::new();
+        mem.cgram[1] = rgb15(255, 0, 0);
+        set_map(&mut mem, 0, 127, 1); // plane (0,1023): would show under wrap
+        set_char(&mut mem, 1, 0, 7, 1);
+        let mut src = LineTableRow::default();
+        src.bg[0].scroll_y = -1.0;
+        src.m7.repeat = 2;
+        let row = RegRow::from(&src);
+        let mut out = [0u8; 4];
+        render_mode7_scanline(&row, &mem, 0, &mut out);
+        assert_eq!(&out[0..4], &[0, 0, 0, 0]); // v=-1: transparent
+        src.m7.repeat = 0;
+        let row = RegRow::from(&src);
+        render_mode7_scanline(&row, &mem, 0, &mut out);
+        assert_eq!(&out[0..4], &unpack_rgb15(rgb15(255, 0, 0))); // v=-1 wraps to 1023
     }
 }
