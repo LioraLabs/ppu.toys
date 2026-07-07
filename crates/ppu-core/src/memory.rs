@@ -1,7 +1,6 @@
-//! Clean (NOT byte-accurate) PPU memory model: 15-bit CGRAM, OAM sprites, and
-//! "VRAM" as named whole-image graphics sources (decoded RGBA + dimensions).
-
-use std::collections::HashMap;
+//! Byte-accurate PPU memory: word-addressed VRAM, 15-bit CGRAM, and OAM
+//! sprites. VRAM/CGRAM/OAM are memory — reads return stored values — while
+//! the PPU registers stay write-only latches (registers.rs / quantize.rs).
 
 use crate::registers::Obj;
 
@@ -24,18 +23,8 @@ pub fn unpack_rgb15(c: u16) -> [u8; 4] {
     [expand(r5), expand(g5), expand(b5), 255]
 }
 
-/// A decoded, named whole-image graphics source (a BG layer image or the OBJ
-/// sheet). The engine auto-tiles / scrolls / transforms over it; it is never
-/// the byte-level VRAM of real hardware.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Source {
-    pub width: u32,
-    pub height: u32,
-    pub rgba: Vec<u8>, // width * height * 4
-}
-
-/// Frame-global PPU memory: palette, sprite table, OBJ sheet selector, and the
-/// named image sources referenced by `bg[n].source` / `obj.sheet`.
+/// Frame-global PPU memory: word-addressed VRAM, CGRAM palette, OAM sprite
+/// table, and the OBJ sheet selector referenced by `obj.sheet`.
 #[derive(Clone, Debug)]
 pub struct Memory {
     /// VRAM: 64KB as 32K 16-bit words, word-addressed like hardware
@@ -50,8 +39,6 @@ pub struct Memory {
     pub oam: [Obj; 128],
     /// Asset id of the OBJ tile sheet that `obj[i].tile` indexes.
     pub obj_sheet: Option<String>,
-    /// Named whole-image sources keyed by upload asset id ("VRAM").
-    pub sources: HashMap<String, Source>,
 }
 
 impl Default for Memory {
@@ -61,7 +48,6 @@ impl Default for Memory {
             cgram: [0; 256],
             oam: [Obj::default(); 128],
             obj_sheet: None,
-            sources: HashMap::new(),
         }
     }
 }
@@ -101,18 +87,6 @@ mod tests {
         assert_eq!(m.cgram, [0u16; 256]);
         assert!(m.oam.iter().all(|o| !o.on));
         assert!(m.obj_sheet.is_none());
-        assert!(m.sources.is_empty());
-    }
-
-    #[test]
-    fn sources_are_keyed_by_asset_id() {
-        let mut m = Memory::new();
-        m.sources.insert(
-            "sky".into(),
-            Source { width: 2, height: 1, rgba: vec![0; 8] },
-        );
-        assert_eq!(m.sources.get("sky").unwrap().width, 2);
-        assert!(m.sources.get("missing").is_none());
     }
 
     #[test]

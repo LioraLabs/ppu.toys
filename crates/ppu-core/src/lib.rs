@@ -1,7 +1,7 @@
-//! ppu.toys headless PPU core. Phase-1 register model, clean memory model
-//! (CGRAM/OAM/named image sources), defaults->per-line override resolution, and
-//! the Phase-2 compositor. The wasm shim drives the Lua VM -> LineTable ->
-//! `render_frame` pipeline and exposes it over the TS `PpuCore` seam.
+//! ppu.toys headless PPU core. Phase-1 register model, byte-accurate memory model
+//! (VRAM/CGRAM/OAM), defaults->per-line override resolution, and the Phase-2
+//! compositor. The wasm shim drives the Lua VM -> LineTable -> `render_frame`
+//! pipeline and exposes it over the TS `PpuCore` seam.
 
 use serde::Serialize;
 use std::collections::HashMap;
