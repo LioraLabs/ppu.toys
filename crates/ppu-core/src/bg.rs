@@ -27,6 +27,22 @@ fn attenuate(mut px: [u8; 4], brightness: u8) -> [u8; 4] {
     px
 }
 
+/// Palette index of pixel (`fx`, `fy`) inside the 8x8 char whose bitplane
+/// data starts at VRAM word `addr`. SNES layout: word `addr + fy` holds
+/// plane 0 (low byte) and plane 1 (high byte) of row `fy`; 4bpp adds planes
+/// 2/3 in word `addr + 8 + fy`. Bit 7 is the leftmost pixel. Fetches wrap
+/// mod VRAM (0x8000 words).
+fn char_pixel_index(mem: &Memory, addr: u16, bpp: u8, fx: u32, fy: u32) -> u8 {
+    let bit = 7 - (fx & 7);
+    let plane_pair = |w: u16| (((w as u8) >> bit) & 1) | ((((w >> 8) as u8) >> bit) & 1) << 1;
+    let word = |off: u32| mem.vram[((addr as u32 + off) & 0x7fff) as usize];
+    let mut index = plane_pair(word(fy));
+    if bpp == 4 {
+        index |= plane_pair(word(8 + fy)) << 2;
+    }
+    index
+}
+
 /// Render one BG layer for scanline `y` into `width` pixel candidates.
 /// `None` = transparent at that x (lower layer / backdrop shows through).
 ///
@@ -112,5 +128,45 @@ mod tests {
         assert_eq!(render_bg_scanline(&row, &m, 0, 2)[0], unpack_rgb15(rgb15(200, 200, 200)));
         row.brightness = 0; // everything black
         assert_eq!(render_bg_scanline(&row, &m, 0, 2)[0], [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn decodes_2bpp_bitplanes() {
+        let mut m = Memory::new();
+        // Row 0 of a 2bpp char at word 0x2000: pixels (0,0)=1, (1,0)=2, (2,0)=3.
+        m.vram[0x2000] = (0b0110_0000 << 8) | 0b1010_0000;
+        // Row 5: pixel (7,5) = 2 (plane 1, bit 0).
+        m.vram[0x2005] = 0b0000_0001 << 8;
+        assert_eq!(char_pixel_index(&m, 0x2000, 2, 0, 0), 1);
+        assert_eq!(char_pixel_index(&m, 0x2000, 2, 1, 0), 2);
+        assert_eq!(char_pixel_index(&m, 0x2000, 2, 2, 0), 3);
+        assert_eq!(char_pixel_index(&m, 0x2000, 2, 3, 0), 0);
+        assert_eq!(char_pixel_index(&m, 0x2000, 2, 7, 5), 2);
+        assert_eq!(char_pixel_index(&m, 0x2000, 2, 7, 4), 0);
+    }
+
+    #[test]
+    fn decodes_4bpp_bitplanes() {
+        let mut m = Memory::new();
+        // 4bpp char at 0x1000: planes 0/1 in words 0..8, planes 2/3 in words 8..16.
+        // Pixel (0,3) set in planes 0+2 -> index 5; pixel (4,3) in planes 1+3 -> index 10.
+        m.vram[0x1000 + 3] = (0b0000_1000 << 8) | 0b1000_0000;
+        m.vram[0x1000 + 8 + 3] = (0b0000_1000 << 8) | 0b1000_0000;
+        assert_eq!(char_pixel_index(&m, 0x1000, 4, 0, 3), 0b0101);
+        assert_eq!(char_pixel_index(&m, 0x1000, 4, 4, 3), 0b1010);
+        // Pixel (7,7) set in all four planes = 15.
+        m.vram[0x1000 + 7] = 0x0101;
+        m.vram[0x1000 + 8 + 7] = 0x0101;
+        assert_eq!(char_pixel_index(&m, 0x1000, 4, 7, 7), 15);
+        // Reading the same data as 2bpp ignores planes 2/3.
+        assert_eq!(char_pixel_index(&m, 0x1000, 2, 0, 3), 1);
+    }
+
+    #[test]
+    fn char_fetch_wraps_vram() {
+        let mut m = Memory::new();
+        // Row 1 of a char based at the last VRAM word wraps to 0x0000.
+        m.vram[0x0000] = 0b1000_0000; // plane 0, bit 7
+        assert_eq!(char_pixel_index(&m, 0x7fff, 2, 0, 1), 1);
     }
 }
