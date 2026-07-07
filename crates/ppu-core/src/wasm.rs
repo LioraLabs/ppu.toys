@@ -12,17 +12,6 @@ use crate::{
     SetSourceResult, HEIGHT, WIDTH,
 };
 
-/// A decoded uploaded image (ImageData), staged as importer input. Uploads are
-/// app-level assets, NOT PPU memory: the importer (m4/importer) quantizes an
-/// asset into real VRAM/CGRAM words when a layer binds it (m4/dsl).
-struct Asset {
-    width: u32,
-    height: u32,
-    /// Raw RGBA pixels, consumed by the importer (m4/importer).
-    #[allow(dead_code)]
-    rgba: Vec<u8>,
-}
-
 #[wasm_bindgen]
 pub struct PpuCore {
     engine: LuaEngine,
@@ -35,10 +24,6 @@ pub struct PpuCore {
     /// whatever the Lua program set; `Some(v)` forces the layer on/off.
     bg_visible: [Option<bool>; 4],
     obj_visible: Option<bool>,
-    /// Uploaded image assets, keyed by slot id. App-level, NOT PPU memory —
-    /// survives recompiles untouched (unlike `LuaEngine::memory`, which is
-    /// reset by `set_source`).
-    assets: HashMap<String, Asset>,
 }
 
 #[wasm_bindgen]
@@ -54,7 +39,6 @@ impl PpuCore {
             prev_reg: HashMap::new(),
             bg_visible: [None; 4],
             obj_visible: None,
-            assets: HashMap::new(),
         }
     }
 
@@ -128,12 +112,12 @@ impl PpuCore {
 
     #[wasm_bindgen(js_name = listAssets)]
     pub fn list_assets(&self) -> Result<JsValue, JsValue> {
-        let mut assets: Vec<AssetInfo> = self
-            .assets
-            .iter()
-            .map(|(id, a)| AssetInfo { id: id.clone(), width: a.width, height: a.height })
-            .collect();
-        assets.sort_by(|a, b| a.id.cmp(&b.id)); // stable order for the inspector
+        let assets: Vec<AssetInfo> = self
+            .engine
+            .assets()
+            .into_iter()
+            .map(|(id, width, height)| AssetInfo { id, width, height })
+            .collect(); // already sorted by id (stable order for the inspector)
         serde_wasm_bindgen::to_value(&assets).map_err(Into::into)
     }
 
@@ -144,10 +128,16 @@ impl PpuCore {
         let height = get("height").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
         let Some(data) = get("data") else { return };
         let rgba = Uint8ClampedArray::new(&data).to_vec();
-        if width == 0 || height == 0 || rgba.len() != (width * height * 4) as usize {
-            return; // malformed ImageData -> ignore
-        }
-        self.assets.insert(slot, Asset { width, height, rgba });
+        // The engine owns the asset store + import cache and validates malformed
+        // ImageData (zero dims / wrong buffer length) internally.
+        self.engine.upload_asset(slot, width, height, rgba);
+    }
+
+    /// Per-layer import budget reports from the most recent `frame()`
+    /// (m4/importer -> m4/inspector).
+    #[wasm_bindgen(js_name = importReports)]
+    pub fn import_reports(&self) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(self.engine.import_reports()).map_err(Into::into)
     }
 
     #[wasm_bindgen(js_name = setLayerVisible)]
