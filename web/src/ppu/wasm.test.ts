@@ -67,4 +67,13 @@ describe("wrapWasmCore", () => {
     expect(Array.from(ppu.vram())).toEqual([0x1234, 0xabcd]);
     expect(ppu.importReports()).toEqual(reports);
   });
+
+  it("falls back when older wasm glue has no VRAM/report methods", () => {
+    const core = fakeCore();
+    delete core.vram;
+    delete core.importReports;
+    const ppu = wrapWasmCore(core);
+    expect(Array.from(ppu.vram())).toEqual([]);
+    expect(ppu.importReports()).toEqual([]);
+  });
 });
