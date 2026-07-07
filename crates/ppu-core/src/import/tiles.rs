@@ -77,7 +77,11 @@ pub struct TileSet {
 
 impl TileSet {
     pub fn new(allow_flips: bool) -> Self {
-        TileSet { tiles: Vec::new(), index: std::collections::HashMap::new(), allow_flips }
+        TileSet {
+            tiles: Vec::new(),
+            index: std::collections::HashMap::new(),
+            allow_flips,
+        }
     }
 
     /// Insert a tile, returning `(tile#, h_flip, v_flip)` — the stored tile
@@ -174,7 +178,7 @@ mod tests {
         assert_eq!(w4.len(), 16);
         assert_eq!(w4[0], 0x0ff0); // planes 0/1
         assert_eq!(w4[8], 0x0000); // planes 2/3 empty
-        // index 15 pixel exercises planes 2/3
+                                   // index 15 pixel exercises planes 2/3
         let mut t2: IndexTile = [0; 64];
         t2[0] = 15;
         let w = pack_planar(&t2, 4);

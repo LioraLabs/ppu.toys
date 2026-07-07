@@ -31,7 +31,12 @@ pub struct ImportOptions {
 
 impl Default for ImportOptions {
     fn default() -> Self {
-        ImportOptions { bit_depth: 4, tile_size: 8, map_base: 0x0000, char_base: 0x1000 }
+        ImportOptions {
+            bit_depth: 4,
+            tile_size: 8,
+            map_base: 0x0000,
+            char_base: 0x1000,
+        }
     }
 }
 
@@ -55,7 +60,10 @@ pub enum Overflow {
     Colors { unique: usize, budget: usize },
     /// Needed more than 8 sub-palettes; overflow tiles were remapped into
     /// their closest sealed palette.
-    Palettes { needed: usize, remapped_tiles: usize },
+    Palettes {
+        needed: usize,
+        remapped_tiles: usize,
+    },
     /// Unique tiles exceeded the char budget; excess map cells fall back to
     /// the blank tile.
     Tiles { unique: usize, kept: usize },
@@ -100,8 +108,11 @@ pub struct TileBgImport {
 /// Pure and deterministic: identical inputs yield identical outputs.
 pub fn import_tile_bg(rgba: &[u8], width: u32, height: u32, opts: &ImportOptions) -> TileBgImport {
     let mut overflows = Vec::new();
-    let (bpp, cap, pal_stride) =
-        if opts.bit_depth == 2 { (2u8, 3usize, 4usize) } else { (4, 15, 16) };
+    let (bpp, cap, pal_stride) = if opts.bit_depth == 2 {
+        (2u8, 3usize, 4usize)
+    } else {
+        (4, 15, 16)
+    };
     if opts.tile_size >= 16 {
         overflows.push(Overflow::TileSize16);
     }
@@ -134,7 +145,10 @@ pub fn import_tile_bg(rgba: &[u8], width: u32, height: u32, opts: &ImportOptions
     }
     let budget = 8 * cap;
     let global: Option<Vec<u16>> = if hist.len() > budget {
-        overflows.push(Overflow::Colors { unique: hist.len(), budget });
+        overflows.push(Overflow::Colors {
+            unique: hist.len(),
+            budget,
+        });
         let hv: Vec<(u16, u32)> = hist.iter().map(|(&c, &n)| (c, n)).collect();
         Some(median_cut(&hv, budget))
     } else {
@@ -168,7 +182,10 @@ pub fn import_tile_bg(rgba: &[u8], width: u32, height: u32, opts: &ImportOptions
                 !tp.is_empty() && tp.iter().any(|c| !fit.palettes[a as usize].contains(c))
             })
             .count();
-        overflows.push(Overflow::Palettes { needed: fit.palettes_needed, remapped_tiles: remapped });
+        overflows.push(Overflow::Palettes {
+            needed: fit.palettes_needed,
+            remapped_tiles: remapped,
+        });
     }
 
     // 6. index remap + flip-aware dedup; tile 0 reserved blank so padding and
@@ -179,8 +196,11 @@ pub fn import_tile_bg(rgba: &[u8], width: u32, height: u32, opts: &ImportOptions
     set.insert([0u8; 64]);
     let mut cells: Vec<u16> = Vec::with_capacity(ptiles.len());
     for (pt, &pal) in ptiles.iter().zip(&fit.assignment) {
-        let palette: &[u16] =
-            fit.palettes.get(pal as usize).map(|v| v.as_slice()).unwrap_or(&[]);
+        let palette: &[u16] = fit
+            .palettes
+            .get(pal as usize)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
         let grid: IndexTile = std::array::from_fn(|i| match pt[i] {
             Some(c) if !palette.is_empty() => nearest(palette, map_color(c)) as u8 + 1,
             _ => 0,
@@ -196,7 +216,10 @@ pub fn import_tile_bg(rgba: &[u8], width: u32, height: u32, opts: &ImportOptions
     let unique_tiles = set.len() - 1; // excl. reserved blank
     let kept = set.len().min(max_tiles);
     if set.len() > max_tiles {
-        overflows.push(Overflow::Tiles { unique: unique_tiles, kept: kept - 1 });
+        overflows.push(Overflow::Tiles {
+            unique: unique_tiles,
+            kept: kept - 1,
+        });
     }
 
     // 7. char emit
@@ -329,13 +352,16 @@ mod tests {
         assert_eq!(out.char_words[16], 0x00ff); // all index 1: plane0 full row
         assert_eq!(out.char_words[24], 0x0000); // planes 2/3 empty
         assert_eq!(out.char_words[32], 0x0ff0); // 1111 2222 row
-        // tilemap: 32x32 screen, cells (0,0)=tile1 (1,0)=tile2, pal 0, rest blank
+                                                // tilemap: 32x32 screen, cells (0,0)=tile1 (1,0)=tile2, pal 0, rest blank
         assert_eq!(out.tilemap_words.len(), 0x400);
         assert_eq!(out.tilemap_words[0], 0x0001);
         assert_eq!(out.tilemap_words[1], 0x0002);
         assert!(out.tilemap_words[2..].iter().all(|&w| w == 0));
         // registers + report
-        assert_eq!((out.registers.map_base, out.registers.char_base), (0x0000, 0x1000));
+        assert_eq!(
+            (out.registers.map_base, out.registers.char_base),
+            (0x0000, 0x1000)
+        );
         assert_eq!((out.registers.screen_size, out.registers.tile_size), (0, 8));
         assert_eq!(out.report.palettes_used, 1);
         assert_eq!(out.report.colors_used, 2);
@@ -346,7 +372,10 @@ mod tests {
 
     #[test]
     fn imports_2bpp_with_4_entry_palette_stride() {
-        let opts = ImportOptions { bit_depth: 2, ..Default::default() };
+        let opts = ImportOptions {
+            bit_depth: 2,
+            ..Default::default()
+        };
         let out = import_tile_bg(&two_tile_rgba(), 16, 8, &opts);
         assert_eq!(out.cgram, vec![(1, 0x001f), (2, 0x7c00)]); // pal 0 base = 0
         assert_eq!(out.char_words.len(), 3 * 8); // 8 words/tile
@@ -392,7 +421,11 @@ mod tests {
         let mut v = Vec::new();
         for _y in 0..8 {
             for x in 0..264 {
-                let c: [u8; 4] = if x < 8 { [255, 0, 0, 255] } else { [0, 0, 0, 0] };
+                let c: [u8; 4] = if x < 8 {
+                    [255, 0, 0, 255]
+                } else {
+                    [0, 0, 0, 0]
+                };
                 v.extend_from_slice(&c);
             }
         }
@@ -401,7 +434,7 @@ mod tests {
         assert_eq!(out.registers.screen_size, 1); // 64x32
         assert_eq!(out.tilemap_words.len(), 2 * 0x400);
         assert_eq!(out.tilemap_words[0], 0x0001); // red tile in SC0 cell 0
-        // column 32 lives in SC1 (words 0x400..)
+                                                  // column 32 lives in SC1 (words 0x400..)
         assert!(out.tilemap_words[0x400..].iter().all(|&w| w == 0));
         // and the same input imported at a different char_base changes capacity
         // bookkeeping but not content determinism
@@ -444,7 +477,10 @@ mod tests {
         assert_eq!(a, b);
         // different bit-depth = different key
         let key2 = ImportKey {
-            options: ImportOptions { bit_depth: 2, ..Default::default() },
+            options: ImportOptions {
+                bit_depth: 2,
+                ..Default::default()
+            },
             ..key.clone()
         };
         cache.get_or_import(key2, &rgba, 16, 8);
