@@ -23,6 +23,7 @@ use crate::mode7::render_mode7_scanline;
 use crate::modes::mode_info;
 use crate::registers::RegRow;
 use crate::sprite::render_scanline as render_sprite_scanline;
+use crate::window::in_window;
 use crate::{HEIGHT, WIDTH};
 
 /// One rung of the per-pixel priority ladder: a BG layer at a given tilemap
@@ -120,17 +121,18 @@ fn tile_mode_ladder(mode: u8) -> Vec<Slot> {
     l
 }
 
-/// Composite one scanline `y` of `row` into `line` (length `WIDTH`) for ONE
-/// screen, including only the layers whose bit is set in `mask` (TM = main
-/// screen, TS = sub screen). Backdrop is CGRAM[0] for both screens (the
-/// sub-screen fixed-color base is a CGWSEL concern for the color-math ticket).
-/// UN-attenuated; brightness is applied by the caller. `pub(crate)` so the
-/// color-math ticket resolves the sub line via `composite_screen(.., row.ts, ..)`.
+/// Composite one scanline `y` of `row` into `line` for ONE screen, including only
+/// the layers whose bit is set in `mask` (TM = main, TS = sub). `wmask` is the
+/// window-designation register for that screen (TMW = main, TSW = sub): a layer
+/// whose `wmask` bit is set is suppressed at any x inside that layer's combined
+/// window. `pub(crate)` so the color-math ticket resolves the sub line via
+/// `composite_screen(.., row.ts, row.tsw, ..)`.
 pub(crate) fn composite_screen(
     row: &RegRow,
     mem: &Memory,
     y: usize,
     mask: u8,
+    wmask: u8,
     line: &mut [[u8; 4]],
 ) {
     // 1. backdrop (opaque base).
@@ -138,6 +140,22 @@ pub(crate) fn composite_screen(
     for px in line.iter_mut() {
         *px = backdrop;
     }
+
+    // Window suppression: for each layer (0..3 = BG1..BG4, 4 = OBJ) whose wmask
+    // bit is set, precompute which columns fall inside its combined window (and
+    // are therefore hidden on this screen). `None` = layer not windowed here.
+    let ranges = row.window_ranges();
+    let win_hidden: [Option<Vec<bool>>; 5] = std::array::from_fn(|layer| {
+        if wmask & (1 << layer) != 0 {
+            let sel = row.layer_window(layer);
+            Some((0..WIDTH).map(|x| in_window(&sel, &ranges, x)).collect())
+        } else {
+            None
+        }
+    });
+    let hidden = |layer: usize, x: usize| -> bool {
+        win_hidden[layer].as_ref().is_some_and(|m| m[x])
+    };
 
     // 2. BG + OBJ.
     if row.mode == 7 {
@@ -147,6 +165,9 @@ pub(crate) fn composite_screen(
             let mut tmp = vec![0u8; WIDTH * 4];
             render_mode7_scanline(row, mem, y, &mut tmp);
             for (x, slot) in line.iter_mut().enumerate() {
+                if hidden(0, x) {
+                    continue;
+                }
                 let p = &tmp[x * 4..x * 4 + 4];
                 if p[3] != 0 {
                     *slot = [p[0], p[1], p[2], 255];
@@ -154,7 +175,14 @@ pub(crate) fn composite_screen(
             }
         }
         if mask & (1 << 4) != 0 {
-            for (slot, sp) in line.iter_mut().zip(render_sprite_scanline(mem, y, WIDTH)) {
+            for (x, (slot, sp)) in line
+                .iter_mut()
+                .zip(render_sprite_scanline(mem, y, WIDTH))
+                .enumerate()
+            {
+                if hidden(4, x) {
+                    continue;
+                }
                 if let Some(s) = sp {
                     *slot = s.rgba;
                 }
@@ -181,6 +209,13 @@ pub(crate) fn composite_screen(
                 if !slot_enabled(mask, rung) {
                     continue;
                 }
+                let layer_bit = match rung {
+                    Slot::Bg { layer, .. } => *layer,
+                    Slot::Obj { .. } => 4,
+                };
+                if hidden(layer_bit, x) {
+                    continue;
+                }
                 let hit = match *rung {
                     Slot::Bg { layer, prio } => {
                         bgs[layer][x].filter(|p| p.prio == prio).map(|p| p.rgba)
@@ -205,7 +240,7 @@ pub fn render_frame(lt: &LineTable, mem: &Memory) -> Vec<u8> {
     let rows = lt.rows.len().min(HEIGHT);
     for y in 0..rows {
         let row = &lt.rows[y];
-        composite_screen(row, mem, y, row.tm, &mut line);
+        composite_screen(row, mem, y, row.tm, row.tmw, &mut line);
         let bri = row.brightness;
         for (x, px) in line.iter().enumerate() {
             let o = (y * WIDTH + x) * 4;
@@ -498,11 +533,70 @@ mod tests {
         let row = RegRow::from(&src);
         let mut main = vec![[0u8; 4]; WIDTH];
         let mut sub = vec![[0u8; 4]; WIDTH];
-        composite_screen(&row, &m, 0, row.tm, &mut main);
-        composite_screen(&row, &m, 0, row.ts, &mut sub);
+        composite_screen(&row, &m, 0, row.tm, row.tmw, &mut main);
+        composite_screen(&row, &m, 0, row.ts, row.tsw, &mut sub);
         // main: BG1 masked -> backdrop (black) shows through.
         assert_eq!(main[0], unpack_rgb15(rgb15(0, 0, 0)));
         // sub: BG1 enabled -> red.
         assert_eq!(sub[0], unpack_rgb15(rgb15(255, 0, 0)));
+    }
+
+    #[test]
+    fn tmw_clips_layer_to_a_horizontal_band_on_main() {
+        // BG1 draws index 1 (red) across the row over a black backdrop.
+        let mut m = Memory::new();
+        m.cgram[0] = rgb15(0, 0, 0);
+        m.cgram[1] = rgb15(255, 0, 0);
+        put_px(&mut m, 0x1000, 1);
+        for tx in 0..32 {
+            m.vram[tx] = 1; // BG1 map row 0: tile 1 across the width
+        }
+        let mut src = LineTableRow::default();
+        src.bg[0].char_base = 0x1000;
+        // Window 1 = [0,7] (first tile-column band). BG1 W1 enable.
+        src.wh0 = 0;
+        src.wh1 = 7;
+        src.w12sel = 0x02; // BG1 low nibble: W1 enable
+        src.wbglog = 0x00; // BG1 logic OR (single window)
+        src.tmw = 0x01; // suppress BG1 inside window on the MAIN screen
+        let row = RegRow::from(&src);
+        let mut main = vec![[0u8; 4]; WIDTH];
+        composite_screen(&row, &m, 0, row.tm, row.tmw, &mut main);
+        // Inside the window (x=0..7): BG1 suppressed -> backdrop (black).
+        assert_eq!(main[0], unpack_rgb15(rgb15(0, 0, 0)));
+        assert_eq!(main[7], unpack_rgb15(rgb15(0, 0, 0)));
+        // Outside the window (x>=8): BG1 shows (red).
+        assert_eq!(main[8], unpack_rgb15(rgb15(255, 0, 0)));
+        assert_eq!(main[128], unpack_rgb15(rgb15(255, 0, 0)));
+    }
+
+    #[test]
+    fn tsw_clips_layer_to_a_band_on_sub_only() {
+        // Same BG1-across-the-row setup; TSW clips the SUB screen, TMW leaves main.
+        let mut m = Memory::new();
+        m.cgram[0] = rgb15(0, 0, 0);
+        m.cgram[1] = rgb15(255, 0, 0);
+        put_px(&mut m, 0x1000, 1);
+        for tx in 0..32 {
+            m.vram[tx] = 1;
+        }
+        let mut src = LineTableRow::default();
+        src.bg[0].char_base = 0x1000;
+        src.ts = 0x01; // BG1 enabled on the sub screen
+        src.wh0 = 0;
+        src.wh1 = 7;
+        src.w12sel = 0x02; // BG1 W1 enable
+        src.tsw = 0x01; // suppress BG1 inside window on the SUB screen
+        // tmw stays 0 -> main screen unaffected.
+        let row = RegRow::from(&src);
+        let mut main = vec![[0u8; 4]; WIDTH];
+        let mut sub = vec![[0u8; 4]; WIDTH];
+        composite_screen(&row, &m, 0, row.tm, row.tmw, &mut main);
+        composite_screen(&row, &m, 0, row.ts, row.tsw, &mut sub);
+        // Main screen: no TMW -> BG1 red everywhere.
+        assert_eq!(main[0], unpack_rgb15(rgb15(255, 0, 0)));
+        // Sub screen: BG1 clipped inside window -> backdrop; visible outside.
+        assert_eq!(sub[0], unpack_rgb15(rgb15(0, 0, 0)));
+        assert_eq!(sub[8], unpack_rgb15(rgb15(255, 0, 0)));
     }
 }
