@@ -110,6 +110,10 @@ pub struct LineTableRow {
     pub m7: Mode7,
     /// BGMODE bit 3: BG3-priority, lifts BG3 above BG1/BG2 in Mode 1.
     pub bg3_priority: bool,
+    /// TM ($212C) main-screen layer designation: bits 0-4 = BG1..BG4,OBJ.
+    pub tm: u8,
+    /// TS ($212D) sub-screen layer designation: same five bits.
+    pub ts: u8,
 }
 
 impl Default for LineTableRow {
@@ -120,6 +124,8 @@ impl Default for LineTableRow {
             bg: std::array::from_fn(|_| Bg::default()),
             m7: Mode7::default(),
             bg3_priority: false,
+            tm: 0x1f, // all five layers on the main screen (playground full-visibility)
+            ts: 0x00, // sub screen empty at power-on
         }
     }
 }
@@ -217,6 +223,8 @@ pub struct RegRow {
     pub bg: [RegBg; 4],
     pub m7: RegM7,
     pub bg3_priority: bool,
+    pub tm: u8,
+    pub ts: u8,
 }
 
 impl From<&LineTableRow> for RegRow {
@@ -242,6 +250,8 @@ impl From<&LineTableRow> for RegRow {
             bg,
             m7: RegM7::from(&r.m7),
             bg3_priority: r.bg3_priority,
+            tm: quantize::screen_mask(r.tm),
+            ts: quantize::screen_mask(r.ts),
         }
     }
 }
@@ -376,5 +386,21 @@ mod tests {
         // untouched layers keep quantized defaults
         assert_eq!(reg.bg[1].tile_size, 8);
         assert_eq!(reg.bg[1].map_base, 0);
+    }
+
+    #[test]
+    fn tm_ts_defaults_and_quantize_on_write() {
+        // Playground power-on: main = all five layers, sub = empty.
+        let d = LineTableRow::default();
+        assert_eq!((d.tm, d.ts), (0x1f, 0x00));
+        let reg = RegRow::from(&d);
+        assert_eq!((reg.tm, reg.ts), (0x1f, 0x00));
+        // 5-bit mask (wraps) on write, like brightness/mode.
+        let mut src = LineTableRow::default();
+        src.tm = 0x13; // BG1+BG2+OBJ
+        src.ts = 0xe4; // high bits set -> masks to 0x04 (BG3 only)
+        let reg = RegRow::from(&src);
+        assert_eq!(reg.tm, 0x13);
+        assert_eq!(reg.ts, 0x04);
     }
 }
