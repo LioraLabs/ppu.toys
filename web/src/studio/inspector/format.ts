@@ -25,3 +25,50 @@ export function cgram15ToCss(c: number): string {
 export function bgMode(registers: RegisterView[]): number {
   return (registers.find((r) => r.name === "BGMODE")?.value ?? 1) & 0x07;
 }
+
+/** The five screen/math layers, LSB-first (TM/TS/CGADSUB bit order). */
+const LAYER_NAMES = ["BG1", "BG2", "BG3", "BG4", "OBJ"] as const;
+
+function regValue(registers: RegisterView[], name: string, dflt: number): number {
+  return registers.find((r) => r.name === name)?.value ?? dflt;
+}
+
+/** Decode a TM/TS-style 5-bit layer mask into layer labels. Absent -> power-on
+ *  default (TM = all five layers on, TS = none). */
+export function screenLayers(registers: RegisterView[], name: "TM" | "TS"): string[] {
+  const mask = regValue(registers, name, name === "TM" ? 0x1f : 0x00);
+  return LAYER_NAMES.filter((_, i) => mask & (1 << i));
+}
+
+export interface ColorMathView {
+  op: "add" | "sub";
+  half: boolean;
+  source: "sub" | "fixed";
+  layers: string[]; // CGADSUB bits 0-5 -> BG1..BG4, OBJ, BACK
+}
+
+/** Decode CGADSUB (sign/half/enable) + CGWSEL (addend source) into a summary. */
+export function colorMath(registers: RegisterView[]): ColorMathView {
+  const adsub = regValue(registers, "CGADSUB", 0);
+  const wsel = regValue(registers, "CGWSEL", 0);
+  const names = [...LAYER_NAMES, "BACK"];
+  return {
+    op: adsub & 0x80 ? "sub" : "add",
+    half: (adsub & 0x40) !== 0,
+    source: wsel & 0x02 ? "sub" : "fixed",
+    layers: names.filter((_, i) => adsub & (1 << i)),
+  };
+}
+
+export interface WindowRangesView {
+  w1: [number, number];
+  w2: [number, number];
+}
+
+/** Decode WH0-3 into the two window [left,right] spans. */
+export function windowRanges(registers: RegisterView[]): WindowRangesView {
+  return {
+    w1: [regValue(registers, "WH0", 0), regValue(registers, "WH1", 0)],
+    w2: [regValue(registers, "WH2", 0), regValue(registers, "WH3", 0)],
+  };
+}

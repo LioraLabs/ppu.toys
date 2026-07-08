@@ -56,3 +56,27 @@ fn mode_and_brightness_wrap_not_clamp() {
     assert_eq!(lt.rows[0].mode, 0); // 8 & 7 = 0 (NOT clamped to 7)
     assert_eq!(lt.rows[0].brightness, 4); // 20 & 0x0f = 4 (NOT clamped to 15)
 }
+
+#[test]
+fn color_math_registers_bind_through_dsl() {
+    let mut e = LuaEngine::new();
+    e.set_source("function frame(t,f) CGWSEL=0xC2; CGADSUB=0x41; COLDATA=rgb(255,0,255) end")
+        .unwrap();
+    let lt = e.frame(0.0, 0).unwrap();
+    assert_eq!(lt.rows[0].cgwsel, 0xC2);
+    assert_eq!(lt.rows[0].cgadsub, 0x41);
+    // rgb(255,0,255) packs to BGR555 with r=31,b=31.
+    assert_eq!(lt.rows[0].coldata, (31 << 10) | 31);
+}
+
+#[test]
+fn coldata_helper_accumulates_channel_writes() {
+    // Two $2132-style byte writes: red then blue.
+    // COLDATA byte: bit5=R, bit6=G, bit7=B, bits0-4=value.
+    let mut e = LuaEngine::new();
+    e.set_source("function frame(t,f) coldata(0x20|31); coldata(0x80|31) end")
+        .unwrap();
+    let lt = e.frame(0.0, 0).unwrap();
+    // red channel = 31, blue channel = 31, green untouched (0).
+    assert_eq!(lt.rows[0].coldata, (31 << 10) | 31);
+}
