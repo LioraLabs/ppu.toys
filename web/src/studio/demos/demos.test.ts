@@ -2,12 +2,15 @@ import { describe, it, expect } from "vitest";
 import { DEMOS } from "./demos";
 
 describe("DEMOS", () => {
-  it("ships dusk-parallax, mode7-floor, offset-per-tile, and mode3-gradient", () => {
+  it("ships all bundled demos in order", () => {
     expect(DEMOS.map((d) => d.id)).toEqual([
       "dusk-parallax",
       "mode7-floor",
       "offset-per-tile",
       "mode3-gradient",
+      "translucency",
+      "spotlight",
+      "glow",
     ]);
   });
 
@@ -67,5 +70,19 @@ describe("DEMOS", () => {
     expect(rgbAt(8, 0)).toEqual([32, 0, 255, 255]);
     expect(rgbAt(64, 0)).toEqual([0, 0, 0, 255]);
     expect(rgbAt(1023, 1023)).toEqual([224, 224, 0, 255]);
+  });
+
+  it("m6 demos carry their colour-math lua and assets", () => {
+    const t = DEMOS.find((d) => d.id === "translucency")!;
+    expect(t.assets.map((a) => a.id)).toEqual(["panel", "ribbons"]);
+    expect(t.source).toContain("CGADSUB = 0x41");
+    expect(t.source).toContain("TS = 0x02");
+    const s = DEMOS.find((d) => d.id === "spotlight")!;
+    expect(s.source).toContain("CGWSEL = 0x40");
+    expect(s.source).toContain("hdma(0, 223");
+    const g = DEMOS.find((d) => d.id === "glow")!;
+    expect(g.source).toContain("CGADSUB = 0x01");
+    expect(g.source).toContain("COLDATA = rgb(120, 60, 0)");
+    for (const a of t.assets) expect(a.data.length).toBe(a.width * a.height * 4);
   });
 });

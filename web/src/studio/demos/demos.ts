@@ -125,6 +125,19 @@ function ribbons(): DemoAsset {
   return { id: "ribbons", width: w, height: h, data };
 }
 
+function panel(): DemoAsset {
+  const w = SCREEN_W, h = SCREEN_H;
+  const data = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    const opaque = y >= 80 && y < 160;
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      if (opaque) { data[i] = 80; data[i + 1] = 230; data[i + 2] = 255; data[i + 3] = 255; }
+    }
+  }
+  return { id: "panel", width: w, height: h, data };
+}
+
 function gradient(): DemoAsset {
   const w = SCREEN_W, h = SCREEN_H;
   const data = new Uint8ClampedArray(w * h * 4);
@@ -199,9 +212,60 @@ function frame(t, f)
 end
 `;
 
+const TRANSLUCENCY_SRC = `-- ppu.toys :: translucency (½-add glass panel over a scrolling BG)
+function frame(t, f)
+  mode = 1; brightness = 15
+  bg[1].source = "panel"                       -- the glass panel (main only)
+  bg[2].source = "ribbons"; bg[2].char_base = 0x2000  -- scene, on main AND sub
+  bg[2].map_base = 0x0800
+  TM = 0x03        -- BG1 (panel) + BG2 (scene) on the main screen
+  TS = 0x02        -- BG2 (scene) on the sub screen -> the addend under the glass
+  CGADSUB = 0x41   -- add + half + BG1 math-enable
+  CGWSEL = 0x02    -- addend = subscreen (not fixed colour)
+end
+`;
+
+const SPOTLIGHT_SRC = `-- ppu.toys :: spotlight (per-scanline circular iris via the colour window)
+function frame(t, f)
+  mode = 1; brightness = 15
+  bg[1].source = "ribbons"
+  TM = 0x01                 -- BG1 only on the main screen
+  WOBJSEL = 0x20            -- COLOR window: window-1 enable (high nibble bit1)
+  WOBJLOG = 0x00            -- COLOR window logic = OR
+  CGWSEL = 0x40             -- clip-to-black region = 01 (outside the window -> black)
+  -- iris: per scanline, window 1 spans [cx-hw, cx+hw] where hw traces a circle.
+  local cx, cy, r = 128, 112, 70
+  hdma(0, 223, function(y)
+    local dy = y - cy
+    local inside = r*r - dy*dy
+    if inside < 0 then
+      WH0 = 1; WH1 = 0        -- empty span (left > right) -> nothing inside
+    else
+      local hw = floor(sqrt(inside))
+      WH0 = cx - hw
+      WH1 = cx + hw
+    end
+  end)
+end
+`;
+
+const GLOW_SRC = `-- ppu.toys :: additive-glow (fixed-colour add brightens BG1 toward warm)
+function frame(t, f)
+  mode = 1; brightness = 15
+  bg[1].source = "ribbons"
+  TM = 0x01               -- BG1 on the main screen
+  CGADSUB = 0x01          -- add (bit7 clear) + BG1 math-enable, no half
+  CGWSEL = 0x00           -- addend = COLDATA fixed colour
+  COLDATA = rgb(120, 60, 0)  -- warm glow added to every BG1 pixel
+end
+`;
+
 export const DEMOS: Demo[] = [
   { id: "dusk-parallax", label: "dusk-parallax", source: DUSK_SRC, assets: [sky(), hills(), hero()] },
   { id: "mode7-floor", label: "mode7-floor", source: MODE7_SRC, assets: [track()] },
   { id: "offset-per-tile", label: "offset-per-tile", source: OFFSET_SRC, assets: [ribbons()] },
   { id: "mode3-gradient", label: "mode3-gradient", source: MODE3_SRC, assets: [gradient()] },
+  { id: "translucency", label: "translucency", source: TRANSLUCENCY_SRC, assets: [panel(), ribbons()] },
+  { id: "spotlight", label: "spotlight", source: SPOTLIGHT_SRC, assets: [ribbons()] },
+  { id: "glow", label: "glow", source: GLOW_SRC, assets: [ribbons()] },
 ];
