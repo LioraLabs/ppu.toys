@@ -382,7 +382,9 @@ impl RegRow {
     pub fn add_subscreen(&self) -> bool {
         self.cgwsel & 0x02 != 0
     }
-    /// CGWSEL bit0: direct color mode (8bpp indices as BGR333). Stretch.
+    /// CGWSEL bit0: direct color mode — an 8bpp BG index becomes a BGR555 color
+    /// built from its index + tilemap palette bits instead of a CGRAM lookup
+    /// (resolved into `RegBg::direct_color` for the rasterizer; see bg.rs).
     pub fn direct_color(&self) -> bool {
         self.cgwsel & 0x01 != 0
     }
