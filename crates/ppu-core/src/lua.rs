@@ -339,6 +339,15 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     ctx.set_global("TM", 0x1f).unwrap();
     ctx.set_global("TS", 0x00).unwrap();
 
+    // Window-mask registers ($2123-$212F). Power-on: all zero -> no window
+    // enabled, no layer clipped (existing goldens unaffected).
+    for name in [
+        "WH0", "WH1", "WH2", "WH3", "W12SEL", "W34SEL", "WOBJSEL", "WBGLOG", "WOBJLOG", "TMW",
+        "TSW",
+    ] {
+        ctx.set_global(name, 0).unwrap();
+    }
+
     // bg[1..4] = { scroll = {x,y}, source=nil, visible=true }
     let bg = Table::new(&ctx);
     for i in 1..=4i64 {
@@ -528,6 +537,39 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
     if let Some(v) = ctx.get_global("TS").to_integer() {
         row.ts = v as u8;
     }
+    if let Some(v) = ctx.get_global("WH0").to_integer() {
+        row.wh0 = v as u8;
+    }
+    if let Some(v) = ctx.get_global("WH1").to_integer() {
+        row.wh1 = v as u8;
+    }
+    if let Some(v) = ctx.get_global("WH2").to_integer() {
+        row.wh2 = v as u8;
+    }
+    if let Some(v) = ctx.get_global("WH3").to_integer() {
+        row.wh3 = v as u8;
+    }
+    if let Some(v) = ctx.get_global("W12SEL").to_integer() {
+        row.w12sel = v as u8;
+    }
+    if let Some(v) = ctx.get_global("W34SEL").to_integer() {
+        row.w34sel = v as u8;
+    }
+    if let Some(v) = ctx.get_global("WOBJSEL").to_integer() {
+        row.wobjsel = v as u8;
+    }
+    if let Some(v) = ctx.get_global("WBGLOG").to_integer() {
+        row.wbglog = v as u8;
+    }
+    if let Some(v) = ctx.get_global("WOBJLOG").to_integer() {
+        row.wobjlog = v as u8;
+    }
+    if let Some(v) = ctx.get_global("TMW").to_integer() {
+        row.tmw = v as u8;
+    }
+    if let Some(v) = ctx.get_global("TSW").to_integer() {
+        row.tsw = v as u8;
+    }
     if let Value::Table(bg) = ctx.get_global("bg") {
         for i in 0..4 {
             if let Value::Table(layer) = bg.get(ctx, (i + 1) as i64) {
@@ -596,6 +638,17 @@ fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
     ctx.set_global("brightness", row.brightness as i64).unwrap();
     ctx.set_global("TM", row.tm as i64).unwrap();
     ctx.set_global("TS", row.ts as i64).unwrap();
+    ctx.set_global("WH0", row.wh0 as i64).unwrap();
+    ctx.set_global("WH1", row.wh1 as i64).unwrap();
+    ctx.set_global("WH2", row.wh2 as i64).unwrap();
+    ctx.set_global("WH3", row.wh3 as i64).unwrap();
+    ctx.set_global("W12SEL", row.w12sel as i64).unwrap();
+    ctx.set_global("W34SEL", row.w34sel as i64).unwrap();
+    ctx.set_global("WOBJSEL", row.wobjsel as i64).unwrap();
+    ctx.set_global("WBGLOG", row.wbglog as i64).unwrap();
+    ctx.set_global("WOBJLOG", row.wobjlog as i64).unwrap();
+    ctx.set_global("TMW", row.tmw as i64).unwrap();
+    ctx.set_global("TSW", row.tsw as i64).unwrap();
     if let Value::Table(bg) = ctx.get_global("bg") {
         for i in 0..4 {
             if let Value::Table(layer) = bg.get(ctx, (i + 1) as i64) {
