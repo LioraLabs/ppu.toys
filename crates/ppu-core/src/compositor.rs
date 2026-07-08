@@ -82,7 +82,12 @@ fn mode1_ladder(bg3_high: bool) -> Vec<Slot> {
 
 fn tile_mode_ladder(mode: u8) -> Vec<Slot> {
     let Some(info) = mode_info(mode) else {
-        return Vec::new();
+        return vec![
+            Slot::Obj { prio: 3 },
+            Slot::Obj { prio: 2 },
+            Slot::Obj { prio: 1 },
+            Slot::Obj { prio: 0 },
+        ];
     };
     let layers: Vec<usize> = info.priority_order.iter().map(|&l| l as usize).collect();
     let mut l = Vec::with_capacity(layers.len() * 2 + 4);
@@ -316,6 +321,32 @@ mod tests {
                 "mode {mode} layer {layer} should draw"
             );
         }
+    }
+
+    #[test]
+    fn unsupported_tile_modes_still_render_obj() {
+        let mut mem = Memory::new();
+        mem.cgram[0] = rgb15(0, 0, 0);
+        mem.cgram[128 + 1] = rgb15(255, 255, 0);
+        mem.obsel.char_base = 0x4000;
+        mem.vram[0x4000 + 16] = 0x0080;
+        mem.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 1,
+            prio: 3,
+            ..Obj::default()
+        };
+
+        let mut src = LineTableRow::default();
+        src.mode = 5;
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+
+        assert_eq!(
+            &render_frame(&lt, &mem)[0..4],
+            &unpack_rgb15(rgb15(255, 255, 0))
+        );
     }
 
     #[test]
