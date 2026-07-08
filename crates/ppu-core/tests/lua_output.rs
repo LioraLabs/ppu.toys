@@ -261,6 +261,38 @@ fn obj_sheet_triggers_obj_import_into_vram_and_obj_cgram() {
 }
 
 #[test]
+fn mode3_source_imports_bg1_as_8bpp_and_bg2_as_4bpp() {
+    let mut e = LuaEngine::new();
+    let red = [255u8, 0, 0, 255].repeat(64);
+    e.upload_asset("fg".into(), 8, 8, red.clone());
+    // BG2's asset stacks a red tile (top) over a blue tile (bottom): the red
+    // tile shares BG1's exact color so both layers agree on CGRAM index 1
+    // (an idempotent overwrite), and blue lands at index 2. Two independent
+    // solid-color imports would otherwise both claim index 1 fresh (no
+    // cross-layer CGRAM allocation exists), clobbering each other -- an
+    // authoring collision outside this task's scope, not a bug in the
+    // Mode 3 bpp wiring under test here.
+    let mut bg_rgba = red;
+    bg_rgba.extend([0u8, 0, 255, 255].repeat(64));
+    e.upload_asset("bg".into(), 8, 16, bg_rgba);
+    e.set_source(
+        "function frame(t,f) mode=3; bg[1].source='fg'; bg[1].char_base=0x1000; bg[2].source='bg'; bg[2].map_base=0x0400; bg[2].char_base=0x2000 end",
+    )
+    .unwrap();
+    let lt = e.frame(0.0, 0).unwrap();
+    let m = e.memory();
+    assert_eq!(lt.rows[0].bg[0].bpp, 8);
+    assert_eq!(lt.rows[0].bg[1].bpp, 4);
+    assert_eq!(m.cgram[1], rgb15(255, 0, 0));
+    assert_eq!(m.cgram[2], rgb15(0, 0, 255));
+    assert_eq!(m.vram[0x0000], 0x0001);
+    assert_eq!(m.vram[0x0400], 0x0001);
+    assert_eq!(m.vram[0x1000 + 32], 0x00ff);
+    assert_eq!(m.vram[0x2000 + 16], 0x00ff);
+    assert_eq!(e.import_reports().len(), 2);
+}
+
+#[test]
 fn scanline_is_an_alias_for_hdma() {
     let mut e = engine("function frame(t,f) scanline(0,223, function(y) brightness=3 end) end");
     let lt = e.frame(0.0, 0).unwrap();

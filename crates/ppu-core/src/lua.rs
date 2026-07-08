@@ -675,10 +675,10 @@ fn apply_imports(
                 report: imp.report.clone(),
             });
         } else {
-            // Tile BG (Mode 1): bit-depth from the mode table; only 2/4bpp
+            // Tile BG (Mode 1): bit-depth from the mode table; only 2/4/8bpp
             // tile layers import.
             let bpp = crate::modes::mode_info(mode).map_or(0, |m| m.bpp[i]);
-            if !matches!(bpp, 2 | 4) {
+            if !matches!(bpp, 2 | 4 | 8) {
                 continue;
             }
             // Placement bases: honor user-set map_base/char_base, else the
