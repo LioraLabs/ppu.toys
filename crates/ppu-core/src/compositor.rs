@@ -880,6 +880,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn backdrop_as_main_source_participates_in_math() {
+        // Main screen shows only the backdrop (red); CGADSUB backdrop-enable
+        // (bit5) lets the backdrop take part in color math. Sub = BG2 blue.
+        let (mut m, mut src) = two_screen_scene(rgb15(0, 255, 0), rgb15(0, 0, 255));
+        m.cgram[0] = rgb15(255, 0, 0); // backdrop red
+        src.tm = 0x00; // main: nothing -> backdrop shows through
+        src.cgadsub = 0x20; // add + backdrop enable (bit5)
+        src.cgwsel = 0x02; // addend = subscreen
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        // backdrop(31,0,0) + sub blue(0,0,31) = (31,0,31).
+        assert_eq!(&render_frame(&lt, &m)[0..4], &unpack_rgb15((31 << 10) | 31));
+    }
+
     /// two_screen_scene + a color window [0,7] on window 1, enabled for the
     /// COLOR window (WOBJSEL high nibble W1 enable = bit5). Caller sets clip /
     /// prevent modes via cgwsel bits 6-7 / 4-5. `two_screen_scene`'s shared char
