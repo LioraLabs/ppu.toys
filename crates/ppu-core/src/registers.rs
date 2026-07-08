@@ -304,10 +304,21 @@ mod tests {
             [reg.bg[0].bpp, reg.bg[1].bpp, reg.bg[2].bpp, reg.bg[3].bpp],
             [4, 4, 2, 0]
         );
-        // Unshipped mode (mode_info -> None): every layer bpp 0 (renders transparent).
         let mut src = LineTableRow::default();
-        src.mode = 0;
-        assert!(RegRow::from(&src).bg.iter().all(|b| b.bpp == 0));
+        for (mode, expected) in [
+            (0, [2, 2, 2, 2]),
+            (2, [4, 4, 0, 0]),
+            (3, [8, 4, 0, 0]),
+            (4, [4, 4, 0, 0]),
+        ] {
+            src.mode = mode;
+            let reg = RegRow::from(&src);
+            assert_eq!(
+                [reg.bg[0].bpp, reg.bg[1].bpp, reg.bg[2].bpp, reg.bg[3].bpp],
+                expected,
+                "mode {mode} bpp"
+            );
+        }
         // Mode 7: the table's BG1 row is 8bpp (tile-BG rasterizer ignores it; mode7.rs owns it).
         src.mode = 7;
         assert_eq!(RegRow::from(&src).bg[0].bpp, 8);
