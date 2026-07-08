@@ -2,7 +2,7 @@
 //! register state; `Obj` entries are the frame-global sprites stored in OAM.
 
 use crate::quantize;
-use crate::window::{WLog, WindowRanges, WindowSel};
+use crate::window::{WindowRanges, WindowSel};
 
 /// One background layer. `source` names an uploaded image asset (importer sugar
 /// from m4/importer + m4/dsl); the binding registers below bind the layer to real VRAM.
@@ -345,6 +345,7 @@ impl RegRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::window::WLog;
 
     #[test]
     fn regrow_quantizes_from_authoring_row() {
