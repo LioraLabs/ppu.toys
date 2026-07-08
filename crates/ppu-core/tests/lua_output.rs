@@ -199,6 +199,20 @@ fn source_triggers_tile_bg_import_into_vram_cgram() {
 }
 
 #[test]
+fn mode0_source_import_writes_layer_cgram_band() {
+    let mut e = LuaEngine::new();
+    let rgba = [0u8, 255, 0, 255].repeat(64);
+    e.upload_asset("sky".into(), 8, 8, rgba);
+    e.set_source("function frame(t,f) mode=0; bg[2].source='sky' end")
+        .unwrap();
+    e.frame(0.0, 0).unwrap();
+    let m = e.memory();
+
+    assert_eq!(m.cgram[1], 0);
+    assert_eq!(m.cgram[8 * 4 + 1], rgb15(0, 255, 0));
+}
+
+#[test]
 fn source_triggers_mode7_import_interleaved() {
     let mut e = LuaEngine::new();
     let rgba = [255u8, 0, 0, 255].repeat(64); // 8x8 solid red = 256 bytes
