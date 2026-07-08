@@ -293,25 +293,35 @@ pub(crate) fn composite_screen(
 
 /// Blend one resolved MAIN pixel against the SUB screen (or COLDATA), returning
 /// the pre-brightness RGBA. Applies CGADSUB add/sub/half gated by the main
-/// source layer's enable bit and (for sprites) the OBJ palette-4-7 rule. Window
-/// regions (clip-to-black / prevent-math) are layered on in a later task.
-/// `main`/`sub` are the resolved RGBA pixels; `src_main`/`src_sub` their sources.
+/// source layer's enable bit and (for sprites) the OBJ palette-4-7 rule, plus
+/// the CGWSEL color-window regions: `clip` forces the main pixel to black
+/// before math and suppresses half (even when math is disabled for the
+/// layer), and `prevent` disables math for the column entirely. `main`/`sub`
+/// are the resolved RGBA pixels; `src_main`/`src_sub` their sources.
 fn blend_pixel(
     row: &RegRow,
     main: [u8; 4],
     sub: [u8; 4],
     src_main: PixelSource,
     src_sub: PixelSource,
+    clip: bool,
+    prevent: bool,
 ) -> [u8; 4] {
-    let math_enabled = row.math_layer_enabled(src_main.math_layer())
+    let math_enabled = !prevent
+        && row.math_layer_enabled(src_main.math_layer())
         && match src_main {
             PixelSource::Obj { pal } => pal >= 4,
             _ => true,
         };
     if !math_enabled {
-        return main;
+        // Clip still blackens the main pixel even when math is off for it.
+        return if clip { [0, 0, 0, 255] } else { main };
     }
-    let main15 = rgb15(main[0], main[1], main[2]);
+    let main15 = if clip {
+        0
+    } else {
+        rgb15(main[0], main[1], main[2])
+    };
     let (sub15, sub_is_backdrop) = if row.add_subscreen() {
         (
             rgb15(sub[0], sub[1], sub[2]),
@@ -320,7 +330,8 @@ fn blend_pixel(
     } else {
         (row.coldata, false)
     };
-    let half = row.math_half() && !sub_is_backdrop;
+    // Half is suppressed inside clip-to-black and when the sub pixel is backdrop.
+    let half = row.math_half() && !clip && !sub_is_backdrop;
     unpack_rgb15(color_math(main15, sub15, row.math_subtract(), half))
 }
 
@@ -339,8 +350,15 @@ pub fn render_frame(lt: &LineTable, mem: &Memory) -> Vec<u8> {
         composite_screen(row, mem, y, row.tm, row.tmw, &mut main, &mut src_main);
         composite_screen(row, mem, y, row.ts, row.tsw, &mut sub, &mut src_sub);
         let bri = row.brightness;
+        let cw_sel = row.color_window();
+        let ranges = row.window_ranges();
+        let clip_mode = row.clip_mode();
+        let prevent_mode = row.prevent_mode();
         for x in 0..WIDTH {
-            let px = blend_pixel(row, main[x], sub[x], src_main[x], src_sub[x]);
+            let inside = in_window(&cw_sel, &ranges, x);
+            let clip = region_active(clip_mode, inside);
+            let prevent = region_active(prevent_mode, inside);
+            let px = blend_pixel(row, main[x], sub[x], src_main[x], src_sub[x], clip, prevent);
             let o = (y * WIDTH + x) * 4;
             fb[o] = apply_brightness(px[0], bri);
             fb[o + 1] = apply_brightness(px[1], bri);
@@ -860,6 +878,63 @@ mod tests {
             &render_frame(&lt, &m)[0..4],
             &unpack_rgb15(rgb15(255, 0, 0))
         );
+    }
+
+    /// two_screen_scene + a color window [0,7] on window 1, enabled for the
+    /// COLOR window (WOBJSEL high nibble W1 enable = bit5). Caller sets clip /
+    /// prevent modes via cgwsel bits 6-7 / 4-5. `two_screen_scene`'s shared char
+    /// only colors its own local pixel (0,0) (see `put_px`), so a second tile
+    /// column is mapped in for both BG1 and BG2 — otherwise x=8 (the "outside
+    /// window" probe column) would just be backdrop, not a real BG pixel.
+    fn color_window_scene(bg1: u16, bg2: u16) -> (Memory, LineTableRow) {
+        let (mut m, mut src) = two_screen_scene(bg1, bg2);
+        m.vram[0x0001] = 1; // BG1 map tile-column 1 (x=8..15): tile1 pal0
+        m.vram[0x0400 + 1] = 1 | (1 << 10); // BG2 map tile-column 1: tile1 pal1
+        src.wh0 = 0;
+        src.wh1 = 7; // window 1 = columns 0..=7
+        src.wobjsel = 0x20; // COLOR window high nibble: W1 enable (bit1 of high nibble)
+        (m, src)
+    }
+
+    #[test]
+    fn clip_to_black_forces_main_black_and_suppresses_half() {
+        // clip = inside color window (mode 2); add + half + BG1; addend subscreen.
+        let (m, mut src) = color_window_scene(rgb15(255, 0, 0), rgb15(0, 0, 255));
+        src.cgadsub = 0x40 | 0x01; // add + half + BG1
+        src.cgwsel = 0x02 | (0b10 << 6); // addend=subscreen, clip=inside(10)
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        let fb = render_frame(&lt, &m);
+        // Inside window (x=0): main clipped to black -> black + sub(0,0,31),
+        // half suppressed by clip -> (0,0,31).
+        assert_eq!(&fb[0..4], &unpack_rgb15(31 << 10));
+        // Outside window (x=8): normal ½-add -> (15,0,15).
+        let o = 8 * 4;
+        assert_eq!(&fb[o..o + 4], &unpack_rgb15((15 << 10) | 15));
+    }
+
+    #[test]
+    fn prevent_math_region_leaves_main_untouched() {
+        // prevent = inside window (mode 2); add + BG1; addend subscreen.
+        let (m, mut src) = color_window_scene(rgb15(255, 0, 0), rgb15(0, 0, 255));
+        src.cgadsub = 0x01; // add + BG1 (no half)
+        src.cgwsel = 0x02 | (0b10 << 4); // addend=subscreen, prevent=inside(10)
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        let fb = render_frame(&lt, &m);
+        // Inside window (x=0): math prevented -> main red unchanged.
+        assert_eq!(&fb[0..4], &unpack_rgb15(rgb15(255, 0, 0)));
+        // Outside window (x=8): add applies -> (31,0,31).
+        let o = 8 * 4;
+        assert_eq!(&fb[o..o + 4], &unpack_rgb15((31 << 10) | 31));
+    }
+
+    #[test]
+    fn clip_to_black_with_math_disabled_still_blackens() {
+        // clip=always, but BG1 math disabled -> pixel is just black inside region.
+        let (m, mut src) = two_screen_scene(rgb15(255, 0, 0), rgb15(0, 0, 255));
+        src.cgadsub = 0x00; // no layer enabled
+        src.cgwsel = 0b11 << 6; // clip = always
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        assert_eq!(&render_frame(&lt, &m)[0..4], &[0, 0, 0, 255]);
     }
 
     #[test]
