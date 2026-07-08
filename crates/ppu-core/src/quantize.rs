@@ -121,6 +121,13 @@ pub fn obj_size_sel(v: u8) -> u8 {
     v & 0x07
 }
 
+/// COLDATA ($2132) fixed color: a 15-bit BGR value. Masks to 15 bits, matching
+/// CGRAM's stored width.
+#[inline]
+pub fn coldata15(v: u16) -> u16 {
+    v & 0x7fff
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,5 +224,12 @@ mod tests {
         assert_eq!(obj_size_sel(0), 0);
         assert_eq!(obj_size_sel(3), 3);
         assert_eq!(obj_size_sel(8), 0); // wraps (mask), NOT clamp
+    }
+
+    #[test]
+    fn coldata15_masks_to_15_bits() {
+        assert_eq!(coldata15(0x7fff), 0x7fff);
+        assert_eq!(coldata15(0xffff), 0x7fff); // top bit dropped
+        assert_eq!(coldata15(0x0000), 0x0000);
     }
 }

@@ -172,18 +172,28 @@ pub fn render_bg_layer_scanline_px(
             if index == 0 {
                 return None; // color 0 = transparent
             }
-            let cgram_index = if layer.bpp == 8 {
-                index as usize
+            let color = if layer.bpp == 8 && layer.direct_color {
+                // Direct color: 8bpp index bits + tilemap palette form BGR555 directly.
+                let pal = (entry >> 10) & 0x07;
+                let idx = index as u16;
+                let r5 = ((idx & 0x07) << 2) | ((pal & 0x01) << 1);
+                let g5 = (((idx >> 3) & 0x07) << 2) | (pal & 0x02);
+                let b5 = (((idx >> 6) & 0x03) << 3) | (pal & 0x04);
+                (b5 << 10) | (g5 << 5) | r5
             } else {
-                let pal = ((entry >> 10) & 0x07) as usize;
-                let mode0_band = if layer.mode == 0 && layer.bpp == 2 {
-                    layer.layer as usize * 8 * 4
+                let cgram_index = if layer.bpp == 8 {
+                    index as usize
                 } else {
-                    0
+                    let pal = ((entry >> 10) & 0x07) as usize;
+                    let mode0_band = if layer.mode == 0 && layer.bpp == 2 {
+                        layer.layer as usize * 8 * 4
+                    } else {
+                        0
+                    };
+                    mode0_band + pal * (1 << layer.bpp) + index as usize
                 };
-                mode0_band + pal * (1 << layer.bpp) + index as usize
+                mem.cgram[cgram_index] // 4bpp p*16, 2bpp p*4, 8bpp direct index
             };
-            let color = mem.cgram[cgram_index]; // 4bpp p*16, 2bpp p*4, 8bpp direct index
             Some(BgPixel {
                 rgba: unpack_rgb15(color),
                 prio: entry & 0x2000 != 0,
@@ -595,6 +605,33 @@ mod tests {
         let line = render_bg_layer_scanline_px(&l, &m, 0, 2);
         assert_eq!(line[0].unwrap().rgba, unpack_rgb15(rgb15(12, 34, 56)));
         assert!(line[1].is_none());
+    }
+
+    #[test]
+    fn direct_color_mode_builds_bgr_from_index_and_palette() {
+        // index 0xD3 = 0b11_010_011: R=3, G=2, B=3. palette = 5 (0b101): Rbit=1,Gbit=0,Bbit=1.
+        // r5=(3<<2)|(1<<1)=14; g5=(2<<2)|0=8; b5=(3<<3)|4=28.
+        let mut m = Memory::new();
+        // 8bpp char at 0x3000, pixel (0,0) = index 0xD3.
+        put_8bpp_row(&mut m, 0x3000 + 32, 0, [0xD3, 0, 0, 0, 0, 0, 0, 0]);
+        m.vram[0] = 1 | (5 << 10); // map(0,0): tile1, palette 5
+        let mut l = layer(0);
+        l.mode = 3;
+        l.bpp = 8;
+        l.char_base = 0x3000;
+        l.direct_color = true;
+        let want = unpack_rgb15((28 << 10) | (8 << 5) | 14);
+        assert_eq!(
+            render_bg_layer_scanline_px(&l, &m, 0, 1)[0].unwrap().rgba,
+            want
+        );
+        // With direct_color off, the same index is a CGRAM lookup (ignores palette).
+        m.cgram[0xD3] = rgb15(9, 9, 9);
+        l.direct_color = false;
+        assert_eq!(
+            render_bg_layer_scanline_px(&l, &m, 0, 1)[0].unwrap().rgba,
+            unpack_rgb15(rgb15(9, 9, 9))
+        );
     }
 
     #[test]
