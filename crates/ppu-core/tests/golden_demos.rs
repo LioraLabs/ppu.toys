@@ -5,6 +5,7 @@ use std::path::Path;
 const DUSK_GOLDEN: &str = "tests/fixtures/golden_dusk_parallax.png";
 const MODE7_GOLDEN: &str = "tests/fixtures/golden_mode7_floor.png";
 const OFFSET_GOLDEN: &str = "tests/fixtures/golden_offset_per_tile.png";
+const MODE3_GOLDEN: &str = "tests/fixtures/golden_mode3_gradient.png";
 
 const DUSK_SRC: &str = r#"-- ppu.toys :: dusk-parallax (Mode 1: parallax BG scroll + CGRAM colour-cycle + sprite)
 local SPEED = 12
@@ -50,6 +51,14 @@ function frame(t, f)
     local wave = floor((sin((col + t * 8) / 3) + 1) * 4)
     column_offset(col, wave, col % 3)
   end
+end
+"#;
+
+const MODE3_SRC: &str = r#"-- ppu.toys :: mode3-gradient (Mode 3: 8bpp 256-colour BG1 gradient)
+function frame(t, f)
+  mode = 3; brightness = 15
+  bg[1].source = "gradient"
+  bg[1].char_base = 0x1000
 end
 "#;
 
@@ -151,6 +160,23 @@ fn ribbons() -> Vec<u8> {
     data
 }
 
+fn gradient() -> Vec<u8> {
+    let mut data = vec![0u8; WIDTH * HEIGHT * 4];
+    for y in 0..HEIGHT {
+        // top->bottom hue sweep; constant across x so unique tiles stay bounded.
+        let r = (y * 255 / (HEIGHT - 1)) as u8;
+        let g = ((HEIGHT - 1 - y) * 255 / (HEIGHT - 1)) as u8;
+        for x in 0..WIDTH {
+            let i = (y * WIDTH + x) * 4;
+            data[i] = r;
+            data[i + 1] = g;
+            data[i + 2] = 128;
+            data[i + 3] = 255;
+        }
+    }
+    data
+}
+
 fn demo_engine(src: &str) -> LuaEngine {
     let mut e = LuaEngine::new();
     e.upload_asset("sky".into(), WIDTH as u32, HEIGHT as u32, sky());
@@ -158,6 +184,7 @@ fn demo_engine(src: &str) -> LuaEngine {
     e.upload_asset("hero".into(), 64, 8, hero());
     e.upload_asset("track".into(), 1024, 1024, track());
     e.upload_asset("ribbons".into(), WIDTH as u32, HEIGHT as u32, ribbons());
+    e.upload_asset("gradient".into(), WIDTH as u32, HEIGHT as u32, gradient());
     e.set_source(src).unwrap();
     e
 }
@@ -313,4 +340,35 @@ fn offset_per_tile_demo_matches_golden_png() {
 fn regen_golden_offset_per_tile() {
     let (fb, _) = render_demo(OFFSET_SRC);
     write_png(OFFSET_GOLDEN, &fb);
+}
+
+#[test]
+fn mode3_gradient_demo_imports_bg1_8bpp_and_draws() {
+    let (fb, e) = render_demo(MODE3_SRC);
+    // 8bpp path: the gradient needs >16 colours, so it cannot be a 4bpp import.
+    let colors = e.import_reports().iter().find_map(|r| match r {
+        ImportBudget::Tile { layer: 0, report } => Some(report.colors_used),
+        _ => None,
+    });
+    assert!(colors.is_some(), "BG1 tile import missing");
+    assert!(colors.unwrap() > 16, "gradient must exceed the 4bpp colour count");
+    assert!(fb
+        .chunks_exact(4)
+        .any(|px| px[3] == 255 && px[..3] != [0, 0, 0]));
+}
+
+#[test]
+fn mode3_gradient_demo_matches_golden_png() {
+    assert!(Path::new(MODE3_GOLDEN).exists());
+    let (actual, _) = render_demo(MODE3_SRC);
+    let expected = decode_png(MODE3_GOLDEN);
+    assert_eq!(actual.len(), expected.len());
+    assert_eq!(actual, expected, "mode3 demo framebuffer differs from golden PNG");
+}
+
+#[test]
+#[ignore = "regenerates the committed Mode 3 demo golden PNG"]
+fn regen_golden_mode3_gradient() {
+    let (fb, _) = render_demo(MODE3_SRC);
+    write_png(MODE3_GOLDEN, &fb);
 }
