@@ -103,3 +103,35 @@ fn lua_tm_ts_round_trip_through_register_state() {
     assert_eq!(lt.rows[110].tm, 0x1f);
     assert_eq!(lt.rows[110].ts, 0x04);
 }
+
+#[test]
+fn lua_window_registers_round_trip_and_animate() {
+    let mut engine = LuaEngine::new();
+    let src = r#"
+        function frame(t, f)
+            WH0 = 0
+            WH1 = 40
+            WH2 = 5
+            WH3 = 250
+            W12SEL = 0x02   -- BG1 window 1 enable
+            W34SEL = 0x00
+            WOBJSEL = 0x00
+            WBGLOG = 0x00
+            WOBJLOG = 0x00
+            TMW = 0x01      -- clip BG1 inside the window on the main screen
+            TSW = 0x00
+            -- iris sweep: window 1 right edge widens down the frame.
+            hdma(0, 223, function(y) WH1 = y end)
+        end
+    "#;
+    engine.set_source(src).expect("source compiles");
+    let lt = engine.frame(0.0, 0).expect("frame runs");
+    // Frame-wide defaults captured on row 0's baseline registers.
+    assert_eq!(lt.rows[0].wh0, 0);
+    assert_eq!(lt.rows[0].w12sel, 0x02);
+    assert_eq!(lt.rows[0].tmw, 0x01);
+    // The hdma hook animates WH1 == y down the frame.
+    assert_eq!(lt.rows[0].wh1, 0);
+    assert_eq!(lt.rows[50].wh1, 50);
+    assert_eq!(lt.rows[200].wh1, 200);
+}

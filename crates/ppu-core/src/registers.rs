@@ -2,6 +2,7 @@
 //! register state; `Obj` entries are the frame-global sprites stored in OAM.
 
 use crate::quantize;
+use crate::window::{WindowRanges, WindowSel};
 
 /// One background layer. `source` names an uploaded image asset (importer sugar
 /// from m4/importer + m4/dsl); the binding registers below bind the layer to real VRAM.
@@ -114,6 +115,26 @@ pub struct LineTableRow {
     pub tm: u8,
     /// TS ($212D) sub-screen layer designation: same five bits.
     pub ts: u8,
+    /// Window 1 left/right edges (WH0 $2126 / WH1 $2127), inclusive on 0..255.
+    pub wh0: u8,
+    pub wh1: u8,
+    /// Window 2 left/right edges (WH2 $2128 / WH3 $2129).
+    pub wh2: u8,
+    pub wh3: u8,
+    /// Per-BG window enable/invert (nibble = W1inv,W1en,W2inv,W2en). W12SEL
+    /// ($2123): BG1 low / BG2 high. W34SEL ($2124): BG3 low / BG4 high.
+    pub w12sel: u8,
+    pub w34sel: u8,
+    /// OBJ (low nibble) + COLOR (high nibble) window enable/invert (WOBJSEL $2125).
+    pub wobjsel: u8,
+    /// 2-bit-per-layer window logic. WBGLOG ($212A): BG1..BG4. WOBJLOG ($212B):
+    /// OBJ (bits 0-1) + COLOR (bits 2-3). 0=OR,1=AND,2=XOR,3=XNOR.
+    pub wbglog: u8,
+    pub wobjlog: u8,
+    /// Per-layer "disable inside window" on main (TMW $212E) / sub (TSW $212F);
+    /// bits 0-4 = BG1..BG4,OBJ.
+    pub tmw: u8,
+    pub tsw: u8,
 }
 
 impl Default for LineTableRow {
@@ -126,6 +147,17 @@ impl Default for LineTableRow {
             bg3_priority: false,
             tm: 0x1f, // all five layers on the main screen (playground full-visibility)
             ts: 0x00, // sub screen empty at power-on
+            wh0: 0,
+            wh1: 0,
+            wh2: 0,
+            wh3: 0,
+            w12sel: 0,
+            w34sel: 0,
+            wobjsel: 0,
+            wbglog: 0,
+            wobjlog: 0,
+            tmw: 0,
+            tsw: 0,
         }
     }
 }
@@ -225,6 +257,17 @@ pub struct RegRow {
     pub bg3_priority: bool,
     pub tm: u8,
     pub ts: u8,
+    pub wh0: u8,
+    pub wh1: u8,
+    pub wh2: u8,
+    pub wh3: u8,
+    pub w12sel: u8,
+    pub w34sel: u8,
+    pub wobjsel: u8,
+    pub wbglog: u8,
+    pub wobjlog: u8,
+    pub tmw: u8,
+    pub tsw: u8,
 }
 
 impl From<&LineTableRow> for RegRow {
@@ -252,13 +295,57 @@ impl From<&LineTableRow> for RegRow {
             bg3_priority: r.bg3_priority,
             tm: quantize::screen_mask(r.tm),
             ts: quantize::screen_mask(r.ts),
+            wh0: r.wh0,
+            wh1: r.wh1,
+            wh2: r.wh2,
+            wh3: r.wh3,
+            w12sel: r.w12sel,
+            w34sel: r.w34sel,
+            wobjsel: r.wobjsel,
+            wbglog: r.wbglog,
+            wobjlog: r.wobjlog,
+            tmw: quantize::screen_mask(r.tmw),
+            tsw: quantize::screen_mask(r.tsw),
         }
+    }
+}
+
+impl RegRow {
+    /// The shared window ranges (WH0-3). Reused by the color window.
+    pub fn window_ranges(&self) -> WindowRanges {
+        WindowRanges {
+            w1_left: self.wh0,
+            w1_right: self.wh1,
+            w2_left: self.wh2,
+            w2_right: self.wh3,
+        }
+    }
+
+    /// The window-select config for layer `layer` (0..3 = BG1..BG4, 4 = OBJ).
+    pub fn layer_window(&self, layer: usize) -> WindowSel {
+        // (sel byte, nibble shift, WLOG byte, WLOG field shift) per layer.
+        let (sel, shift, log, log_shift) = match layer {
+            0 => (self.w12sel, 0, self.wbglog, 0),   // BG1
+            1 => (self.w12sel, 4, self.wbglog, 2),   // BG2
+            2 => (self.w34sel, 0, self.wbglog, 4),   // BG3
+            3 => (self.w34sel, 4, self.wbglog, 6),   // BG4
+            _ => (self.wobjsel, 0, self.wobjlog, 0), // OBJ
+        };
+        WindowSel::from_bits((sel >> shift) & 0x0f, (log >> log_shift) & 0x03)
+    }
+
+    /// The COLOR window's select config: WOBJSEL high nibble + WOBJLOG bits 2-3.
+    /// Not consumed here — the color-math ticket calls this with `in_window`
+    /// to gate its color effect.
+    pub fn color_window(&self) -> WindowSel {
+        WindowSel::from_bits((self.wobjsel >> 4) & 0x0f, (self.wobjlog >> 2) & 0x03)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::window::WLog;
 
     #[test]
     fn regrow_quantizes_from_authoring_row() {
@@ -402,5 +489,66 @@ mod tests {
         let reg = RegRow::from(&src);
         assert_eq!(reg.tm, 0x13);
         assert_eq!(reg.ts, 0x04);
+    }
+
+    #[test]
+    fn window_registers_default_zero_and_round_trip() {
+        let d = LineTableRow::default();
+        assert_eq!(
+            (
+                d.wh0, d.wh1, d.wh2, d.wh3, d.w12sel, d.w34sel, d.wobjsel, d.wbglog, d.wobjlog,
+                d.tmw, d.tsw
+            ),
+            (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        );
+        let mut src = LineTableRow::default();
+        src.wh0 = 64;
+        src.wh1 = 192;
+        src.wh2 = 10;
+        src.wh3 = 250;
+        src.w12sel = 0xAB;
+        src.w34sel = 0xCD;
+        src.wobjsel = 0xEF;
+        src.wbglog = 0x1B;
+        src.wobjlog = 0x0E;
+        src.tmw = 0xE3; // high bits set -> masks to 0x03 (BG1+BG2)
+        src.tsw = 0x1f;
+        let reg = RegRow::from(&src);
+        assert_eq!((reg.wh0, reg.wh1, reg.wh2, reg.wh3), (64, 192, 10, 250));
+        assert_eq!((reg.w12sel, reg.w34sel, reg.wobjsel), (0xAB, 0xCD, 0xEF));
+        assert_eq!((reg.wbglog, reg.wobjlog), (0x1B, 0x0E));
+        assert_eq!(reg.tmw, 0x03); // masked to 5 bits like TM/TS
+        assert_eq!(reg.tsw, 0x1f);
+    }
+
+    #[test]
+    fn regrow_layer_window_and_ranges_decode() {
+        let mut src = LineTableRow::default();
+        src.wh0 = 1;
+        src.wh1 = 2;
+        src.wh2 = 3;
+        src.wh3 = 4;
+        // W12SEL low nibble (BG1) = 0b1011: W1 invert+enable, W2 enable.
+        src.w12sel = 0x0B;
+        // WBGLOG BG1 field (bits 0-1) = 0b10 = XOR.
+        src.wbglog = 0x02;
+        let reg = RegRow::from(&src);
+        let r = reg.window_ranges();
+        assert_eq!((r.w1_left, r.w1_right, r.w2_left, r.w2_right), (1, 2, 3, 4));
+        let bg1 = reg.layer_window(0);
+        assert!(bg1.w1_enable && bg1.w1_invert && bg1.w2_enable && !bg1.w2_invert);
+        assert_eq!(bg1.logic, WLog::Xor);
+        // OBJ (layer 4) reads WOBJSEL low nibble + WOBJLOG bits 0-1.
+        let mut src2 = LineTableRow::default();
+        src2.wobjsel = 0x02; // OBJ W1 enable
+        src2.wobjlog = 0x01; // OBJ logic = AND
+        let obj = RegRow::from(&src2).layer_window(4);
+        assert!(obj.w1_enable && obj.logic == WLog::And);
+        // COLOR window: WOBJSEL high nibble + WOBJLOG bits 2-3 (color-math seam).
+        let mut src3 = LineTableRow::default();
+        src3.wobjsel = 0x20; // COLOR W1 enable (high nibble bit1)
+        src3.wobjlog = 0x08; // COLOR logic bits 2-3 = 0b10 = XOR
+        let color = RegRow::from(&src3).color_window();
+        assert!(color.w1_enable && color.logic == WLog::Xor);
     }
 }
