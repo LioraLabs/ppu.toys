@@ -343,7 +343,7 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     // enabled, no layer clipped (existing goldens unaffected).
     for name in [
         "WH0", "WH1", "WH2", "WH3", "W12SEL", "W34SEL", "WOBJSEL", "WBGLOG", "WOBJLOG", "TMW",
-        "TSW",
+        "TSW", "CGWSEL", "CGADSUB", "COLDATA",
     ] {
         ctx.set_global(name, 0).unwrap();
     }
@@ -478,6 +478,32 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     });
     ctx.set_global("hsl", hsl).unwrap();
 
+    // coldata(byte): authentic $2132 accumulation. bit5=R, bit6=G, bit7=B select
+    // which channels a 5-bit value (bits0-4) overwrites; other channels persist.
+    // Reads/writes the COLDATA global so it composes with a direct `COLDATA = rgb(..)`.
+    let coldata = Callback::from_fn(&ctx, |ctx, _, mut stack| {
+        let byte = stack.get(0).to_integer().unwrap_or(0) as u16;
+        stack.clear();
+        let cur = ctx.get_global("COLDATA").to_integer().unwrap_or(0) as u16 & 0x7fff;
+        let v = byte & 0x1f;
+        let mut r = cur & 0x1f;
+        let mut g = (cur >> 5) & 0x1f;
+        let mut b = (cur >> 10) & 0x1f;
+        if byte & 0x20 != 0 {
+            r = v;
+        }
+        if byte & 0x40 != 0 {
+            g = v;
+        }
+        if byte & 0x80 != 0 {
+            b = v;
+        }
+        ctx.set_global("COLDATA", ((b << 10) | (g << 5) | r) as i64)
+            .unwrap();
+        Ok(CallbackReturn::Return)
+    });
+    ctx.set_global("coldata", coldata).unwrap();
+
     // hdma(y0,y1,fn) / scanline alias -> append {y0,y1,fn} to __ppu_hooks
     let hdma = Callback::from_fn(&ctx, |ctx, _, mut stack| {
         let y0 = stack.get(0).to_integer().unwrap_or(0);
@@ -570,6 +596,15 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
     if let Some(v) = ctx.get_global("TSW").to_integer() {
         row.tsw = v as u8;
     }
+    if let Some(v) = ctx.get_global("CGWSEL").to_integer() {
+        row.cgwsel = v as u8;
+    }
+    if let Some(v) = ctx.get_global("CGADSUB").to_integer() {
+        row.cgadsub = v as u8;
+    }
+    if let Some(v) = ctx.get_global("COLDATA").to_integer() {
+        row.coldata = v as u16;
+    }
     if let Value::Table(bg) = ctx.get_global("bg") {
         for i in 0..4 {
             if let Value::Table(layer) = bg.get(ctx, (i + 1) as i64) {
@@ -649,6 +684,9 @@ fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
     ctx.set_global("WOBJLOG", row.wobjlog as i64).unwrap();
     ctx.set_global("TMW", row.tmw as i64).unwrap();
     ctx.set_global("TSW", row.tsw as i64).unwrap();
+    ctx.set_global("CGWSEL", row.cgwsel as i64).unwrap();
+    ctx.set_global("CGADSUB", row.cgadsub as i64).unwrap();
+    ctx.set_global("COLDATA", row.coldata as i64).unwrap();
     if let Value::Table(bg) = ctx.get_global("bg") {
         for i in 0..4 {
             if let Value::Table(layer) = bg.get(ctx, (i + 1) as i64) {

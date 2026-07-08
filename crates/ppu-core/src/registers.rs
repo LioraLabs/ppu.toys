@@ -135,6 +135,15 @@ pub struct LineTableRow {
     /// bits 0-4 = BG1..BG4,OBJ.
     pub tmw: u8,
     pub tsw: u8,
+    /// CGWSEL ($2130) color-math control: bit0 direct color, bit1 addend select
+    /// (0=fixed color, 1=subscreen), bits4-5 prevent-math region, bits6-7
+    /// clip-to-black region. Power-on 0 = no math effect.
+    pub cgwsel: u8,
+    /// CGADSUB ($2131): bit7 subtract, bit6 half, bits0-5 math-enable per
+    /// BG1,BG2,BG3,BG4,OBJ,backdrop. Power-on 0 = math disabled everywhere.
+    pub cgadsub: u8,
+    /// COLDATA ($2132) fixed color, 15-bit BGR. Power-on 0 = black.
+    pub coldata: u16,
 }
 
 impl Default for LineTableRow {
@@ -158,6 +167,9 @@ impl Default for LineTableRow {
             wobjlog: 0,
             tmw: 0,
             tsw: 0,
+            cgwsel: 0,
+            cgadsub: 0,
+            coldata: 0,
         }
     }
 }
@@ -192,6 +204,10 @@ pub struct RegBg {
     /// the mode table (modes.rs) at quantize time; 0 = the layer does not
     /// exist in this mode (renders transparent).
     pub bpp: u8,
+    /// CGWSEL bit0 direct-color mode: an 8bpp index is read as a direct BGR555
+    /// color built from index+palette bits instead of a CGRAM lookup. Only
+    /// affects 8bpp layers; ignored otherwise.
+    pub direct_color: bool,
 }
 
 impl From<&Bg> for RegBg {
@@ -210,6 +226,7 @@ impl From<&Bg> for RegBg {
             offset_map_base: 0,
             offset_screen_size: 0,
             bpp: 0, // resolved from the mode table by RegRow::from (needs the row's mode)
+            direct_color: false,
         }
     }
 }
@@ -268,6 +285,9 @@ pub struct RegRow {
     pub wobjlog: u8,
     pub tmw: u8,
     pub tsw: u8,
+    pub cgwsel: u8,
+    pub cgadsub: u8,
+    pub coldata: u16,
 }
 
 impl From<&LineTableRow> for RegRow {
@@ -279,6 +299,7 @@ impl From<&LineTableRow> for RegRow {
             b.mode = mode;
             b.layer = i as u8;
             b.bpp = bpp[i];
+            b.direct_color = r.cgwsel & 1 != 0;
             b
         });
         let offset_map_base = bg[2].map_base;
@@ -306,6 +327,9 @@ impl From<&LineTableRow> for RegRow {
             wobjlog: r.wobjlog,
             tmw: quantize::screen_mask(r.tmw),
             tsw: quantize::screen_mask(r.tsw),
+            cgwsel: r.cgwsel,
+            cgadsub: r.cgadsub,
+            coldata: quantize::coldata15(r.coldata),
         }
     }
 }
@@ -339,6 +363,38 @@ impl RegRow {
     /// to gate its color effect.
     pub fn color_window(&self) -> WindowSel {
         WindowSel::from_bits((self.wobjsel >> 4) & 0x0f, (self.wobjlog >> 2) & 0x03)
+    }
+
+    /// CGADSUB bit7: subtract (true) vs add (false).
+    pub fn math_subtract(&self) -> bool {
+        self.cgadsub & 0x80 != 0
+    }
+    /// CGADSUB bit6: halve the math result.
+    pub fn math_half(&self) -> bool {
+        self.cgadsub & 0x40 != 0
+    }
+    /// CGADSUB bits0-5: is color math enabled for this source layer?
+    /// `layer` 0..3 = BG1..BG4, 4 = OBJ, 5 = backdrop.
+    pub fn math_layer_enabled(&self, layer: usize) -> bool {
+        self.cgadsub & (1 << layer) != 0
+    }
+    /// CGWSEL bit1: addend is the subscreen (true) vs the COLDATA fixed color (false).
+    pub fn add_subscreen(&self) -> bool {
+        self.cgwsel & 0x02 != 0
+    }
+    /// CGWSEL bit0: direct color mode — an 8bpp BG index becomes a BGR555 color
+    /// built from its index + tilemap palette bits instead of a CGRAM lookup
+    /// (resolved into `RegBg::direct_color` for the rasterizer; see bg.rs).
+    pub fn direct_color(&self) -> bool {
+        self.cgwsel & 0x01 != 0
+    }
+    /// CGWSEL bits6-7: clip-to-black region select (0 never,1 outside,2 inside,3 always).
+    pub fn clip_mode(&self) -> u8 {
+        (self.cgwsel >> 6) & 0x03
+    }
+    /// CGWSEL bits4-5: prevent-math region select (0 never,1 outside,2 inside,3 always).
+    pub fn prevent_mode(&self) -> u8 {
+        (self.cgwsel >> 4) & 0x03
     }
 }
 
@@ -550,5 +606,51 @@ mod tests {
         src3.wobjlog = 0x08; // COLOR logic bits 2-3 = 0b10 = XOR
         let color = RegRow::from(&src3).color_window();
         assert!(color.w1_enable && color.logic == WLog::Xor);
+    }
+
+    #[test]
+    fn color_math_registers_default_zero_and_round_trip() {
+        let d = LineTableRow::default();
+        assert_eq!((d.cgwsel, d.cgadsub, d.coldata), (0, 0, 0));
+        let mut src = LineTableRow::default();
+        src.cgwsel = 0xC2; // clip=always(11), prevent=never(00), addend=subscreen(1), direct=0
+        src.cgadsub = 0xC1; // subtract + half + BG1 enable
+        src.coldata = 0xFFFF; // masks to 0x7FFF (15-bit)
+        let reg = RegRow::from(&src);
+        assert_eq!(reg.cgwsel, 0xC2);
+        assert_eq!(reg.cgadsub, 0xC1);
+        assert_eq!(reg.coldata, 0x7FFF);
+    }
+
+    #[test]
+    fn cgadsub_decode_accessors() {
+        let mut src = LineTableRow::default();
+        src.cgadsub = 0x80 | 0x40 | 0b1_1001; // subtract, half, BG1+BG4+OBJ enable
+        let reg = RegRow::from(&src);
+        assert!(reg.math_subtract());
+        assert!(reg.math_half());
+        assert!(reg.math_layer_enabled(0)); // BG1
+        assert!(!reg.math_layer_enabled(1)); // BG2
+        assert!(reg.math_layer_enabled(3)); // BG4
+        assert!(reg.math_layer_enabled(4)); // OBJ
+        assert!(!reg.math_layer_enabled(5)); // backdrop off
+                                             // add + backdrop enable
+        src.cgadsub = 0x20;
+        let reg = RegRow::from(&src);
+        assert!(!reg.math_subtract() && !reg.math_half());
+        assert!(reg.math_layer_enabled(5)); // backdrop
+    }
+
+    #[test]
+    fn cgwsel_decode_accessors() {
+        let mut src = LineTableRow::default();
+        src.cgwsel = 0b11_10_00_1_0; // clip=11(always), prevent=10(inside), addend=1(subscreen), direct=0
+        let reg = RegRow::from(&src);
+        assert_eq!(reg.clip_mode(), 0b11);
+        assert_eq!(reg.prevent_mode(), 0b10);
+        assert!(reg.add_subscreen());
+        assert!(!reg.direct_color());
+        src.cgwsel = 0x01; // direct color only
+        assert!(RegRow::from(&src).direct_color());
     }
 }
