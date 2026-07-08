@@ -710,8 +710,9 @@ fn apply_imports(
             for (o, &w) in imp.tilemap_words.iter().enumerate() {
                 mem.vram[(mb + o) & 0x7fff] = w;
             }
+            let mode0_band = if mode == 0 && bpp == 2 { i * 8 * 4 } else { 0 };
             for &(idx, c) in &imp.cgram {
-                mem.cgram[idx as usize] = c;
+                mem.cgram[mode0_band + idx as usize] = c;
             }
             layer
                 .set(ctx, "map_base", imp.registers.map_base as i64)
