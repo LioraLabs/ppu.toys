@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { formatAddr, formatValue, cgram15ToCss } from "./format";
+import { formatAddr, formatValue, cgram15ToCss, bgMode } from "./format";
+import type { RegisterView } from "../../ppu/core";
+
+const reg = (name: string, value: number): RegisterView => ({ addr: 0, name, value, changed: false });
 
 describe("inspector format", () => {
   it("formats register addr as $XXXX uppercase 4-digit", () => {
@@ -24,5 +27,16 @@ describe("inspector format", () => {
     expect(cgram15ToCss(0x03e0)).toBe("rgb(0, 255, 0)");
     // pure blue: B=31 -> 0x7c00
     expect(cgram15ToCss(0x7c00)).toBe("rgb(0, 0, 255)");
+  });
+});
+
+describe("bgMode", () => {
+  it("reads the low 3 bits of BGMODE", () => {
+    expect(bgMode([reg("BGMODE", 0x02)])).toBe(2);
+    expect(bgMode([reg("BGMODE", 0x07)])).toBe(7); // mode 7
+    expect(bgMode([reg("BGMODE", 0x91)])).toBe(1); // tile-size bits stripped
+  });
+  it("defaults to mode 1 when BGMODE is absent", () => {
+    expect(bgMode([])).toBe(1);
   });
 });
