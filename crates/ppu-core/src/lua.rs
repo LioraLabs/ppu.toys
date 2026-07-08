@@ -333,6 +333,11 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     // scalar registers
     ctx.set_global("mode", 1).unwrap();
     ctx.set_global("brightness", 15).unwrap();
+    // TM/TS main/sub screen designation ($212C/$212D). Playground defaults:
+    // all five layers on the main screen (like brightness=15/visible=true),
+    // nothing on the sub screen (authentic power-on).
+    ctx.set_global("TM", 0x1f).unwrap();
+    ctx.set_global("TS", 0x00).unwrap();
 
     // bg[1..4] = { scroll = {x,y}, source=nil, visible=true }
     let bg = Table::new(&ctx);
@@ -517,6 +522,12 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
     if let Some(b) = ctx.get_global("brightness").to_integer() {
         row.brightness = b as u8; // wrap; quantize::brightness masks to 4 bits
     }
+    if let Some(v) = ctx.get_global("TM").to_integer() {
+        row.tm = v as u8; // wrap; quantize::screen_mask masks to 5 bits at build
+    }
+    if let Some(v) = ctx.get_global("TS").to_integer() {
+        row.ts = v as u8;
+    }
     if let Value::Table(bg) = ctx.get_global("bg") {
         for i in 0..4 {
             if let Value::Table(layer) = bg.get(ctx, (i + 1) as i64) {
@@ -583,6 +594,8 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
 fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
     ctx.set_global("mode", row.mode as i64).unwrap();
     ctx.set_global("brightness", row.brightness as i64).unwrap();
+    ctx.set_global("TM", row.tm as i64).unwrap();
+    ctx.set_global("TS", row.ts as i64).unwrap();
     if let Value::Table(bg) = ctx.get_global("bg") {
         for i in 0..4 {
             if let Value::Table(layer) = bg.get(ctx, (i + 1) as i64) {

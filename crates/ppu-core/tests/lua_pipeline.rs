@@ -81,3 +81,25 @@ fn frame_reports_runtime_error() {
     let err = result.err().unwrap();
     assert!(!err.message.is_empty(), "runtime error carries a message");
 }
+
+#[test]
+fn lua_tm_ts_round_trip_through_register_state() {
+    let mut engine = LuaEngine::new();
+    // Frame-wide default set, plus a hook that repaints TM on a band — exercises
+    // both write_state (baseline) and read_state (readback).
+    let src = r#"
+        function frame(t, f)
+            TM = 0x13   -- BG1+BG2+OBJ on the main screen
+            TS = 0x04   -- BG3 on the sub screen
+            hdma(100, 120, function(y) TM = 0x1f end)
+        end
+    "#;
+    engine.set_source(src).expect("source compiles");
+    let lt = engine.frame(0.0, 0).expect("frame runs");
+    // Frame-wide default row.
+    assert_eq!(lt.rows[0].tm, 0x13);
+    assert_eq!(lt.rows[0].ts, 0x04);
+    // Inside the hook band TM is repainted; TS stays the sticky default.
+    assert_eq!(lt.rows[110].tm, 0x1f);
+    assert_eq!(lt.rows[110].ts, 0x04);
+}
