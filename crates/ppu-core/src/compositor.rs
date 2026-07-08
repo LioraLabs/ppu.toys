@@ -315,10 +315,22 @@ mod tests {
     #[test]
     fn region_active_maps_the_two_bit_field() {
         // field: 0=never, 1=outside(!inside), 2=inside, 3=always.
-        assert_eq!([region_active(0, false), region_active(0, true)], [false, false]);
-        assert_eq!([region_active(1, false), region_active(1, true)], [true, false]);
-        assert_eq!([region_active(2, false), region_active(2, true)], [false, true]);
-        assert_eq!([region_active(3, false), region_active(3, true)], [true, true]);
+        assert_eq!(
+            [region_active(0, false), region_active(0, true)],
+            [false, false]
+        );
+        assert_eq!(
+            [region_active(1, false), region_active(1, true)],
+            [true, false]
+        );
+        assert_eq!(
+            [region_active(2, false), region_active(2, true)],
+            [false, true]
+        );
+        assert_eq!(
+            [region_active(3, false), region_active(3, true)],
+            [true, true]
+        );
     }
 
     /// Set pixel (0,0) of 4bpp char `c` (at VRAM word `char_base`) to palette

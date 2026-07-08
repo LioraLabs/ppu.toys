@@ -626,7 +626,7 @@ mod tests {
         assert!(reg.math_layer_enabled(3)); // BG4
         assert!(reg.math_layer_enabled(4)); // OBJ
         assert!(!reg.math_layer_enabled(5)); // backdrop off
-        // add + backdrop enable
+                                             // add + backdrop enable
         src.cgadsub = 0x20;
         let reg = RegRow::from(&src);
         assert!(!reg.math_subtract() && !reg.math_half());
