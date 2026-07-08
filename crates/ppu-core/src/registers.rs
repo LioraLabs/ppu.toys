@@ -325,10 +325,10 @@ impl RegRow {
     pub fn layer_window(&self, layer: usize) -> WindowSel {
         // (sel byte, nibble shift, WLOG byte, WLOG field shift) per layer.
         let (sel, shift, log, log_shift) = match layer {
-            0 => (self.w12sel, 0, self.wbglog, 0),  // BG1
-            1 => (self.w12sel, 4, self.wbglog, 2),  // BG2
-            2 => (self.w34sel, 0, self.wbglog, 4),  // BG3
-            3 => (self.w34sel, 4, self.wbglog, 6),  // BG4
+            0 => (self.w12sel, 0, self.wbglog, 0),   // BG1
+            1 => (self.w12sel, 4, self.wbglog, 2),   // BG2
+            2 => (self.w34sel, 0, self.wbglog, 4),   // BG3
+            3 => (self.w34sel, 4, self.wbglog, 6),   // BG4
             _ => (self.wobjsel, 0, self.wobjlog, 0), // OBJ
         };
         WindowSel::from_bits((sel >> shift) & 0x0f, (log >> log_shift) & 0x03)
@@ -495,13 +495,22 @@ mod tests {
     fn window_registers_default_zero_and_round_trip() {
         let d = LineTableRow::default();
         assert_eq!(
-            (d.wh0, d.wh1, d.wh2, d.wh3, d.w12sel, d.w34sel, d.wobjsel, d.wbglog, d.wobjlog, d.tmw, d.tsw),
+            (
+                d.wh0, d.wh1, d.wh2, d.wh3, d.w12sel, d.w34sel, d.wobjsel, d.wbglog, d.wobjlog,
+                d.tmw, d.tsw
+            ),
             (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
         );
         let mut src = LineTableRow::default();
-        src.wh0 = 64; src.wh1 = 192; src.wh2 = 10; src.wh3 = 250;
-        src.w12sel = 0xAB; src.w34sel = 0xCD; src.wobjsel = 0xEF;
-        src.wbglog = 0x1B; src.wobjlog = 0x0E;
+        src.wh0 = 64;
+        src.wh1 = 192;
+        src.wh2 = 10;
+        src.wh3 = 250;
+        src.w12sel = 0xAB;
+        src.w34sel = 0xCD;
+        src.wobjsel = 0xEF;
+        src.wbglog = 0x1B;
+        src.wobjlog = 0x0E;
         src.tmw = 0xE3; // high bits set -> masks to 0x03 (BG1+BG2)
         src.tsw = 0x1f;
         let reg = RegRow::from(&src);
@@ -515,7 +524,10 @@ mod tests {
     #[test]
     fn regrow_layer_window_and_ranges_decode() {
         let mut src = LineTableRow::default();
-        src.wh0 = 1; src.wh1 = 2; src.wh2 = 3; src.wh3 = 4;
+        src.wh0 = 1;
+        src.wh1 = 2;
+        src.wh2 = 3;
+        src.wh3 = 4;
         // W12SEL low nibble (BG1) = 0b1011: W1 invert+enable, W2 enable.
         src.w12sel = 0x0B;
         // WBGLOG BG1 field (bits 0-1) = 0b10 = XOR.
