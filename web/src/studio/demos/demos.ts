@@ -125,6 +125,24 @@ function ribbons(): DemoAsset {
   return { id: "ribbons", width: w, height: h, data };
 }
 
+function gradient(): DemoAsset {
+  const w = SCREEN_W, h = SCREEN_H;
+  const data = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    // top->bottom hue sweep, constant across x (matches golden_demos.rs gradient()).
+    const r = Math.floor((y * 255) / (h - 1));
+    const g = Math.floor(((h - 1 - y) * 255) / (h - 1));
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      data[i] = r;
+      data[i + 1] = g;
+      data[i + 2] = 128;
+      data[i + 3] = 255;
+    }
+  }
+  return { id: "gradient", width: w, height: h, data };
+}
+
 // ── Lua sources (verbatim from golden_demos.rs DUSK_SRC / MODE7_SRC) ──────────
 const DUSK_SRC = `-- ppu.toys :: dusk-parallax (Mode 1: parallax BG scroll + CGRAM colour-cycle + sprite)
 local SPEED = 12
@@ -173,8 +191,17 @@ function frame(t, f)
 end
 `;
 
+const MODE3_SRC = `-- ppu.toys :: mode3-gradient (Mode 3: 8bpp 256-colour BG1 gradient)
+function frame(t, f)
+  mode = 3; brightness = 15
+  bg[1].source = "gradient"
+  bg[1].char_base = 0x1000
+end
+`;
+
 export const DEMOS: Demo[] = [
   { id: "dusk-parallax", label: "dusk-parallax", source: DUSK_SRC, assets: [sky(), hills(), hero()] },
   { id: "mode7-floor", label: "mode7-floor", source: MODE7_SRC, assets: [track()] },
   { id: "offset-per-tile", label: "offset-per-tile", source: OFFSET_SRC, assets: [ribbons()] },
+  { id: "mode3-gradient", label: "mode3-gradient", source: MODE3_SRC, assets: [gradient()] },
 ];

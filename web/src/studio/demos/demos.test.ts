@@ -2,8 +2,13 @@ import { describe, it, expect } from "vitest";
 import { DEMOS } from "./demos";
 
 describe("DEMOS", () => {
-  it("ships dusk-parallax, mode7-floor, and offset-per-tile", () => {
-    expect(DEMOS.map((d) => d.id)).toEqual(["dusk-parallax", "mode7-floor", "offset-per-tile"]);
+  it("ships dusk-parallax, mode7-floor, offset-per-tile, and mode3-gradient", () => {
+    expect(DEMOS.map((d) => d.id)).toEqual([
+      "dusk-parallax",
+      "mode7-floor",
+      "offset-per-tile",
+      "mode3-gradient",
+    ]);
   });
 
   it("dusk-parallax carries sky/hills/hero with correct RGBA sizes", () => {
@@ -31,6 +36,21 @@ describe("DEMOS", () => {
     expect(d.source).toContain("mode = 7");
     expect(d.source).toContain("m7.a, m7.d");
     expect(d.source).toContain("hdma(96, 223");
+  });
+
+  it("mode3-gradient carries the 8bpp gradient source and mode 3 lua", () => {
+    const d = DEMOS.find((x) => x.id === "mode3-gradient")!;
+    expect(d.assets.map((a) => a.id)).toEqual(["gradient"]);
+    expect(d.assets[0].width).toBe(256);
+    expect(d.assets[0].height).toBe(224);
+    expect(d.assets[0].data.length).toBe(256 * 224 * 4);
+    expect(d.source).toContain("mode = 3");
+    expect(d.source).toContain('bg[1].source = "gradient"');
+    // >16 distinct colours -> the whole point of the 8bpp path
+    const colors = new Set<string>();
+    const g = d.assets[0].data;
+    for (let i = 0; i < g.length; i += 4) colors.add(`${g[i]},${g[i + 1]},${g[i + 2]}`);
+    expect(colors.size).toBeGreaterThan(16);
   });
 
   it("sky is opaque above the horizon and transparent below it", () => {
