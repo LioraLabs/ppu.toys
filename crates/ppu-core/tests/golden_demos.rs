@@ -8,6 +8,7 @@ const OFFSET_GOLDEN: &str = "tests/fixtures/golden_offset_per_tile.png";
 const MODE3_GOLDEN: &str = "tests/fixtures/golden_mode3_gradient.png";
 const MODE0_GOLDEN: &str = "tests/fixtures/golden_mode0_bands.png";
 const TRANSLUCENCY_GOLDEN: &str = "tests/fixtures/golden_translucency.png";
+const SPOTLIGHT_GOLDEN: &str = "tests/fixtures/golden_spotlight.png";
 
 const DUSK_SRC: &str = r#"-- ppu.toys :: dusk-parallax (Mode 1: parallax BG scroll + CGRAM colour-cycle + sprite)
 local SPEED = 12
@@ -82,6 +83,30 @@ function frame(t, f)
   TS = 0x02        -- BG2 (scene) on the sub screen -> the addend under the glass
   CGADSUB = 0x41   -- add + half + BG1 math-enable
   CGWSEL = 0x02    -- addend = subscreen (not fixed colour)
+end
+"#;
+
+const SPOTLIGHT_SRC: &str = r#"-- ppu.toys :: spotlight (per-scanline circular iris via the colour window)
+function frame(t, f)
+  mode = 1; brightness = 15
+  bg[1].source = "ribbons"
+  TM = 0x01                 -- BG1 only on the main screen
+  WOBJSEL = 0x20            -- COLOR window: window-1 enable (high nibble bit1)
+  WOBJLOG = 0x00            -- COLOR window logic = OR
+  CGWSEL = 0x40             -- clip-to-black region = 01 (outside the window -> black)
+  -- iris: per scanline, window 1 spans [cx-hw, cx+hw] where hw traces a circle.
+  local cx, cy, r = 128, 112, 70
+  hdma(0, 223, function(y)
+    local dy = y - cy
+    local inside = r*r - dy*dy
+    if inside < 0 then
+      WH0 = 1; WH1 = 0        -- empty span (left > right) -> nothing inside
+    else
+      local hw = floor(sqrt(inside))
+      WH0 = cx - hw
+      WH1 = cx + hw
+    end
+  end)
 end
 "#;
 
@@ -515,4 +540,30 @@ fn translucency_demo_matches_golden_png() {
 fn regen_golden_translucency() {
     let (fb, _) = render_demo(TRANSLUCENCY_SRC);
     write_png(TRANSLUCENCY_GOLDEN, &fb);
+}
+
+#[test]
+fn spotlight_demo_masks_scene_to_a_circular_iris() {
+    let (fb, _) = render_demo(SPOTLIGHT_SRC);
+    // Center of the iris shows the scene; a far corner (well outside r=70) is clipped black.
+    let center = &fb[(112 * WIDTH + 128) * 4..][..4];
+    let corner = &fb[(5 * WIDTH + 5) * 4..][..4];
+    assert_ne!(center[..3], [0, 0, 0], "iris centre was clipped");
+    assert_eq!(corner[..3], [0, 0, 0], "outside the iris should be black");
+}
+
+#[test]
+fn spotlight_demo_matches_golden_png() {
+    assert!(Path::new(SPOTLIGHT_GOLDEN).exists());
+    let (actual, _) = render_demo(SPOTLIGHT_SRC);
+    let expected = decode_png(SPOTLIGHT_GOLDEN);
+    assert_eq!(actual.len(), expected.len());
+    assert_eq!(actual, expected, "spotlight demo differs from golden PNG");
+}
+
+#[test]
+#[ignore = "regenerates the committed spotlight demo golden PNG"]
+fn regen_golden_spotlight() {
+    let (fb, _) = render_demo(SPOTLIGHT_SRC);
+    write_png(SPOTLIGHT_GOLDEN, &fb);
 }
