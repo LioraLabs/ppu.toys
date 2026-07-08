@@ -324,6 +324,25 @@ mod tests {
     }
 
     #[test]
+    fn mode0_bg4_dispatches_with_fourth_cgram_band() {
+        let mut mem = Memory::new();
+        mem.cgram[0] = rgb15(0, 0, 0);
+        mem.cgram[24 * 4 + 1] = rgb15(0, 0, 255);
+        mem.vram[0x3000 + 8] = 0x0080;
+        mem.vram[0] = 1;
+
+        let mut src = LineTableRow::default();
+        src.mode = 0;
+        src.bg[3].char_base = 0x3000;
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+
+        assert_eq!(
+            &render_frame(&lt, &mem)[0..4],
+            &unpack_rgb15(rgb15(0, 0, 255))
+        );
+    }
+
+    #[test]
     fn unsupported_tile_modes_still_render_obj() {
         let mut mem = Memory::new();
         mem.cgram[0] = rgb15(0, 0, 0);
