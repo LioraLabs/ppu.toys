@@ -300,3 +300,25 @@ fn runtime_error_in_hook_propagates() {
     };
     assert!(err.message.contains("boom"), "got: {}", err.message);
 }
+
+#[test]
+fn lua_column_offset_helper_writes_bg3_offset_words() {
+    let src = r#"
+function column_offset(col, dh, dv)
+  local base = 0x0800
+  bg[3].map_base = base
+  local enable = 0x2000
+  vram[base + col] = enable + (dh % 1024)
+  vram[base + 32 + col] = enable + 0x8000 + (dv % 1024)
+end
+
+function frame(t, f)
+  mode = 2
+  column_offset(3, 8, 1)
+end
+"#;
+    let mut e = engine(src);
+    e.frame(0.0, 0).unwrap();
+    assert_eq!(e.memory().vram[0x0800 + 3], 0x2000 | 8);
+    assert_eq!(e.memory().vram[0x0800 + 32 + 3], 0x2000 | 0x8000 | 1);
+}
