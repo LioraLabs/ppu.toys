@@ -1,7 +1,7 @@
 //! Per-mode static capability table: bits-per-pixel per BG layer + fixed layer
 //! order. The rasterizer/compositor read this instead of hard-coding modes, so
-//! new modes (0/2/3) become table rows, not rewrites. Ships Mode 1 + Mode 7;
-//! offset-per-tile (2/4/6) and hi-res (5/6) stay out of scope for M4.
+//! new modes become table rows, not rewrites. Ships tile modes 0-4 + Mode 7;
+//! hi-res (5/6) stays out of scope for M4.
 
 /// Static capabilities of one BG mode.
 #[derive(Debug, PartialEq, Eq)]
@@ -14,6 +14,8 @@ pub struct ModeInfo {
     /// Fixed front-to-back BG order at equal tile priority (0-based indices).
     /// Per-tile priority interleaving is the m4/compositing pass's concern.
     pub priority_order: &'static [u8],
+    /// Whether the mode uses BG3 as the offset-per-tile control layer.
+    pub offset_per_tile: bool,
 }
 
 impl ModeInfo {
@@ -23,11 +25,44 @@ impl ModeInfo {
     }
 }
 
+/// Mode 0: four 2bpp BG layers.
+const MODE_0: ModeInfo = ModeInfo {
+    mode: 0,
+    bpp: [2, 2, 2, 2],
+    priority_order: &[0, 1, 2, 3],
+    offset_per_tile: false,
+};
+
 /// Mode 1: BG1/BG2 4bpp, BG3 2bpp. (The BG3-priority BGMODE bit is m4/compositing.)
 const MODE_1: ModeInfo = ModeInfo {
     mode: 1,
     bpp: [4, 4, 2, 0],
     priority_order: &[0, 1, 2],
+    offset_per_tile: false,
+};
+
+/// Mode 2: BG1/BG2 4bpp with offset-per-tile controls.
+const MODE_2: ModeInfo = ModeInfo {
+    mode: 2,
+    bpp: [4, 4, 0, 0],
+    priority_order: &[0, 1],
+    offset_per_tile: true,
+};
+
+/// Mode 3: BG1 8bpp, BG2 4bpp.
+const MODE_3: ModeInfo = ModeInfo {
+    mode: 3,
+    bpp: [8, 4, 0, 0],
+    priority_order: &[0, 1],
+    offset_per_tile: false,
+};
+
+/// Mode 4: BG1/BG2 4bpp with offset-per-tile controls.
+const MODE_4: ModeInfo = ModeInfo {
+    mode: 4,
+    bpp: [4, 4, 0, 0],
+    priority_order: &[0, 1],
+    offset_per_tile: true,
 };
 
 /// Mode 7: one 8bpp affine BG over the interleaved VRAM layout (m4/mode7).
@@ -35,13 +70,17 @@ const MODE_7: ModeInfo = ModeInfo {
     mode: 7,
     bpp: [8, 0, 0, 0],
     priority_order: &[0],
+    offset_per_tile: false,
 };
 
-/// Look up a mode's static capabilities. Modes 0/2/3 are trivial future rows
-/// (one `ModeInfo` each); unsupported modes return `None`.
+/// Look up a mode's static capabilities. Unsupported modes return `None`.
 pub fn mode_info(mode: u8) -> Option<&'static ModeInfo> {
     match mode {
+        0 => Some(&MODE_0),
         1 => Some(&MODE_1),
+        2 => Some(&MODE_2),
+        3 => Some(&MODE_3),
+        4 => Some(&MODE_4),
         7 => Some(&MODE_7),
         _ => None,
     }
@@ -68,10 +107,41 @@ mod tests {
     }
 
     #[test]
-    fn unshipped_modes_are_none() {
-        for mode in [0u8, 2, 3, 4, 5, 6] {
-            assert!(mode_info(mode).is_none(), "mode {mode} should be unshipped");
+    fn mode_0_is_four_2bpp_layers() {
+        let m = mode_info(0).unwrap();
+        assert_eq!(m.bpp, [2, 2, 2, 2]);
+        assert_eq!(m.layer_count(), 4);
+        assert_eq!(m.priority_order, &[0, 1, 2, 3]);
+        assert!(!m.offset_per_tile);
+    }
+
+    #[test]
+    fn modes_2_and_4_mark_offset_per_tile_without_drawing_bg3() {
+        for mode in [2u8, 4] {
+            let m = mode_info(mode).unwrap();
+            assert_eq!(m.bpp, [4, 4, 0, 0]);
+            assert_eq!(m.layer_count(), 2);
+            assert_eq!(m.priority_order, &[0, 1]);
+            assert!(m.offset_per_tile);
         }
-        assert!(mode_info(9).is_none()); // out of range entirely
+    }
+
+    #[test]
+    fn mode_3_is_8bpp_bg1_plus_4bpp_bg2() {
+        let m = mode_info(3).unwrap();
+        assert_eq!(m.bpp, [8, 4, 0, 0]);
+        assert_eq!(m.layer_count(), 2);
+        assert_eq!(m.priority_order, &[0, 1]);
+        assert!(!m.offset_per_tile);
+    }
+
+    #[test]
+    fn still_unsupported_modes_are_none() {
+        for mode in [5u8, 6, 9] {
+            assert!(
+                mode_info(mode).is_none(),
+                "mode {mode} should remain unsupported"
+            );
+        }
     }
 }
