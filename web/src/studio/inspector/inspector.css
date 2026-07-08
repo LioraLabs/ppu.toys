@@ -168,3 +168,14 @@
   border: 1px solid var(--border-palette);
   border-radius: 2px;
 }
+.reg-mode {
+  margin: 2px 4px 8px;
+  padding: 5px 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: var(--bg-grid);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  color: var(--text-dim2);
+}
