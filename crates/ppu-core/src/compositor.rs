@@ -18,7 +18,7 @@
 
 use crate::bg::{apply_brightness, render_bg_layer_scanline_px, BgPixel};
 use crate::linetable::LineTable;
-use crate::memory::{unpack_rgb15, Memory};
+use crate::memory::{rgb15, unpack_rgb15, Memory};
 use crate::mode7::render_mode7_scanline;
 use crate::modes::mode_info;
 use crate::registers::RegRow;
@@ -291,19 +291,56 @@ pub(crate) fn composite_screen(
     }
 }
 
+/// Blend one resolved MAIN pixel against the SUB screen (or COLDATA), returning
+/// the pre-brightness RGBA. Applies CGADSUB add/sub/half gated by the main
+/// source layer's enable bit and (for sprites) the OBJ palette-4-7 rule. Window
+/// regions (clip-to-black / prevent-math) are layered on in a later task.
+/// `main`/`sub` are the resolved RGBA pixels; `src_main`/`src_sub` their sources.
+fn blend_pixel(
+    row: &RegRow,
+    main: [u8; 4],
+    sub: [u8; 4],
+    src_main: PixelSource,
+    src_sub: PixelSource,
+) -> [u8; 4] {
+    let math_enabled = row.math_layer_enabled(src_main.math_layer())
+        && match src_main {
+            PixelSource::Obj { pal } => pal >= 4,
+            _ => true,
+        };
+    if !math_enabled {
+        return main;
+    }
+    let main15 = rgb15(main[0], main[1], main[2]);
+    let (sub15, sub_is_backdrop) = if row.add_subscreen() {
+        (
+            rgb15(sub[0], sub[1], sub[2]),
+            src_sub == PixelSource::Backdrop,
+        )
+    } else {
+        (row.coldata, false)
+    };
+    let half = row.math_half() && !sub_is_backdrop;
+    unpack_rgb15(color_math(main15, sub15, row.math_subtract(), half))
+}
+
 /// Phase-2 compositor entry: resolved `LineTable` (224 rows) + `Memory` -> full
 /// 256x224 RGBA framebuffer (`WIDTH*HEIGHT*4` bytes; alpha always 255). This is
 /// the seam the wasm shim (E7) calls.
 pub fn render_frame(lt: &LineTable, mem: &Memory) -> Vec<u8> {
     let mut fb = vec![0u8; WIDTH * HEIGHT * 4];
-    let mut line = vec![[0u8; 4]; WIDTH];
-    let mut src = vec![PixelSource::Backdrop; WIDTH];
+    let mut main = vec![[0u8; 4]; WIDTH];
+    let mut sub = vec![[0u8; 4]; WIDTH];
+    let mut src_main = vec![PixelSource::Backdrop; WIDTH];
+    let mut src_sub = vec![PixelSource::Backdrop; WIDTH];
     let rows = lt.rows.len().min(HEIGHT);
     for y in 0..rows {
         let row = &lt.rows[y];
-        composite_screen(row, mem, y, row.tm, row.tmw, &mut line, &mut src);
+        composite_screen(row, mem, y, row.tm, row.tmw, &mut main, &mut src_main);
+        composite_screen(row, mem, y, row.ts, row.tsw, &mut sub, &mut src_sub);
         let bri = row.brightness;
-        for (x, px) in line.iter().enumerate() {
+        for x in 0..WIDTH {
+            let px = blend_pixel(row, main[x], sub[x], src_main[x], src_sub[x]);
             let o = (y * WIDTH + x) * 4;
             fb[o] = apply_brightness(px[0], bri);
             fb[o + 1] = apply_brightness(px[1], bri);
@@ -318,7 +355,6 @@ pub fn render_frame(lt: &LineTable, mem: &Memory) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::linetable::LineTableBuilder;
-    use crate::memory::rgb15;
     use crate::registers::{LineTableRow, Obj};
 
     /// Pack 5-bit channels straight into a BGR555 word (unlike `rgb15` which
@@ -745,5 +781,122 @@ mod tests {
         assert_eq!(PixelSource::Bg(0).math_layer(), 0);
         assert_eq!(PixelSource::Obj { pal: 5 }.math_layer(), 4);
         assert_eq!(PixelSource::Backdrop.math_layer(), 5);
+    }
+
+    /// Build a two-BG scene: BG1 (pal0) on main, BG2 (pal1) on sub, sharing char 1.
+    /// Returns (memory, source-row) with color-math registers left default.
+    fn two_screen_scene(bg1: u16, bg2: u16) -> (Memory, LineTableRow) {
+        let mut m = Memory::new();
+        m.cgram[0] = rgb15(0, 0, 0);
+        m.cgram[1] = bg1; // BG1 pal0 idx1
+        m.cgram[16 + 1] = bg2; // BG2 pal1 idx1
+        put_px(&mut m, 0x1000, 1); // shared char 1
+        m.vram[0x0000] = 1; // BG1 map(0,0): tile1 pal0
+        m.vram[0x0400] = 1 | (1 << 10); // BG2 map(0,0): tile1 pal1
+        let mut src = LineTableRow::default();
+        src.bg[0].char_base = 0x1000;
+        src.bg[1].char_base = 0x1000;
+        src.bg[1].map_base = 0x0400;
+        src.tm = 0x01; // main: BG1 only
+        src.ts = 0x02; // sub: BG2 only
+        (m, src)
+    }
+
+    #[test]
+    fn half_add_is_clean_translucency() {
+        // A = (31,0,0), B = (0,0,31). ½-add -> (15,0,15) in 5-bit.
+        let (m, mut src) = two_screen_scene(rgb15(255, 0, 0), rgb15(0, 0, 255));
+        src.cgadsub = 0x40 | 0x01; // add + half + BG1 enable
+        src.cgwsel = 0x02; // addend = subscreen
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        let want = unpack_rgb15((15 << 10) | 15); // b=15, r=15
+        assert_eq!(&render_frame(&lt, &m)[0..4], &want);
+    }
+
+    #[test]
+    fn subtract_darkens_main_by_sub() {
+        // main r=20, sub r=5 -> 15 (no half).
+        let (m, mut src) = two_screen_scene(20u16, 5u16);
+        src.cgadsub = 0x80 | 0x01; // subtract + BG1 enable
+        src.cgwsel = 0x02;
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        assert_eq!(&render_frame(&lt, &m)[0..4], &unpack_rgb15(15));
+    }
+
+    #[test]
+    fn math_disabled_layer_passes_main_through() {
+        // BG1 enable bit clear -> no math; main shows A unchanged.
+        let (m, mut src) = two_screen_scene(rgb15(255, 0, 0), rgb15(0, 0, 255));
+        src.cgadsub = 0x40 | 0x02; // add + half but only BG2 enabled (not the main source)
+        src.cgwsel = 0x02;
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        assert_eq!(
+            &render_frame(&lt, &m)[0..4],
+            &unpack_rgb15(rgb15(255, 0, 0))
+        );
+    }
+
+    #[test]
+    fn fixed_color_source_uses_coldata_not_subscreen() {
+        // addend = fixed color; COLDATA blue=31. main red -> add -> (31,0,31).
+        let (m, mut src) = two_screen_scene(rgb15(255, 0, 0), rgb15(0, 255, 0));
+        src.cgadsub = 0x01; // add + BG1 enable (no half)
+        src.cgwsel = 0x00; // addend = fixed color (bit1 clear)
+        src.coldata = 31 << 10; // blue = 31
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        assert_eq!(&render_frame(&lt, &m)[0..4], &unpack_rgb15((31 << 10) | 31));
+    }
+
+    #[test]
+    fn half_is_suppressed_when_sub_pixel_is_backdrop() {
+        // Sub screen empty (TS=0) -> sub pixel is backdrop -> half NOT applied.
+        let (m, mut src) = two_screen_scene(rgb15(255, 0, 0), rgb15(0, 0, 255));
+        src.ts = 0x00; // sub = backdrop (black) everywhere
+        src.cgadsub = 0x40 | 0x01; // add + half + BG1
+        src.cgwsel = 0x02; // addend = subscreen (which is backdrop here)
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        // main(31,0,0) + backdrop(0,0,0) = (31,0,0), half suppressed -> unchanged.
+        assert_eq!(
+            &render_frame(&lt, &m)[0..4],
+            &unpack_rgb15(rgb15(255, 0, 0))
+        );
+    }
+
+    #[test]
+    fn obj_palette_gate_excludes_low_palettes() {
+        // A sprite on the MAIN screen; sub BG2 = blue via subscreen; add.
+        // OBJ math enabled only if sprite uses palette 4-7.
+        let build = |pal: u8| {
+            let mut m = Memory::new();
+            m.cgram[0] = rgb15(0, 0, 0);
+            m.cgram[128 + (pal as usize) * 16 + 1] = rgb15(255, 0, 0); // sprite red
+            m.cgram[16 + 1] = rgb15(0, 0, 255); // BG2 pal1 blue (sub)
+            put_px(&mut m, 0x1000, 1);
+            m.vram[0x0400] = 1 | (1 << 10);
+            m.obsel.char_base = 0x4000;
+            m.vram[0x4000 + 16] = 0x0080;
+            m.oam[0] = Obj {
+                on: true,
+                x: 0,
+                y: 0,
+                tile: 1,
+                pal,
+                prio: 3,
+                ..Obj::default()
+            };
+            let mut src = LineTableRow::default();
+            src.bg[1].char_base = 0x1000;
+            src.bg[1].map_base = 0x0400;
+            src.tm = 0x10; // main: OBJ only
+            src.ts = 0x02; // sub: BG2 only
+            src.cgadsub = 0x10; // add + OBJ enable
+            src.cgwsel = 0x02; // addend = subscreen
+            let lt = LineTableBuilder::new(src).build(HEIGHT);
+            render_frame(&lt, &m)[0..4].to_vec()
+        };
+        // pal 3: gate blocks math -> sprite red unchanged.
+        assert_eq!(build(3), unpack_rgb15(rgb15(255, 0, 0)));
+        // pal 4: math applies -> red + blue = (31,0,31).
+        assert_eq!(build(4), unpack_rgb15((31 << 10) | 31));
     }
 }
