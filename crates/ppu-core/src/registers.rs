@@ -204,6 +204,10 @@ pub struct RegBg {
     /// the mode table (modes.rs) at quantize time; 0 = the layer does not
     /// exist in this mode (renders transparent).
     pub bpp: u8,
+    /// CGWSEL bit0 direct-color mode: an 8bpp index is read as a direct BGR555
+    /// color built from index+palette bits instead of a CGRAM lookup. Only
+    /// affects 8bpp layers; ignored otherwise.
+    pub direct_color: bool,
 }
 
 impl From<&Bg> for RegBg {
@@ -222,6 +226,7 @@ impl From<&Bg> for RegBg {
             offset_map_base: 0,
             offset_screen_size: 0,
             bpp: 0, // resolved from the mode table by RegRow::from (needs the row's mode)
+            direct_color: false,
         }
     }
 }
@@ -294,6 +299,7 @@ impl From<&LineTableRow> for RegRow {
             b.mode = mode;
             b.layer = i as u8;
             b.bpp = bpp[i];
+            b.direct_color = r.cgwsel & 1 != 0;
             b
         });
         let offset_map_base = bg[2].map_base;
