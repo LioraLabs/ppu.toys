@@ -7,6 +7,11 @@ const MODE7_GOLDEN: &str = "tests/fixtures/golden_mode7_floor.png";
 const OFFSET_GOLDEN: &str = "tests/fixtures/golden_offset_per_tile.png";
 const MODE3_GOLDEN: &str = "tests/fixtures/golden_mode3_gradient.png";
 const MODE0_GOLDEN: &str = "tests/fixtures/golden_mode0_bands.png";
+const TRANSLUCENCY_GOLDEN: &str = "tests/fixtures/golden_translucency.png";
+const SPOTLIGHT_GOLDEN: &str = "tests/fixtures/golden_spotlight.png";
+const GLOW_GOLDEN: &str = "tests/fixtures/golden_glow.png";
+const TM_MASK_GOLDEN: &str = "tests/fixtures/golden_tm_mask.png";
+const SHADOW_GOLDEN: &str = "tests/fixtures/golden_shadow.png";
 
 const DUSK_SRC: &str = r#"-- ppu.toys :: dusk-parallax (Mode 1: parallax BG scroll + CGRAM colour-cycle + sprite)
 local SPEED = 12
@@ -68,6 +73,74 @@ function frame(t, f)
   mode = 0; brightness = 15
   bg[1].source = "mode0_bg1"
   bg[2].source = "mode0_bg2"; bg[2].map_base = 0x0400; bg[2].char_base = 0x2000
+end
+"#;
+
+const TRANSLUCENCY_SRC: &str = r#"-- ppu.toys :: translucency (½-add glass panel over a scrolling BG)
+function frame(t, f)
+  mode = 1; brightness = 15
+  bg[1].source = "panel"                       -- the glass panel (main only)
+  bg[2].source = "ribbons"; bg[2].char_base = 0x2000  -- scene, on main AND sub
+  bg[2].map_base = 0x0800
+  TM = 0x03        -- BG1 (panel) + BG2 (scene) on the main screen
+  TS = 0x02        -- BG2 (scene) on the sub screen -> the addend under the glass
+  CGADSUB = 0x41   -- add + half + BG1 math-enable
+  CGWSEL = 0x02    -- addend = subscreen (not fixed colour)
+end
+"#;
+
+const SPOTLIGHT_SRC: &str = r#"-- ppu.toys :: spotlight (per-scanline circular iris via the colour window)
+function frame(t, f)
+  mode = 1; brightness = 15
+  bg[1].source = "ribbons"
+  TM = 0x01                 -- BG1 only on the main screen
+  WOBJSEL = 0x20            -- COLOR window: window-1 enable (high nibble bit1)
+  WOBJLOG = 0x00            -- COLOR window logic = OR
+  CGWSEL = 0x40             -- clip-to-black region = 01 (outside the window -> black)
+  -- iris: per scanline, window 1 spans [cx-hw, cx+hw] where hw traces a circle.
+  local cx, cy, r = 128, 112, 70
+  hdma(0, 223, function(y)
+    local dy = y - cy
+    local inside = r*r - dy*dy
+    if inside < 0 then
+      WH0 = 1; WH1 = 0        -- empty span (left > right) -> nothing inside
+    else
+      local hw = floor(sqrt(inside))
+      WH0 = cx - hw
+      WH1 = cx + hw
+    end
+  end)
+end
+"#;
+
+const GLOW_SRC: &str = r#"-- ppu.toys :: additive-glow (fixed-colour add brightens BG1 toward warm)
+function frame(t, f)
+  mode = 1; brightness = 15
+  bg[1].source = "ribbons"
+  TM = 0x01               -- BG1 on the main screen
+  CGADSUB = 0x01          -- add (bit7 clear) + BG1 math-enable, no half
+  CGWSEL = 0x00           -- addend = COLDATA fixed colour
+  COLDATA = rgb(120, 60, 0)  -- warm glow added to every BG1 pixel
+end
+"#;
+
+const TM_MASK_SRC: &str = r#"-- ppu.toys :: tm-mask (TM drops BG2 from the main screen)
+function frame(t, f)
+  mode = 0; brightness = 15
+  bg[1].source = "mode0_bg1"
+  bg[2].source = "mode0_bg2"; bg[2].map_base = 0x0400; bg[2].char_base = 0x2000
+  TM = 0x01   -- BG1 only; BG2 is masked off the main screen
+end
+"#;
+
+const SHADOW_SRC: &str = r#"-- ppu.toys :: shadow (subtractive fixed-colour darkens BG1)
+function frame(t, f)
+  mode = 1; brightness = 15
+  bg[1].source = "ribbons"
+  TM = 0x01
+  CGADSUB = 0x81          -- subtract (bit7) + BG1 math-enable
+  CGWSEL = 0x00           -- addend = COLDATA fixed colour
+  COLDATA = rgb(120, 120, 120)
 end
 "#;
 
@@ -169,6 +242,20 @@ fn ribbons() -> Vec<u8> {
     data
 }
 
+fn panel() -> Vec<u8> {
+    let mut data = vec![0u8; WIDTH * HEIGHT * 4];
+    for y in 0..HEIGHT {
+        let opaque = (80..160).contains(&y);
+        for x in 0..WIDTH {
+            let i = (y * WIDTH + x) * 4;
+            if opaque {
+                data[i..i + 4].copy_from_slice(&[80, 230, 255, 255]); // cyan glass
+            } // else alpha 0
+        }
+    }
+    data
+}
+
 fn gradient() -> Vec<u8> {
     let mut data = vec![0u8; WIDTH * HEIGHT * 4];
     for y in 0..HEIGHT {
@@ -222,6 +309,7 @@ fn demo_engine(src: &str) -> LuaEngine {
     e.upload_asset("gradient".into(), WIDTH as u32, HEIGHT as u32, gradient());
     e.upload_asset("mode0_bg1".into(), WIDTH as u32, HEIGHT as u32, mode0_bg1());
     e.upload_asset("mode0_bg2".into(), WIDTH as u32, HEIGHT as u32, mode0_bg2());
+    e.upload_asset("panel".into(), WIDTH as u32, HEIGHT as u32, panel());
     e.set_source(src).unwrap();
     e
 }
@@ -456,4 +544,146 @@ fn mode0_bands_demo_matches_golden_png() {
 fn regen_golden_mode0_bands() {
     let (fb, _) = render_demo(MODE0_SRC);
     write_png(MODE0_GOLDEN, &fb);
+}
+
+#[test]
+fn translucency_demo_blends_panel_half_over_scene() {
+    let (fb, _) = render_demo(TRANSLUCENCY_SRC);
+    // A column inside the panel band (y=120) blends panel+scene at half; a column
+    // in the same x but below the panel (y=200) shows the scene alone.
+    let panel_px = &fb[(120 * WIDTH + 128) * 4..][..4];
+    let scene_px = &fb[(200 * WIDTH + 128) * 4..][..4];
+    assert_ne!(panel_px[..3], [0, 0, 0], "glass pixel went black");
+    assert_ne!(scene_px[..3], [0, 0, 0], "scene pixel went black");
+    // Half-blend pulls the bright cyan panel toward the darker scene: the blended
+    // green channel is below the panel's own ~230 full value.
+    assert!(panel_px[1] < 230, "no half-blend darkening applied to the panel");
+}
+
+#[test]
+fn translucency_demo_matches_golden_png() {
+    assert!(Path::new(TRANSLUCENCY_GOLDEN).exists());
+    let (actual, _) = render_demo(TRANSLUCENCY_SRC);
+    let expected = decode_png(TRANSLUCENCY_GOLDEN);
+    assert_eq!(actual.len(), expected.len());
+    assert_eq!(actual, expected, "translucency demo differs from golden PNG");
+}
+
+#[test]
+#[ignore = "regenerates the committed translucency demo golden PNG"]
+fn regen_golden_translucency() {
+    let (fb, _) = render_demo(TRANSLUCENCY_SRC);
+    write_png(TRANSLUCENCY_GOLDEN, &fb);
+}
+
+#[test]
+fn spotlight_demo_masks_scene_to_a_circular_iris() {
+    let (fb, _) = render_demo(SPOTLIGHT_SRC);
+    // Center of the iris shows the scene; a far corner (well outside r=70) is clipped black.
+    let center = &fb[(112 * WIDTH + 128) * 4..][..4];
+    let corner = &fb[(5 * WIDTH + 5) * 4..][..4];
+    assert_ne!(center[..3], [0, 0, 0], "iris centre was clipped");
+    assert_eq!(corner[..3], [0, 0, 0], "outside the iris should be black");
+}
+
+#[test]
+fn spotlight_demo_matches_golden_png() {
+    assert!(Path::new(SPOTLIGHT_GOLDEN).exists());
+    let (actual, _) = render_demo(SPOTLIGHT_SRC);
+    let expected = decode_png(SPOTLIGHT_GOLDEN);
+    assert_eq!(actual.len(), expected.len());
+    assert_eq!(actual, expected, "spotlight demo differs from golden PNG");
+}
+
+#[test]
+#[ignore = "regenerates the committed spotlight demo golden PNG"]
+fn regen_golden_spotlight() {
+    let (fb, _) = render_demo(SPOTLIGHT_SRC);
+    write_png(SPOTLIGHT_GOLDEN, &fb);
+}
+
+#[test]
+fn glow_demo_adds_fixed_color_over_baseline() {
+    let (glow, _) = render_demo(GLOW_SRC);
+    // Baseline: identical scene with no colour math.
+    let baseline_src = GLOW_SRC
+        .replace("CGADSUB = 0x01", "CGADSUB = 0x00")
+        .replace("COLDATA = rgb(120, 60, 0)", "COLDATA = 0");
+    let (base, _) = render_demo(&baseline_src);
+    // The additive red channel must lift the frame overall (sum of R over the frame).
+    let sum_r = |fb: &[u8]| fb.chunks_exact(4).map(|p| p[0] as u64).sum::<u64>();
+    assert!(sum_r(&glow) > sum_r(&base), "additive glow did not brighten the frame");
+}
+
+#[test]
+fn glow_demo_matches_golden_png() {
+    assert!(Path::new(GLOW_GOLDEN).exists());
+    let (actual, _) = render_demo(GLOW_SRC);
+    let expected = decode_png(GLOW_GOLDEN);
+    assert_eq!(actual.len(), expected.len());
+    assert_eq!(actual, expected, "glow demo differs from golden PNG");
+}
+
+#[test]
+#[ignore = "regenerates the committed additive-glow demo golden PNG"]
+fn regen_golden_glow() {
+    let (fb, _) = render_demo(GLOW_SRC);
+    write_png(GLOW_GOLDEN, &fb);
+}
+
+#[test]
+fn tm_mask_demo_removes_bg2_from_main_screen() {
+    let (fb, _) = render_demo(TM_MASK_SRC);
+    // mode0_bg2 is magenta (R high, B high, G low). With BG2 masked off TM, no
+    // pixel in the frame should read as that magenta.
+    let has_magenta = fb
+        .chunks_exact(4)
+        .any(|p| p[0] > 150 && p[2] > 120 && p[1] < 100 && p[3] == 255);
+    assert!(!has_magenta, "BG2 magenta leaked despite TM=0x01");
+    // BG1 green is still present.
+    let has_green = fb
+        .chunks_exact(4)
+        .any(|p| p[1] > 150 && p[0] < 100 && p[3] == 255);
+    assert!(has_green, "BG1 green missing");
+}
+
+#[test]
+fn shadow_demo_subtracts_fixed_color_below_baseline() {
+    let (shadow, _) = render_demo(SHADOW_SRC);
+    let baseline_src = SHADOW_SRC
+        .replace("CGADSUB = 0x81", "CGADSUB = 0x00")
+        .replace("COLDATA = rgb(120, 120, 120)", "COLDATA = 0");
+    let (base, _) = render_demo(&baseline_src);
+    let sum = |fb: &[u8]| fb.chunks_exact(4).map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64).sum::<u64>();
+    assert!(sum(&shadow) < sum(&base), "subtract did not darken the frame");
+}
+
+#[test]
+fn tm_mask_demo_matches_golden_png() {
+    assert!(Path::new(TM_MASK_GOLDEN).exists());
+    let (actual, _) = render_demo(TM_MASK_SRC);
+    let expected = decode_png(TM_MASK_GOLDEN);
+    assert_eq!(actual, expected, "tm-mask demo differs from golden PNG");
+}
+
+#[test]
+#[ignore = "regenerates the committed TM-mask golden PNG"]
+fn regen_golden_tm_mask() {
+    let (fb, _) = render_demo(TM_MASK_SRC);
+    write_png(TM_MASK_GOLDEN, &fb);
+}
+
+#[test]
+fn shadow_demo_matches_golden_png() {
+    assert!(Path::new(SHADOW_GOLDEN).exists());
+    let (actual, _) = render_demo(SHADOW_SRC);
+    let expected = decode_png(SHADOW_GOLDEN);
+    assert_eq!(actual, expected, "shadow demo differs from golden PNG");
+}
+
+#[test]
+#[ignore = "regenerates the committed subtractive-shadow golden PNG"]
+fn regen_golden_shadow() {
+    let (fb, _) = render_demo(SHADOW_SRC);
+    write_png(SHADOW_GOLDEN, &fb);
 }

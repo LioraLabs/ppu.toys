@@ -179,3 +179,42 @@
   letter-spacing: 0.1em;
   color: var(--text-dim2);
 }
+
+/* M6 main/sub + colour-math + window summary */
+.reg-m6 {
+  margin: 0 4px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.reg-m6-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.reg-m6-key {
+  width: 38px;
+  flex: none;
+  letter-spacing: 0.1em;
+  color: var(--text-dim2);
+}
+.reg-m6-val { color: var(--text-main); }
+.reg-winbar {
+  position: relative;
+  height: 8px;
+  margin-top: 3px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  background: var(--bg-grid);
+  overflow: hidden;
+}
+.reg-winband {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: block;
+}
+.reg-winband--1 { background: color-mix(in srgb, var(--accent-cyan) 70%, transparent); }
+.reg-winband--2 { background: color-mix(in srgb, var(--accent-magenta) 45%, transparent); }

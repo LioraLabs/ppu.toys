@@ -139,7 +139,7 @@ pub fn derive_registers(row: &RegRow, prev: &HashMap<u16, i32>) -> Vec<Register>
     };
     let m7sel =
         (row.m7.flip_x as i32) | ((row.m7.flip_y as i32) << 1) | ((row.m7.repeat as i32) << 6);
-    let entries: [(u16, &str, i32); 21] = [
+    let entries: [(u16, &str, i32); 37] = [
         (0x2100, "INIDISP", row.brightness as i32),
         (0x2105, "BGMODE", bgmode),
         (0x2107, "BG1SC", sc(&row.bg[0])),
@@ -161,6 +161,22 @@ pub fn derive_registers(row: &RegRow, prev: &HashMap<u16, i32>) -> Vec<Register>
         (0x211c, "M7B", m7(row.m7.b)),
         (0x211d, "M7C", m7(row.m7.c)),
         (0x211e, "M7D", m7(row.m7.d)),
+        (0x2123, "W12SEL", row.w12sel as i32),
+        (0x2124, "W34SEL", row.w34sel as i32),
+        (0x2125, "WOBJSEL", row.wobjsel as i32),
+        (0x2126, "WH0", row.wh0 as i32),
+        (0x2127, "WH1", row.wh1 as i32),
+        (0x2128, "WH2", row.wh2 as i32),
+        (0x2129, "WH3", row.wh3 as i32),
+        (0x212a, "WBGLOG", row.wbglog as i32),
+        (0x212b, "WOBJLOG", row.wobjlog as i32),
+        (0x212c, "TM", row.tm as i32),
+        (0x212d, "TS", row.ts as i32),
+        (0x212e, "TMW", row.tmw as i32),
+        (0x212f, "TSW", row.tsw as i32),
+        (0x2130, "CGWSEL", row.cgwsel as i32),
+        (0x2131, "CGADSUB", row.cgadsub as i32),
+        (0x2132, "COLDATA", row.coldata as i32),
     ];
     entries
         .iter()
@@ -298,5 +314,49 @@ mod tests {
         assert_eq!(json["on"], true);
         assert_eq!(json["tile"], 5);
         assert!(json.get("flip_x").is_none());
+    }
+
+    #[test]
+    fn derive_registers_includes_m6_screen_window_and_math() {
+        let mut ltr = LineTableRow::default();
+        ltr.tm = 0x13;
+        ltr.ts = 0x04;
+        ltr.tmw = 0x01;
+        ltr.tsw = 0x02;
+        ltr.wh0 = 32;
+        ltr.wh1 = 200;
+        ltr.wh2 = 10;
+        ltr.wh3 = 240;
+        ltr.w12sel = 0x0b;
+        ltr.w34sel = 0xcd;
+        ltr.wobjsel = 0x2e;
+        ltr.wbglog = 0x1b;
+        ltr.wobjlog = 0x0e;
+        ltr.cgwsel = 0x42;
+        ltr.cgadsub = 0x81;
+        ltr.coldata = 0x7c1f;
+        let row = RegRow::from(&ltr);
+        let regs = derive_registers(&row, &HashMap::new());
+        let val = |name: &str| regs.iter().find(|r| r.name == name).unwrap().value;
+        assert_eq!(val("TM"), 0x13);
+        assert_eq!(val("TS"), 0x04);
+        assert_eq!(val("TMW"), 0x01);
+        assert_eq!(val("TSW"), 0x02);
+        assert_eq!(val("WH0"), 32);
+        assert_eq!(val("WH1"), 200);
+        assert_eq!(val("WH2"), 10);
+        assert_eq!(val("WH3"), 240);
+        assert_eq!(val("W12SEL"), 0x0b);
+        assert_eq!(val("W34SEL"), 0xcd);
+        assert_eq!(val("WOBJSEL"), 0x2e);
+        assert_eq!(val("WBGLOG"), 0x1b);
+        assert_eq!(val("WOBJLOG"), 0x0e);
+        assert_eq!(val("CGWSEL"), 0x42);
+        assert_eq!(val("CGADSUB"), 0x81);
+        assert_eq!(val("COLDATA"), 0x7c1f);
+        let addr = |name: &str| regs.iter().find(|r| r.name == name).unwrap().addr;
+        assert_eq!(addr("TM"), 0x212c);
+        assert_eq!(addr("CGADSUB"), 0x2131);
+        assert_eq!(addr("COLDATA"), 0x2132);
     }
 }

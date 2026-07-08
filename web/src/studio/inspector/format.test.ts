@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatAddr, formatValue, cgram15ToCss, bgMode } from "./format";
+import { formatAddr, formatValue, cgram15ToCss, bgMode, screenLayers, colorMath, windowRanges } from "./format";
 import type { RegisterView } from "../../ppu/core";
 
 const reg = (name: string, value: number): RegisterView => ({ addr: 0, name, value, changed: false });
@@ -38,5 +38,36 @@ describe("bgMode", () => {
   });
   it("defaults to mode 1 when BGMODE is absent", () => {
     expect(bgMode([])).toBe(1);
+  });
+});
+
+describe("inspector m6 decoders", () => {
+  const regs = (m: Record<string, number>): RegisterView[] =>
+    Object.entries(m).map(([name, value]) => ({ addr: 0, name, value, changed: false }));
+
+  it("screenLayers reads TM/TS bit masks into layer labels", () => {
+    const r = regs({ TM: 0x13, TS: 0x04 });
+    expect(screenLayers(r, "TM")).toEqual(["BG1", "BG2", "OBJ"]);
+    expect(screenLayers(r, "TS")).toEqual(["BG3"]);
+  });
+  it("screenLayers defaults to power-on TM=all / TS=none when absent", () => {
+    expect(screenLayers([], "TM")).toEqual(["BG1", "BG2", "BG3", "BG4", "OBJ"]);
+    expect(screenLayers([], "TS")).toEqual([]);
+  });
+  it("colorMath decodes sign, half, source and enabled layers", () => {
+    const r = regs({ CGADSUB: 0x41, CGWSEL: 0x02 });
+    expect(colorMath(r)).toEqual({ op: "add", half: true, source: "sub", layers: ["BG1"] });
+    const r2 = regs({ CGADSUB: 0x81, CGWSEL: 0x00 });
+    expect(colorMath(r2)).toEqual({ op: "sub", half: false, source: "fixed", layers: ["BG1"] });
+  });
+  it("colorMath reports no layers when none are enabled", () => {
+    expect(colorMath(regs({ CGADSUB: 0x00, CGWSEL: 0x00 })).layers).toEqual([]);
+  });
+  it("colorMath includes BACK when the backdrop math bit is set", () => {
+    expect(colorMath(regs({ CGADSUB: 0x20 })).layers).toEqual(["BACK"]);
+  });
+  it("windowRanges reads WH0-3 into two [left,right] spans", () => {
+    const r = regs({ WH0: 32, WH1: 200, WH2: 10, WH3: 240 });
+    expect(windowRanges(r)).toEqual({ w1: [32, 200], w2: [10, 240] });
   });
 });
