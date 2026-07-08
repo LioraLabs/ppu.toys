@@ -51,6 +51,13 @@ pub fn mode(v: u8) -> u8 {
     v & 0x07
 }
 
+/// TM/TS main/sub screen designation ($212C/$212D): low 5 bits enable
+/// BG1..BG4 + OBJ on that screen. Masks (wraps) like hardware.
+#[inline]
+pub fn screen_mask(v: u8) -> u8 {
+    v & 0x1f
+}
+
 /// BG tile size (BGMODE bits 4-7, one bit per layer). The DSL authors the pixel
 /// edge (8 or 16); anything >= 16 snaps to 16x16, else 8x8. Stored as the pixel
 /// edge — the BGMODE bit is derived as `tile_size == 16` at display time.
