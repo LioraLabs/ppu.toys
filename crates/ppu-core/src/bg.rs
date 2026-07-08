@@ -29,15 +29,20 @@ fn attenuate(mut px: [u8; 4], brightness: u8) -> [u8; 4] {
 /// (shared with sprite.rs) Palette index of pixel (`fx`, `fy`) inside the 8x8
 /// char whose bitplane data starts at VRAM word `addr`. SNES layout: word
 /// `addr + fy` holds plane 0 (low byte) and plane 1 (high byte) of row `fy`;
-/// 4bpp adds planes 2/3 in word `addr + 8 + fy`. Bit 7 is the leftmost pixel.
+/// 4bpp adds planes 2/3 in word `addr + 8 + fy`; 8bpp adds plane pairs at
+/// `addr + 16 + fy` and `addr + 24 + fy`. Bit 7 is the leftmost pixel.
 /// Fetches wrap mod VRAM (0x8000 words).
 pub(crate) fn char_pixel_index(mem: &Memory, addr: u16, bpp: u8, fx: u32, fy: u32) -> u8 {
     let bit = 7 - (fx & 7);
     let plane_pair = |w: u16| (((w as u8) >> bit) & 1) | ((((w >> 8) as u8) >> bit) & 1) << 1;
     let word = |off: u32| mem.vram[((addr as u32 + off) & 0x7fff) as usize];
     let mut index = plane_pair(word(fy));
-    if bpp == 4 {
+    if bpp >= 4 {
         index |= plane_pair(word(8 + fy)) << 2;
+    }
+    if bpp == 8 {
+        index |= plane_pair(word(16 + fy)) << 4;
+        index |= plane_pair(word(24 + fy)) << 6;
     }
     index
 }
@@ -126,15 +131,14 @@ pub struct BgPixel {
 /// `map_base` (screen-size wrap) -> entry decode (tile#, palette, priority,
 /// H/V flip) -> char bitplane decode at `char_base` (16x16 tiles = four 8x8
 /// quadrant chars) -> CGRAM sub-palette (index 0 = transparent). Layers whose
-/// mode-table bpp is not 2/4 render transparent: bpp 0 = absent in this mode,
-/// bpp 8 = Mode 3 tile BGs (unshipped) / Mode 7 (own rasterizer, mode7.rs).
+/// mode-table bpp is not 2/4/8 render transparent: bpp 0 = absent in this mode.
 pub fn render_bg_layer_scanline_px(
     layer: &RegBg,
     mem: &Memory,
     y: usize,
     width: usize,
 ) -> Vec<Option<BgPixel>> {
-    if !layer.visible || !matches!(layer.bpp, 2 | 4) {
+    if !layer.visible || !matches!(layer.bpp, 2 | 4 | 8) {
         return vec![None; width];
     }
     let ts = layer.tile_size as u32; // pixel edge: 8 or 16
@@ -144,7 +148,7 @@ pub fn render_bg_layer_scanline_px(
         3 => (64, 64),
         _ => (32, 32),
     };
-    let words_per_char = layer.bpp as u32 * 4; // 2bpp = 8 words, 4bpp = 16
+    let words_per_char = layer.bpp as u32 * 4; // 2bpp = 8 words, 4bpp = 16, 8bpp = 32
     (0..width)
         .map(|x| {
             let opt = offset_per_tile(layer, mem, x);
@@ -168,14 +172,18 @@ pub fn render_bg_layer_scanline_px(
             if index == 0 {
                 return None; // color 0 = transparent
             }
-            let pal = ((entry >> 10) & 0x07) as usize;
-            let mode0_band = if layer.mode == 0 && layer.bpp == 2 {
-                layer.layer as usize * 8 * 4
+            let cgram_index = if layer.bpp == 8 {
+                index as usize
             } else {
-                0
+                let pal = ((entry >> 10) & 0x07) as usize;
+                let mode0_band = if layer.mode == 0 && layer.bpp == 2 {
+                    layer.layer as usize * 8 * 4
+                } else {
+                    0
+                };
+                mode0_band + pal * (1 << layer.bpp) + index as usize
             };
-            let cgram_index = mode0_band + pal * (1 << layer.bpp) + index as usize;
-            let color = mem.cgram[cgram_index]; // 4bpp p*16, 2bpp p*4
+            let color = mem.cgram[cgram_index]; // 4bpp p*16, 2bpp p*4, 8bpp direct index
             Some(BgPixel {
                 rgba: unpack_rgb15(color),
                 prio: entry & 0x2000 != 0,
@@ -246,6 +254,18 @@ mod tests {
     /// A Mode-1 layer to mutate per test: index 0 = BG1 (4bpp), 2 = BG3 (2bpp).
     fn layer(i: usize) -> RegBg {
         RegRow::from(&LineTableRow::default()).bg[i].clone()
+    }
+
+    fn put_8bpp_row(mem: &mut Memory, addr: usize, row: usize, values: [u8; 8]) {
+        for pair in 0..4usize {
+            let mut lo = 0u16;
+            let mut hi = 0u16;
+            for (x, &v) in values.iter().enumerate() {
+                lo |= (((v >> (pair * 2)) & 1) as u16) << (7 - x);
+                hi |= (((v >> (pair * 2 + 1)) & 1) as u16) << (7 - x);
+            }
+            mem.vram[addr + pair * 8 + row] = lo | (hi << 8);
+        }
     }
 
     #[test]
@@ -546,6 +566,35 @@ mod tests {
         assert_eq!(char_pixel_index(&m, 0x1000, 4, 7, 7), 15);
         // Reading the same data as 2bpp ignores planes 2/3.
         assert_eq!(char_pixel_index(&m, 0x1000, 2, 0, 3), 1);
+    }
+
+    #[test]
+    fn decodes_8bpp_bitplanes() {
+        let mut m = Memory::new();
+        put_8bpp_row(
+            &mut m,
+            0x3000,
+            2,
+            [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80],
+        );
+        for x in 0..8u32 {
+            assert_eq!(char_pixel_index(&m, 0x3000, 8, x, 2), 1u8 << x, "x={x}");
+        }
+    }
+
+    #[test]
+    fn renders_8bpp_tile_with_direct_cgram_index_and_ignores_tile_palette() {
+        let mut m = Memory::new();
+        m.cgram[0x21] = rgb15(12, 34, 56);
+        put_8bpp_row(&mut m, 0x3000 + 32, 0, [0x21, 0, 0, 0, 0, 0, 0, 0]);
+        m.vram[0] = 1 | (7 << 10);
+        let mut l = layer(0);
+        l.mode = 3;
+        l.bpp = 8;
+        l.char_base = 0x3000;
+        let line = render_bg_layer_scanline_px(&l, &m, 0, 2);
+        assert_eq!(line[0].unwrap().rgba, unpack_rgb15(rgb15(12, 34, 56)));
+        assert!(line[1].is_none());
     }
 
     #[test]

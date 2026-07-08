@@ -33,6 +33,22 @@ fn pack_4bpp(px: [[u8; 8]; 8]) -> [u16; 16] {
     std::array::from_fn(|i| if i < 8 { p01[i] } else { p23[i - 8] })
 }
 
+/// Pack a hand-drawn 8x8 index grid into 8bpp bitplanes (32 words: plane
+/// pairs 0/1, 2/3, 4/5, 6/7, each 8 words). Composes four `pack_2bpp` calls
+/// over successive 2-bit slices of the index value, mirroring `pack_4bpp`.
+fn pack_8bpp(px: [[u8; 8]; 8]) -> [u16; 32] {
+    let p01 = pack_2bpp(px.map(|r| r.map(|v| v & 3)));
+    let p23 = pack_2bpp(px.map(|r| r.map(|v| (v >> 2) & 3)));
+    let p45 = pack_2bpp(px.map(|r| r.map(|v| (v >> 4) & 3)));
+    let p67 = pack_2bpp(px.map(|r| r.map(|v| (v >> 6) & 3)));
+    std::array::from_fn(|i| match i / 8 {
+        0 => p01[i],
+        1 => p23[i - 8],
+        2 => p45[i - 16],
+        _ => p67[i - 24],
+    })
+}
+
 /// Build a `vhopppcc cccccccc` tilemap entry word.
 fn entry(tile: u16, pal: u16, prio: bool, fh: bool, fv: bool) -> u16 {
     tile | pal << 10 | (prio as u16) << 13 | (fh as u16) << 14 | (fv as u16) << 15
@@ -231,6 +247,50 @@ fn bg_fixture_matches_golden_png() {
     let expected = decode_png(GOLDEN);
     assert_eq!(actual.len(), WIDTH * HEIGHT * 4);
     assert_eq!(actual, expected, "framebuffer differs from golden PNG");
+}
+
+/// Mode 3: BG1 8bpp (direct CGRAM addressing, no sub-palette) + BG2 4bpp
+/// (standard sub-palette indirection). Hand-authored VRAM only -- no
+/// importer involved. BG1's tile is red on its left 4 columns and
+/// transparent (index 0) on its right 4; where BG1 is transparent, BG2's
+/// solid blue tile must show through.
+#[test]
+fn mode3_renders_8bpp_bg1_over_4bpp_bg2_through_transparency() {
+    let mut mem = Memory::new();
+
+    // BG1 8bpp: index 0x21 is a direct CGRAM address (no pal field).
+    mem.cgram[0x21] = rgb15(220, 20, 20); // distinct red
+    const HALF: [[u8; 8]; 8] = [[0x21, 0x21, 0x21, 0x21, 0, 0, 0, 0]; 8];
+    for (i, w) in pack_8bpp(HALF).into_iter().enumerate() {
+        mem.vram[0x1000 + 32 + i] = w; // char index 1
+    }
+    mem.vram[0x0000] = entry(1, 0, false, false, false); // BG1 map(0,0) -> tile 1
+
+    // BG2 4bpp: sub-palette 1, index 1 -> cgram[16 + 1].
+    mem.cgram[16 + 1] = rgb15(20, 20, 220); // distinct blue
+    const SOLID: [[u8; 8]; 8] = [[1; 8]; 8];
+    for (i, w) in pack_4bpp(SOLID).into_iter().enumerate() {
+        mem.vram[0x2000 + 16 + i] = w; // char index 1
+    }
+    mem.vram[0x0400] = entry(1, 1, false, false, false); // BG2 map(0,0) -> tile 1, pal 1
+
+    let mut def = LineTableRow::default();
+    def.mode = 3;
+    def.bg[0].char_base = 0x1000;
+    def.bg[0].map_base = 0x0000;
+    def.bg[1].char_base = 0x2000;
+    def.bg[1].map_base = 0x0400;
+    let lt = LineTableBuilder::new(def).build(HEIGHT);
+
+    let fb = render_frame(&lt, &mem);
+    let px = |x: usize| -> [u8; 4] {
+        let o = x * 4;
+        [fb[o], fb[o + 1], fb[o + 2], fb[o + 3]]
+    };
+    // Left half: BG1's opaque red (8bpp direct CGRAM index 0x21).
+    assert_eq!(px(0), unpack_rgb15(rgb15(220, 20, 20)));
+    // Right half: BG1 transparent (index 0) -> BG2's blue shows through.
+    assert_eq!(px(4), unpack_rgb15(rgb15(20, 20, 220)));
 }
 
 #[test]

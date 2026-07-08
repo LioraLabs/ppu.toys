@@ -19,7 +19,7 @@ use self::tiles::{pack_planar, split_tiles, IndexTile, TileSet};
 /// bit-depth, so caching by bit-depth avoids spurious re-quantization.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ImportOptions {
-    /// Target bits per pixel: 4 or 2 (Mode 1 BG1/BG2 vs BG3).
+    /// Target bits per pixel: 2, 4, or 8.
     pub bit_depth: u8,
     /// Tile edge in px. Only 8 is packed today; 16 falls back to 8 and is
     /// reported as `Overflow::TileSize16`.
@@ -109,10 +109,10 @@ pub struct TileBgImport {
 /// Pure and deterministic: identical inputs yield identical outputs.
 pub fn import_tile_bg(rgba: &[u8], width: u32, height: u32, opts: &ImportOptions) -> TileBgImport {
     let mut overflows = Vec::new();
-    let (bpp, cap, pal_stride) = if opts.bit_depth == 2 {
-        (2u8, 3usize, 4usize)
-    } else {
-        (4, 15, 16)
+    let (bpp, cap, pal_stride, palette_count) = match opts.bit_depth {
+        2 => (2u8, 3usize, 4usize, 8usize),
+        8 => (8u8, 255usize, 256usize, 1usize),
+        _ => (4u8, 15usize, 16usize, 8usize),
     };
     if opts.tile_size >= 16 {
         overflows.push(Overflow::TileSize16);
@@ -137,14 +137,14 @@ pub fn import_tile_bg(rgba: &[u8], width: u32, height: u32, opts: &ImportOptions
     // 2. tile split (BGR555 + transparency happen here)
     let (ptiles, cols, rows) = split_tiles(&cropped, w, h);
 
-    // 3. global color budget: 8 sub-palettes x cap colors
+    // 3. global color budget: sub-palettes x cap colors
     let mut hist: BTreeMap<u16, u32> = BTreeMap::new();
     for t in &ptiles {
         for c in t.iter().flatten() {
             *hist.entry(*c).or_default() += 1;
         }
     }
-    let budget = 8 * cap;
+    let budget = palette_count * cap;
     let global: Option<Vec<u16>> = if hist.len() > budget {
         overflows.push(Overflow::Colors {
             unique: hist.len(),
@@ -173,9 +173,9 @@ pub fn import_tile_bg(rgba: &[u8], width: u32, height: u32, opts: &ImportOptions
         })
         .collect();
 
-    // 5. region fit into <= 8 sub-palettes
-    let fit = region_fit(&tile_pals, 8, cap);
-    if fit.palettes_needed > 8 {
+    // 5. region fit into the target sub-palette count
+    let fit = region_fit(&tile_pals, palette_count, cap);
+    if fit.palettes_needed > palette_count {
         let remapped = tile_pals
             .iter()
             .zip(&fit.assignment)
@@ -191,7 +191,7 @@ pub fn import_tile_bg(rgba: &[u8], width: u32, height: u32, opts: &ImportOptions
 
     // 6. index remap + flip-aware dedup; tile 0 reserved blank so padding and
     //    dropped cells are honestly transparent
-    let words_per_tile = if bpp == 2 { 8 } else { 16 };
+    let words_per_tile = bpp as usize * 4;
     let max_tiles = ((0x8000 - opts.char_base as usize) / words_per_tile).clamp(1, 1024);
     let mut set = TileSet::new(true);
     set.insert([0u8; 64]);
