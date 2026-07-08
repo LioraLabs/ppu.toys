@@ -10,6 +10,8 @@ const MODE0_GOLDEN: &str = "tests/fixtures/golden_mode0_bands.png";
 const TRANSLUCENCY_GOLDEN: &str = "tests/fixtures/golden_translucency.png";
 const SPOTLIGHT_GOLDEN: &str = "tests/fixtures/golden_spotlight.png";
 const GLOW_GOLDEN: &str = "tests/fixtures/golden_glow.png";
+const TM_MASK_GOLDEN: &str = "tests/fixtures/golden_tm_mask.png";
+const SHADOW_GOLDEN: &str = "tests/fixtures/golden_shadow.png";
 
 const DUSK_SRC: &str = r#"-- ppu.toys :: dusk-parallax (Mode 1: parallax BG scroll + CGRAM colour-cycle + sprite)
 local SPEED = 12
@@ -119,6 +121,26 @@ function frame(t, f)
   CGADSUB = 0x01          -- add (bit7 clear) + BG1 math-enable, no half
   CGWSEL = 0x00           -- addend = COLDATA fixed colour
   COLDATA = rgb(120, 60, 0)  -- warm glow added to every BG1 pixel
+end
+"#;
+
+const TM_MASK_SRC: &str = r#"-- ppu.toys :: tm-mask (TM drops BG2 from the main screen)
+function frame(t, f)
+  mode = 0; brightness = 15
+  bg[1].source = "mode0_bg1"
+  bg[2].source = "mode0_bg2"; bg[2].map_base = 0x0400; bg[2].char_base = 0x2000
+  TM = 0x01   -- BG1 only; BG2 is masked off the main screen
+end
+"#;
+
+const SHADOW_SRC: &str = r#"-- ppu.toys :: shadow (subtractive fixed-colour darkens BG1)
+function frame(t, f)
+  mode = 1; brightness = 15
+  bg[1].source = "ribbons"
+  TM = 0x01
+  CGADSUB = 0x81          -- subtract (bit7) + BG1 math-enable
+  CGWSEL = 0x00           -- addend = COLDATA fixed colour
+  COLDATA = rgb(120, 120, 120)
 end
 "#;
 
@@ -607,4 +629,61 @@ fn glow_demo_matches_golden_png() {
 fn regen_golden_glow() {
     let (fb, _) = render_demo(GLOW_SRC);
     write_png(GLOW_GOLDEN, &fb);
+}
+
+#[test]
+fn tm_mask_demo_removes_bg2_from_main_screen() {
+    let (fb, _) = render_demo(TM_MASK_SRC);
+    // mode0_bg2 is magenta (R high, B high, G low). With BG2 masked off TM, no
+    // pixel in the frame should read as that magenta.
+    let has_magenta = fb
+        .chunks_exact(4)
+        .any(|p| p[0] > 150 && p[2] > 120 && p[1] < 100 && p[3] == 255);
+    assert!(!has_magenta, "BG2 magenta leaked despite TM=0x01");
+    // BG1 green is still present.
+    let has_green = fb
+        .chunks_exact(4)
+        .any(|p| p[1] > 150 && p[0] < 100 && p[3] == 255);
+    assert!(has_green, "BG1 green missing");
+}
+
+#[test]
+fn shadow_demo_subtracts_fixed_color_below_baseline() {
+    let (shadow, _) = render_demo(SHADOW_SRC);
+    let baseline_src = SHADOW_SRC
+        .replace("CGADSUB = 0x81", "CGADSUB = 0x00")
+        .replace("COLDATA = rgb(120, 120, 120)", "COLDATA = 0");
+    let (base, _) = render_demo(&baseline_src);
+    let sum = |fb: &[u8]| fb.chunks_exact(4).map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64).sum::<u64>();
+    assert!(sum(&shadow) < sum(&base), "subtract did not darken the frame");
+}
+
+#[test]
+fn tm_mask_demo_matches_golden_png() {
+    assert!(Path::new(TM_MASK_GOLDEN).exists());
+    let (actual, _) = render_demo(TM_MASK_SRC);
+    let expected = decode_png(TM_MASK_GOLDEN);
+    assert_eq!(actual, expected, "tm-mask demo differs from golden PNG");
+}
+
+#[test]
+#[ignore = "regenerates the committed TM-mask golden PNG"]
+fn regen_golden_tm_mask() {
+    let (fb, _) = render_demo(TM_MASK_SRC);
+    write_png(TM_MASK_GOLDEN, &fb);
+}
+
+#[test]
+fn shadow_demo_matches_golden_png() {
+    assert!(Path::new(SHADOW_GOLDEN).exists());
+    let (actual, _) = render_demo(SHADOW_SRC);
+    let expected = decode_png(SHADOW_GOLDEN);
+    assert_eq!(actual, expected, "shadow demo differs from golden PNG");
+}
+
+#[test]
+#[ignore = "regenerates the committed subtractive-shadow golden PNG"]
+fn regen_golden_shadow() {
+    let (fb, _) = render_demo(SHADOW_SRC);
+    write_png(SHADOW_GOLDEN, &fb);
 }
