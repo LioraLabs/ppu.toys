@@ -5,6 +5,8 @@ use std::path::Path;
 const DUSK_GOLDEN: &str = "tests/fixtures/golden_dusk_parallax.png";
 const MODE7_GOLDEN: &str = "tests/fixtures/golden_mode7_floor.png";
 const OFFSET_GOLDEN: &str = "tests/fixtures/golden_offset_per_tile.png";
+const MODE3_GOLDEN: &str = "tests/fixtures/golden_mode3_gradient.png";
+const MODE0_GOLDEN: &str = "tests/fixtures/golden_mode0_bands.png";
 
 const DUSK_SRC: &str = r#"-- ppu.toys :: dusk-parallax (Mode 1: parallax BG scroll + CGRAM colour-cycle + sprite)
 local SPEED = 12
@@ -50,6 +52,22 @@ function frame(t, f)
     local wave = floor((sin((col + t * 8) / 3) + 1) * 4)
     column_offset(col, wave, col % 3)
   end
+end
+"#;
+
+const MODE3_SRC: &str = r#"-- ppu.toys :: mode3-gradient (Mode 3: 8bpp 256-colour BG1 gradient)
+function frame(t, f)
+  mode = 3; brightness = 15
+  bg[1].source = "gradient"
+  bg[1].char_base = 0x1000
+end
+"#;
+
+const MODE0_SRC: &str = r#"-- ppu.toys :: mode0-bands (Mode 0: two 2bpp layers, per-layer CGRAM band)
+function frame(t, f)
+  mode = 0; brightness = 15
+  bg[1].source = "mode0_bg1"
+  bg[2].source = "mode0_bg2"; bg[2].map_base = 0x0400; bg[2].char_base = 0x2000
 end
 "#;
 
@@ -151,6 +169,49 @@ fn ribbons() -> Vec<u8> {
     data
 }
 
+fn gradient() -> Vec<u8> {
+    let mut data = vec![0u8; WIDTH * HEIGHT * 4];
+    for y in 0..HEIGHT {
+        // top->bottom hue sweep; constant across x so unique tiles stay bounded.
+        let r = (y * 255 / (HEIGHT - 1)) as u8;
+        let g = ((HEIGHT - 1 - y) * 255 / (HEIGHT - 1)) as u8;
+        for x in 0..WIDTH {
+            let i = (y * WIDTH + x) * 4;
+            data[i] = r;
+            data[i + 1] = g;
+            data[i + 2] = 128;
+            data[i + 3] = 255;
+        }
+    }
+    data
+}
+
+fn mode0_bg1() -> Vec<u8> {
+    let mut data = vec![0u8; WIDTH * HEIGHT * 4];
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            let i = (y * WIDTH + x) * 4;
+            if (x / 8) % 2 == 0 {
+                data[i..i + 4].copy_from_slice(&[40, 220, 90, 255]); // green
+            } // else alpha 0 = transparent
+        }
+    }
+    data
+}
+
+fn mode0_bg2() -> Vec<u8> {
+    let mut data = vec![0u8; WIDTH * HEIGHT * 4];
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            let i = (y * WIDTH + x) * 4;
+            if (y / 8) % 2 == 0 {
+                data[i..i + 4].copy_from_slice(&[220, 60, 200, 255]); // magenta
+            }
+        }
+    }
+    data
+}
+
 fn demo_engine(src: &str) -> LuaEngine {
     let mut e = LuaEngine::new();
     e.upload_asset("sky".into(), WIDTH as u32, HEIGHT as u32, sky());
@@ -158,6 +219,9 @@ fn demo_engine(src: &str) -> LuaEngine {
     e.upload_asset("hero".into(), 64, 8, hero());
     e.upload_asset("track".into(), 1024, 1024, track());
     e.upload_asset("ribbons".into(), WIDTH as u32, HEIGHT as u32, ribbons());
+    e.upload_asset("gradient".into(), WIDTH as u32, HEIGHT as u32, gradient());
+    e.upload_asset("mode0_bg1".into(), WIDTH as u32, HEIGHT as u32, mode0_bg1());
+    e.upload_asset("mode0_bg2".into(), WIDTH as u32, HEIGHT as u32, mode0_bg2());
     e.set_source(src).unwrap();
     e
 }
@@ -305,7 +369,10 @@ fn offset_per_tile_demo_matches_golden_png() {
     let (actual, _) = render_demo(OFFSET_SRC);
     let expected = decode_png(OFFSET_GOLDEN);
     assert_eq!(actual.len(), expected.len());
-    assert_eq!(actual, expected, "offset-per-tile demo framebuffer differs from golden PNG");
+    assert_eq!(
+        actual, expected,
+        "offset-per-tile demo framebuffer differs from golden PNG"
+    );
 }
 
 #[test]
@@ -313,4 +380,80 @@ fn offset_per_tile_demo_matches_golden_png() {
 fn regen_golden_offset_per_tile() {
     let (fb, _) = render_demo(OFFSET_SRC);
     write_png(OFFSET_GOLDEN, &fb);
+}
+
+#[test]
+fn mode3_gradient_demo_imports_bg1_8bpp_and_draws() {
+    let (fb, e) = render_demo(MODE3_SRC);
+    // 8bpp path: the gradient needs >16 colours, so it cannot be a 4bpp import.
+    let colors = e.import_reports().iter().find_map(|r| match r {
+        ImportBudget::Tile { layer: 0, report } => Some(report.colors_used),
+        _ => None,
+    });
+    assert!(colors.is_some(), "BG1 tile import missing");
+    assert!(
+        colors.unwrap() > 16,
+        "gradient must exceed the 4bpp colour count"
+    );
+    assert!(fb
+        .chunks_exact(4)
+        .any(|px| px[3] == 255 && px[..3] != [0, 0, 0]));
+}
+
+#[test]
+fn mode3_gradient_demo_matches_golden_png() {
+    assert!(Path::new(MODE3_GOLDEN).exists());
+    let (actual, _) = render_demo(MODE3_SRC);
+    let expected = decode_png(MODE3_GOLDEN);
+    assert_eq!(actual.len(), expected.len());
+    assert_eq!(
+        actual, expected,
+        "mode3 demo framebuffer differs from golden PNG"
+    );
+}
+
+#[test]
+#[ignore = "regenerates the committed Mode 3 demo golden PNG"]
+fn regen_golden_mode3_gradient() {
+    let (fb, _) = render_demo(MODE3_SRC);
+    write_png(MODE3_GOLDEN, &fb);
+}
+
+#[test]
+fn mode0_bands_demo_writes_per_layer_cgram_bands_and_draws() {
+    let (fb, e) = render_demo(MODE0_SRC);
+    assert!(e
+        .import_reports()
+        .iter()
+        .any(|r| matches!(r, ImportBudget::Tile { layer: 0, .. })));
+    assert!(e
+        .import_reports()
+        .iter()
+        .any(|r| matches!(r, ImportBudget::Tile { layer: 1, .. })));
+    let cg = &e.memory().cgram;
+    assert_ne!(cg[1], 0, "BG1 colour missing from band 0");
+    assert_ne!(cg[33], 0, "BG2 colour missing from band 1 (offset 32)");
+    assert_ne!(cg[1], cg[33], "layers must occupy distinct CGRAM bands");
+    assert!(fb
+        .chunks_exact(4)
+        .any(|px| px[3] == 255 && px[..3] != [0, 0, 0]));
+}
+
+#[test]
+fn mode0_bands_demo_matches_golden_png() {
+    assert!(Path::new(MODE0_GOLDEN).exists());
+    let (actual, _) = render_demo(MODE0_SRC);
+    let expected = decode_png(MODE0_GOLDEN);
+    assert_eq!(actual.len(), expected.len());
+    assert_eq!(
+        actual, expected,
+        "mode0 demo framebuffer differs from golden PNG"
+    );
+}
+
+#[test]
+#[ignore = "regenerates the committed Mode 0 demo golden PNG"]
+fn regen_golden_mode0_bands() {
+    let (fb, _) = render_demo(MODE0_SRC);
+    write_png(MODE0_GOLDEN, &fb);
 }
