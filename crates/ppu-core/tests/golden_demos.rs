@@ -7,6 +7,7 @@ const MODE7_GOLDEN: &str = "tests/fixtures/golden_mode7_floor.png";
 const OFFSET_GOLDEN: &str = "tests/fixtures/golden_offset_per_tile.png";
 const MODE3_GOLDEN: &str = "tests/fixtures/golden_mode3_gradient.png";
 const MODE0_GOLDEN: &str = "tests/fixtures/golden_mode0_bands.png";
+const TRANSLUCENCY_GOLDEN: &str = "tests/fixtures/golden_translucency.png";
 
 const DUSK_SRC: &str = r#"-- ppu.toys :: dusk-parallax (Mode 1: parallax BG scroll + CGRAM colour-cycle + sprite)
 local SPEED = 12
@@ -68,6 +69,19 @@ function frame(t, f)
   mode = 0; brightness = 15
   bg[1].source = "mode0_bg1"
   bg[2].source = "mode0_bg2"; bg[2].map_base = 0x0400; bg[2].char_base = 0x2000
+end
+"#;
+
+const TRANSLUCENCY_SRC: &str = r#"-- ppu.toys :: translucency (½-add glass panel over a scrolling BG)
+function frame(t, f)
+  mode = 1; brightness = 15
+  bg[1].source = "panel"                       -- the glass panel (main only)
+  bg[2].source = "ribbons"; bg[2].char_base = 0x2000  -- scene, on main AND sub
+  bg[2].map_base = 0x0800
+  TM = 0x03        -- BG1 (panel) + BG2 (scene) on the main screen
+  TS = 0x02        -- BG2 (scene) on the sub screen -> the addend under the glass
+  CGADSUB = 0x41   -- add + half + BG1 math-enable
+  CGWSEL = 0x02    -- addend = subscreen (not fixed colour)
 end
 "#;
 
@@ -169,6 +183,20 @@ fn ribbons() -> Vec<u8> {
     data
 }
 
+fn panel() -> Vec<u8> {
+    let mut data = vec![0u8; WIDTH * HEIGHT * 4];
+    for y in 0..HEIGHT {
+        let opaque = (80..160).contains(&y);
+        for x in 0..WIDTH {
+            let i = (y * WIDTH + x) * 4;
+            if opaque {
+                data[i..i + 4].copy_from_slice(&[80, 230, 255, 255]); // cyan glass
+            } // else alpha 0
+        }
+    }
+    data
+}
+
 fn gradient() -> Vec<u8> {
     let mut data = vec![0u8; WIDTH * HEIGHT * 4];
     for y in 0..HEIGHT {
@@ -222,6 +250,7 @@ fn demo_engine(src: &str) -> LuaEngine {
     e.upload_asset("gradient".into(), WIDTH as u32, HEIGHT as u32, gradient());
     e.upload_asset("mode0_bg1".into(), WIDTH as u32, HEIGHT as u32, mode0_bg1());
     e.upload_asset("mode0_bg2".into(), WIDTH as u32, HEIGHT as u32, mode0_bg2());
+    e.upload_asset("panel".into(), WIDTH as u32, HEIGHT as u32, panel());
     e.set_source(src).unwrap();
     e
 }
@@ -456,4 +485,34 @@ fn mode0_bands_demo_matches_golden_png() {
 fn regen_golden_mode0_bands() {
     let (fb, _) = render_demo(MODE0_SRC);
     write_png(MODE0_GOLDEN, &fb);
+}
+
+#[test]
+fn translucency_demo_blends_panel_half_over_scene() {
+    let (fb, _) = render_demo(TRANSLUCENCY_SRC);
+    // A column inside the panel band (y=120) blends panel+scene at half; a column
+    // in the same x but below the panel (y=200) shows the scene alone.
+    let panel_px = &fb[(120 * WIDTH + 128) * 4..][..4];
+    let scene_px = &fb[(200 * WIDTH + 128) * 4..][..4];
+    assert_ne!(panel_px[..3], [0, 0, 0], "glass pixel went black");
+    assert_ne!(scene_px[..3], [0, 0, 0], "scene pixel went black");
+    // Half-blend pulls the bright cyan panel toward the darker scene: the blended
+    // green channel is below the panel's own ~230 full value.
+    assert!(panel_px[1] < 230, "no half-blend darkening applied to the panel");
+}
+
+#[test]
+fn translucency_demo_matches_golden_png() {
+    assert!(Path::new(TRANSLUCENCY_GOLDEN).exists());
+    let (actual, _) = render_demo(TRANSLUCENCY_SRC);
+    let expected = decode_png(TRANSLUCENCY_GOLDEN);
+    assert_eq!(actual.len(), expected.len());
+    assert_eq!(actual, expected, "translucency demo differs from golden PNG");
+}
+
+#[test]
+#[ignore = "regenerates the committed translucency demo golden PNG"]
+fn regen_golden_translucency() {
+    let (fb, _) = render_demo(TRANSLUCENCY_SRC);
+    write_png(TRANSLUCENCY_GOLDEN, &fb);
 }
