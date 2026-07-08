@@ -4,6 +4,7 @@ use std::path::Path;
 
 const DUSK_GOLDEN: &str = "tests/fixtures/golden_dusk_parallax.png";
 const MODE7_GOLDEN: &str = "tests/fixtures/golden_mode7_floor.png";
+const OFFSET_GOLDEN: &str = "tests/fixtures/golden_offset_per_tile.png";
 
 const DUSK_SRC: &str = r#"-- ppu.toys :: dusk-parallax (Mode 1: parallax BG scroll + CGRAM colour-cycle + sprite)
 local SPEED = 12
@@ -28,6 +29,27 @@ function frame(t, f)
     m7.cx, m7.cy = 128, 0
     bg[1].scroll.y = (t*80) * d
   end)
+end
+"#;
+
+const OFFSET_SRC: &str = r#"-- ppu.toys :: offset-per-tile (Mode 2: BG3 table drives per-column scroll)
+function column_offset(col, dh, dv)
+  local base = 0x0800
+  bg[3].map_base = base
+  local enable = 0x2000
+  vram[base + col] = enable + (dh % 1024)
+  vram[base + 32 + col] = enable + 0x8000 + (dv % 1024)
+end
+
+function frame(t, f)
+  mode = 2; brightness = 15
+  bg[1].source = "ribbons"
+  bg[1].char_base = 0x1000
+  bg[3].map_base = 0x0800
+  for col = 0, 31 do
+    local wave = floor((sin((col + t * 8) / 3) + 1) * 4)
+    column_offset(col, wave, col % 3)
+  end
 end
 "#;
 
@@ -114,12 +136,28 @@ fn track() -> Vec<u8> {
     data
 }
 
+fn ribbons() -> Vec<u8> {
+    let mut data = vec![0u8; WIDTH * HEIGHT * 4];
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            let i = (y * WIDTH + x) * 4;
+            let band = ((x / 8) % 8) as u8;
+            data[i] = 32 + band * 24;
+            data[i + 1] = 40 + ((y / 8) % 8) as u8 * 24;
+            data[i + 2] = 220 - band * 16;
+            data[i + 3] = 255;
+        }
+    }
+    data
+}
+
 fn demo_engine(src: &str) -> LuaEngine {
     let mut e = LuaEngine::new();
     e.upload_asset("sky".into(), WIDTH as u32, HEIGHT as u32, sky());
     e.upload_asset("hills".into(), WIDTH as u32, HEIGHT as u32, hills());
     e.upload_asset("hero".into(), 64, 8, hero());
     e.upload_asset("track".into(), 1024, 1024, track());
+    e.upload_asset("ribbons".into(), WIDTH as u32, HEIGHT as u32, ribbons());
     e.set_source(src).unwrap();
     e
 }
@@ -249,4 +287,30 @@ fn regen_golden_dusk_parallax() {
 fn regen_golden_mode7_floor() {
     let (fb, _) = render_demo(MODE7_SRC);
     write_png(MODE7_GOLDEN, &fb);
+}
+
+#[test]
+fn offset_per_tile_demo_writes_bg3_table_and_draws() {
+    let (fb, e) = render_demo(OFFSET_SRC);
+    assert_eq!(e.memory().vram[0x0800] & 0x2000, 0x2000);
+    assert_eq!(e.memory().vram[0x0800 + 32] & 0xa000, 0xa000);
+    assert!(fb
+        .chunks_exact(4)
+        .any(|px| px[3] == 255 && px[..3] != [0, 0, 0]));
+}
+
+#[test]
+fn offset_per_tile_demo_matches_golden_png() {
+    assert!(Path::new(OFFSET_GOLDEN).exists());
+    let (actual, _) = render_demo(OFFSET_SRC);
+    let expected = decode_png(OFFSET_GOLDEN);
+    assert_eq!(actual.len(), expected.len());
+    assert_eq!(actual, expected, "offset-per-tile demo framebuffer differs from golden PNG");
+}
+
+#[test]
+#[ignore = "regenerates the committed offset-per-tile demo golden PNG"]
+fn regen_golden_offset_per_tile() {
+    let (fb, _) = render_demo(OFFSET_SRC);
+    write_png(OFFSET_GOLDEN, &fb);
 }

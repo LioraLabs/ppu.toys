@@ -2,8 +2,8 @@ import { describe, it, expect } from "vitest";
 import { DEMOS } from "./demos";
 
 describe("DEMOS", () => {
-  it("ships dusk-parallax and mode7-floor", () => {
-    expect(DEMOS.map((d) => d.id)).toEqual(["dusk-parallax", "mode7-floor"]);
+  it("ships dusk-parallax, mode7-floor, and offset-per-tile", () => {
+    expect(DEMOS.map((d) => d.id)).toEqual(["dusk-parallax", "mode7-floor", "offset-per-tile"]);
   });
 
   it("dusk-parallax carries sky/hills/hero with correct RGBA sizes", () => {
