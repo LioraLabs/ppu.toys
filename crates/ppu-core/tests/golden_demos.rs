@@ -9,6 +9,7 @@ const MODE3_GOLDEN: &str = "tests/fixtures/golden_mode3_gradient.png";
 const MODE0_GOLDEN: &str = "tests/fixtures/golden_mode0_bands.png";
 const TRANSLUCENCY_GOLDEN: &str = "tests/fixtures/golden_translucency.png";
 const SPOTLIGHT_GOLDEN: &str = "tests/fixtures/golden_spotlight.png";
+const GLOW_GOLDEN: &str = "tests/fixtures/golden_glow.png";
 
 const DUSK_SRC: &str = r#"-- ppu.toys :: dusk-parallax (Mode 1: parallax BG scroll + CGRAM colour-cycle + sprite)
 local SPEED = 12
@@ -107,6 +108,17 @@ function frame(t, f)
       WH1 = cx + hw
     end
   end)
+end
+"#;
+
+const GLOW_SRC: &str = r#"-- ppu.toys :: additive-glow (fixed-colour add brightens BG1 toward warm)
+function frame(t, f)
+  mode = 1; brightness = 15
+  bg[1].source = "ribbons"
+  TM = 0x01               -- BG1 on the main screen
+  CGADSUB = 0x01          -- add (bit7 clear) + BG1 math-enable, no half
+  CGWSEL = 0x00           -- addend = COLDATA fixed colour
+  COLDATA = rgb(120, 60, 0)  -- warm glow added to every BG1 pixel
 end
 "#;
 
@@ -566,4 +578,33 @@ fn spotlight_demo_matches_golden_png() {
 fn regen_golden_spotlight() {
     let (fb, _) = render_demo(SPOTLIGHT_SRC);
     write_png(SPOTLIGHT_GOLDEN, &fb);
+}
+
+#[test]
+fn glow_demo_adds_fixed_color_over_baseline() {
+    let (glow, _) = render_demo(GLOW_SRC);
+    // Baseline: identical scene with no colour math.
+    let baseline_src = GLOW_SRC
+        .replace("CGADSUB = 0x01", "CGADSUB = 0x00")
+        .replace("COLDATA = rgb(120, 60, 0)", "COLDATA = 0");
+    let (base, _) = render_demo(&baseline_src);
+    // The additive red channel must lift the frame overall (sum of R over the frame).
+    let sum_r = |fb: &[u8]| fb.chunks_exact(4).map(|p| p[0] as u64).sum::<u64>();
+    assert!(sum_r(&glow) > sum_r(&base), "additive glow did not brighten the frame");
+}
+
+#[test]
+fn glow_demo_matches_golden_png() {
+    assert!(Path::new(GLOW_GOLDEN).exists());
+    let (actual, _) = render_demo(GLOW_SRC);
+    let expected = decode_png(GLOW_GOLDEN);
+    assert_eq!(actual.len(), expected.len());
+    assert_eq!(actual, expected, "glow demo differs from golden PNG");
+}
+
+#[test]
+#[ignore = "regenerates the committed additive-glow demo golden PNG"]
+fn regen_golden_glow() {
+    let (fb, _) = render_demo(GLOW_SRC);
+    write_png(GLOW_GOLDEN, &fb);
 }
