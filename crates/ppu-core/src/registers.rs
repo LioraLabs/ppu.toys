@@ -134,6 +134,10 @@ pub struct RegBg {
     pub scroll_y: i16,
     pub source: Option<String>,
     pub visible: bool,
+    /// Resolved row mode this layer belongs to.
+    pub mode: u8,
+    /// Zero-based BG layer index within the row.
+    pub layer: u8,
     /// Quantized tile size in pixels: exactly 8 or 16.
     pub tile_size: u8,
     /// Snapped tilemap base VRAM word address (multiple of 0x400, in-VRAM).
@@ -155,6 +159,8 @@ impl From<&Bg> for RegBg {
             scroll_y: quantize::scroll_reg(b.scroll_y),
             source: b.source.clone(),
             visible: b.visible,
+            mode: 0,
+            layer: 0,
             tile_size: quantize::bg_tile_size(b.tile_size),
             map_base: quantize::bg_map_base(b.map_base),
             screen_size: quantize::bg_screen_size(b.screen_size),
@@ -216,6 +222,8 @@ impl From<&LineTableRow> for RegRow {
             brightness: quantize::brightness(r.brightness),
             bg: std::array::from_fn(|i| {
                 let mut b = RegBg::from(&r.bg[i]);
+                b.mode = mode;
+                b.layer = i as u8;
                 b.bpp = bpp[i];
                 b
             }),
@@ -318,6 +326,8 @@ mod tests {
                 expected,
                 "mode {mode} bpp"
             );
+            assert_eq!(reg.bg[0].mode, reg.mode);
+            assert_eq!(reg.bg[3].layer, 3);
         }
         // Mode 7: the table's BG1 row is 8bpp (tile-BG rasterizer ignores it; mode7.rs owns it).
         src.mode = 7;
