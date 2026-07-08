@@ -57,10 +57,10 @@ const MODE_3: ModeInfo = ModeInfo {
     offset_per_tile: false,
 };
 
-/// Mode 4: BG1/BG2 4bpp with offset-per-tile controls.
+/// Mode 4: BG1 8bpp, BG2 2bpp with offset-per-tile controls.
 const MODE_4: ModeInfo = ModeInfo {
     mode: 4,
-    bpp: [4, 4, 0, 0],
+    bpp: [8, 2, 0, 0],
     priority_order: &[0, 1],
     offset_per_tile: true,
 };
@@ -116,14 +116,21 @@ mod tests {
     }
 
     #[test]
-    fn modes_2_and_4_mark_offset_per_tile_without_drawing_bg3() {
-        for mode in [2u8, 4] {
-            let m = mode_info(mode).unwrap();
-            assert_eq!(m.bpp, [4, 4, 0, 0]);
-            assert_eq!(m.layer_count(), 2);
-            assert_eq!(m.priority_order, &[0, 1]);
-            assert!(m.offset_per_tile);
-        }
+    fn mode_2_marks_offset_per_tile_without_drawing_bg3() {
+        let m = mode_info(2).unwrap();
+        assert_eq!(m.bpp, [4, 4, 0, 0]);
+        assert_eq!(m.layer_count(), 2);
+        assert_eq!(m.priority_order, &[0, 1]);
+        assert!(m.offset_per_tile);
+    }
+
+    #[test]
+    fn mode_4_is_8bpp_bg1_plus_2bpp_bg2_with_offset_per_tile() {
+        let m = mode_info(4).unwrap();
+        assert_eq!(m.bpp, [8, 2, 0, 0]);
+        assert_eq!(m.layer_count(), 2);
+        assert_eq!(m.priority_order, &[0, 1]);
+        assert!(m.offset_per_tile);
     }
 
     #[test]

@@ -89,15 +89,20 @@ fn tile_mode_ladder(mode: u8) -> Vec<Slot> {
             Slot::Obj { prio: 0 },
         ];
     };
-    let layers: Vec<usize> = info.priority_order.iter().map(|&l| l as usize).collect();
-    let mut l = Vec::with_capacity(layers.len() * 2 + 4);
+    let mut l = Vec::with_capacity(info.priority_order.len() * 2 + 4);
     l.push(Slot::Obj { prio: 3 });
-    for &layer in &layers {
-        l.push(Slot::Bg { layer, prio: true });
+    for &layer in info.priority_order {
+        l.push(Slot::Bg {
+            layer: layer as usize,
+            prio: true,
+        });
     }
     l.push(Slot::Obj { prio: 2 });
-    for &layer in &layers {
-        l.push(Slot::Bg { layer, prio: false });
+    for &layer in info.priority_order {
+        l.push(Slot::Bg {
+            layer: layer as usize,
+            prio: false,
+        });
     }
     l.push(Slot::Obj { prio: 1 });
     l.push(Slot::Obj { prio: 0 });
@@ -302,8 +307,8 @@ mod tests {
     }
 
     #[test]
-    fn tile_modes_2_3_4_dispatch_drawable_layers() {
-        for (mode, layer) in [(2u8, 0usize), (3, 1), (4, 0)] {
+    fn tile_modes_2_and_3_dispatch_drawable_layers() {
+        for (mode, layer) in [(2u8, 0usize), (3, 1)] {
             let mut mem = Memory::new();
             mem.cgram[0] = rgb15(0, 0, 0);
             mem.cgram[1] = rgb15(0, 255, 0);
@@ -321,6 +326,25 @@ mod tests {
                 "mode {mode} layer {layer} should draw"
             );
         }
+    }
+
+    #[test]
+    fn mode4_dispatches_2bpp_bg2() {
+        let mut mem = Memory::new();
+        mem.cgram[0] = rgb15(0, 0, 0);
+        mem.cgram[1] = rgb15(0, 255, 0);
+        mem.vram[0x1000 + 8] = 0x0080;
+        mem.vram[0] = 1;
+
+        let mut src = LineTableRow::default();
+        src.mode = 4;
+        src.bg[1].char_base = 0x1000;
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+
+        assert_eq!(
+            &render_frame(&lt, &mem)[0..4],
+            &unpack_rgb15(rgb15(0, 255, 0))
+        );
     }
 
     #[test]
