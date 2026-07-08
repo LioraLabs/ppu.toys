@@ -27,16 +27,21 @@ use crate::window::in_window;
 use crate::{HEIGHT, WIDTH};
 
 /// Per-channel SNES color math in 15-bit BGR space. Add or subtract each 5-bit
-/// channel with saturation to 0..31, then optionally halve (integer `>> 1`).
-/// Halving happens AFTER the clamp, matching hardware.
+/// channel. Without half: saturate to 0..31 (add caps at 31, subtract floors at
+/// 0). With half: the result is halved (`>> 1`) instead of upper-clamped — on
+/// hardware `(main + sub) >> 1` needs no cap since it can't exceed 31, and this
+/// is what makes a ½-add read as clean 50% translucency. Subtract still floors
+/// at 0 before halving.
 fn color_math(main: u16, sub: u16, subtract: bool, half: bool) -> u16 {
     let ch = |shift: u32| {
         let m = ((main >> shift) & 0x1f) as i16;
         let s = ((sub >> shift) & 0x1f) as i16;
-        let mut v = if subtract { m - s } else { m + s }.clamp(0, 31);
-        if half {
-            v >>= 1;
-        }
+        let raw = if subtract { m - s } else { m + s };
+        let v = if half {
+            raw.max(0) >> 1 // floor at 0 (subtract), then halve; add sum never exceeds 62
+        } else {
+            raw.clamp(0, 31)
+        };
         (v as u16) << shift
     };
     ch(0) | ch(5) | ch(10)
@@ -298,8 +303,9 @@ mod tests {
         let main = rgb15_word(5, 20, 0);
         let sub = rgb15_word(3, 20, 7);
         assert_eq!(color_math(main, sub, false, false), rgb15_word(8, 31, 7));
-        // Half: (8, 31, 7) >> 1 = (4, 15, 3).
-        assert_eq!(color_math(main, sub, false, true), rgb15_word(4, 15, 3));
+        // Half halves the RAW per-channel sums (no pre-clamp): (5+3)>>1=4,
+        // (20+20)>>1=20, (0+7)>>1=3 -> (4, 20, 3). This is the clean-50% path.
+        assert_eq!(color_math(main, sub, false, true), rgb15_word(4, 20, 3));
     }
 
     #[test]
