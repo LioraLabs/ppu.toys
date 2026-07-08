@@ -33,6 +33,17 @@ enum Slot {
     Obj { prio: u8 },
 }
 
+/// Is the layer behind ladder rung `slot` enabled on the screen whose
+/// designation bitmask is `mask` (TM for main, TS for sub)? Bits 0-4 =
+/// BG1,BG2,BG3,BG4,OBJ.
+fn slot_enabled(mask: u8, slot: &Slot) -> bool {
+    let bit = match slot {
+        Slot::Bg { layer, .. } => *layer as u8,
+        Slot::Obj { .. } => 4,
+    };
+    mask & (1 << bit) != 0
+}
+
 /// Authentic Mode-1 priority ladder, front (index 0) to back. BG participants
 /// come from the mode table's `priority_order` ([BG1,BG2,BG3]); the OBJ-prio
 /// slots and the BG3-priority-bit lift are Mode-1 hardware semantics. `bg3_high`
@@ -109,9 +120,19 @@ fn tile_mode_ladder(mode: u8) -> Vec<Slot> {
     l
 }
 
-/// Composite one scanline `y` of `row` into `line` (length `WIDTH`), backdrop +
-/// BG + sprites, UN-attenuated. Brightness is applied by the caller.
-fn composite_line(row: &RegRow, mem: &Memory, y: usize, line: &mut [[u8; 4]]) {
+/// Composite one scanline `y` of `row` into `line` (length `WIDTH`) for ONE
+/// screen, including only the layers whose bit is set in `mask` (TM = main
+/// screen, TS = sub screen). Backdrop is CGRAM[0] for both screens (the
+/// sub-screen fixed-color base is a CGWSEL concern for the color-math ticket).
+/// UN-attenuated; brightness is applied by the caller. `pub(crate)` so the
+/// color-math ticket resolves the sub line via `composite_screen(.., row.ts, ..)`.
+pub(crate) fn composite_screen(
+    row: &RegRow,
+    mem: &Memory,
+    y: usize,
+    mask: u8,
+    line: &mut [[u8; 4]],
+) {
     // 1. backdrop (opaque base).
     let backdrop = unpack_rgb15(mem.cgram[0]);
     for px in line.iter_mut() {
@@ -122,7 +143,7 @@ fn composite_line(row: &RegRow, mem: &Memory, y: usize, line: &mut [[u8; 4]]) {
     if row.mode == 7 {
         // Mode 7 is a single BG layer (mode7.rs owns its own compositing);
         // sprites still overlay on top, ordered among themselves by prio.
-        if row.bg[0].visible {
+        if row.bg[0].visible && mask & 0x01 != 0 {
             let mut tmp = vec![0u8; WIDTH * 4];
             render_mode7_scanline(row, mem, y, &mut tmp);
             for (x, slot) in line.iter_mut().enumerate() {
@@ -132,9 +153,11 @@ fn composite_line(row: &RegRow, mem: &Memory, y: usize, line: &mut [[u8; 4]]) {
                 }
             }
         }
-        for (slot, sp) in line.iter_mut().zip(render_sprite_scanline(mem, y, WIDTH)) {
-            if let Some(s) = sp {
-                *slot = s.rgba;
+        if mask & (1 << 4) != 0 {
+            for (slot, sp) in line.iter_mut().zip(render_sprite_scanline(mem, y, WIDTH)) {
+                if let Some(s) = sp {
+                    *slot = s.rgba;
+                }
             }
         }
     } else {
@@ -155,6 +178,9 @@ fn composite_line(row: &RegRow, mem: &Memory, y: usize, line: &mut [[u8; 4]]) {
         };
         for (x, slot) in line.iter_mut().enumerate() {
             for rung in &ladder {
+                if !slot_enabled(mask, rung) {
+                    continue;
+                }
                 let hit = match *rung {
                     Slot::Bg { layer, prio } => {
                         bgs[layer][x].filter(|p| p.prio == prio).map(|p| p.rgba)
@@ -179,7 +205,7 @@ pub fn render_frame(lt: &LineTable, mem: &Memory) -> Vec<u8> {
     let rows = lt.rows.len().min(HEIGHT);
     for y in 0..rows {
         let row = &lt.rows[y];
-        composite_line(row, mem, y, &mut line);
+        composite_screen(row, mem, y, row.tm, &mut line);
         let bri = row.brightness;
         for (x, px) in line.iter().enumerate() {
             let o = (y * WIDTH + x) * 4;
@@ -455,5 +481,28 @@ mod tests {
         let lt = LineTableBuilder::new(def).build(HEIGHT);
         let fb = render_frame(&lt, &mem);
         assert_eq!(&fb[0..4], &unpack_rgb15(rgb15(200, 200, 200)));
+    }
+
+    #[test]
+    fn tm_masks_layer_from_main_but_ts_keeps_it_on_sub() {
+        // BG1 draws index 1 (red) at (0,0) over a black backdrop.
+        let mut m = Memory::new();
+        m.cgram[0] = rgb15(0, 0, 0);
+        m.cgram[1] = rgb15(255, 0, 0); // BG1 pal 0, index 1
+        put_px(&mut m, 0x1000, 1);
+        m.vram[0x0000] = 1; // BG1 map(0,0): tile 1
+        let mut src = LineTableRow::default();
+        src.bg[0].char_base = 0x1000;
+        src.tm = 0x1e; // main: BG1 (bit 0) masked off, others on
+        src.ts = 0x01; // sub: BG1 enabled
+        let row = RegRow::from(&src);
+        let mut main = vec![[0u8; 4]; WIDTH];
+        let mut sub = vec![[0u8; 4]; WIDTH];
+        composite_screen(&row, &m, 0, row.tm, &mut main);
+        composite_screen(&row, &m, 0, row.ts, &mut sub);
+        // main: BG1 masked -> backdrop (black) shows through.
+        assert_eq!(main[0], unpack_rgb15(rgb15(0, 0, 0)));
+        // sub: BG1 enabled -> red.
+        assert_eq!(sub[0], unpack_rgb15(rgb15(255, 0, 0)));
     }
 }
