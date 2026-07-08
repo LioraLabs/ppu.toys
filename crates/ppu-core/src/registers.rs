@@ -146,6 +146,10 @@ pub struct RegBg {
     pub screen_size: u8,
     /// Snapped char base VRAM word address (multiple of 0x1000, in-VRAM).
     pub char_base: u16,
+    /// BG3 tilemap base used as the offset-per-tile table in modes 2/4.
+    pub offset_map_base: u16,
+    /// BG3 screen size selector for the offset table.
+    pub offset_screen_size: u8,
     /// Bits per pixel this layer renders at in the row's mode, resolved from
     /// the mode table (modes.rs) at quantize time; 0 = the layer does not
     /// exist in this mode (renders transparent).
@@ -165,6 +169,8 @@ impl From<&Bg> for RegBg {
             map_base: quantize::bg_map_base(b.map_base),
             screen_size: quantize::bg_screen_size(b.screen_size),
             char_base: quantize::bg_char_base(b.char_base),
+            offset_map_base: 0,
+            offset_screen_size: 0,
             bpp: 0, // resolved from the mode table by RegRow::from (needs the row's mode)
         }
     }
@@ -217,16 +223,23 @@ impl From<&LineTableRow> for RegRow {
     fn from(r: &LineTableRow) -> Self {
         let mode = quantize::mode(r.mode);
         let bpp = crate::modes::mode_info(mode).map_or([0; 4], |m| m.bpp);
+        let mut bg = std::array::from_fn(|i| {
+            let mut b = RegBg::from(&r.bg[i]);
+            b.mode = mode;
+            b.layer = i as u8;
+            b.bpp = bpp[i];
+            b
+        });
+        let offset_map_base = bg[2].map_base;
+        let offset_screen_size = bg[2].screen_size;
+        for b in &mut bg {
+            b.offset_map_base = offset_map_base;
+            b.offset_screen_size = offset_screen_size;
+        }
         RegRow {
             mode,
             brightness: quantize::brightness(r.brightness),
-            bg: std::array::from_fn(|i| {
-                let mut b = RegBg::from(&r.bg[i]);
-                b.mode = mode;
-                b.layer = i as u8;
-                b.bpp = bpp[i];
-                b
-            }),
+            bg,
             m7: RegM7::from(&r.m7),
             bg3_priority: r.bg3_priority,
         }
@@ -254,6 +267,8 @@ mod tests {
         assert!(reg.bg[0].visible);
         assert_eq!(reg.m7.a, 128); // Q8
         assert_eq!(reg.m7.cx, 128);
+        assert_eq!(reg.bg[0].offset_map_base, reg.bg[2].map_base);
+        assert_eq!(reg.bg[0].offset_screen_size, reg.bg[2].screen_size);
     }
 
     #[test]

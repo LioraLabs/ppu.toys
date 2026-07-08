@@ -58,6 +58,59 @@ fn map_entry_addr(map_base: u16, screen_size: u8, tx: u32, ty: u32) -> u16 {
     ((map_base as u32 + off) & 0x7fff) as u16
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ColumnOffset {
+    h: i16,
+    v: i16,
+}
+
+fn offset_word_value(word: u16) -> i16 {
+    (word & 0x03ff) as i16
+}
+
+// Offset-per-tile modes repurpose BG3 as a control table, so mode_info(2/4)
+// keeps BG3 out of priority_order. The table is addressed by 8-pixel column:
+// (screen_x + BGnHOFS) / 8, through BG3's 32x32 tilemap layout. Low 10 bits are
+// the scroll delta added before BG1/BG2 tilemap fetch; bit13 is the enable/valid
+// bit. Mode 2 uses row 0 for H and row 1 for V. Mode 4 uses one word; bit15
+// selects V when set, H when clear. Bits are intentionally the tilemap attribute
+// bits so authors can poke raw vram[] or bg[3].map entries.
+fn offset_per_tile(layer: &RegBg, mem: &Memory, screen_x: usize) -> ColumnOffset {
+    if !matches!(layer.mode, 2 | 4) || layer.layer > 1 {
+        return ColumnOffset::default();
+    }
+    let base_col = (screen_x as i64 + layer.scroll_x as i64).div_euclid(8) as u32;
+    let addr =
+        map_entry_addr(layer.offset_map_base, layer.offset_screen_size, base_col, 0) as usize;
+    let word = mem.vram[addr];
+    if word & 0x2000 == 0 {
+        return ColumnOffset::default();
+    }
+    if layer.mode == 4 {
+        return if word & 0x8000 != 0 {
+            ColumnOffset {
+                h: 0,
+                v: offset_word_value(word),
+            }
+        } else {
+            ColumnOffset {
+                h: offset_word_value(word),
+                v: 0,
+            }
+        };
+    }
+    let v_word = mem.vram
+        [map_entry_addr(layer.offset_map_base, layer.offset_screen_size, base_col, 1) as usize];
+    ColumnOffset {
+        h: offset_word_value(word),
+        v: if v_word & 0x2000 != 0 {
+            offset_word_value(v_word)
+        } else {
+            0
+        },
+    }
+}
+
 /// One rasterized BG pixel candidate: the resolved CGRAM color plus the
 /// tilemap entry's priority bit, so the compositor's priority pass
 /// (m4/compositing) can interleave it with layer order and sprites.
@@ -92,10 +145,13 @@ pub fn render_bg_layer_scanline_px(
         _ => (32, 32),
     };
     let words_per_char = layer.bpp as u32 * 4; // 2bpp = 8 words, 4bpp = 16
-    let wy = (y as i64 + layer.scroll_y as i64).rem_euclid((tiles_h * ts) as i64) as u32;
     (0..width)
         .map(|x| {
-            let wx = (x as i64 + layer.scroll_x as i64).rem_euclid((tiles_w * ts) as i64) as u32;
+            let opt = offset_per_tile(layer, mem, x);
+            let wx = (x as i64 + layer.scroll_x as i64 + opt.h as i64)
+                .rem_euclid((tiles_w * ts) as i64) as u32;
+            let wy = (y as i64 + layer.scroll_y as i64 + opt.v as i64)
+                .rem_euclid((tiles_h * ts) as i64) as u32;
             let entry = mem.vram
                 [map_entry_addr(layer.map_base, layer.screen_size, wx / ts, wy / ts) as usize];
             let (mut fx, mut fy) = (wx % ts, wy % ts);
@@ -246,6 +302,60 @@ mod tests {
         let row = RegRow::from(&src);
         let px = render_bg_layer_scanline_px(&row.bg[1], &m, 0, 1)[0].unwrap();
         assert_eq!(px.rgba, unpack_rgb15(rgb15(0, 255, 0)));
+    }
+
+    #[test]
+    fn mode2_bg3_words_add_independent_h_and_v_offsets_per_column() {
+        let mut m = Memory::new();
+        m.cgram[1] = rgb15(255, 0, 0);
+
+        // BG1 tile 1 has only pixel (0, 1) set. Without offsets, scanline y=0 is empty.
+        m.vram[0x1000 + 16 + 1] = 0x0080;
+        m.vram[1] = 1; // BG1 map cell (1, 0): tile 1, reached by +8 H offset.
+
+        // BG3 offset table at 0x0800, column 0:
+        // bit13 enables BG1/BG2 offset word use, bit15 marks V when set.
+        m.vram[0x0800] = 0x2000 | 8; // row 0: H += 8
+        m.vram[0x0800 + 32] = 0x2000 | 0x8000 | 1; // row 1: V += 1
+
+        let mut l = layer(0);
+        l.mode = 2;
+        l.layer = 0;
+        l.char_base = 0x1000;
+        l.offset_map_base = 0x0800;
+
+        let line = render_bg_layer_scanline_px(&l, &m, 0, 1);
+        assert_eq!(line[0].unwrap().rgba, unpack_rgb15(rgb15(255, 0, 0)));
+
+        // Clearing V offset keeps H shifted to tile 1 but samples empty row 0.
+        m.vram[0x0800 + 32] = 0;
+        assert!(render_bg_layer_scanline_px(&l, &m, 0, 1)[0].is_none());
+    }
+
+    #[test]
+    fn mode4_bg3_word_bit15_selects_h_or_v_offset() {
+        let mut m = Memory::new();
+        m.cgram[1] = rgb15(0, 255, 0);
+        m.vram[0x1000 + 16 + 1] = 0x0080; // tile 1, pixel (0, 1)
+        m.vram[1] = 1; // H-shift target tile
+        m.vram[0] = 1; // V-shift target tile
+
+        let mut l = layer(0);
+        l.mode = 4;
+        l.layer = 0;
+        l.char_base = 0x1000;
+        l.offset_map_base = 0x0800;
+
+        // H-only word: reaches tile column 1 but row 0 is transparent.
+        m.vram[0x0800] = 0x2000 | 8;
+        assert!(render_bg_layer_scanline_px(&l, &m, 0, 1)[0].is_none());
+
+        // V-only word: samples row 1 of tile column 0 and becomes visible.
+        m.vram[0x0800] = 0x2000 | 0x8000 | 1;
+        assert_eq!(
+            render_bg_layer_scanline_px(&l, &m, 0, 1)[0].unwrap().rgba,
+            unpack_rgb15(rgb15(0, 255, 0))
+        );
     }
 
     #[test]
