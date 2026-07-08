@@ -26,6 +26,33 @@ use crate::sprite::render_scanline as render_sprite_scanline;
 use crate::window::in_window;
 use crate::{HEIGHT, WIDTH};
 
+/// Per-channel SNES color math in 15-bit BGR space. Add or subtract each 5-bit
+/// channel with saturation to 0..31, then optionally halve (integer `>> 1`).
+/// Halving happens AFTER the clamp, matching hardware.
+fn color_math(main: u16, sub: u16, subtract: bool, half: bool) -> u16 {
+    let ch = |shift: u32| {
+        let m = ((main >> shift) & 0x1f) as i16;
+        let s = ((sub >> shift) & 0x1f) as i16;
+        let mut v = if subtract { m - s } else { m + s }.clamp(0, 31);
+        if half {
+            v >>= 1;
+        }
+        (v as u16) << shift
+    };
+    ch(0) | ch(5) | ch(10)
+}
+
+/// Resolve a CGWSEL 2-bit region field against whether column x is inside the
+/// color window: 0 = never, 1 = outside, 2 = inside, 3 = always.
+fn region_active(field: u8, inside: bool) -> bool {
+    match field & 0x03 {
+        0 => false,
+        1 => !inside,
+        2 => inside,
+        _ => true,
+    }
+}
+
 /// One rung of the per-pixel priority ladder: a BG layer at a given tilemap
 /// priority bit, or the OBJ layer at a given sprite-priority level.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -258,6 +285,41 @@ mod tests {
     use crate::linetable::LineTableBuilder;
     use crate::memory::rgb15;
     use crate::registers::{LineTableRow, Obj};
+
+    /// Pack 5-bit channels straight into a BGR555 word (unlike `rgb15` which
+    /// takes 8-bit inputs) — lets the color-math tests assert exact 5-bit values.
+    fn rgb15_word(r: u16, g: u16, b: u16) -> u16 {
+        (b << 10) | (g << 5) | r
+    }
+
+    #[test]
+    fn color_math_adds_clamps_and_halves_per_channel() {
+        // r: 5+3=8; g: 20+20=40 clamp 31; b: 0+7=7. No half.
+        let main = rgb15_word(5, 20, 0);
+        let sub = rgb15_word(3, 20, 7);
+        assert_eq!(color_math(main, sub, false, false), rgb15_word(8, 31, 7));
+        // Half: (8, 31, 7) >> 1 = (4, 15, 3).
+        assert_eq!(color_math(main, sub, false, true), rgb15_word(4, 15, 3));
+    }
+
+    #[test]
+    fn color_math_subtracts_and_floors_at_zero() {
+        // r: 10-3=7; g: 3-10 -> 0 (saturating); b: 31-1=30.
+        let main = rgb15_word(10, 3, 31);
+        let sub = rgb15_word(3, 10, 1);
+        assert_eq!(color_math(main, sub, true, false), rgb15_word(7, 0, 30));
+        // Half of (7,0,30) = (3,0,15).
+        assert_eq!(color_math(main, sub, true, true), rgb15_word(3, 0, 15));
+    }
+
+    #[test]
+    fn region_active_maps_the_two_bit_field() {
+        // field: 0=never, 1=outside(!inside), 2=inside, 3=always.
+        assert_eq!([region_active(0, false), region_active(0, true)], [false, false]);
+        assert_eq!([region_active(1, false), region_active(1, true)], [true, false]);
+        assert_eq!([region_active(2, false), region_active(2, true)], [false, true]);
+        assert_eq!([region_active(3, false), region_active(3, true)], [true, true]);
+    }
 
     /// Set pixel (0,0) of 4bpp char `c` (at VRAM word `char_base`) to palette
     /// index 1 (plane-0 bit 7 of the char's row 0). A char is 16 words at 4bpp.
