@@ -95,7 +95,7 @@ pub fn render_bg_layer_scanline_px(
         3 => (64, 64),
         _ => (32, 32),
     };
-    let words_per_char = layer.bpp as u32 * 4; // 2bpp = 8 words, 4bpp = 16
+    let words_per_char = layer.bpp as u32 * 4; // 2bpp = 8 words, 4bpp = 16, 8bpp = 32
     let wy = (y as i64 + layer.scroll_y as i64).rem_euclid((tiles_h * ts) as i64) as u32;
     (0..width)
         .map(|x| {
@@ -127,7 +127,7 @@ pub fn render_bg_layer_scanline_px(
                 };
                 mode0_band + pal * (1 << layer.bpp) + index as usize
             };
-            let color = mem.cgram[cgram_index]; // 4bpp p*16, 2bpp p*4
+            let color = mem.cgram[cgram_index]; // 4bpp p*16, 2bpp p*4, 8bpp direct index
             Some(BgPixel {
                 rgba: unpack_rgb15(color),
                 prio: entry & 0x2000 != 0,
