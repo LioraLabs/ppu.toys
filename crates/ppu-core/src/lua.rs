@@ -675,10 +675,10 @@ fn apply_imports(
                 report: imp.report.clone(),
             });
         } else {
-            // Tile BG (Mode 1): bit-depth from the mode table; only 2/4bpp
+            // Tile BG (Mode 1): bit-depth from the mode table; only 2/4/8bpp
             // tile layers import.
             let bpp = crate::modes::mode_info(mode).map_or(0, |m| m.bpp[i]);
-            if !matches!(bpp, 2 | 4) {
+            if !matches!(bpp, 2 | 4 | 8) {
                 continue;
             }
             // Placement bases: honor user-set map_base/char_base, else the
@@ -710,8 +710,9 @@ fn apply_imports(
             for (o, &w) in imp.tilemap_words.iter().enumerate() {
                 mem.vram[(mb + o) & 0x7fff] = w;
             }
+            let mode0_band = if mode == 0 && bpp == 2 { i * 8 * 4 } else { 0 };
             for &(idx, c) in &imp.cgram {
-                mem.cgram[idx as usize] = c;
+                mem.cgram[mode0_band + idx as usize] = c;
             }
             layer
                 .set(ctx, "map_base", imp.registers.map_base as i64)

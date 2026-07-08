@@ -199,6 +199,20 @@ fn source_triggers_tile_bg_import_into_vram_cgram() {
 }
 
 #[test]
+fn mode0_source_import_writes_layer_cgram_band() {
+    let mut e = LuaEngine::new();
+    let rgba = [0u8, 255, 0, 255].repeat(64);
+    e.upload_asset("sky".into(), 8, 8, rgba);
+    e.set_source("function frame(t,f) mode=0; bg[2].source='sky' end")
+        .unwrap();
+    e.frame(0.0, 0).unwrap();
+    let m = e.memory();
+
+    assert_eq!(m.cgram[1], 0);
+    assert_eq!(m.cgram[8 * 4 + 1], rgb15(0, 255, 0));
+}
+
+#[test]
 fn source_triggers_mode7_import_interleaved() {
     let mut e = LuaEngine::new();
     let rgba = [255u8, 0, 0, 255].repeat(64); // 8x8 solid red = 256 bytes
@@ -261,6 +275,38 @@ fn obj_sheet_triggers_obj_import_into_vram_and_obj_cgram() {
 }
 
 #[test]
+fn mode3_source_imports_bg1_as_8bpp_and_bg2_as_4bpp() {
+    let mut e = LuaEngine::new();
+    let red = [255u8, 0, 0, 255].repeat(64);
+    e.upload_asset("fg".into(), 8, 8, red.clone());
+    // BG2's asset stacks a red tile (top) over a blue tile (bottom): the red
+    // tile shares BG1's exact color so both layers agree on CGRAM index 1
+    // (an idempotent overwrite), and blue lands at index 2. Two independent
+    // solid-color imports would otherwise both claim index 1 fresh (no
+    // cross-layer CGRAM allocation exists), clobbering each other -- an
+    // authoring collision outside this task's scope, not a bug in the
+    // Mode 3 bpp wiring under test here.
+    let mut bg_rgba = red;
+    bg_rgba.extend([0u8, 0, 255, 255].repeat(64));
+    e.upload_asset("bg".into(), 8, 16, bg_rgba);
+    e.set_source(
+        "function frame(t,f) mode=3; bg[1].source='fg'; bg[1].char_base=0x1000; bg[2].source='bg'; bg[2].map_base=0x0400; bg[2].char_base=0x2000 end",
+    )
+    .unwrap();
+    let lt = e.frame(0.0, 0).unwrap();
+    let m = e.memory();
+    assert_eq!(lt.rows[0].bg[0].bpp, 8);
+    assert_eq!(lt.rows[0].bg[1].bpp, 4);
+    assert_eq!(m.cgram[1], rgb15(255, 0, 0));
+    assert_eq!(m.cgram[2], rgb15(0, 0, 255));
+    assert_eq!(m.vram[0x0000], 0x0001);
+    assert_eq!(m.vram[0x0400], 0x0001);
+    assert_eq!(m.vram[0x1000 + 32], 0x00ff);
+    assert_eq!(m.vram[0x2000 + 16], 0x00ff);
+    assert_eq!(e.import_reports().len(), 2);
+}
+
+#[test]
 fn scanline_is_an_alias_for_hdma() {
     let mut e = engine("function frame(t,f) scanline(0,223, function(y) brightness=3 end) end");
     let lt = e.frame(0.0, 0).unwrap();
@@ -299,4 +345,26 @@ fn runtime_error_in_hook_propagates() {
         Ok(_) => panic!("expected a runtime error from the hook"),
     };
     assert!(err.message.contains("boom"), "got: {}", err.message);
+}
+
+#[test]
+fn lua_column_offset_helper_writes_bg3_offset_words() {
+    let src = r#"
+function column_offset(col, dh, dv)
+  local base = 0x0800
+  bg[3].map_base = base
+  local enable = 0x2000
+  vram[base + col] = enable + (dh % 1024)
+  vram[base + 32 + col] = enable + 0x8000 + (dv % 1024)
+end
+
+function frame(t, f)
+  mode = 2
+  column_offset(3, 8, 1)
+end
+"#;
+    let mut e = engine(src);
+    e.frame(0.0, 0).unwrap();
+    assert_eq!(e.memory().vram[0x0800 + 3], 0x2000 | 8);
+    assert_eq!(e.memory().vram[0x0800 + 32 + 3], 0x2000 | 0x8000 | 1);
 }

@@ -50,6 +50,7 @@ pub fn flip_v(t: &IndexTile) -> IndexTile {
 /// Bitplane-pack one [`IndexTile`] into authentic SNES char words.
 /// 2bpp: 8 words, word[r] = plane0(r) | plane1(r)<<8.
 /// 4bpp: 16 words, rows 0..8 planes 0/1 then rows 0..8 planes 2/3.
+/// 8bpp: 32 words, adding rows 0..8 planes 4/5 then rows 0..8 planes 6/7.
 /// Leftmost pixel = bit 7 of each plane byte.
 pub fn pack_planar(t: &IndexTile, bpp: u8) -> Vec<u16> {
     let plane_byte = |plane: u8, row: usize| -> u16 {
@@ -59,8 +60,12 @@ pub fn pack_planar(t: &IndexTile, bpp: u8) -> Vec<u16> {
     };
     let word = |lo: u8, hi: u8, row: usize| plane_byte(lo, row) | (plane_byte(hi, row) << 8);
     let mut out: Vec<u16> = (0..8).map(|r| word(0, 1, r)).collect();
-    if bpp == 4 {
+    if bpp >= 4 {
         out.extend((0..8).map(|r| word(2, 3, r)));
+    }
+    if bpp == 8 {
+        out.extend((0..8).map(|r| word(4, 5, r)));
+        out.extend((0..8).map(|r| word(6, 7, r)));
     }
     out
 }
@@ -184,6 +189,20 @@ mod tests {
         let w = pack_planar(&t2, 4);
         assert_eq!(w[0], 0x8080); // p0 bit7 | p1 bit7 << 8
         assert_eq!(w[8], 0x8080); // p2 bit7 | p3 bit7 << 8
+    }
+
+    #[test]
+    fn pack_planar_8bpp_bit_layout() {
+        let mut t: IndexTile = [0; 64];
+        t[0] = 0xff;
+        t[7] = 0x80;
+        let w = pack_planar(&t, 8);
+        assert_eq!(w.len(), 32);
+        assert_eq!(w[0], 0x8080);
+        assert_eq!(w[8], 0x8080);
+        assert_eq!(w[16], 0x8080);
+        assert_eq!(w[24], 0x8180);
+        assert_eq!(w[31] & 0x0001, 0x0000);
     }
 
     #[test]

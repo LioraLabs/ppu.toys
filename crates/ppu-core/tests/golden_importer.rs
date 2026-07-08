@@ -58,6 +58,28 @@ fn golden_small_png_2bpp_bytes() {
 }
 
 #[test]
+fn golden_small_png_8bpp_bytes() {
+    let (rgba, w, h) = load_png("importer_4bpp.png");
+    let opts = ImportOptions {
+        bit_depth: 8,
+        ..Default::default()
+    };
+    let out = import_tile_bg(&rgba, w, h, &opts);
+    assert_eq!(out.cgram, vec![(1, 0x001f), (2, 0x7c00)]);
+    let mut expect_char = vec![0u16; 32];
+    expect_char.extend(std::iter::repeat(0x00ff).take(8));
+    expect_char.extend(std::iter::repeat(0x0000).take(24));
+    expect_char.extend(std::iter::repeat(0x0ff0).take(8));
+    expect_char.extend(std::iter::repeat(0x0000).take(24));
+    assert_eq!(out.char_words, expect_char);
+    assert_eq!(out.tilemap_words[0], 0x0001);
+    assert_eq!(out.tilemap_words[1], 0x0002);
+    assert_eq!(out.report.colors_used, 2);
+    assert_eq!(out.report.palettes_used, 1);
+    assert_eq!(out.report.vram_words, 96 + 0x400);
+}
+
+#[test]
 fn overbudget_png_reports_palette_overflow_honestly() {
     let (rgba, w, h) = load_png("importer_overbudget.png");
     let out = import_tile_bg(&rgba, w, h, &ImportOptions::default());
@@ -91,5 +113,13 @@ fn import_is_deterministic() {
         let a = import_tile_bg(&rgba, w, h, &ImportOptions::default());
         let b = import_tile_bg(&rgba, w, h, &ImportOptions::default());
         assert_eq!(a, b, "{name} must import identically every run");
+
+        let opts = ImportOptions {
+            bit_depth: 8,
+            ..Default::default()
+        };
+        let a = import_tile_bg(&rgba, w, h, &opts);
+        let b = import_tile_bg(&rgba, w, h, &opts);
+        assert_eq!(a, b, "{name} must import identically every run at 8bpp");
     }
 }
