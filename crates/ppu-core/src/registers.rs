@@ -134,6 +134,10 @@ pub struct RegBg {
     pub scroll_y: i16,
     pub source: Option<String>,
     pub visible: bool,
+    /// Resolved row mode this layer belongs to.
+    pub mode: u8,
+    /// Zero-based BG layer index within the row.
+    pub layer: u8,
     /// Quantized tile size in pixels: exactly 8 or 16.
     pub tile_size: u8,
     /// Snapped tilemap base VRAM word address (multiple of 0x400, in-VRAM).
@@ -155,6 +159,8 @@ impl From<&Bg> for RegBg {
             scroll_y: quantize::scroll_reg(b.scroll_y),
             source: b.source.clone(),
             visible: b.visible,
+            mode: 0,
+            layer: 0,
             tile_size: quantize::bg_tile_size(b.tile_size),
             map_base: quantize::bg_map_base(b.map_base),
             screen_size: quantize::bg_screen_size(b.screen_size),
@@ -216,6 +222,8 @@ impl From<&LineTableRow> for RegRow {
             brightness: quantize::brightness(r.brightness),
             bg: std::array::from_fn(|i| {
                 let mut b = RegBg::from(&r.bg[i]);
+                b.mode = mode;
+                b.layer = i as u8;
                 b.bpp = bpp[i];
                 b
             }),
@@ -304,10 +312,23 @@ mod tests {
             [reg.bg[0].bpp, reg.bg[1].bpp, reg.bg[2].bpp, reg.bg[3].bpp],
             [4, 4, 2, 0]
         );
-        // Unshipped mode (mode_info -> None): every layer bpp 0 (renders transparent).
         let mut src = LineTableRow::default();
-        src.mode = 0;
-        assert!(RegRow::from(&src).bg.iter().all(|b| b.bpp == 0));
+        for (mode, expected) in [
+            (0, [2, 2, 2, 2]),
+            (2, [4, 4, 0, 0]),
+            (3, [8, 4, 0, 0]),
+            (4, [4, 4, 0, 0]),
+        ] {
+            src.mode = mode;
+            let reg = RegRow::from(&src);
+            assert_eq!(
+                [reg.bg[0].bpp, reg.bg[1].bpp, reg.bg[2].bpp, reg.bg[3].bpp],
+                expected,
+                "mode {mode} bpp"
+            );
+            assert_eq!(reg.bg[0].mode, reg.mode);
+            assert_eq!(reg.bg[3].layer, 3);
+        }
         // Mode 7: the table's BG1 row is 8bpp (tile-BG rasterizer ignores it; mode7.rs owns it).
         src.mode = 7;
         assert_eq!(RegRow::from(&src).bg[0].bpp, 8);

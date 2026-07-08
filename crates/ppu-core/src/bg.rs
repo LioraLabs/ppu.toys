@@ -113,7 +113,13 @@ pub fn render_bg_layer_scanline_px(
                 return None; // color 0 = transparent
             }
             let pal = ((entry >> 10) & 0x07) as usize;
-            let color = mem.cgram[pal * (1 << layer.bpp) + index as usize]; // 4bpp p*16, 2bpp p*4
+            let mode0_band = if layer.mode == 0 && layer.bpp == 2 {
+                layer.layer as usize * 8 * 4
+            } else {
+                0
+            };
+            let cgram_index = mode0_band + pal * (1 << layer.bpp) + index as usize;
+            let color = mem.cgram[cgram_index]; // 4bpp p*16, 2bpp p*4
             Some(BgPixel {
                 rgba: unpack_rgb15(color),
                 prio: entry & 0x2000 != 0,
@@ -225,6 +231,21 @@ mod tests {
         l.char_base = 0x2000;
         let line = render_bg_layer_scanline_px(&l, &m, 0, 2);
         assert_eq!(line[0].unwrap().rgba, unpack_rgb15(rgb15(0, 255, 0)));
+    }
+
+    #[test]
+    fn mode0_bg2_uses_second_cgram_band() {
+        let mut m = Memory::new();
+        m.cgram[1] = rgb15(255, 0, 0);
+        m.cgram[8 * 4 + 1] = rgb15(0, 255, 0);
+        m.vram[0x2000 + 8] = 0x0080;
+        m.vram[0] = 1;
+        let mut src = LineTableRow::default();
+        src.mode = 0;
+        src.bg[1].char_base = 0x2000;
+        let row = RegRow::from(&src);
+        let px = render_bg_layer_scanline_px(&row.bg[1], &m, 0, 1)[0].unwrap();
+        assert_eq!(px.rgba, unpack_rgb15(rgb15(0, 255, 0)));
     }
 
     #[test]
