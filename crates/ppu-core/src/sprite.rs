@@ -18,6 +18,8 @@ const TILE: u32 = 8;
 pub struct SpritePixel {
     pub rgba: [u8; 4],
     pub prio: u8,
+    /// OBJ sub-palette 0..7 (needed by color math's palette-4-7 gate).
+    pub pal: u8,
 }
 
 /// Pixel edge length of a sprite given its size selector: 8, 16, 32, 64.
@@ -91,6 +93,7 @@ pub fn render_scanline(mem: &Memory, y: usize, width: usize) -> Vec<Option<Sprit
             *slot = Some(SpritePixel {
                 rgba: unpack_rgb15(mem.cgram[pal_base + index as usize]),
                 prio: o.prio,
+                pal: o.pal & 7,
             });
         }
     }

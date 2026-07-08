@@ -77,6 +77,26 @@ fn slot_enabled(mask: u8, slot: &Slot) -> bool {
     mask & (1 << bit) != 0
 }
 
+/// Which layer produced a resolved pixel, for the color-math blend: backdrop,
+/// a BG layer (0..3), or a sprite (carrying its OBJ palette for the 4-7 gate).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PixelSource {
+    Backdrop,
+    Bg(u8),
+    Obj { pal: u8 },
+}
+
+impl PixelSource {
+    /// CGADSUB math-enable bit index: BG1..BG4 = 0..3, OBJ = 4, backdrop = 5.
+    fn math_layer(self) -> usize {
+        match self {
+            PixelSource::Backdrop => 5,
+            PixelSource::Bg(l) => l as usize,
+            PixelSource::Obj { .. } => 4,
+        }
+    }
+}
+
 /// Authentic Mode-1 priority ladder, front (index 0) to back. BG participants
 /// come from the mode table's `priority_order` ([BG1,BG2,BG3]); the OBJ-prio
 /// slots and the BG3-priority-bit lift are Mode-1 hardware semantics. `bg3_high`
@@ -166,11 +186,15 @@ pub(crate) fn composite_screen(
     mask: u8,
     wmask: u8,
     line: &mut [[u8; 4]],
+    src: &mut [PixelSource],
 ) {
     // 1. backdrop (opaque base).
     let backdrop = unpack_rgb15(mem.cgram[0]);
     for px in line.iter_mut() {
         *px = backdrop;
+    }
+    for s in src.iter_mut() {
+        *s = PixelSource::Backdrop;
     }
 
     // Window suppression: for each layer (0..3 = BG1..BG4, 4 = OBJ) whose wmask
@@ -202,6 +226,7 @@ pub(crate) fn composite_screen(
                 let p = &tmp[x * 4..x * 4 + 4];
                 if p[3] != 0 {
                     *slot = [p[0], p[1], p[2], 255];
+                    src[x] = PixelSource::Bg(0);
                 }
             }
         }
@@ -216,6 +241,7 @@ pub(crate) fn composite_screen(
                 }
                 if let Some(s) = sp {
                     *slot = s.rgba;
+                    src[x] = PixelSource::Obj { pal: s.pal };
                 }
             }
         }
@@ -248,13 +274,16 @@ pub(crate) fn composite_screen(
                     continue;
                 }
                 let hit = match *rung {
-                    Slot::Bg { layer, prio } => {
-                        bgs[layer][x].filter(|p| p.prio == prio).map(|p| p.rgba)
-                    }
-                    Slot::Obj { prio } => obj[x].filter(|s| s.prio == prio).map(|s| s.rgba),
+                    Slot::Bg { layer, prio } => bgs[layer][x]
+                        .filter(|p| p.prio == prio)
+                        .map(|p| (p.rgba, PixelSource::Bg(layer as u8))),
+                    Slot::Obj { prio } => obj[x]
+                        .filter(|s| s.prio == prio)
+                        .map(|s| (s.rgba, PixelSource::Obj { pal: s.pal })),
                 };
-                if let Some(rgba) = hit {
+                if let Some((rgba, source)) = hit {
                     *slot = rgba;
+                    src[x] = source;
                     break;
                 }
             }
@@ -268,10 +297,11 @@ pub(crate) fn composite_screen(
 pub fn render_frame(lt: &LineTable, mem: &Memory) -> Vec<u8> {
     let mut fb = vec![0u8; WIDTH * HEIGHT * 4];
     let mut line = vec![[0u8; 4]; WIDTH];
+    let mut src = vec![PixelSource::Backdrop; WIDTH];
     let rows = lt.rows.len().min(HEIGHT);
     for y in 0..rows {
         let row = &lt.rows[y];
-        composite_screen(row, mem, y, row.tm, row.tmw, &mut line);
+        composite_screen(row, mem, y, row.tm, row.tmw, &mut line, &mut src);
         let bri = row.brightness;
         for (x, px) in line.iter().enumerate() {
             let o = (y * WIDTH + x) * 4;
@@ -612,8 +642,9 @@ mod tests {
         let row = RegRow::from(&src);
         let mut main = vec![[0u8; 4]; WIDTH];
         let mut sub = vec![[0u8; 4]; WIDTH];
-        composite_screen(&row, &m, 0, row.tm, row.tmw, &mut main);
-        composite_screen(&row, &m, 0, row.ts, row.tsw, &mut sub);
+        let mut s = vec![PixelSource::Backdrop; WIDTH];
+        composite_screen(&row, &m, 0, row.tm, row.tmw, &mut main, &mut s);
+        composite_screen(&row, &m, 0, row.ts, row.tsw, &mut sub, &mut s);
         // main: BG1 masked -> backdrop (black) shows through.
         assert_eq!(main[0], unpack_rgb15(rgb15(0, 0, 0)));
         // sub: BG1 enabled -> red.
@@ -640,7 +671,8 @@ mod tests {
         src.tmw = 0x01; // suppress BG1 inside window on the MAIN screen
         let row = RegRow::from(&src);
         let mut main = vec![[0u8; 4]; WIDTH];
-        composite_screen(&row, &m, 0, row.tm, row.tmw, &mut main);
+        let mut s = vec![PixelSource::Backdrop; WIDTH];
+        composite_screen(&row, &m, 0, row.tm, row.tmw, &mut main, &mut s);
         // Inside the window (x=0..7): BG1 suppressed -> backdrop (black).
         assert_eq!(main[0], unpack_rgb15(rgb15(0, 0, 0)));
         assert_eq!(main[7], unpack_rgb15(rgb15(0, 0, 0)));
@@ -670,12 +702,48 @@ mod tests {
         let row = RegRow::from(&src);
         let mut main = vec![[0u8; 4]; WIDTH];
         let mut sub = vec![[0u8; 4]; WIDTH];
-        composite_screen(&row, &m, 0, row.tm, row.tmw, &mut main);
-        composite_screen(&row, &m, 0, row.ts, row.tsw, &mut sub);
+        let mut s = vec![PixelSource::Backdrop; WIDTH];
+        composite_screen(&row, &m, 0, row.tm, row.tmw, &mut main, &mut s);
+        composite_screen(&row, &m, 0, row.ts, row.tsw, &mut sub, &mut s);
         // Main screen: no TMW -> BG1 red everywhere.
         assert_eq!(main[0], unpack_rgb15(rgb15(255, 0, 0)));
         // Sub screen: BG1 clipped inside window -> backdrop; visible outside.
         assert_eq!(sub[0], unpack_rgb15(rgb15(0, 0, 0)));
         assert_eq!(sub[8], unpack_rgb15(rgb15(255, 0, 0)));
+    }
+
+    #[test]
+    fn composite_screen_reports_pixel_sources() {
+        // BG1 index1 (red) at (0,0); a sprite (pal 5) at (1,0); backdrop elsewhere.
+        let mut m = Memory::new();
+        m.cgram[0] = rgb15(0, 0, 0);
+        m.cgram[1] = rgb15(255, 0, 0); // BG1 pal0 idx1
+        m.cgram[128 + 5 * 16 + 1] = rgb15(0, 255, 0); // OBJ pal5 idx1
+        put_px(&mut m, 0x1000, 1); // BG1 char 1 pixel (0,0)
+        m.vram[0x0000] = 1;
+        m.obsel.char_base = 0x4000;
+        m.vram[0x4000 + 16] = 0x0080; // OBJ char 1 pixel (0,0)
+        m.oam[0] = Obj {
+            on: true,
+            x: 1,
+            y: 0,
+            tile: 1,
+            pal: 5,
+            prio: 3,
+            ..Obj::default()
+        };
+        let mut src = LineTableRow::default();
+        src.bg[0].char_base = 0x1000;
+        let row = RegRow::from(&src);
+        let mut line = vec![[0u8; 4]; WIDTH];
+        let mut srcs = vec![PixelSource::Backdrop; WIDTH];
+        composite_screen(&row, &m, 0, row.tm, row.tmw, &mut line, &mut srcs);
+        assert_eq!(srcs[0], PixelSource::Bg(0));
+        assert_eq!(srcs[1], PixelSource::Obj { pal: 5 });
+        assert_eq!(srcs[2], PixelSource::Backdrop);
+        // math_layer() maps sources to CGADSUB bit indices.
+        assert_eq!(PixelSource::Bg(0).math_layer(), 0);
+        assert_eq!(PixelSource::Obj { pal: 5 }.math_layer(), 4);
+        assert_eq!(PixelSource::Backdrop.math_layer(), 5);
     }
 }
