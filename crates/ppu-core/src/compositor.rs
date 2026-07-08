@@ -80,6 +80,30 @@ fn mode1_ladder(bg3_high: bool) -> Vec<Slot> {
     l
 }
 
+fn tile_mode_ladder(mode: u8) -> Vec<Slot> {
+    let Some(info) = mode_info(mode) else {
+        return vec![
+            Slot::Obj { prio: 3 },
+            Slot::Obj { prio: 2 },
+            Slot::Obj { prio: 1 },
+            Slot::Obj { prio: 0 },
+        ];
+    };
+    let layers: Vec<usize> = info.priority_order.iter().map(|&l| l as usize).collect();
+    let mut l = Vec::with_capacity(layers.len() * 2 + 4);
+    l.push(Slot::Obj { prio: 3 });
+    for &layer in &layers {
+        l.push(Slot::Bg { layer, prio: true });
+    }
+    l.push(Slot::Obj { prio: 2 });
+    for &layer in &layers {
+        l.push(Slot::Bg { layer, prio: false });
+    }
+    l.push(Slot::Obj { prio: 1 });
+    l.push(Slot::Obj { prio: 0 });
+    l
+}
+
 /// Composite one scanline `y` of `row` into `line` (length `WIDTH`), backdrop +
 /// BG + sprites, UN-attenuated. Brightness is applied by the caller.
 fn composite_line(row: &RegRow, mem: &Memory, y: usize, line: &mut [[u8; 4]]) {
@@ -109,17 +133,21 @@ fn composite_line(row: &RegRow, mem: &Memory, y: usize, line: &mut [[u8; 4]]) {
             }
         }
     } else {
-        // Mode 1: authentic per-pixel priority resolution. Each BG layer and the
-        // OBJ layer produce one candidate per x; the ladder (front->back) picks
-        // the frontmost occupied rung, interleaving tilemap priority bit x mode
-        // layer order x sprite priority. Backdrop shows through if no rung hits.
+        // Tile modes: per-pixel priority resolution. Each BG layer and the OBJ
+        // layer produce one candidate per x; the ladder (front->back) picks the
+        // frontmost occupied rung, interleaving tilemap priority bit x mode layer
+        // order x sprite priority. Backdrop shows through if no rung hits.
         let bgs: Vec<Vec<Option<BgPixel>>> = row
             .bg
             .iter()
             .map(|l| render_bg_layer_scanline_px(l, mem, y, WIDTH))
             .collect();
         let obj = render_sprite_scanline(mem, y, WIDTH);
-        let ladder = mode1_ladder(row.bg3_priority);
+        let ladder = if row.mode == 1 {
+            mode1_ladder(row.bg3_priority)
+        } else {
+            tile_mode_ladder(row.mode)
+        };
         for (x, slot) in line.iter_mut().enumerate() {
             for rung in &ladder {
                 let hit = match *rung {
@@ -270,6 +298,73 @@ mod tests {
         assert_eq!(
             &render_frame(&lt, &m)[0..4],
             &unpack_rgb15(rgb15(255, 0, 0))
+        );
+    }
+
+    #[test]
+    fn tile_modes_2_3_4_dispatch_drawable_layers() {
+        for (mode, layer) in [(2u8, 0usize), (3, 1), (4, 0)] {
+            let mut mem = Memory::new();
+            mem.cgram[0] = rgb15(0, 0, 0);
+            mem.cgram[1] = rgb15(0, 255, 0);
+            put_px(&mut mem, 0x1000, 1);
+            mem.vram[0] = 1;
+
+            let mut src = LineTableRow::default();
+            src.mode = mode;
+            src.bg[layer].char_base = 0x1000;
+            let lt = LineTableBuilder::new(src).build(HEIGHT);
+
+            assert_eq!(
+                &render_frame(&lt, &mem)[0..4],
+                &unpack_rgb15(rgb15(0, 255, 0)),
+                "mode {mode} layer {layer} should draw"
+            );
+        }
+    }
+
+    #[test]
+    fn mode0_bg4_dispatches_with_fourth_cgram_band() {
+        let mut mem = Memory::new();
+        mem.cgram[0] = rgb15(0, 0, 0);
+        mem.cgram[24 * 4 + 1] = rgb15(0, 0, 255);
+        mem.vram[0x3000 + 8] = 0x0080;
+        mem.vram[0] = 1;
+
+        let mut src = LineTableRow::default();
+        src.mode = 0;
+        src.bg[3].char_base = 0x3000;
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+
+        assert_eq!(
+            &render_frame(&lt, &mem)[0..4],
+            &unpack_rgb15(rgb15(0, 0, 255))
+        );
+    }
+
+    #[test]
+    fn unsupported_tile_modes_still_render_obj() {
+        let mut mem = Memory::new();
+        mem.cgram[0] = rgb15(0, 0, 0);
+        mem.cgram[128 + 1] = rgb15(255, 255, 0);
+        mem.obsel.char_base = 0x4000;
+        mem.vram[0x4000 + 16] = 0x0080;
+        mem.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 1,
+            prio: 3,
+            ..Obj::default()
+        };
+
+        let mut src = LineTableRow::default();
+        src.mode = 5;
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+
+        assert_eq!(
+            &render_frame(&lt, &mem)[0..4],
+            &unpack_rgb15(rgb15(255, 255, 0))
         );
     }
 
