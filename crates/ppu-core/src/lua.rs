@@ -342,7 +342,8 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     // Window-mask registers ($2123-$212F). Power-on: all zero -> no window
     // enabled, no layer clipped (existing goldens unaffected).
     for name in [
-        "WH0", "WH1", "WH2", "WH3", "W12SEL", "W34SEL", "WOBJSEL", "WBGLOG", "WOBJLOG", "TMW", "TSW",
+        "WH0", "WH1", "WH2", "WH3", "W12SEL", "W34SEL", "WOBJSEL", "WBGLOG", "WOBJLOG", "TMW",
+        "TSW",
     ] {
         ctx.set_global(name, 0).unwrap();
     }
@@ -536,17 +537,39 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
     if let Some(v) = ctx.get_global("TS").to_integer() {
         row.ts = v as u8;
     }
-    if let Some(v) = ctx.get_global("WH0").to_integer() { row.wh0 = v as u8; }
-    if let Some(v) = ctx.get_global("WH1").to_integer() { row.wh1 = v as u8; }
-    if let Some(v) = ctx.get_global("WH2").to_integer() { row.wh2 = v as u8; }
-    if let Some(v) = ctx.get_global("WH3").to_integer() { row.wh3 = v as u8; }
-    if let Some(v) = ctx.get_global("W12SEL").to_integer() { row.w12sel = v as u8; }
-    if let Some(v) = ctx.get_global("W34SEL").to_integer() { row.w34sel = v as u8; }
-    if let Some(v) = ctx.get_global("WOBJSEL").to_integer() { row.wobjsel = v as u8; }
-    if let Some(v) = ctx.get_global("WBGLOG").to_integer() { row.wbglog = v as u8; }
-    if let Some(v) = ctx.get_global("WOBJLOG").to_integer() { row.wobjlog = v as u8; }
-    if let Some(v) = ctx.get_global("TMW").to_integer() { row.tmw = v as u8; }
-    if let Some(v) = ctx.get_global("TSW").to_integer() { row.tsw = v as u8; }
+    if let Some(v) = ctx.get_global("WH0").to_integer() {
+        row.wh0 = v as u8;
+    }
+    if let Some(v) = ctx.get_global("WH1").to_integer() {
+        row.wh1 = v as u8;
+    }
+    if let Some(v) = ctx.get_global("WH2").to_integer() {
+        row.wh2 = v as u8;
+    }
+    if let Some(v) = ctx.get_global("WH3").to_integer() {
+        row.wh3 = v as u8;
+    }
+    if let Some(v) = ctx.get_global("W12SEL").to_integer() {
+        row.w12sel = v as u8;
+    }
+    if let Some(v) = ctx.get_global("W34SEL").to_integer() {
+        row.w34sel = v as u8;
+    }
+    if let Some(v) = ctx.get_global("WOBJSEL").to_integer() {
+        row.wobjsel = v as u8;
+    }
+    if let Some(v) = ctx.get_global("WBGLOG").to_integer() {
+        row.wbglog = v as u8;
+    }
+    if let Some(v) = ctx.get_global("WOBJLOG").to_integer() {
+        row.wobjlog = v as u8;
+    }
+    if let Some(v) = ctx.get_global("TMW").to_integer() {
+        row.tmw = v as u8;
+    }
+    if let Some(v) = ctx.get_global("TSW").to_integer() {
+        row.tsw = v as u8;
+    }
     if let Value::Table(bg) = ctx.get_global("bg") {
         for i in 0..4 {
             if let Value::Table(layer) = bg.get(ctx, (i + 1) as i64) {

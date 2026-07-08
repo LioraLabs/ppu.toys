@@ -153,9 +153,8 @@ pub(crate) fn composite_screen(
             None
         }
     });
-    let hidden = |layer: usize, x: usize| -> bool {
-        win_hidden[layer].as_ref().is_some_and(|m| m[x])
-    };
+    let hidden =
+        |layer: usize, x: usize| -> bool { win_hidden[layer].as_ref().is_some_and(|m| m[x]) };
 
     // 2. BG + OBJ.
     if row.mode == 7 {
@@ -587,7 +586,7 @@ mod tests {
         src.wh1 = 7;
         src.w12sel = 0x02; // BG1 W1 enable
         src.tsw = 0x01; // suppress BG1 inside window on the SUB screen
-        // tmw stays 0 -> main screen unaffected.
+                        // tmw stays 0 -> main screen unaffected.
         let row = RegRow::from(&src);
         let mut main = vec![[0u8; 4]; WIDTH];
         let mut sub = vec![[0u8; 4]; WIDTH];

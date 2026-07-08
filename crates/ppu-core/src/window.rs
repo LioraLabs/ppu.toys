@@ -91,10 +91,21 @@ pub fn in_window(sel: &WindowSel, win: &WindowRanges, x: usize) -> bool {
 mod tests {
     use super::*;
 
-    const FULL: WindowRanges = WindowRanges { w1_left: 0, w1_right: 255, w2_left: 0, w2_right: 255 };
+    const FULL: WindowRanges = WindowRanges {
+        w1_left: 0,
+        w1_right: 255,
+        w2_left: 0,
+        w2_right: 255,
+    };
 
     fn sel(w1e: bool, w1i: bool, w2e: bool, w2i: bool, logic: WLog) -> WindowSel {
-        WindowSel { w1_enable: w1e, w1_invert: w1i, w2_enable: w2e, w2_invert: w2i, logic }
+        WindowSel {
+            w1_enable: w1e,
+            w1_invert: w1i,
+            w2_enable: w2e,
+            w2_invert: w2i,
+            logic,
+        }
     }
 
     #[test]
@@ -121,7 +132,12 @@ mod tests {
     fn single_window_range_is_inclusive() {
         // Only window 1 enabled, range [64,192].
         let s = sel(true, false, false, false, WLog::Or);
-        let win = WindowRanges { w1_left: 64, w1_right: 192, w2_left: 0, w2_right: 0 };
+        let win = WindowRanges {
+            w1_left: 64,
+            w1_right: 192,
+            w2_left: 0,
+            w2_right: 0,
+        };
         assert!(!in_window(&s, &win, 63));
         assert!(in_window(&s, &win, 64)); // left edge inclusive
         assert!(in_window(&s, &win, 128));
@@ -141,7 +157,12 @@ mod tests {
     fn inversion_flips_the_range() {
         // Window 1 only, inverted: inside == OUTSIDE [64,192].
         let s = sel(true, true, false, false, WLog::Or);
-        let win = WindowRanges { w1_left: 64, w1_right: 192, w2_left: 0, w2_right: 0 };
+        let win = WindowRanges {
+            w1_left: 64,
+            w1_right: 192,
+            w2_left: 0,
+            w2_right: 0,
+        };
         assert!(in_window(&s, &win, 0));
         assert!(!in_window(&s, &win, 128));
         assert!(in_window(&s, &win, 255));
@@ -150,7 +171,12 @@ mod tests {
     #[test]
     fn empty_range_masks_nothing_but_inverts_to_everything() {
         // left > right: raw range false everywhere.
-        let win = WindowRanges { w1_left: 200, w1_right: 100, w2_left: 0, w2_right: 0 };
+        let win = WindowRanges {
+            w1_left: 200,
+            w1_right: 100,
+            w2_left: 0,
+            w2_right: 0,
+        };
         let s = sel(true, false, false, false, WLog::Or);
         assert!((0..=255).all(|x| !in_window(&s, &win, x)));
         // inverted empty range -> inside everywhere.
@@ -167,13 +193,18 @@ mod tests {
     #[test]
     fn both_windows_combine_under_each_logic_op() {
         // W1 = [0,127], W2 = [64,255]. Overlap [64,127].
-        let win = WindowRanges { w1_left: 0, w1_right: 127, w2_left: 64, w2_right: 255 };
+        let win = WindowRanges {
+            w1_left: 0,
+            w1_right: 127,
+            w2_left: 64,
+            w2_right: 255,
+        };
         // sample points: 32 (only W1), 96 (both), 200 (only W2).
         let cases = [
-            (WLog::Or,   [true,  true,  true]),  // in either
-            (WLog::And,  [false, true,  false]), // in both
-            (WLog::Xor,  [true,  false, true]),  // in exactly one
-            (WLog::Xnor, [false, true,  false]), // in both or neither
+            (WLog::Or, [true, true, true]),     // in either
+            (WLog::And, [false, true, false]),  // in both
+            (WLog::Xor, [true, false, true]),   // in exactly one
+            (WLog::Xnor, [false, true, false]), // in both or neither
         ];
         for (logic, expect) in cases {
             let s = sel(true, false, true, false, logic);
@@ -186,7 +217,12 @@ mod tests {
     #[test]
     fn only_enabled_window_applies_regardless_of_logic() {
         // W2 disabled: AND logic must NOT force everything false — result == W1.
-        let win = WindowRanges { w1_left: 64, w1_right: 192, w2_left: 0, w2_right: 255 };
+        let win = WindowRanges {
+            w1_left: 64,
+            w1_right: 192,
+            w2_left: 0,
+            w2_right: 255,
+        };
         let s = sel(true, false, false, false, WLog::And);
         assert!(in_window(&s, &win, 128)); // W1 inside; W2 ignored despite AND
         assert!(!in_window(&s, &win, 0));
