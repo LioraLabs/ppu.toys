@@ -175,6 +175,11 @@ pub struct LineTableRow {
     pub cgadsub: u8,
     /// COLDATA ($2132) fixed color, 15-bit BGR. Power-on 0 = black.
     pub coldata: u16,
+    /// SETINI ($2133) screen-init byte. Only bit 6 (EXTBG) is load-bearing in
+    /// M8: it splits the Mode 7 plane into two per-pixel priority sub-levels by
+    /// each pixel's bit 7. Other bits (interlace/overscan/pseudo-hi-res) are M8
+    /// non-goals — the byte is stored but unused. Power-on 0 = EXTBG off.
+    pub setini: u8,
 }
 
 impl Default for LineTableRow {
@@ -201,6 +206,7 @@ impl Default for LineTableRow {
             cgwsel: 0,
             cgadsub: 0,
             coldata: 0,
+            setini: 0,
         }
     }
 }
@@ -319,6 +325,8 @@ pub struct RegRow {
     pub cgwsel: u8,
     pub cgadsub: u8,
     pub coldata: u16,
+    /// SETINI ($2133); only bit 6 (EXTBG) is load-bearing. See `LineTableRow::setini`.
+    pub setini: u8,
 }
 
 impl From<&LineTableRow> for RegRow {
@@ -361,6 +369,7 @@ impl From<&LineTableRow> for RegRow {
             cgwsel: r.cgwsel,
             cgadsub: r.cgadsub,
             coldata: quantize::coldata15(r.coldata),
+            setini: r.setini,
         }
     }
 }
@@ -426,6 +435,11 @@ impl RegRow {
     /// CGWSEL bits4-5: prevent-math region select (0 never,1 outside,2 inside,3 always).
     pub fn prevent_mode(&self) -> u8 {
         (self.cgwsel >> 4) & 0x03
+    }
+    /// SETINI.6 EXTBG: Mode 7 per-pixel priority (each pixel's bit 7 becomes a
+    /// priority flag). Off = today's single-plane Mode 7.
+    pub fn extbg(&self) -> bool {
+        self.setini & 0x40 != 0
     }
 }
 
@@ -564,6 +578,25 @@ mod tests {
         let mut src = LineTableRow::default();
         src.bg3_priority = true;
         assert!(RegRow::from(&src).bg3_priority);
+    }
+
+    #[test]
+    fn extbg_bit_defaults_off_and_round_trips() {
+        // Default row: SETINI zero, EXTBG off.
+        let d = RegRow::from(&LineTableRow::default());
+        assert_eq!(d.setini, 0);
+        assert!(!d.extbg());
+        // SETINI bit 6 set -> extbg() true, byte preserved through quantize.
+        let mut src = LineTableRow::default();
+        src.setini = 0x40;
+        let reg = RegRow::from(&src);
+        assert_eq!(reg.setini, 0x40);
+        assert!(reg.extbg());
+        // Other SETINI bits are modeled (stored) but do NOT enable EXTBG.
+        src.setini = 0x80;
+        let reg = RegRow::from(&src);
+        assert_eq!(reg.setini, 0x80);
+        assert!(!reg.extbg());
     }
 
     #[test]
