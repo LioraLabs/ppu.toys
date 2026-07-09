@@ -180,6 +180,7 @@ fn tile_mode_ladder(mode: u8) -> Vec<Slot> {
 /// whose `wmask` bit is set is suppressed at any x inside that layer's combined
 /// window. `pub(crate)` so the color-math ticket resolves the sub line via
 /// `composite_screen(.., row.ts, row.tsw, ..)`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn composite_screen(
     row: &RegRow,
     mem: &Memory,
