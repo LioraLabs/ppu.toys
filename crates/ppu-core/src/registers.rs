@@ -184,6 +184,10 @@ pub struct LineTableRow {
     /// each pixel's bit 7. Other bits (interlace/overscan/pseudo-hi-res) are M8
     /// non-goals — the byte is stored but unused. Power-on 0 = EXTBG off.
     pub setini: u8,
+    /// INIDISP ($2100) bit 7: force blank. When set, the line outputs black
+    /// regardless of layers/brightness (compositor honors it). Per-line, like
+    /// brightness. Power-on 0 = not blanked.
+    pub force_blank: bool,
 }
 
 impl Default for LineTableRow {
@@ -213,6 +217,7 @@ impl Default for LineTableRow {
             mosaic_size: 0,
             mosaic_enable: [false; 4],
             setini: 0,
+            force_blank: false,
         }
     }
 }
@@ -340,6 +345,7 @@ pub struct RegRow {
     pub mosaic_enable: [bool; 4],
     /// SETINI ($2133); only bit 6 (EXTBG) is load-bearing. See `LineTableRow::setini`.
     pub setini: u8,
+    pub force_blank: bool,
 }
 
 impl From<&LineTableRow> for RegRow {
@@ -390,6 +396,7 @@ impl From<&LineTableRow> for RegRow {
             mosaic_size: quantize::mosaic_size(r.mosaic_size),
             mosaic_enable: r.mosaic_enable,
             setini: r.setini,
+            force_blank: r.force_blank,
         }
     }
 }
@@ -790,5 +797,14 @@ mod tests {
         src.mosaic_size = 0xf5;
         assert_eq!(RegRow::from(&src).mosaic_size, 5);
         assert_eq!(RegRow::from(&src).bg[0].mosaic, 6);
+    }
+
+    #[test]
+    fn force_blank_defaults_off_and_round_trips() {
+        assert!(!LineTableRow::default().force_blank);
+        assert!(!RegRow::from(&LineTableRow::default()).force_blank);
+        let mut src = LineTableRow::default();
+        src.force_blank = true;
+        assert!(RegRow::from(&src).force_blank);
     }
 }

@@ -169,7 +169,11 @@ pub fn derive_registers(row: &RegRow, obsel: &Obsel, prev: &HashMap<u16, i32>) -
             .map(|(i, &e)| (e as i32) << (4 + i))
             .sum::<i32>();
     let entries: [(u16, &str, i32); 40] = [
-        (0x2100, "INIDISP", row.brightness as i32),
+        (
+            0x2100,
+            "INIDISP",
+            row.brightness as i32 | ((row.force_blank as i32) << 7),
+        ),
         (0x2105, "BGMODE", bgmode),
         (0x2106, "MOSAIC", mosaic),
         (0x2101, "OBSEL", obsel_val),
@@ -253,6 +257,17 @@ mod tests {
         let setini = regs.iter().find(|r| r.name == "SETINI").unwrap();
         assert_eq!(setini.addr, 0x2133);
         assert_eq!(setini.value, 0x40);
+    }
+
+    #[test]
+    fn derive_registers_inidisp_includes_force_blank_bit7() {
+        let mut ltr = LineTableRow::default();
+        ltr.brightness = 7;
+        ltr.force_blank = true;
+        let row = RegRow::from(&ltr);
+        let regs = derive_registers(&row, &Obsel::default(), &HashMap::new());
+        let inidisp = regs.iter().find(|r| r.name == "INIDISP").unwrap();
+        assert_eq!(inidisp.value, 0x87); // brightness 7 | force-blank bit 7
     }
 
     #[test]

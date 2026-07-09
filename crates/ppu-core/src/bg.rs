@@ -116,6 +116,19 @@ fn offset_per_tile(layer: &RegBg, mem: &Memory, screen_x: usize) -> ColumnOffset
     }
 }
 
+/// Direct color (CGWSEL.0): build a BGR555 word from an 8bpp pixel `index` and the
+/// 3-bit tilemap `pal`. Index bits `bbgggrrr` fill each channel's high bits; the
+/// palette bits fill one low bit per channel (R<-pal0, G<-pal1, B<-pal2), matching
+/// fullsnes' BGR233->BGR555 expansion. Mode 7 has no per-tile palette, so `pal = 0`.
+pub(crate) fn direct_color_bgr555(index: u8, pal: u8) -> u16 {
+    let idx = index as u16;
+    let pal = pal as u16;
+    let r5 = ((idx & 0x07) << 2) | ((pal & 0x01) << 1);
+    let g5 = (((idx >> 3) & 0x07) << 2) | (pal & 0x02);
+    let b5 = (((idx >> 6) & 0x03) << 3) | (pal & 0x04);
+    (b5 << 10) | (g5 << 5) | r5
+}
+
 /// One rasterized BG pixel candidate: the resolved CGRAM color plus the
 /// tilemap entry's priority bit, so the compositor's priority pass
 /// (m4/compositing) can interleave it with layer order and sprites.
@@ -180,13 +193,7 @@ pub fn render_bg_layer_scanline_px(
                 return None; // color 0 = transparent
             }
             let color = if layer.bpp == 8 && layer.direct_color {
-                // Direct color: 8bpp index bits + tilemap palette form BGR555 directly.
-                let pal = (entry >> 10) & 0x07;
-                let idx = index as u16;
-                let r5 = ((idx & 0x07) << 2) | ((pal & 0x01) << 1);
-                let g5 = (((idx >> 3) & 0x07) << 2) | (pal & 0x02);
-                let b5 = (((idx >> 6) & 0x03) << 3) | (pal & 0x04);
-                (b5 << 10) | (g5 << 5) | r5
+                direct_color_bgr555(index, ((entry >> 10) & 0x07) as u8)
             } else {
                 let cgram_index = if layer.bpp == 8 {
                     index as usize

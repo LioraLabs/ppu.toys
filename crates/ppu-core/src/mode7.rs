@@ -89,6 +89,11 @@ pub fn render_mode7_scanline(row: &RegRow, mem: &Memory, y: usize, out: &mut [u8
         let oi = x * 4;
         out[oi..oi + 4].copy_from_slice(&if index == 0 {
             [0, 0, 0, 0] // palette index 0 = transparent
+        } else if row.bg[0].direct_color {
+            // Direct color (CGWSEL.0): 8bpp index -> BGR555, bypassing CGRAM.
+            // No per-tile palette in Mode 7, so pal = 0. (EXTBG's own path,
+            // render_mode7_scanline_px, applies direct color to its low 7 bits.)
+            unpack_rgb15(crate::bg::direct_color_bgr555(index, 0))
         } else {
             unpack_rgb15(mem.cgram[index as usize])
         });
@@ -112,12 +117,19 @@ pub fn render_mode7_scanline_px(
     y: usize,
     width: usize,
 ) -> Vec<Option<Mode7Pixel>> {
+    let direct = row.bg[0].direct_color;
     (0..width)
         .map(|x| {
             let raw = mode7_raw_index(row, mem, y, x);
             let color = raw & 0x7f;
             (color != 0).then(|| Mode7Pixel {
-                rgba: unpack_rgb15(mem.cgram[color as usize]),
+                // Direct color (CGWSEL.0) expands the low-7-bit color to BGR555
+                // (pal 0), bypassing CGRAM; otherwise it's a CGRAM index.
+                rgba: if direct {
+                    unpack_rgb15(crate::bg::direct_color_bgr555(color, 0))
+                } else {
+                    unpack_rgb15(mem.cgram[color as usize])
+                },
                 prio: raw & 0x80 != 0,
             })
         })
@@ -370,6 +382,24 @@ mod tests {
         let mut out = [0u8; 4];
         render_mode7_scanline(&row, &mem, 0, &mut out);
         assert_eq!(&out[0..4], &unpack_rgb15(rgb15(255, 255, 255)));
+    }
+
+    #[test]
+    fn mode7_direct_color_bypasses_cgram() {
+        // pixel (0,0): map cell (0,0) -> tile 0; char high byte at tile 0 pixel (0,0) = index.
+        let mut mem = Memory::new();
+        set_map(&mut mem, 0, 0, 0);
+        set_char(&mut mem, 0, 0, 0, 0xD3); // index 0xD3 = 0b11_010_011
+                                           // If CGRAM were used it would read this; direct color must ignore it.
+        mem.cgram[0xD3] = rgb15(9, 9, 9);
+        let mut src = LineTableRow::default();
+        src.mode = 7;
+        src.cgwsel = 0x01; // direct color on
+        let row = RegRow::from(&src);
+        let mut out = [0u8; 4];
+        render_mode7_scanline(&row, &mem, 0, &mut out);
+        // pal = 0 (Mode 7 has no tilemap palette): r5=(3<<2)=12, g5=(2<<2)=8, b5=(3<<3)=24.
+        assert_eq!(out, unpack_rgb15((24 << 10) | (8 << 5) | 12));
     }
 
     #[test]
