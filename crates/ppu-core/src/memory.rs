@@ -41,6 +41,15 @@ pub struct Memory {
     pub obj_sheet: Option<String>,
     /// Frame-global OBJ binding registers (OBSEL $2101): char base + size select.
     pub obsel: Obsel,
+    /// OAM priority rotation ($2103 bit 7). When true, per-line OBJ evaluation
+    /// starts at the OAMADD-derived sprite index (see `sprite::obj_first_sprite`)
+    /// and wraps mod 128, instead of scanning 0..127 ascending.
+    pub priority_rotate: bool,
+    /// OAM word address (OAMADD, $2102 + $2103 bit 0): a 9-bit word address into
+    /// OAM. Only its derived start-sprite matters for rendering (see
+    /// `sprite::obj_first_sprite`); stored raw (masked to 9 bits) so S5 export is
+    /// authentic.
+    pub oam_addr: u16,
 }
 
 impl Default for Memory {
@@ -51,6 +60,8 @@ impl Default for Memory {
             oam: [Obj::default(); 128],
             obj_sheet: None,
             obsel: Obsel::default(),
+            priority_rotate: false,
+            oam_addr: 0,
         }
     }
 }
@@ -113,5 +124,12 @@ mod tests {
         let m = Memory::new();
         assert_eq!(m.obsel.char_base, 0);
         assert_eq!(m.obsel.size_sel, 0);
+    }
+
+    #[test]
+    fn priority_rotation_defaults_off() {
+        let m = Memory::new();
+        assert!(!m.priority_rotate);
+        assert_eq!(m.oam_addr, 0);
     }
 }

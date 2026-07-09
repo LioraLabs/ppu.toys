@@ -135,3 +135,34 @@ fn lua_window_registers_round_trip_and_animate() {
     assert_eq!(lt.rows[50].wh1, 50);
     assert_eq!(lt.rows[200].wh1, 200);
 }
+
+#[test]
+fn lua_obj_priority_rotate_and_oam_addr_reach_memory() {
+    let mut engine = ppu_core::LuaEngine::new();
+    let src = r#"
+        function frame(t, f)
+            obj.priority_rotate = true
+            obj.oam_addr = 10
+        end
+    "#;
+    engine.set_source(src).expect("compiles");
+    let _ = engine.frame(0.0, 0).expect("runs");
+    assert!(engine.memory().priority_rotate);
+    assert_eq!(engine.memory().oam_addr, 10);
+}
+
+#[test]
+fn lua_obj_first_helper_sets_rotation_and_word_address() {
+    let mut engine = ppu_core::LuaEngine::new();
+    // obj.first = N is sugar: turns rotation ON and sets OAMADD to sprite N's
+    // word address (N << 1), so obj_first_sprite(oam_addr) == N.
+    let src = r#"
+        function frame(t, f)
+            obj.first = 5
+        end
+    "#;
+    engine.set_source(src).expect("compiles");
+    let _ = engine.frame(0.0, 0).expect("runs");
+    assert!(engine.memory().priority_rotate);
+    assert_eq!(engine.memory().oam_addr, 10); // 5 << 1
+}
