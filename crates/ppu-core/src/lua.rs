@@ -333,6 +333,8 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     // scalar registers
     ctx.set_global("mode", 1).unwrap();
     ctx.set_global("brightness", 15).unwrap();
+    ctx.set_global("direct_color", false).unwrap();
+    ctx.set_global("force_blank", false).unwrap();
     // TM/TS main/sub screen designation ($212C/$212D). Playground defaults:
     // all five layers on the main screen (like brightness=15/visible=true),
     // nothing on the sub screen (authentic power-on).
@@ -601,6 +603,12 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
     if let Some(v) = ctx.get_global("CGWSEL").to_integer() {
         row.cgwsel = v as u8;
     }
+    // Friendly alias: direct_color=true forces CGWSEL bit 0 (raw CGWSEL still works;
+    // OR keeps both authoring styles valid and both-off byte-identical).
+    if ctx.get_global("direct_color").to_bool() {
+        row.cgwsel |= 0x01;
+    }
+    row.force_blank = ctx.get_global("force_blank").to_bool();
     if let Some(v) = ctx.get_global("CGADSUB").to_integer() {
         row.cgadsub = v as u8;
     }
@@ -689,6 +697,9 @@ fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
     ctx.set_global("CGWSEL", row.cgwsel as i64).unwrap();
     ctx.set_global("CGADSUB", row.cgadsub as i64).unwrap();
     ctx.set_global("COLDATA", row.coldata as i64).unwrap();
+    ctx.set_global("direct_color", (row.cgwsel & 0x01) != 0)
+        .unwrap();
+    ctx.set_global("force_blank", row.force_blank).unwrap();
     if let Value::Table(bg) = ctx.get_global("bg") {
         for i in 0..4 {
             if let Value::Table(layer) = bg.get(ctx, (i + 1) as i64) {
