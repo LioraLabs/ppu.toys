@@ -430,10 +430,10 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
         for (k, v) in [("x", 0.0), ("y", 0.0)] {
             o.set(ctx, k, v).unwrap();
         }
-        for k in ["tile", "pal", "prio", "size"] {
+        for k in ["tile", "pal", "prio"] {
             o.set(ctx, k, 0).unwrap();
         }
-        for k in ["flip_x", "flip_y", "on"] {
+        for k in ["flip_x", "flip_y", "on", "large"] {
             o.set(ctx, k, false).unwrap();
         }
         obj.set(ctx, i, o).unwrap();
