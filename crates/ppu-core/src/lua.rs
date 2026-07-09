@@ -385,6 +385,7 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     m7.set(ctx, "wrap", 0).unwrap();
     m7.set(ctx, "flip_x", false).unwrap();
     m7.set(ctx, "flip_y", false).unwrap();
+    m7.set(ctx, "extbg", false).unwrap();
     // Mode 7 tilemap poke: m7.map[ty][tx] = tile# (low byte of the interleaved word).
     m7.set(ctx, "map", Table::new(&ctx)).unwrap();
     ctx.set_global("m7", m7).unwrap();
@@ -664,6 +665,8 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
         }
         row.m7.flip_x = m7.get(ctx, "flip_x").to_bool();
         row.m7.flip_y = m7.get(ctx, "flip_y").to_bool();
+        // SETINI.6 EXTBG: fold the DSL bool into the register byte's bit 6.
+        row.setini = (row.setini & !0x40) | ((m7.get(ctx, "extbg").to_bool() as u8) << 6);
     }
     row
 }
@@ -731,6 +734,7 @@ fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
         m7.set(ctx, "wrap", row.m7.repeat as i64).unwrap();
         m7.set(ctx, "flip_x", row.m7.flip_x).unwrap();
         m7.set(ctx, "flip_y", row.m7.flip_y).unwrap();
+        m7.set(ctx, "extbg", row.setini & 0x40 != 0).unwrap();
     }
 }
 
