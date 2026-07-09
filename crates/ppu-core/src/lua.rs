@@ -928,7 +928,7 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
                 e.tile = o.get(ctx, "tile").to_integer().unwrap_or(0) as u16;
                 e.pal = o.get(ctx, "pal").to_integer().unwrap_or(0) as u8;
                 e.prio = o.get(ctx, "prio").to_integer().unwrap_or(0) as u8;
-                e.size = o.get(ctx, "size").to_integer().unwrap_or(0) as u8;
+                e.large = o.get(ctx, "large").to_bool();
                 e.flip_x = o.get(ctx, "flip_x").to_bool();
                 e.flip_y = o.get(ctx, "flip_y").to_bool();
                 e.on = o.get(ctx, "on").to_bool();

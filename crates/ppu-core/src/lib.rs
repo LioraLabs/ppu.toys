@@ -87,7 +87,7 @@ pub struct OamSprite {
     pub tile: u16,
     pub pal: u8,
     pub prio: u8,
-    pub size: u8,
+    pub large: bool,
     #[serde(rename = "flipX")]
     pub flip_x: bool,
     #[serde(rename = "flipY")]
@@ -103,7 +103,7 @@ impl From<&Obj> for OamSprite {
             tile: o.tile,
             pal: o.pal,
             prio: o.prio,
-            size: o.size,
+            large: o.large,
             flip_x: o.flip_x,
             flip_y: o.flip_y,
             on: o.on,
@@ -319,6 +319,7 @@ mod tests {
         assert_eq!(json["flipY"], false);
         assert_eq!(json["on"], true);
         assert_eq!(json["tile"], 5);
+        assert_eq!(json["large"], false);
         assert!(json.get("flip_x").is_none());
     }
 
