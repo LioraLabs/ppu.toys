@@ -88,16 +88,20 @@ pub struct Obj {
 
 /// Frame-global OBJ binding registers (OBSEL $2101). `char_base` is the OBJ
 /// tile-data base as an EFFECTIVE VRAM word address (name base, bits 0-2);
-/// `size_sel` is the sprite-size pair selector (bits 5-7). Quantize-on-write,
-/// consistent with the BG binding registers — the DSL authors friendly values
-/// and `lua::read_memory` snaps them via `quantize::obj_char_base`/`obj_size_sel`.
+/// `name_select` is the second name-table gap selector (bits 3-4); `size_sel`
+/// is the sprite-size pair selector (bits 5-7). Quantize-on-write, consistent
+/// with the BG binding registers — the DSL authors friendly values and
+/// `lua::read_memory` snaps them via
+/// `quantize::obj_char_base`/`obj_name_select`/`obj_size_sel`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct Obsel {
     /// Snapped OBJ char base VRAM word address (multiple of 0x2000, in-VRAM).
     pub char_base: u16,
-    /// Sprite-size selector, masked to 0..7. Modeled and quantized for register
-    /// fidelity; the sampler currently sizes sprites from per-OAM `Obj::size`, so
-    /// this is not yet consumed by rendering (forward-looking).
+    /// Name-select (bits 3-4), masked to 0..3: second name-table gap in
+    /// 0x1000-word units (second table = char_base + (name_select+1)*0x1000).
+    pub name_select: u8,
+    /// Sprite-size selector, masked to 0..7 (OBSEL bits 5-7): indexes the
+    /// authentic size-pair table (small/large WxH) consumed by the rasterizer.
     pub size_sel: u8,
 }
 

@@ -121,6 +121,13 @@ pub fn obj_size_sel(v: u8) -> u8 {
     v & 0x07
 }
 
+/// OBSEL name-select (bits 3-4): the second OBJ name-table gap selector, in
+/// 0x1000-word units. Masks (wraps) to 2 bits like the other enum registers.
+#[inline]
+pub fn obj_name_select(v: u8) -> u8 {
+    v & 0x03
+}
+
 /// COLDATA ($2132) fixed color: a 15-bit BGR value. Masks to 15 bits, matching
 /// CGRAM's stored width.
 #[inline]
@@ -231,5 +238,13 @@ mod tests {
         assert_eq!(coldata15(0x7fff), 0x7fff);
         assert_eq!(coldata15(0xffff), 0x7fff); // top bit dropped
         assert_eq!(coldata15(0x0000), 0x0000);
+    }
+
+    #[test]
+    fn obj_name_select_masks_to_2_bits() {
+        assert_eq!(obj_name_select(0), 0);
+        assert_eq!(obj_name_select(3), 3);
+        assert_eq!(obj_name_select(4), 0); // wraps (mask), NOT clamp
+        assert_eq!(obj_name_select(7), 3);
     }
 }
