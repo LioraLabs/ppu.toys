@@ -175,6 +175,10 @@ pub struct LineTableRow {
     pub cgadsub: u8,
     /// COLDATA ($2132) fixed color, 15-bit BGR. Power-on 0 = black.
     pub coldata: u16,
+    /// INIDISP ($2100) bit 7: force blank. When set, the line outputs black
+    /// regardless of layers/brightness (compositor honors it). Per-line, like
+    /// brightness. Power-on 0 = not blanked.
+    pub force_blank: bool,
 }
 
 impl Default for LineTableRow {
@@ -201,6 +205,7 @@ impl Default for LineTableRow {
             cgwsel: 0,
             cgadsub: 0,
             coldata: 0,
+            force_blank: false,
         }
     }
 }
@@ -319,6 +324,7 @@ pub struct RegRow {
     pub cgwsel: u8,
     pub cgadsub: u8,
     pub coldata: u16,
+    pub force_blank: bool,
 }
 
 impl From<&LineTableRow> for RegRow {
@@ -361,6 +367,7 @@ impl From<&LineTableRow> for RegRow {
             cgwsel: r.cgwsel,
             cgadsub: r.cgadsub,
             coldata: quantize::coldata15(r.coldata),
+            force_blank: r.force_blank,
         }
     }
 }
@@ -708,5 +715,14 @@ mod tests {
         assert!(!reg.direct_color());
         src.cgwsel = 0x01; // direct color only
         assert!(RegRow::from(&src).direct_color());
+    }
+
+    #[test]
+    fn force_blank_defaults_off_and_round_trips() {
+        assert!(!LineTableRow::default().force_blank);
+        assert!(!RegRow::from(&LineTableRow::default()).force_blank);
+        let mut src = LineTableRow::default();
+        src.force_blank = true;
+        assert!(RegRow::from(&src).force_blank);
     }
 }
