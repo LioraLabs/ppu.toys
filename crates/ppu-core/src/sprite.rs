@@ -165,19 +165,21 @@ fn obj_tile_addr(char_base: u32, name_select: u32, tile: u16, col: u32, row: u32
     (addr & 0x7fff) as u16
 }
 
-/// Composite every visible sprite for scanline `y` into a `width`-long row of
-/// `Option<SpritePixel>` (`None` = transparent). Real OBJ pixel sampling: per
-/// covering sprite (lowest OAM index first), fetch its 4bpp char from the OBSEL
-/// char base in VRAM, apply flip/size, decode the palette index, and map index
-/// 0 = transparent / else `cgram[128 + pal*16 + index]` (OBJ palettes 8-15).
-/// `SpritePixel.prio` carries the sprite's priority for the BG/OBJ compositor.
-/// Un-attenuated; brightness is applied by the compositor.
-pub fn render_scanline(mem: &Memory, y: usize, width: usize) -> Vec<Option<SpritePixel>> {
+/// Composite the given `indices` (already binned + capped, in evaluation order)
+/// for scanline `y` into a `width`-long row of `Option<SpritePixel>`. First index
+/// to paint a pixel wins it (eval-order priority). See [`render_scanline`] for the
+/// pixel-sampling details.
+pub fn render_scanline_for(
+    mem: &Memory,
+    indices: &[usize],
+    y: usize,
+    width: usize,
+) -> Vec<Option<SpritePixel>> {
     let mut out = vec![None; width];
     let char_base = mem.obsel.char_base as u32;
     let size_sel = mem.obsel.size_sel;
     let name_select = mem.obsel.name_select as u32;
-    for i in sprites_on_line(mem, y) {
+    for &i in indices {
         let o = mem.oam[i];
         let (w, h) = sprite_dims(size_sel, o.large);
         let row = (y as i64 - o.y as i64) as u32; // 0..h (binning guarantees in-range)
@@ -206,6 +208,15 @@ pub fn render_scanline(mem: &Memory, y: usize, width: usize) -> Vec<Option<Sprit
         }
     }
     out
+}
+
+/// Composite every kept sprite for scanline `y` (self-binning convenience for the
+/// full-frame helper + unit tests). Real pixel sampling: per covering sprite (in
+/// eval order), fetch its 4bpp char from the OBSEL char base in VRAM, apply
+/// flip/size, decode the palette index, map index 0 = transparent / else
+/// `cgram[128 + pal*16 + index]`. `SpritePixel.prio` carries the sprite priority.
+pub fn render_scanline(mem: &Memory, y: usize, width: usize) -> Vec<Option<SpritePixel>> {
+    render_scanline_for(mem, &bin_line(mem, y).sprites, y, width)
 }
 
 /// Full-frame sprite raster over the CGRAM backdrop (`cgram[0]`), for sprite
@@ -641,5 +652,25 @@ mod tests {
         // The sprite is 64 tall, so row 63 is still covered; row 64 is not.
         assert_eq!(sprites_on_line(&mem, 63), vec![0]);
         assert_eq!(sprites_on_line(&mem, 64), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn render_scanline_for_paints_only_given_indices_in_order() {
+        let mut mem = obj_mem();
+        mem.cgram[128 + 1] = rgb15(255, 0, 0);
+        mem.cgram[128 + 2] = rgb15(0, 0, 255);
+        let mut g1 = [[0u8; 8]; 8];
+        g1[0][0] = 1;
+        let mut g2 = [[0u8; 8]; 8];
+        g2[0][0] = 2;
+        put_obj_char(&mut mem, 1, g1);
+        put_obj_char(&mut mem, 2, g2);
+        mem.oam[0] = Obj { on: true, x: 0, y: 0, tile: 1, ..Obj::default() };
+        mem.oam[5] = Obj { on: true, x: 0, y: 0, tile: 2, ..Obj::default() };
+        // Explicit index order [5, 0]: sprite 5 is painted first -> wins the pixel.
+        let line = render_scanline_for(&mem, &[5, 0], 0, crate::WIDTH);
+        assert_eq!(line[0].unwrap().rgba, unpack_rgb15(rgb15(0, 0, 255)));
+        // Empty set -> nothing painted.
+        assert!(render_scanline_for(&mem, &[], 0, crate::WIDTH)[0].is_none());
     }
 }
