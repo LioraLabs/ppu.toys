@@ -22,8 +22,9 @@ use crate::memory::{rgb15, unpack_rgb15, Memory};
 use crate::mode7::render_mode7_scanline;
 use crate::modes::mode_info;
 use crate::registers::RegRow;
-use crate::sprite::render_scanline as render_sprite_scanline;
+use crate::sprite::{bin_line, render_scanline_for};
 use crate::window::in_window;
+use crate::ObjOverflow;
 use crate::{HEIGHT, WIDTH};
 
 /// Per-channel SNES color math in 15-bit BGR space. Add or subtract each 5-bit
@@ -185,6 +186,7 @@ pub(crate) fn composite_screen(
     y: usize,
     mask: u8,
     wmask: u8,
+    obj: &[usize],
     line: &mut [[u8; 4]],
     src: &mut [PixelSource],
 ) {
@@ -233,7 +235,7 @@ pub(crate) fn composite_screen(
         if mask & (1 << 4) != 0 {
             for (x, (slot, sp)) in line
                 .iter_mut()
-                .zip(render_sprite_scanline(mem, y, WIDTH))
+                .zip(render_scanline_for(mem, obj, y, WIDTH))
                 .enumerate()
             {
                 if hidden(4, x) {
@@ -255,7 +257,7 @@ pub(crate) fn composite_screen(
             .iter()
             .map(|l| render_bg_layer_scanline_px(l, mem, y, WIDTH))
             .collect();
-        let obj = render_sprite_scanline(mem, y, WIDTH);
+        let obj = render_scanline_for(mem, obj, y, WIDTH);
         let ladder = if row.mode == 1 {
             mode1_ladder(row.bg3_priority)
         } else {
@@ -336,19 +338,52 @@ fn blend_pixel(
 }
 
 /// Phase-2 compositor entry: resolved `LineTable` (224 rows) + `Memory` -> full
-/// 256x224 RGBA framebuffer (`WIDTH*HEIGHT*4` bytes; alpha always 255). This is
-/// the seam the wasm shim (E7) calls.
+/// 256x224 RGBA framebuffer. Framebuffer-only convenience over
+/// [`render_frame_stats`] (drops the STAT77 diagnostic).
 pub fn render_frame(lt: &LineTable, mem: &Memory) -> Vec<u8> {
+    render_frame_stats(lt, mem).0
+}
+
+/// Compositor entry that ALSO returns the per-frame OBJ overflow diagnostic
+/// (`$213E` STAT77). The per-line OBJ bin is computed ONCE here and reused by the
+/// main and sub `composite_screen` passes, so both screens composite the exact
+/// same deterministically-capped sprite set (no drift).
+pub fn render_frame_stats(lt: &LineTable, mem: &Memory) -> (Vec<u8>, ObjOverflow) {
     let mut fb = vec![0u8; WIDTH * HEIGHT * 4];
     let mut main = vec![[0u8; 4]; WIDTH];
     let mut sub = vec![[0u8; 4]; WIDTH];
     let mut src_main = vec![PixelSource::Backdrop; WIDTH];
     let mut src_sub = vec![PixelSource::Backdrop; WIDTH];
+    let mut stats = ObjOverflow::default();
     let rows = lt.rows.len().min(HEIGHT);
     for y in 0..rows {
         let row = &lt.rows[y];
-        composite_screen(row, mem, y, row.tm, row.tmw, &mut main, &mut src_main);
-        composite_screen(row, mem, y, row.ts, row.tsw, &mut sub, &mut src_sub);
+        // Bin OBJ once per line; both screens reuse the identical capped set.
+        let bin = bin_line(mem, y);
+        stats.range_over |= bin.range_over;
+        stats.time_over |= bin.time_over;
+        stats.max_sprites = stats.max_sprites.max(bin.sprite_count);
+        stats.max_tiles = stats.max_tiles.max(bin.tile_count);
+        composite_screen(
+            row,
+            mem,
+            y,
+            row.tm,
+            row.tmw,
+            &bin.sprites,
+            &mut main,
+            &mut src_main,
+        );
+        composite_screen(
+            row,
+            mem,
+            y,
+            row.ts,
+            row.tsw,
+            &bin.sprites,
+            &mut sub,
+            &mut src_sub,
+        );
         let bri = row.brightness;
         let cw_sel = row.color_window();
         let ranges = row.window_ranges();
@@ -366,7 +401,7 @@ pub fn render_frame(lt: &LineTable, mem: &Memory) -> Vec<u8> {
             fb[o + 3] = 255;
         }
     }
-    fb
+    (fb, stats)
 }
 
 #[cfg(test)]
@@ -697,8 +732,9 @@ mod tests {
         let mut main = vec![[0u8; 4]; WIDTH];
         let mut sub = vec![[0u8; 4]; WIDTH];
         let mut s = vec![PixelSource::Backdrop; WIDTH];
-        composite_screen(&row, &m, 0, row.tm, row.tmw, &mut main, &mut s);
-        composite_screen(&row, &m, 0, row.ts, row.tsw, &mut sub, &mut s);
+        let obj = crate::sprite::sprites_on_line(&m, 0);
+        composite_screen(&row, &m, 0, row.tm, row.tmw, &obj, &mut main, &mut s);
+        composite_screen(&row, &m, 0, row.ts, row.tsw, &obj, &mut sub, &mut s);
         // main: BG1 masked -> backdrop (black) shows through.
         assert_eq!(main[0], unpack_rgb15(rgb15(0, 0, 0)));
         // sub: BG1 enabled -> red.
@@ -726,7 +762,8 @@ mod tests {
         let row = RegRow::from(&src);
         let mut main = vec![[0u8; 4]; WIDTH];
         let mut s = vec![PixelSource::Backdrop; WIDTH];
-        composite_screen(&row, &m, 0, row.tm, row.tmw, &mut main, &mut s);
+        let obj = crate::sprite::sprites_on_line(&m, 0);
+        composite_screen(&row, &m, 0, row.tm, row.tmw, &obj, &mut main, &mut s);
         // Inside the window (x=0..7): BG1 suppressed -> backdrop (black).
         assert_eq!(main[0], unpack_rgb15(rgb15(0, 0, 0)));
         assert_eq!(main[7], unpack_rgb15(rgb15(0, 0, 0)));
@@ -757,8 +794,9 @@ mod tests {
         let mut main = vec![[0u8; 4]; WIDTH];
         let mut sub = vec![[0u8; 4]; WIDTH];
         let mut s = vec![PixelSource::Backdrop; WIDTH];
-        composite_screen(&row, &m, 0, row.tm, row.tmw, &mut main, &mut s);
-        composite_screen(&row, &m, 0, row.ts, row.tsw, &mut sub, &mut s);
+        let obj = crate::sprite::sprites_on_line(&m, 0);
+        composite_screen(&row, &m, 0, row.tm, row.tmw, &obj, &mut main, &mut s);
+        composite_screen(&row, &m, 0, row.ts, row.tsw, &obj, &mut sub, &mut s);
         // Main screen: no TMW -> BG1 red everywhere.
         assert_eq!(main[0], unpack_rgb15(rgb15(255, 0, 0)));
         // Sub screen: BG1 clipped inside window -> backdrop; visible outside.
@@ -791,7 +829,8 @@ mod tests {
         let row = RegRow::from(&src);
         let mut line = vec![[0u8; 4]; WIDTH];
         let mut srcs = vec![PixelSource::Backdrop; WIDTH];
-        composite_screen(&row, &m, 0, row.tm, row.tmw, &mut line, &mut srcs);
+        let obj = crate::sprite::sprites_on_line(&m, 0);
+        composite_screen(&row, &m, 0, row.tm, row.tmw, &obj, &mut line, &mut srcs);
         assert_eq!(srcs[0], PixelSource::Bg(0));
         assert_eq!(srcs[1], PixelSource::Obj { pal: 5 });
         assert_eq!(srcs[2], PixelSource::Backdrop);
@@ -987,5 +1026,39 @@ mod tests {
         assert_eq!(build(3), unpack_rgb15(rgb15(255, 0, 0)));
         // pal 4: math applies -> red + blue = (31,0,31).
         assert_eq!(build(4), unpack_rgb15((31 << 10) | 31));
+    }
+
+    #[test]
+    fn render_frame_stats_reports_overflow_and_main_sub_share_the_set() {
+        // 40 opaque 8x8 sprites stacked on the same pixel column at the top-left.
+        let mut m = Memory::new();
+        m.obsel.char_base = 0x2000;
+        m.cgram[0] = rgb15(0, 0, 0);
+        m.cgram[128 + 1] = rgb15(255, 0, 0); // OBJ pal0 idx1 = red
+                                             // Tile 1 char at 0x2000 + 1*16; plane0 row0 bit7 (0x0080) -> index 1 at x=0.
+        m.vram[0x2000 + 16] = 0x0080;
+        for i in 0..40usize {
+            m.oam[i] = Obj {
+                on: true,
+                x: 0,
+                y: 0,
+                tile: 1,
+                pal: 0,
+                ..Obj::default()
+            };
+        }
+        // OBJ on BOTH screens: default row has OBJ on main (tm bit4); add it to sub.
+        let mut def = LineTableRow::default();
+        def.ts = 0x10; // OBJ on the sub screen
+        let lt = LineTableBuilder::new(def).build(HEIGHT);
+        let (fb, ov) = render_frame_stats(&lt, &m);
+        assert_eq!(fb.len(), WIDTH * HEIGHT * 4);
+        assert!(ov.range_over); // 40 > 32 on line 0
+        assert_eq!(ov.max_sprites, 40);
+        assert!(!ov.time_over); // 32 kept * 1 sliver < 34
+                                // The top-left pixel is a kept sprite (red) on both screens' shared set.
+        assert_eq!(&fb[0..4], &unpack_rgb15(rgb15(255, 0, 0)));
+        // render_frame is exactly the framebuffer half of render_frame_stats.
+        assert_eq!(render_frame(&lt, &m), fb);
     }
 }
