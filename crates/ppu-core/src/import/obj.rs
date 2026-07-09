@@ -268,6 +268,26 @@ mod tests {
     }
 
     #[test]
+    fn import_is_size_agnostic_emits_8x8_tiles_only() {
+        // A 16x16 sheet imports as four independent 8x8 cells regardless of any OBJ
+        // size selector — sizing is a runtime OAM/OBSEL property, not an import input.
+        let mut rgba = Vec::new();
+        for y in 0..16 {
+            for x in 0..16 {
+                let on = (x / 8 + y / 8) % 2 == 0;
+                rgba.extend_from_slice(if on { &[255, 0, 0, 255] } else { &[0, 0, 255, 255] });
+            }
+        }
+        let out = import_obj_sheet(&rgba, 16, 16);
+        assert_eq!((out.cols, out.rows), (2, 2)); // 4 source cells
+        assert_eq!(out.cells.len(), 4);
+        // Every emitted tile is exactly 16 words (one 8x8 4bpp tile) — no size coupling.
+        assert_eq!(out.char_words.len() % WORDS_PER_TILE, 0);
+        // The import signature takes only (rgba, w, h): no size/size_sel parameter.
+        let _f: fn(&[u8], u32, u32) -> ObjImport = import_obj_sheet;
+    }
+
+    #[test]
     fn fully_transparent_sheet_is_blank() {
         let out = import_obj_sheet(&vec![0u8; 8 * 8 * 4], 8, 8);
         assert!(out.cgram.is_empty());

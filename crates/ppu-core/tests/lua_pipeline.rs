@@ -1,6 +1,6 @@
 //! E7 sanity: drive the real LuaEngine -> compositor pipeline end-to-end the way
 //! the wasm shim does, without wasm-bindgen.
-use ppu_core::{derive_registers, render_frame, LuaEngine, OamSprite, WIDTH};
+use ppu_core::{derive_registers, render_frame, LuaEngine, OamSprite, Obsel, WIDTH};
 use std::collections::HashMap;
 
 #[test]
@@ -22,7 +22,7 @@ fn lua_source_drives_backdrop_through_compositor() {
     // the resolved absolute row carries the frame's mode — assert both the
     // source-of-truth and the inspector derivation agree.
     assert_eq!(lt.rows[0].mode, 1);
-    let regs = derive_registers(&lt.rows[0], &HashMap::new());
+    let regs = derive_registers(&lt.rows[0], &Obsel::default(), &HashMap::new());
     let bgmode = regs.iter().find(|r| r.name == "BGMODE").unwrap();
     assert_eq!(bgmode.value, 1);
 }
@@ -134,4 +134,35 @@ fn lua_window_registers_round_trip_and_animate() {
     assert_eq!(lt.rows[0].wh1, 0);
     assert_eq!(lt.rows[50].wh1, 50);
     assert_eq!(lt.rows[200].wh1, 200);
+}
+
+#[test]
+fn lua_obj_priority_rotate_and_oam_addr_reach_memory() {
+    let mut engine = ppu_core::LuaEngine::new();
+    let src = r#"
+        function frame(t, f)
+            obj.priority_rotate = true
+            obj.oam_addr = 10
+        end
+    "#;
+    engine.set_source(src).expect("compiles");
+    let _ = engine.frame(0.0, 0).expect("runs");
+    assert!(engine.memory().priority_rotate);
+    assert_eq!(engine.memory().oam_addr, 10);
+}
+
+#[test]
+fn lua_obj_first_helper_sets_rotation_and_word_address() {
+    let mut engine = ppu_core::LuaEngine::new();
+    // obj.first = N is sugar: turns rotation ON and sets OAMADD to sprite N's
+    // word address (N << 1), so obj_first_sprite(oam_addr) == N.
+    let src = r#"
+        function frame(t, f)
+            obj.first = 5
+        end
+    "#;
+    engine.set_source(src).expect("compiles");
+    let _ = engine.frame(0.0, 0).expect("runs");
+    assert!(engine.memory().priority_rotate);
+    assert_eq!(engine.memory().oam_addr, 10); // 5 << 1
 }

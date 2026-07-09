@@ -1,14 +1,58 @@
-import type { FrameResult } from "../../ppu/core";
+import type { FrameResult, ObjOverflow } from "../../ppu/core";
 import { cgram15ToCss } from "./format";
+
+// Authentic OBSEL size-pair table (mirrors ppu-core sprite.rs OBJ_SIZE_PAIRS):
+// size_sel -> [small [w,h], large [w,h]].
+const OBJ_SIZE_PAIRS: [[number, number], [number, number]][] = [
+  [[8, 8], [16, 16]],
+  [[8, 8], [32, 32]],
+  [[8, 8], [64, 64]],
+  [[16, 16], [32, 32]],
+  [[16, 16], [64, 64]],
+  [[32, 32], [64, 64]],
+  [[16, 32], [32, 64]],
+  [[16, 32], [32, 32]],
+];
+
+/** OBSEL size_sel (bits 5-7) off the $2101 register the frame carries; 0 if absent. */
+function objSizeSel(frame: FrameResult): number {
+  const obsel = frame.registers.find((r) => r.addr === 0x2101);
+  return obsel ? (obsel.value >> 5) & 0x07 : 0;
+}
+
+/** RANGE OVER / TIME OVER labels for the active STAT77 flags (order stable). */
+export function objOverflowBadges(ov: ObjOverflow | undefined): string[] {
+  const out: string[] = [];
+  if (ov?.rangeOver) out.push("RANGE OVER");
+  if (ov?.timeOver) out.push("TIME OVER");
+  return out;
+}
 
 /** SPRITES tab: live OAM from the shared frame. Lists the active sprites with
  *  their per-sprite fields; the colour chip uses the sprite's OBJ palette. */
 export function SpritesTab({ frame }: { frame: FrameResult | null }) {
   if (!frame) return <div className="insp-empty">waiting for frame…</div>;
+  const sizeSel = objSizeSel(frame);
   const active = frame.oam.filter((s) => s.on).length;
+  const ov = frame.objOverflow;
+  const badges = objOverflowBadges(ov);
   return (
     <div className="insp-scroll">
-      <div className="insp-subhead">OAM · {active} active / {frame.oam.length}</div>
+      <div className="insp-subhead">
+        OAM · {active} active / {frame.oam.length}
+        {ov && (
+          <span className="oam-maxline"> · max {ov.maxSprites} spr / {ov.maxTiles} til per line</span>
+        )}
+      </div>
+      {badges.length > 0 && (
+        <div className="oam-badges">
+          {badges.map((b) => (
+            <span key={b} className={`oam-badge ${b === "RANGE OVER" ? "range" : "time"}`}>
+              {b}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="oam-list">
         {frame.oam.map((s, i) =>
           s.on ? (
@@ -23,7 +67,10 @@ export function SpritesTab({ frame }: { frame: FrameResult | null }) {
               <span className="oam-field">t{s.tile}</span>
               <span className="oam-field">p{s.pal}</span>
               <span className="oam-field">pr{s.prio}</span>
-              <span className="oam-field">{s.size ? "16" : "8"}px</span>
+              {(() => {
+                const [w, h] = OBJ_SIZE_PAIRS[sizeSel][s.large ? 1 : 0];
+                return <span className="oam-field">{w}×{h}</span>;
+              })()}
               <span className="oam-field">
                 {s.flipX ? "↔" : ""}{s.flipY ? "↕" : ""}
               </span>

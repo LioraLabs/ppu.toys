@@ -29,10 +29,13 @@ describe("ppuCompletions", () => {
     expect(labels).not.toContain("brightness");
   });
 
-  it("offers obj.sheet after `obj.`", () => {
+  it("offers obj.* members after `obj.`", () => {
     const res = complete("obj.");
-    expect(res).not.toBeNull();
-    expect(res!.options.map((o) => o.label)).toContain("sheet");
+    const labels = res!.options.map((o) => o.label);
+    expect(labels).toContain("sheet");
+    expect(labels).toContain("size_sel");
+    expect(labels).toContain("name_select");
+    expect(labels).toContain("char_base");
   });
 
   it("returns null when there is no word to complete", () => {

@@ -55,7 +55,13 @@ describe("transport store", () => {
 });
 
 function fakeFrame(): FrameResult {
-  return { framebuffer: new Uint8ClampedArray(4), registers: [], cgram: new Uint16Array(0), oam: [] };
+  return {
+    framebuffer: new Uint8ClampedArray(4),
+    registers: [],
+    cgram: new Uint16Array(0),
+    oam: [],
+    objOverflow: { rangeOver: false, timeOver: false, maxSprites: 0, maxTiles: 0 },
+  };
 }
 
 function makeCore(state: { throwing: boolean }): PpuCore {
