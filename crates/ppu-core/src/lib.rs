@@ -161,7 +161,11 @@ pub fn derive_registers(row: &RegRow, obsel: &Obsel, prev: &HashMap<u16, i32>) -
         | ((obsel.name_select as i32) << 3)
         | ((obsel.size_sel as i32) << 5);
     let entries: [(u16, &str, i32); 38] = [
-        (0x2100, "INIDISP", row.brightness as i32 | ((row.force_blank as i32) << 7)),
+        (
+            0x2100,
+            "INIDISP",
+            row.brightness as i32 | ((row.force_blank as i32) << 7),
+        ),
         (0x2105, "BGMODE", bgmode),
         (0x2101, "OBSEL", obsel_val),
         (0x2107, "BG1SC", sc(&row.bg[0])),

@@ -1086,9 +1086,6 @@ mod tests {
         let fb = render_frame(&lt, &m);
         // Every pixel of line 0 is opaque black despite bright red BG content.
         assert_eq!(&fb[0..4], &[0, 0, 0, 255]);
-        assert_eq!(
-            &fb[(WIDTH - 1) * 4..(WIDTH - 1) * 4 + 4],
-            &[0, 0, 0, 255]
-        );
+        assert_eq!(&fb[(WIDTH - 1) * 4..(WIDTH - 1) * 4 + 4], &[0, 0, 0, 255]);
     }
 }
