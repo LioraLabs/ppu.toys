@@ -275,7 +275,7 @@ function frame(t, f)
   local N = 48
   for i = 0, N - 1 do
     obj[i].tile = 0; obj[i].pal = i % 8
-    obj[i].x = 8 + (i * 5) % 232; obj[i].y = 96
+    obj[i].x = 8 + (i * 15) % 232; obj[i].y = 96
     obj[i].large = (i % 12 == 0)           -- a few 32x32 among the 16x32 storm
     obj[i].on = true
   end
