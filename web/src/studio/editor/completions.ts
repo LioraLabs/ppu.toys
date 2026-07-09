@@ -31,6 +31,9 @@ const MATH_MEMBERS: Completion[] = [
 /** obj.* members. */
 const OBJ_MEMBERS: Completion[] = [
   { label: "sheet", type: "property", detail: "OBJ tile sheet asset id" },
+  { label: "char_base", type: "property", detail: "OBSEL char base (VRAM word addr)" },
+  { label: "size_sel", type: "property", detail: "OBSEL size pair 0..7 (small/large WxH)" },
+  { label: "name_select", type: "property", detail: "OBSEL name-select 0..3 (2nd table gap)" },
 ];
 
 export function ppuCompletions(ctx: CompletionContext): CompletionResult | null {
