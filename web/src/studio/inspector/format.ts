@@ -77,3 +77,16 @@ export function windowRanges(registers: RegisterView[]): WindowRangesView {
     w2: [regValue(registers, "WH2", 0), regValue(registers, "WH3", 0)],
   };
 }
+
+export interface DisplayFlagsView {
+  directColor: boolean; // CGWSEL bit 0 — 8bpp direct colour
+  forceBlank: boolean; // INIDISP bit 7 — force blank
+}
+
+/** Decode the two output-path flags: CGWSEL.0 direct colour + INIDISP.7 blank. */
+export function displayFlags(registers: RegisterView[]): DisplayFlagsView {
+  return {
+    directColor: (regValue(registers, "CGWSEL", 0) & 0x01) !== 0,
+    forceBlank: (regValue(registers, "INIDISP", 0) & 0x80) !== 0,
+  };
+}

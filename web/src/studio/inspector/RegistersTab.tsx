@@ -1,5 +1,15 @@
 import type { FrameResult } from "../../ppu/core";
-import { formatAddr, formatValue, cgram15ToCss, bgMode, screenLayers, colorMath, windowRanges, extbg } from "./format";
+import {
+  formatAddr,
+  formatValue,
+  cgram15ToCss,
+  bgMode,
+  screenLayers,
+  colorMath,
+  windowRanges,
+  extbg,
+  displayFlags,
+} from "./format";
 
 export function RegistersTab({ frame }: { frame: FrameResult | null }) {
   if (!frame) return <div className="insp-empty">waiting for frame…</div>;
@@ -10,6 +20,7 @@ export function RegistersTab({ frame }: { frame: FrameResult | null }) {
       </div>
       {(() => {
         const cm = colorMath(frame.registers);
+        const flags = displayFlags(frame.registers);
         const win = windowRanges(frame.registers);
         const main = screenLayers(frame.registers, "TM");
         const sub = screenLayers(frame.registers, "TS");
@@ -38,6 +49,14 @@ export function RegistersTab({ frame }: { frame: FrameResult | null }) {
             <div className="reg-m6-row" title="SETINI $2133 bit6 — Mode 7 EXTBG per-pixel priority">
               <span className="reg-m6-key">EXTBG</span>
               <span className="reg-m6-val">{extbg(frame.registers) ? "on" : "off"}</span>
+            </div>
+            <div className="reg-m6-row" title="CGWSEL.0 direct colour · INIDISP.7 force blank">
+              <span className="reg-m6-key">FLAGS</span>
+              <span className="reg-m6-val">
+                {[flags.directColor && "DIRECT", flags.forceBlank && "BLANK"]
+                  .filter(Boolean)
+                  .join(" ") || "—"}
+              </span>
             </div>
             <div className="reg-m6-row" title="WH0-3 — window 1 / 2 spans">
               <span className="reg-m6-key">WIN</span>

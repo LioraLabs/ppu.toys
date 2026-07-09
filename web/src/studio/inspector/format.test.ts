@@ -1,5 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { formatAddr, formatValue, cgram15ToCss, bgMode, screenLayers, colorMath, windowRanges, extbg } from "./format";
+import {
+  formatAddr,
+  formatValue,
+  cgram15ToCss,
+  bgMode,
+  screenLayers,
+  colorMath,
+  windowRanges,
+  extbg,
+  displayFlags,
+} from "./format";
 import type { RegisterView } from "../../ppu/core";
 
 const reg = (name: string, value: number): RegisterView => ({ addr: 0, name, value, changed: false });
@@ -74,5 +84,16 @@ describe("inspector m6 decoders", () => {
     expect(extbg(regs({ SETINI: 0x40 }))).toBe(true);
     expect(extbg(regs({ SETINI: 0x00 }))).toBe(false);
     expect(extbg(regs({ SETINI: 0x80 }))).toBe(false); // other bits don't enable it
+  });
+
+  it("displayFlags decodes CGWSEL.0 direct colour and INIDISP.7 force blank", () => {
+    expect(displayFlags(regs({ CGWSEL: 0x01, INIDISP: 0x80 }))).toEqual({
+      directColor: true,
+      forceBlank: true,
+    });
+    expect(displayFlags(regs({ CGWSEL: 0x00, INIDISP: 0x0f }))).toEqual({
+      directColor: false,
+      forceBlank: false,
+    });
   });
 });

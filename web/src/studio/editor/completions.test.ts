@@ -15,6 +15,8 @@ describe("ppuCompletions", () => {
     expect(res).not.toBeNull();
     const labels = res!.options.map((o) => o.label);
     expect(labels).toContain("brightness");
+    expect(labels).toContain("direct_color");
+    expect(labels).toContain("force_blank");
     expect(labels).toContain("mode");
     expect(labels).toContain("hdma");
     expect(labels).toContain("rgb");
