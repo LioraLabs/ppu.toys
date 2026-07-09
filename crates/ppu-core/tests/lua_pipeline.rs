@@ -166,3 +166,25 @@ fn lua_obj_first_helper_sets_rotation_and_word_address() {
     assert!(engine.memory().priority_rotate);
     assert_eq!(engine.memory().oam_addr, 10); // 5 << 1
 }
+
+#[test]
+fn lua_direct_color_and_force_blank_globals() {
+    let mut engine = LuaEngine::new();
+    engine
+        .set_source("function frame(t, f) direct_color = true; force_blank = true end")
+        .expect("source compiles");
+    let lt = engine.frame(0.0, 0).expect("frame runs");
+    assert!(lt.rows[0].force_blank);
+    assert!(lt.rows[0].direct_color()); // CGWSEL bit 0 via the friendly alias
+
+    // Both-off stays off; raw CGWSEL bit 0 still enables direct color.
+    let mut e2 = LuaEngine::new();
+    e2.set_source("function frame(t, f) end").expect("compiles");
+    let off = e2.frame(0.0, 0).expect("runs");
+    assert!(!off.rows[0].force_blank && !off.rows[0].direct_color());
+
+    let mut e3 = LuaEngine::new();
+    e3.set_source("function frame(t, f) CGWSEL = 0x01 end")
+        .expect("compiles");
+    assert!(e3.frame(0.0, 0).expect("runs").rows[0].direct_color());
+}
