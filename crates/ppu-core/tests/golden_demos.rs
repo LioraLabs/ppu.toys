@@ -12,6 +12,7 @@ const SPOTLIGHT_GOLDEN: &str = "tests/fixtures/golden_spotlight.png";
 const GLOW_GOLDEN: &str = "tests/fixtures/golden_glow.png";
 const TM_MASK_GOLDEN: &str = "tests/fixtures/golden_tm_mask.png";
 const SHADOW_GOLDEN: &str = "tests/fixtures/golden_shadow.png";
+const SPRITE_STORM_GOLDEN: &str = "tests/fixtures/golden_sprite_storm.png";
 
 const DUSK_SRC: &str = r#"-- ppu.toys :: dusk-parallax (Mode 1: parallax BG scroll + CGRAM colour-cycle + sprite)
 local SPEED = 12
@@ -141,6 +142,29 @@ function frame(t, f)
   CGADSUB = 0x81          -- subtract (bit7) + BG1 math-enable
   CGWSEL = 0x00           -- addend = COLDATA fixed colour
   COLDATA = rgb(120, 120, 120)
+end
+"#;
+
+const SPRITE_STORM_SRC: &str = r#"-- ppu.toys :: sprite-storm (authentic OBJ flicker: >32 sprites on one band, OAM start rotates each frame)
+function frame(t, f)
+  mode = 1; brightness = 15
+  obj.char_base = 0x4000
+  obj.size_sel = 7           -- small 16x32 (non-square), large 32x32
+  -- solid 4bpp OBJ tiles (index 1) so large sprites fill fully
+  for tn = 0, 63 do
+    local base = 0x4000 + tn * 16
+    for y = 0, 7 do vram[base + y] = 0x00ff end
+  end
+  cgram[0] = rgb(24, 16, 48)               -- backdrop
+  for p = 0, 7 do cgram[128 + p * 16 + 1] = hsl(p * 44, 0.8, 0.55) end
+  local N = 48
+  for i = 0, N - 1 do
+    obj[i].tile = 0; obj[i].pal = i % 8
+    obj[i].x = 8 + (i * 5) % 232; obj[i].y = 96
+    obj[i].large = (i % 12 == 0)           -- a few 32x32 among the 16x32 storm
+    obj[i].on = true
+  end
+  obj.first = f % N                        -- rotate OAM eval start -> flicker
 end
 "#;
 
@@ -312,6 +336,12 @@ fn demo_engine(src: &str) -> LuaEngine {
     e.upload_asset("panel".into(), WIDTH as u32, HEIGHT as u32, panel());
     e.set_source(src).unwrap();
     e
+}
+
+fn render_storm(f: u32) -> (Vec<u8>, ppu_core::ObjOverflow) {
+    let mut e = demo_engine(SPRITE_STORM_SRC);
+    let lt = e.frame(1.0, f).unwrap();
+    ppu_core::render_frame_stats(&lt, e.memory())
 }
 
 fn render_demo(src: &str) -> (Vec<u8>, LuaEngine) {
@@ -686,4 +716,36 @@ fn shadow_demo_matches_golden_png() {
 fn regen_golden_shadow() {
     let (fb, _) = render_demo(SHADOW_SRC);
     write_png(SHADOW_GOLDEN, &fb);
+}
+
+#[test]
+fn sprite_storm_overflows_both_caps_and_flickers() {
+    // Both per-line caps engage on the packed band.
+    let (fb, ov) = render_storm(90);
+    assert!(ov.range_over, "sprite-storm must exceed the 32-sprite range cap");
+    assert!(ov.time_over, "sprite-storm must exceed the 34-tile time cap");
+    assert!(ov.max_sprites > 32);
+    // Sprites actually draw over the backdrop.
+    assert!(fb.chunks_exact(4).any(|p| p[3] == 255 && p[..3] != [0, 0, 0]));
+    // Authentic flicker: rotating the OAM start each frame changes the output.
+    assert!(render_storm(90).0 != render_storm(91).0, "OAM rotation must change survivors");
+}
+
+#[test]
+fn sprite_storm_demo_matches_golden_png() {
+    assert!(Path::new(SPRITE_STORM_GOLDEN).exists());
+    let mut e = demo_engine(SPRITE_STORM_SRC);
+    let lt = e.frame(1.0, 90).unwrap();
+    let actual = render_frame(&lt, e.memory());
+    let expected = decode_png(SPRITE_STORM_GOLDEN);
+    assert_eq!(actual.len(), expected.len());
+    assert_eq!(actual, expected, "sprite-storm demo differs from golden PNG");
+}
+
+#[test]
+#[ignore = "regenerates the committed sprite-storm demo golden PNG"]
+fn regen_golden_sprite_storm() {
+    let mut e = demo_engine(SPRITE_STORM_SRC);
+    let lt = e.frame(1.0, 90).unwrap();
+    write_png(SPRITE_STORM_GOLDEN, &render_frame(&lt, e.memory()));
 }
