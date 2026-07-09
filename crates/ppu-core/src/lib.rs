@@ -111,6 +111,22 @@ impl From<&Obj> for OamSprite {
     }
 }
 
+/// Per-frame OBJ overflow diagnostic for the `$213E` STAT77 inspector badges.
+/// Read-only status: `range_over`/`time_over` are set if
+/// ANY scanline overflowed; `max_sprites`/`max_tiles` are the busiest line's
+/// in-range sprite count and attempted tile-sliver count across the frame.
+#[derive(Serialize, Default, Clone, Debug, PartialEq, Eq)]
+pub struct ObjOverflow {
+    #[serde(rename = "rangeOver")]
+    pub range_over: bool,
+    #[serde(rename = "timeOver")]
+    pub time_over: bool,
+    #[serde(rename = "maxSprites")]
+    pub max_sprites: u16,
+    #[serde(rename = "maxTiles")]
+    pub max_tiles: u16,
+}
+
 /// An uploaded image source, mapped to the JS `AssetInfo` shape.
 #[derive(Serialize)]
 pub struct AssetInfo {
@@ -321,6 +337,22 @@ mod tests {
         assert_eq!(json["tile"], 5);
         assert_eq!(json["large"], false);
         assert!(json.get("flip_x").is_none());
+    }
+
+    #[test]
+    fn obj_overflow_serializes_camelcase() {
+        let ov = ObjOverflow {
+            range_over: true,
+            time_over: false,
+            max_sprites: 40,
+            max_tiles: 34,
+        };
+        let json = serde_json::to_value(&ov).unwrap();
+        assert_eq!(json["rangeOver"], true);
+        assert_eq!(json["timeOver"], false);
+        assert_eq!(json["maxSprites"], 40);
+        assert_eq!(json["maxTiles"], 34);
+        assert!(json.get("range_over").is_none());
     }
 
     #[test]
