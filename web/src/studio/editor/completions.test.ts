@@ -15,6 +15,8 @@ describe("ppuCompletions", () => {
     expect(res).not.toBeNull();
     const labels = res!.options.map((o) => o.label);
     expect(labels).toContain("brightness");
+    expect(labels).toContain("direct_color");
+    expect(labels).toContain("force_blank");
     expect(labels).toContain("mode");
     expect(labels).toContain("hdma");
     expect(labels).toContain("rgb");
@@ -36,6 +38,15 @@ describe("ppuCompletions", () => {
     expect(labels).toContain("size_sel");
     expect(labels).toContain("name_select");
     expect(labels).toContain("char_base");
+  });
+
+  it("offers m7.* members after `m7.`", () => {
+    const res = complete("m7.");
+    expect(res).not.toBeNull();
+    const labels = res!.options.map((o) => o.label);
+    expect(labels).toContain("extbg");
+    expect(labels).toContain("cx");
+    expect(labels).not.toContain("brightness");
   });
 
   it("returns null when there is no word to complete", () => {

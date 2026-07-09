@@ -70,6 +70,20 @@ fn color_math_registers_bind_through_dsl() {
 }
 
 #[test]
+fn mosaic_dsl_maps_global_size_and_per_bg_enable() {
+    // Global `mosaic = N` sets the block size; per-layer `bg[n].mosaic = true`
+    // enables that BG (n = 1..4 in the DSL, index n-1 internally).
+    let mut e = LuaEngine::new();
+    e.set_source("function frame(t,f) mosaic = 3; bg[1].mosaic = true end")
+        .unwrap();
+    let lt = e.frame(0.0, 0).unwrap();
+    let regs = &lt.rows[0]; // LineTable rows are already quantized RegRow values
+    assert_eq!(regs.mosaic_size, 3);
+    assert_eq!(regs.bg[0].mosaic, 4); // BG1 enabled -> size+1
+    assert_eq!(regs.bg[1].mosaic, 1); // BG2 not enabled -> off
+}
+
+#[test]
 fn coldata_helper_accumulates_channel_writes() {
     // Two $2132-style byte writes: red then blue.
     // COLDATA byte: bit5=R, bit6=G, bit7=B, bits0-4=value.

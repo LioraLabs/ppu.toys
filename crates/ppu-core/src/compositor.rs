@@ -19,7 +19,7 @@
 use crate::bg::{apply_brightness, render_bg_layer_scanline_px, BgPixel};
 use crate::linetable::LineTable;
 use crate::memory::{rgb15, unpack_rgb15, Memory};
-use crate::mode7::render_mode7_scanline;
+use crate::mode7::{render_mode7_scanline, render_mode7_scanline_px};
 use crate::modes::mode_info;
 use crate::registers::RegRow;
 use crate::sprite::{bin_line, render_scanline_for};
@@ -145,6 +145,24 @@ fn mode1_ladder(bg3_high: bool) -> Vec<Slot> {
     l
 }
 
+/// Authentic Mode 7 EXTBG priority ladder, front (index 0) to back. SETINI.6
+/// splits the single Mode-7 plane into two priority sub-levels by each pixel's
+/// bit 7: HIGH pixels (`prio: true`) sit above OBJ prio 1-2, LOW pixels
+/// (`prio: false`) below them — so a sprite at OBJ prio 1/2 renders BETWEEN the
+/// two floor levels. `layer: 0` is the Mode-7 plane (TM/TS BG1 bit 0). Pinned by
+/// `mode7_extbg_ladder_orders_front_to_back`; do not reorder without a hardware
+/// reference.
+fn mode7_extbg_ladder() -> [Slot; 6] {
+    [
+        Slot::Obj { prio: 3 },
+        Slot::Bg { layer: 0, prio: true }, // Mode-7 high (bit7 = 1)
+        Slot::Obj { prio: 2 },
+        Slot::Obj { prio: 1 },
+        Slot::Bg { layer: 0, prio: false }, // Mode-7 low (bit7 = 0)
+        Slot::Obj { prio: 0 },
+    ]
+}
+
 fn tile_mode_ladder(mode: u8) -> Vec<Slot> {
     let Some(info) = mode_info(mode) else {
         return vec![
@@ -217,34 +235,75 @@ pub(crate) fn composite_screen(
 
     // 2. BG + OBJ.
     if row.mode == 7 {
-        // Mode 7 is a single BG layer (mode7.rs owns its own compositing);
-        // sprites still overlay on top, ordered among themselves by prio.
-        if row.bg[0].visible && mask & 0x01 != 0 {
-            let mut tmp = vec![0u8; WIDTH * 4];
-            render_mode7_scanline(row, mem, y, &mut tmp);
+        if row.extbg() {
+            // EXTBG: the Mode-7 plane splits into two per-pixel priority levels
+            // (bit 7) interleaved with OBJ prio via `mode7_extbg_ladder`. Resolve
+            // per pixel like the tile-mode path; the only BG participant is the
+            // Mode-7 plane at layer 0.
+            let m7 = if row.bg[0].visible {
+                render_mode7_scanline_px(row, mem, y, WIDTH)
+            } else {
+                vec![None; WIDTH]
+            };
+            let obj = render_scanline_for(mem, obj, y, WIDTH);
+            let ladder = mode7_extbg_ladder();
             for (x, slot) in line.iter_mut().enumerate() {
-                if hidden(0, x) {
-                    continue;
-                }
-                let p = &tmp[x * 4..x * 4 + 4];
-                if p[3] != 0 {
-                    *slot = [p[0], p[1], p[2], 255];
-                    src[x] = PixelSource::Bg(0);
+                for rung in &ladder {
+                    if !slot_enabled(mask, rung) {
+                        continue;
+                    }
+                    let layer_bit = match rung {
+                        Slot::Bg { layer, .. } => *layer,
+                        Slot::Obj { .. } => 4,
+                    };
+                    if hidden(layer_bit, x) {
+                        continue;
+                    }
+                    let hit = match *rung {
+                        Slot::Bg { prio, .. } => m7[x]
+                            .filter(|p| p.prio == prio)
+                            .map(|p| (p.rgba, PixelSource::Bg(0))),
+                        Slot::Obj { prio } => obj[x]
+                            .filter(|s| s.prio == prio)
+                            .map(|s| (s.rgba, PixelSource::Obj { pal: s.pal })),
+                    };
+                    if let Some((rgba, source)) = hit {
+                        *slot = rgba;
+                        src[x] = source;
+                        break;
+                    }
                 }
             }
-        }
-        if mask & (1 << 4) != 0 {
-            for (x, (slot, sp)) in line
-                .iter_mut()
-                .zip(render_scanline_for(mem, obj, y, WIDTH))
-                .enumerate()
-            {
-                if hidden(4, x) {
-                    continue;
+        } else {
+            // EXTBG off (today's behavior, byte-identical): single Mode-7 floor,
+            // sprites overlaid on top ordered among themselves by prio.
+            if row.bg[0].visible && mask & 0x01 != 0 {
+                let mut tmp = vec![0u8; WIDTH * 4];
+                render_mode7_scanline(row, mem, y, &mut tmp);
+                for (x, slot) in line.iter_mut().enumerate() {
+                    if hidden(0, x) {
+                        continue;
+                    }
+                    let p = &tmp[x * 4..x * 4 + 4];
+                    if p[3] != 0 {
+                        *slot = [p[0], p[1], p[2], 255];
+                        src[x] = PixelSource::Bg(0);
+                    }
                 }
-                if let Some(s) = sp {
-                    *slot = s.rgba;
-                    src[x] = PixelSource::Obj { pal: s.pal };
+            }
+            if mask & (1 << 4) != 0 {
+                for (x, (slot, sp)) in line
+                    .iter_mut()
+                    .zip(render_scanline_for(mem, obj, y, WIDTH))
+                    .enumerate()
+                {
+                    if hidden(4, x) {
+                        continue;
+                    }
+                    if let Some(s) = sp {
+                        *slot = s.rgba;
+                        src[x] = PixelSource::Obj { pal: s.pal };
+                    }
                 }
             }
         }
@@ -359,6 +418,14 @@ pub fn render_frame_stats(lt: &LineTable, mem: &Memory) -> (Vec<u8>, ObjOverflow
     let rows = lt.rows.len().min(HEIGHT);
     for y in 0..rows {
         let row = &lt.rows[y];
+        if row.force_blank {
+            // Forced blank: no rendering this line; output opaque black.
+            for x in 0..WIDTH {
+                let o = (y * WIDTH + x) * 4;
+                fb[o..o + 4].copy_from_slice(&[0, 0, 0, 255]);
+            }
+            continue;
+        }
         // Bin OBJ once per line; both screens reuse the identical capped set.
         let bin = bin_line(mem, y);
         stats.range_over |= bin.range_over;
@@ -653,6 +720,34 @@ mod tests {
     }
 
     #[test]
+    fn mosaic_does_not_pixelate_sprites() {
+        // A lit sprite pixel at (0,0) only; BG1 mosaic on. The sprite must NOT
+        // replicate into x=1 (sprites are never mosaiced).
+        let mut m = Memory::new();
+        m.cgram[0] = rgb15(0, 0, 0);
+        m.cgram[128 + 1] = rgb15(255, 255, 0); // OBJ pal0 idx1
+        m.obsel.char_base = 0x4000;
+        m.vram[0x4000 + 16] = 0x0080; // OBJ char 1 pixel (0,0) only
+        m.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 1,
+            prio: 3,
+            ..Obj::default()
+        };
+        let mut src = LineTableRow::default();
+        src.tm = 0x10; // main: OBJ only
+        src.mosaic_size = 3;
+        src.mosaic_enable = [true, true, true, true]; // all BG enabled (irrelevant to OBJ)
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        let fb = render_frame(&lt, &m);
+        // x=0: sprite yellow. x=1: NOT replicated -> backdrop (black).
+        assert_eq!(&fb[0..4], &unpack_rgb15(rgb15(255, 255, 0)));
+        assert_eq!(&fb[4..8], &unpack_rgb15(rgb15(0, 0, 0)));
+    }
+
+    #[test]
     fn frame_is_full_size_and_opaque() {
         let lt = LineTableBuilder::new(LineTableRow::default()).build(HEIGHT);
         let fb = render_frame(&lt, &Memory::new());
@@ -698,6 +793,138 @@ mod tests {
                 layer: 2,
                 prio: true
             })
+        );
+    }
+
+    #[test]
+    fn mode7_extbg_ladder_orders_front_to_back() {
+        // Authentic EXTBG front->back: OBJ3, M7-high, OBJ2, OBJ1, M7-low, OBJ0.
+        assert_eq!(
+            mode7_extbg_ladder(),
+            [
+                Slot::Obj { prio: 3 },
+                Slot::Bg { layer: 0, prio: true },
+                Slot::Obj { prio: 2 },
+                Slot::Obj { prio: 1 },
+                Slot::Bg { layer: 0, prio: false },
+                Slot::Obj { prio: 0 },
+            ]
+        );
+    }
+
+    /// Build an EXTBG Mode-7 scene: plane pixel col0 = HIGH priority (bit7) color1,
+    /// col1 = LOW priority color1. A sprite (yellow) spanning both columns at the
+    /// given OBJ prio. Returns the rendered framebuffer.
+    fn extbg_scene(obj_prio: u8, extbg: bool) -> Vec<u8> {
+        let mut m = Memory::new();
+        m.cgram[0] = rgb15(0, 0, 0);
+        m.cgram[1] = rgb15(255, 0, 0); // Mode-7 color 1 = red
+        m.cgram[128 + 1] = rgb15(255, 255, 0); // OBJ pal0 idx1 = yellow
+        // Mode-7 tile 0 (map cells default to tile 0): char (0,0)=0x81 hi+color1,
+        // char (1,0)=0x01 lo+color1. HIGH byte = char lane, LOW byte = map (0=tile0).
+        m.vram[0] = 0x81 << 8;
+        m.vram[1] = 0x01 << 8;
+        // Sprite char 1 covering screen x=0 and x=1 (4bpp plane0 row0 bits 7,6).
+        m.obsel.char_base = 0x4000;
+        m.vram[0x4000 + 16] = 0x00c0;
+        m.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 1,
+            pal: 0,
+            prio: obj_prio,
+            ..Obj::default()
+        };
+        let mut src = LineTableRow::default();
+        src.mode = 7;
+        if extbg {
+            src.setini = 0x40;
+        }
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        render_frame(&lt, &m)
+    }
+
+    #[test]
+    fn extbg_sprite_renders_between_mode7_priority_levels() {
+        // OBJ prio 2 sits BELOW the high floor but ABOVE the low floor.
+        let fb = extbg_scene(2, true);
+        assert_eq!(
+            &fb[0..4],
+            &unpack_rgb15(rgb15(255, 0, 0)),
+            "col0 high floor beats OBJ2"
+        );
+        assert_eq!(
+            &fb[4..8],
+            &unpack_rgb15(rgb15(255, 255, 0)),
+            "col1 OBJ2 beats low floor"
+        );
+    }
+
+    #[test]
+    fn extbg_obj_prio0_sinks_below_both_floor_levels() {
+        // OBJ prio 0 is the back rung: both floor pixels win.
+        let fb = extbg_scene(0, true);
+        assert_eq!(&fb[0..4], &unpack_rgb15(rgb15(255, 0, 0))); // high floor
+        assert_eq!(&fb[4..8], &unpack_rgb15(rgb15(255, 0, 0))); // low floor wins over OBJ0
+    }
+
+    #[test]
+    fn extbg_off_keeps_flat_sprite_overlay() {
+        // EXTBG off: sprites ALWAYS overlay the single Mode-7 floor regardless of
+        // OBJ priority (no interleave) — today's behavior, unchanged.
+        let fb = extbg_scene(0, false);
+        assert_eq!(
+            &fb[0..4],
+            &unpack_rgb15(rgb15(255, 255, 0)),
+            "sprite overlays col0"
+        );
+        assert_eq!(
+            &fb[4..8],
+            &unpack_rgb15(rgb15(255, 255, 0)),
+            "sprite overlays col1"
+        );
+    }
+
+    #[test]
+    fn extbg_with_direct_color_decodes_low7_bits_and_keeps_priority() {
+        // Integration reconciliation (M8): with EXTBG *and* direct colour both on,
+        // render_mode7_scanline_px expands the pixel's low 7 bits through
+        // direct_color_bgr555 (bit 7 still priority). The floor colour therefore does
+        // NOT come from CGRAM — leave cgram[1] unset to prove the bypass. OBJ is unaffected.
+        let mut m = Memory::new();
+        m.cgram[128 + 1] = rgb15(255, 255, 0); // OBJ pal0 idx1 = yellow
+        m.vram[0] = 0x81 << 8; // col0: bit7 high + colour index 1
+        m.vram[1] = 0x01 << 8; // col1: low + colour index 1
+        m.obsel.char_base = 0x4000;
+        m.vram[0x4000 + 16] = 0x00c0; // sprite char covering screen x=0,1
+        m.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 1,
+            pal: 0,
+            prio: 2,
+            ..Obj::default()
+        };
+        let mut src = LineTableRow::default();
+        src.mode = 7;
+        src.setini = 0x40; // EXTBG
+        src.cgwsel = 0x01; // direct colour
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        let fb = render_frame(&lt, &m);
+        // col0: high floor beats OBJ2 -> low-7-bits (index 1) through direct colour, not CGRAM.
+        // direct_color_bgr555(1, 0): r5 = (1 & 7) << 2 = 4, g5 = 0, b5 = 0 -> raw 0x0004.
+        assert_eq!(
+            &fb[0..4],
+            &unpack_rgb15(0x0004),
+            "col0 = direct-colour decode of the low-7 bits (CGRAM bypassed)"
+        );
+        // col1: OBJ2 beats the low floor -> yellow sprite (OBJ still uses CGRAM).
+        assert_eq!(
+            &fb[4..8],
+            &unpack_rgb15(rgb15(255, 255, 0)),
+            "col1 = sprite over the low floor"
         );
     }
 
@@ -1061,5 +1288,23 @@ mod tests {
         assert_eq!(&fb[0..4], &unpack_rgb15(rgb15(255, 0, 0)));
         // render_frame is exactly the framebuffer half of render_frame_stats.
         assert_eq!(render_frame(&lt, &m), fb);
+    }
+
+    #[test]
+    fn force_blank_line_outputs_black_over_bright_content() {
+        // BG1 index 1 = red across the row, brightness 15 -> visible red normally.
+        let mut def = LineTableRow::default();
+        def.force_blank = true;
+        let mut m = Memory::new();
+        m.cgram[1] = rgb15(255, 0, 0);
+        // put a solid BG1 tile so a non-blanked line would be red
+        for w in 0..8 {
+            m.vram[w] = 0x00ff;
+        } // char row plane bits -> index 1s
+        let lt = LineTableBuilder::new(def).build(HEIGHT);
+        let fb = render_frame(&lt, &m);
+        // Every pixel of line 0 is opaque black despite bright red BG content.
+        assert_eq!(&fb[0..4], &[0, 0, 0, 255]);
+        assert_eq!(&fb[(WIDTH - 1) * 4..(WIDTH - 1) * 4 + 4], &[0, 0, 0, 255]);
     }
 }

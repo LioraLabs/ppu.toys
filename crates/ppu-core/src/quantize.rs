@@ -135,6 +135,11 @@ pub fn coldata15(v: u16) -> u16 {
     v & 0x7fff
 }
 
+/// MOSAIC ($2106) size field, masked to 4 bits (0..15). 0 = off (1x1 blocks).
+pub fn mosaic_size(v: u8) -> u8 {
+    v & 0x0f
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,5 +251,12 @@ mod tests {
         assert_eq!(obj_name_select(3), 3);
         assert_eq!(obj_name_select(4), 0); // wraps (mask), NOT clamp
         assert_eq!(obj_name_select(7), 3);
+    }
+
+    #[test]
+    fn mosaic_size_masks_to_4_bits() {
+        assert_eq!(mosaic_size(0), 0);
+        assert_eq!(mosaic_size(15), 15);
+        assert_eq!(mosaic_size(0xf3), 3); // high nibble (enable bits) dropped
     }
 }

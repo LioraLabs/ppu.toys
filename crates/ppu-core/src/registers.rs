@@ -175,6 +175,19 @@ pub struct LineTableRow {
     pub cgadsub: u8,
     /// COLDATA ($2132) fixed color, 15-bit BGR. Power-on 0 = black.
     pub coldata: u16,
+    /// MOSAIC ($2106) bits 0-3: block size (0 = off = 1x1, N = (N+1)x(N+1)).
+    pub mosaic_size: u8,
+    /// MOSAIC ($2106) bits 4-7: per-BG enable (index 0..3 = BG1..BG4).
+    pub mosaic_enable: [bool; 4],
+    /// SETINI ($2133) screen-init byte. Only bit 6 (EXTBG) is load-bearing in
+    /// M8: it splits the Mode 7 plane into two per-pixel priority sub-levels by
+    /// each pixel's bit 7. Other bits (interlace/overscan/pseudo-hi-res) are M8
+    /// non-goals — the byte is stored but unused. Power-on 0 = EXTBG off.
+    pub setini: u8,
+    /// INIDISP ($2100) bit 7: force blank. When set, the line outputs black
+    /// regardless of layers/brightness (compositor honors it). Per-line, like
+    /// brightness. Power-on 0 = not blanked.
+    pub force_blank: bool,
 }
 
 impl Default for LineTableRow {
@@ -201,6 +214,10 @@ impl Default for LineTableRow {
             cgwsel: 0,
             cgadsub: 0,
             coldata: 0,
+            mosaic_size: 0,
+            mosaic_enable: [false; 4],
+            setini: 0,
+            force_blank: false,
         }
     }
 }
@@ -239,6 +256,10 @@ pub struct RegBg {
     /// color built from index+palette bits instead of a CGRAM lookup. Only
     /// affects 8bpp layers; ignored otherwise.
     pub direct_color: bool,
+    /// Effective mosaic block edge in pixels: 1 = no mosaic, else (size+1).
+    /// Resolved by `RegRow::from` from the row's MOSAIC size + this layer's
+    /// enable bit; the rasterizer snaps sample coords to this block.
+    pub mosaic: u8,
 }
 
 impl From<&Bg> for RegBg {
@@ -258,6 +279,7 @@ impl From<&Bg> for RegBg {
             offset_screen_size: 0,
             bpp: 0, // resolved from the mode table by RegRow::from (needs the row's mode)
             direct_color: false,
+            mosaic: 1, // off by default; RegRow::from overrides for enabled layers
         }
     }
 }
@@ -319,6 +341,11 @@ pub struct RegRow {
     pub cgwsel: u8,
     pub cgadsub: u8,
     pub coldata: u16,
+    pub mosaic_size: u8,
+    pub mosaic_enable: [bool; 4],
+    /// SETINI ($2133); only bit 6 (EXTBG) is load-bearing. See `LineTableRow::setini`.
+    pub setini: u8,
+    pub force_blank: bool,
 }
 
 impl From<&LineTableRow> for RegRow {
@@ -331,6 +358,11 @@ impl From<&LineTableRow> for RegRow {
             b.layer = i as u8;
             b.bpp = bpp[i];
             b.direct_color = r.cgwsel & 1 != 0;
+            b.mosaic = if r.mosaic_enable[i] {
+                crate::quantize::mosaic_size(r.mosaic_size) + 1
+            } else {
+                1
+            };
             b
         });
         let offset_map_base = bg[2].map_base;
@@ -361,6 +393,10 @@ impl From<&LineTableRow> for RegRow {
             cgwsel: r.cgwsel,
             cgadsub: r.cgadsub,
             coldata: quantize::coldata15(r.coldata),
+            mosaic_size: quantize::mosaic_size(r.mosaic_size),
+            mosaic_enable: r.mosaic_enable,
+            setini: r.setini,
+            force_blank: r.force_blank,
         }
     }
 }
@@ -426,6 +462,11 @@ impl RegRow {
     /// CGWSEL bits4-5: prevent-math region select (0 never,1 outside,2 inside,3 always).
     pub fn prevent_mode(&self) -> u8 {
         (self.cgwsel >> 4) & 0x03
+    }
+    /// SETINI.6 EXTBG: Mode 7 per-pixel priority (each pixel's bit 7 becomes a
+    /// priority flag). Off = today's single-plane Mode 7.
+    pub fn extbg(&self) -> bool {
+        self.setini & 0x40 != 0
     }
 }
 
@@ -564,6 +605,25 @@ mod tests {
         let mut src = LineTableRow::default();
         src.bg3_priority = true;
         assert!(RegRow::from(&src).bg3_priority);
+    }
+
+    #[test]
+    fn extbg_bit_defaults_off_and_round_trips() {
+        // Default row: SETINI zero, EXTBG off.
+        let d = RegRow::from(&LineTableRow::default());
+        assert_eq!(d.setini, 0);
+        assert!(!d.extbg());
+        // SETINI bit 6 set -> extbg() true, byte preserved through quantize.
+        let mut src = LineTableRow::default();
+        src.setini = 0x40;
+        let reg = RegRow::from(&src);
+        assert_eq!(reg.setini, 0x40);
+        assert!(reg.extbg());
+        // Other SETINI bits are modeled (stored) but do NOT enable EXTBG.
+        src.setini = 0x80;
+        let reg = RegRow::from(&src);
+        assert_eq!(reg.setini, 0x80);
+        assert!(!reg.extbg());
     }
 
     #[test]
@@ -708,5 +768,43 @@ mod tests {
         assert!(!reg.direct_color());
         src.cgwsel = 0x01; // direct color only
         assert!(RegRow::from(&src).direct_color());
+    }
+
+    #[test]
+    fn mosaic_defaults_off_and_regbg_block_is_one() {
+        let d = LineTableRow::default();
+        assert_eq!(d.mosaic_size, 0);
+        assert_eq!(d.mosaic_enable, [false; 4]);
+        let reg = RegRow::from(&d);
+        assert_eq!(reg.mosaic_size, 0);
+        assert_eq!(reg.mosaic_enable, [false; 4]);
+        // Disabled -> block edge 1 (no effect) on every layer.
+        assert!(reg.bg.iter().all(|b| b.mosaic == 1));
+    }
+
+    #[test]
+    fn mosaic_enabled_layer_gets_block_size_plus_one() {
+        let mut src = LineTableRow::default();
+        src.mosaic_size = 3; // 4x4 blocks
+        src.mosaic_enable = [true, false, true, false]; // BG1 + BG3
+        let reg = RegRow::from(&src);
+        assert_eq!(reg.mosaic_size, 3);
+        assert_eq!(reg.bg[0].mosaic, 4); // BG1 enabled -> size+1
+        assert_eq!(reg.bg[1].mosaic, 1); // BG2 disabled -> off
+        assert_eq!(reg.bg[2].mosaic, 4); // BG3 enabled
+        assert_eq!(reg.bg[3].mosaic, 1);
+        // High-nibble junk in size is masked away (quantize-on-write).
+        src.mosaic_size = 0xf5;
+        assert_eq!(RegRow::from(&src).mosaic_size, 5);
+        assert_eq!(RegRow::from(&src).bg[0].mosaic, 6);
+    }
+
+    #[test]
+    fn force_blank_defaults_off_and_round_trips() {
+        assert!(!LineTableRow::default().force_blank);
+        assert!(!RegRow::from(&LineTableRow::default()).force_blank);
+        let mut src = LineTableRow::default();
+        src.force_blank = true;
+        assert!(RegRow::from(&src).force_blank);
     }
 }
