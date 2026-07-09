@@ -38,6 +38,15 @@ describe("ppuCompletions", () => {
     expect(labels).toContain("char_base");
   });
 
+  it("offers m7.* members after `m7.`", () => {
+    const res = complete("m7.");
+    expect(res).not.toBeNull();
+    const labels = res!.options.map((o) => o.label);
+    expect(labels).toContain("extbg");
+    expect(labels).toContain("cx");
+    expect(labels).not.toContain("brightness");
+  });
+
   it("returns null when there is no word to complete", () => {
     const state = EditorState.create({ doc: "x = 1 " });
     const ctx = new CompletionContext(state, 6, false);

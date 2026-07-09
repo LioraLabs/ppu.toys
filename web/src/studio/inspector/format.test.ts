@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatAddr, formatValue, cgram15ToCss, bgMode, screenLayers, colorMath, windowRanges } from "./format";
+import { formatAddr, formatValue, cgram15ToCss, bgMode, screenLayers, colorMath, windowRanges, extbg } from "./format";
 import type { RegisterView } from "../../ppu/core";
 
 const reg = (name: string, value: number): RegisterView => ({ addr: 0, name, value, changed: false });
@@ -69,5 +69,10 @@ describe("inspector m6 decoders", () => {
   it("windowRanges reads WH0-3 into two [left,right] spans", () => {
     const r = regs({ WH0: 32, WH1: 200, WH2: 10, WH3: 240 });
     expect(windowRanges(r)).toEqual({ w1: [32, 200], w2: [10, 240] });
+  });
+  it("decodes SETINI bit6 as EXTBG", () => {
+    expect(extbg(regs({ SETINI: 0x40 }))).toBe(true);
+    expect(extbg(regs({ SETINI: 0x00 }))).toBe(false);
+    expect(extbg(regs({ SETINI: 0x80 }))).toBe(false); // other bits don't enable it
   });
 });

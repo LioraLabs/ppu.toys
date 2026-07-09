@@ -1,5 +1,5 @@
 import type { FrameResult } from "../../ppu/core";
-import { formatAddr, formatValue, cgram15ToCss, bgMode, screenLayers, colorMath, windowRanges } from "./format";
+import { formatAddr, formatValue, cgram15ToCss, bgMode, screenLayers, colorMath, windowRanges, extbg } from "./format";
 
 export function RegistersTab({ frame }: { frame: FrameResult | null }) {
   if (!frame) return <div className="insp-empty">waiting for frame…</div>;
@@ -34,6 +34,10 @@ export function RegistersTab({ frame }: { frame: FrameResult | null }) {
                   ? `${cm.op === "sub" ? "−" : "+"}${cm.half ? "½" : ""} ${cm.source} · ${cm.layers.join(",")}`
                   : "off"}
               </span>
+            </div>
+            <div className="reg-m6-row" title="SETINI $2133 bit6 — Mode 7 EXTBG per-pixel priority">
+              <span className="reg-m6-key">EXTBG</span>
+              <span className="reg-m6-val">{extbg(frame.registers) ? "on" : "off"}</span>
             </div>
             <div className="reg-m6-row" title="WH0-3 — window 1 / 2 spans">
               <span className="reg-m6-key">WIN</span>

@@ -6,7 +6,7 @@ const GLOBALS: Completion[] = [
   { label: "brightness", type: "variable", detail: "int 0..15 — INIDISP" },
   { label: "mosaic", type: "variable", detail: "int 0..15 block size ($2106); enable per layer via bg[n].mosaic=true" },
   { label: "bg", type: "variable", detail: "bg[1..4].scroll/.source/.visible" },
-  { label: "m7", type: "variable", detail: "Mode 7 affine .a .b .c .d .cx .cy" },
+  { label: "m7", type: "variable", detail: "Mode 7 .a .b .c .d .cx .cy .extbg" },
   { label: "cgram", type: "variable", detail: "cgram[0..255] palette" },
   { label: "obj", type: "variable", detail: "obj[0..127] sprites; obj.sheet" },
   { label: "hdma", type: "function", detail: "hdma(y0,y1,fn) per-scanline hook" },
@@ -37,14 +37,29 @@ const OBJ_MEMBERS: Completion[] = [
   { label: "name_select", type: "property", detail: "OBSEL name-select 0..3 (2nd table gap)" },
 ];
 
+/** m7.* members. */
+const M7_MEMBERS: Completion[] = [
+  { label: "a", type: "property", detail: "affine matrix a" },
+  { label: "b", type: "property", detail: "affine matrix b" },
+  { label: "c", type: "property", detail: "affine matrix c" },
+  { label: "d", type: "property", detail: "affine matrix d" },
+  { label: "cx", type: "property", detail: "rotation center x" },
+  { label: "cy", type: "property", detail: "rotation center y" },
+  { label: "wrap", type: "property", detail: "M7SEL screen-over 0..3" },
+  { label: "flip_x", type: "property", detail: "flip plane horizontally" },
+  { label: "flip_y", type: "property", detail: "flip plane vertically" },
+  { label: "extbg", type: "property", detail: "SETINI.6 — Mode 7 per-pixel priority" },
+  { label: "map", type: "property", detail: "m7.map[ty][tx] = tile#" },
+];
+
 export function ppuCompletions(ctx: CompletionContext): CompletionResult | null {
-  // member access: `math.` / `obj.` (optionally with a partial word after the dot)
-  const member = ctx.matchBefore(/(math|obj)\.\w*/);
+  // member access: `math.` / `obj.` / `m7.` (optionally with a partial word after the dot)
+  const member = ctx.matchBefore(/(math|obj|m7)\.\w*/);
   if (member) {
     const dot = member.text.indexOf(".");
     const base = member.text.slice(0, dot);
     const from = member.from + dot + 1;
-    const options = base === "math" ? MATH_MEMBERS : OBJ_MEMBERS;
+    const options = base === "math" ? MATH_MEMBERS : base === "obj" ? OBJ_MEMBERS : M7_MEMBERS;
     return { from, options };
   }
 

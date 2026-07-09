@@ -60,6 +60,11 @@ export function colorMath(registers: RegisterView[]): ColorMathView {
   };
 }
 
+/** SETINI $2133 bit 6 — Mode 7 EXTBG (per-pixel Mode-7 priority). */
+export function extbg(registers: RegisterView[]): boolean {
+  return (regValue(registers, "SETINI", 0) & 0x40) !== 0;
+}
+
 export interface WindowRangesView {
   w1: [number, number];
   w2: [number, number];
