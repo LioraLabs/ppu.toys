@@ -887,6 +887,48 @@ mod tests {
     }
 
     #[test]
+    fn extbg_with_direct_color_decodes_low7_bits_and_keeps_priority() {
+        // Integration reconciliation (M8): with EXTBG *and* direct colour both on,
+        // render_mode7_scanline_px expands the pixel's low 7 bits through
+        // direct_color_bgr555 (bit 7 still priority). The floor colour therefore does
+        // NOT come from CGRAM — leave cgram[1] unset to prove the bypass. OBJ is unaffected.
+        let mut m = Memory::new();
+        m.cgram[128 + 1] = rgb15(255, 255, 0); // OBJ pal0 idx1 = yellow
+        m.vram[0] = 0x81 << 8; // col0: bit7 high + colour index 1
+        m.vram[1] = 0x01 << 8; // col1: low + colour index 1
+        m.obsel.char_base = 0x4000;
+        m.vram[0x4000 + 16] = 0x00c0; // sprite char covering screen x=0,1
+        m.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 1,
+            pal: 0,
+            prio: 2,
+            ..Obj::default()
+        };
+        let mut src = LineTableRow::default();
+        src.mode = 7;
+        src.setini = 0x40; // EXTBG
+        src.cgwsel = 0x01; // direct colour
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        let fb = render_frame(&lt, &m);
+        // col0: high floor beats OBJ2 -> low-7-bits (index 1) through direct colour, not CGRAM.
+        // direct_color_bgr555(1, 0): r5 = (1 & 7) << 2 = 4, g5 = 0, b5 = 0 -> raw 0x0004.
+        assert_eq!(
+            &fb[0..4],
+            &unpack_rgb15(0x0004),
+            "col0 = direct-colour decode of the low-7 bits (CGRAM bypassed)"
+        );
+        // col1: OBJ2 beats the low floor -> yellow sprite (OBJ still uses CGRAM).
+        assert_eq!(
+            &fb[4..8],
+            &unpack_rgb15(rgb15(255, 255, 0)),
+            "col1 = sprite over the low floor"
+        );
+    }
+
+    #[test]
     fn brightness_applied_once_to_backdrop() {
         let mut mem = Memory::new();
         mem.cgram[0] = rgb15(200, 200, 200);
