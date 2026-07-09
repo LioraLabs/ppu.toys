@@ -5,6 +5,7 @@ import {
   RegisterView,
   LuaError,
   OamSprite,
+  ObjOverflow,
   AssetInfo,
   ImportReport,
 } from "./core";
@@ -20,6 +21,7 @@ export interface WasmCoreLike {
   cgram(): Uint16Array;
   vram?: () => Uint16Array;
   oam?: () => OamSprite[];
+  objOverflow?: () => ObjOverflow;
   listAssets?: () => AssetInfo[];
   importReports?: () => ImportReport[];
   uploadTexture(slot: string, imageData: ImageData): void;
@@ -41,6 +43,12 @@ export function wrapWasmCore(core: WasmCoreLike): PpuCore {
         registers: core.registers() as RegisterView[],
         cgram: core.cgram(),
         oam: core.oam?.() ?? [],
+        objOverflow: (core.objOverflow?.() as ObjOverflow) ?? {
+          rangeOver: false,
+          timeOver: false,
+          maxSprites: 0,
+          maxTiles: 0,
+        },
       };
     },
     uploadTexture(slot: string, imageData: ImageData) {

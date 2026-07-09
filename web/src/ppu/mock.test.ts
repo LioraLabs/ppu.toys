@@ -103,4 +103,10 @@ describe("MockPpuCore", () => {
     core.uploadTexture("hero", img);
     expect(core.listAssets()).toEqual([{ id: "hero", width: 16, height: 8 }]);
   });
+
+  it("frame() exposes an objOverflow diagnostic", () => {
+    const ov = new MockPpuCore().frame(0.5, 30).objOverflow;
+    expect(ov).toMatchObject({ rangeOver: false, timeOver: false });
+    expect(ov.maxSprites).toBeGreaterThan(0);
+  });
 });

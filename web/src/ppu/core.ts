@@ -22,6 +22,16 @@ export interface OamSprite {
   on: boolean;
 }
 
+/** Per-frame OBJ overflow diagnostic ($213E STAT77), from render_frame_stats.
+ *  rangeOver/timeOver are set if ANY scanline overflowed; maxSprites/maxTiles are
+ *  the busiest line's in-range sprite count / attempted tile-sliver count. */
+export interface ObjOverflow {
+  rangeOver: boolean;
+  timeOver: boolean;
+  maxSprites: number;
+  maxTiles: number;
+}
+
 export interface AssetInfo {
   id: string;
   width: number;
@@ -63,6 +73,7 @@ export interface FrameResult {
   registers: RegisterView[];
   cgram: Uint16Array;
   oam: OamSprite[]; // 128 sprite entries -> SPRITES inspector
+  objOverflow: ObjOverflow; // $213E STAT77 per-frame flags + busiest-line counts
 }
 
 /** The one hard seam. Headless — no canvas. Both the mock and the real WASM
