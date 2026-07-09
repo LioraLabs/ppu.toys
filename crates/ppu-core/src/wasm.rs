@@ -98,7 +98,7 @@ impl PpuCore {
 
         // Registers + changed flags vs the previous frame, snapshotted from the
         // resolved top scanline (row 0).
-        self.registers = derive_registers(&lt.rows[0], &self.prev_reg);
+        self.registers = derive_registers(&lt.rows[0], &mem.obsel, &self.prev_reg);
         self.prev_reg = self.registers.iter().map(|r| (r.addr, r.value)).collect();
         Ok(())
     }

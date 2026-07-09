@@ -80,24 +80,55 @@ pub struct Obj {
     pub tile: u16,
     pub pal: u8,  // 0..7: selects the OBJ CGRAM sub-palette (cgram[128 + pal*16 + index])
     pub prio: u8, // 0..3: sprite priority, carried to the compositor
-    pub size: u8, // sprite size selector -> sprite_dim (8/16/32/64)
+    pub large: bool, // OAM high-table size bit: picks small/large from the OBSEL size-pair
     pub flip_x: bool,
     pub flip_y: bool,
     pub on: bool,
 }
 
+impl Obj {
+    /// The SNES OAM *high table* nibble for this sprite: bit 0 = X bit 8 (the 9th
+    /// X bit / sign, set when `x` does not fit in unsigned 8 bits), bit 1 = the
+    /// `large` size bit. (Actual OAM serialization packs 4 sprites per byte — S5.)
+    pub fn oam_high_bits(&self) -> u8 {
+        let x_bit8 = ((self.x as i32) & !0xff) != 0; // outside 0..=255 -> bit 8 set
+        (x_bit8 as u8) | ((self.large as u8) << 1)
+    }
+
+    /// Reconstruct the size + 9-bit signed X from the low-table X byte and the
+    /// high-table nibble (inverse of the OAM split). X is `low_x | (bit8 << 8)`,
+    /// interpreted as 9-bit signed (bit 8 = sign).
+    pub fn from_oam_high(low_x: u8, high_bits: u8) -> Obj {
+        let raw = (low_x as u16) | (((high_bits & 1) as u16) << 8); // 9-bit
+        let x = if raw & 0x100 != 0 {
+            (raw | 0xfe00) as i16 // sign-extend bit 8
+        } else {
+            raw as i16
+        };
+        Obj {
+            x,
+            large: high_bits & 0b10 != 0,
+            ..Obj::default()
+        }
+    }
+}
+
 /// Frame-global OBJ binding registers (OBSEL $2101). `char_base` is the OBJ
 /// tile-data base as an EFFECTIVE VRAM word address (name base, bits 0-2);
-/// `size_sel` is the sprite-size pair selector (bits 5-7). Quantize-on-write,
-/// consistent with the BG binding registers — the DSL authors friendly values
-/// and `lua::read_memory` snaps them via `quantize::obj_char_base`/`obj_size_sel`.
+/// `name_select` is the second name-table gap selector (bits 3-4); `size_sel`
+/// is the sprite-size pair selector (bits 5-7). Quantize-on-write, consistent
+/// with the BG binding registers — the DSL authors friendly values and
+/// `lua::read_memory` snaps them via
+/// `quantize::obj_char_base`/`obj_name_select`/`obj_size_sel`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct Obsel {
     /// Snapped OBJ char base VRAM word address (multiple of 0x2000, in-VRAM).
     pub char_base: u16,
-    /// Sprite-size selector, masked to 0..7. Modeled and quantized for register
-    /// fidelity; the sampler currently sizes sprites from per-OAM `Obj::size`, so
-    /// this is not yet consumed by rendering (forward-looking).
+    /// Name-select (bits 3-4), masked to 0..3: second name-table gap in
+    /// 0x1000-word units (second table = char_base + (name_select+1)*0x1000).
+    pub name_select: u8,
+    /// Sprite-size selector, masked to 0..7 (OBSEL bits 5-7): indexes the
+    /// authentic size-pair table (small/large WxH) consumed by the rasterizer.
     pub size_sel: u8,
 }
 
@@ -431,6 +462,31 @@ mod tests {
         assert_eq!(reg.m7.a, 256); // identity 1.0 in Q8
         assert_eq!(reg.m7.d, 256);
         assert_eq!(reg.bg[0].scroll_x, 0);
+    }
+
+    #[test]
+    fn obj_oam_high_table_round_trips_x_bit8_and_large() {
+        // OAM high table packs 2 bits/sprite: bit0 = X bit 8 (the sign of the 9-bit
+        // signed X), bit1 = the `large` size bit. Values below stay in 9-bit signed
+        // range (-256..=255) — the only X range OAM can hold.
+        let cases: [(i16, bool, u8); 6] = [
+            (0, false, 0b00),
+            (255, false, 0b00),   // fits in 8 bits, no X bit 8
+            (100, true, 0b10),    // large only
+            (-1, false, 0b01),    // negative -> X bit 8 set
+            (-200, false, 0b01),
+            (-256, true, 0b11),   // most-negative X + large
+        ];
+        for (x, large, bits) in cases {
+            let o = Obj { x, large, ..Obj::default() };
+            assert_eq!(o.oam_high_bits(), bits, "high bits for x={x} large={large}");
+            // Round-trip: the low X byte + the high nibble reconstruct x (9-bit
+            // signed) and large exactly.
+            let low_x = (x as u16 & 0xff) as u8;
+            let r = Obj::from_oam_high(low_x, o.oam_high_bits());
+            assert_eq!(r.x, x, "x round-trip for x={x}");
+            assert_eq!(r.large, large, "large round-trip for x={x}");
+        }
     }
 
     #[test]

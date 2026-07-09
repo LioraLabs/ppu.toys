@@ -430,10 +430,10 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
         for (k, v) in [("x", 0.0), ("y", 0.0)] {
             o.set(ctx, k, v).unwrap();
         }
-        for k in ["tile", "pal", "prio", "size"] {
+        for k in ["tile", "pal", "prio"] {
             o.set(ctx, k, 0).unwrap();
         }
-        for k in ["flip_x", "flip_y", "on"] {
+        for k in ["flip_x", "flip_y", "on", "large"] {
             o.set(ctx, k, false).unwrap();
         }
         obj.set(ctx, i, o).unwrap();
@@ -917,6 +917,9 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
         );
         mem.obsel.size_sel =
             crate::quantize::obj_size_sel(obj.get(ctx, "size_sel").to_integer().unwrap_or(0) as u8);
+        mem.obsel.name_select = crate::quantize::obj_name_select(
+            obj.get(ctx, "name_select").to_integer().unwrap_or(0) as u8,
+        );
         for i in 0..128 {
             if let Value::Table(o) = obj.get(ctx, i as i64) {
                 let e = &mut mem.oam[i];
@@ -925,7 +928,7 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
                 e.tile = o.get(ctx, "tile").to_integer().unwrap_or(0) as u16;
                 e.pal = o.get(ctx, "pal").to_integer().unwrap_or(0) as u8;
                 e.prio = o.get(ctx, "prio").to_integer().unwrap_or(0) as u8;
-                e.size = o.get(ctx, "size").to_integer().unwrap_or(0) as u8;
+                e.large = o.get(ctx, "large").to_bool();
                 e.flip_x = o.get(ctx, "flip_x").to_bool();
                 e.flip_y = o.get(ctx, "flip_y").to_bool();
                 e.on = o.get(ctx, "on").to_bool();

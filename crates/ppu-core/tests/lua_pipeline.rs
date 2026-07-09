@@ -1,6 +1,6 @@
 //! E7 sanity: drive the real LuaEngine -> compositor pipeline end-to-end the way
 //! the wasm shim does, without wasm-bindgen.
-use ppu_core::{derive_registers, render_frame, LuaEngine, OamSprite, WIDTH};
+use ppu_core::{derive_registers, render_frame, LuaEngine, OamSprite, Obsel, WIDTH};
 use std::collections::HashMap;
 
 #[test]
@@ -22,7 +22,7 @@ fn lua_source_drives_backdrop_through_compositor() {
     // the resolved absolute row carries the frame's mode — assert both the
     // source-of-truth and the inspector derivation agree.
     assert_eq!(lt.rows[0].mode, 1);
-    let regs = derive_registers(&lt.rows[0], &HashMap::new());
+    let regs = derive_registers(&lt.rows[0], &Obsel::default(), &HashMap::new());
     let bgmode = regs.iter().find(|r| r.name == "BGMODE").unwrap();
     assert_eq!(bgmode.value, 1);
 }
