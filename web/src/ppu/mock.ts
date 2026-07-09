@@ -145,7 +145,7 @@ export class MockPpuCore implements PpuCore {
         tile: (i + (f >> 3)) & 0xff,
         pal: i % 8,
         prio: i % 4,
-        size: i % 2,
+        large: i % 2 === 1,
         flipX: ((f >> 4) & 1) === 1 && i % 3 === 0,
         flipY: false,
         on: baseOn && objOn,

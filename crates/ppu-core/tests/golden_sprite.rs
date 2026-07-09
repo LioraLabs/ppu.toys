@@ -88,7 +88,7 @@ fn fixture() -> (ppu_core::LineTable, Memory) {
             pal: if i % 2 == 0 { 0 } else { 2 },
             flip_x: i % 2 == 1,
             flip_y: i % 4 == 3,
-            size: 0,
+            large: false,
             prio: (i % 4) as u8,
             ..Obj::default()
         };
@@ -99,7 +99,7 @@ fn fixture() -> (ppu_core::LineTable, Memory) {
         y: 120,
         tile: 2,
         pal: 1,
-        size: 1,
+        large: true,
         ..Obj::default()
     };
     mem.oam[7] = Obj {

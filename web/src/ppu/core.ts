@@ -16,7 +16,7 @@ export interface OamSprite {
   tile: number;
   pal: number; // 0..7
   prio: number; // 0..3
-  size: number; // 0 = small, 1 = large
+  large: boolean; // OAM high-table size bit: false = small, true = large
   flipX: boolean;
   flipY: boolean;
   on: boolean;
