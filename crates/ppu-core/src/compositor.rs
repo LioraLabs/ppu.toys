@@ -653,6 +653,34 @@ mod tests {
     }
 
     #[test]
+    fn mosaic_does_not_pixelate_sprites() {
+        // A lit sprite pixel at (0,0) only; BG1 mosaic on. The sprite must NOT
+        // replicate into x=1 (sprites are never mosaiced).
+        let mut m = Memory::new();
+        m.cgram[0] = rgb15(0, 0, 0);
+        m.cgram[128 + 1] = rgb15(255, 255, 0); // OBJ pal0 idx1
+        m.obsel.char_base = 0x4000;
+        m.vram[0x4000 + 16] = 0x0080; // OBJ char 1 pixel (0,0) only
+        m.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 1,
+            prio: 3,
+            ..Obj::default()
+        };
+        let mut src = LineTableRow::default();
+        src.tm = 0x10; // main: OBJ only
+        src.mosaic_size = 3;
+        src.mosaic_enable = [true, true, true, true]; // all BG enabled (irrelevant to OBJ)
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        let fb = render_frame(&lt, &m);
+        // x=0: sprite yellow. x=1: NOT replicated -> backdrop (black).
+        assert_eq!(&fb[0..4], &unpack_rgb15(rgb15(255, 255, 0)));
+        assert_eq!(&fb[4..8], &unpack_rgb15(rgb15(0, 0, 0)));
+    }
+
+    #[test]
     fn frame_is_full_size_and_opaque() {
         let lt = LineTableBuilder::new(LineTableRow::default()).build(HEIGHT);
         let fb = render_frame(&lt, &Memory::new());
