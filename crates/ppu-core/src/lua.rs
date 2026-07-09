@@ -917,6 +917,9 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
         );
         mem.obsel.size_sel =
             crate::quantize::obj_size_sel(obj.get(ctx, "size_sel").to_integer().unwrap_or(0) as u8);
+        mem.obsel.name_select = crate::quantize::obj_name_select(
+            obj.get(ctx, "name_select").to_integer().unwrap_or(0) as u8,
+        );
         for i in 0..128 {
             if let Value::Table(o) = obj.get(ctx, i as i64) {
                 let e = &mut mem.oam[i];
