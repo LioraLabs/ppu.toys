@@ -156,6 +156,23 @@ function gradient(): DemoAsset {
   return { id: "gradient", width: w, height: h, data };
 }
 
+function ramp(): DemoAsset {
+  // 32px-period sawtooth in x AND y (mirrors golden_demos.rs ramp()): fine sub-8px
+  // detail that mosaic flattens into flat blocks. Only 16 unique 8x8 tiles.
+  const w = SCREEN_W, h = SCREEN_H;
+  const data = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      data[i] = (x % 32) * 8;
+      data[i + 1] = (y % 32) * 8;
+      data[i + 2] = 128;
+      data[i + 3] = 255;
+    }
+  }
+  return { id: "ramp", width: w, height: h, data };
+}
+
 // ── Lua sources (verbatim from golden_demos.rs DUSK_SRC / MODE7_SRC) ──────────
 const DUSK_SRC = `-- ppu.toys :: dusk-parallax (Mode 1: parallax BG scroll + CGRAM colour-cycle + sprite)
 local SPEED = 12
@@ -283,6 +300,69 @@ function frame(t, f)
 end
 `;
 
+const MOSAIC_SRC = `-- ppu.toys :: mosaic (BG1 pixelation; block size steps every 8 frames)
+function frame(t, f)
+  mode = 3; brightness = 15
+  bg[1].source = "ramp"
+  bg[1].mosaic = true
+  mosaic = floor(f / 8) % 16
+end
+`;
+
+const EXTBG_SRC = `-- ppu.toys :: mode7-extbg (per-pixel floor priority; sprite between the two levels)
+function frame(t, f)
+  mode = 7; brightness = 15
+  m7.a, m7.d = 1, 1
+  m7.extbg = true
+  cgram[1] = rgb(216, 64, 64)          -- Mode 7 floor colour 1 = red
+  cgram[128 + 1] = rgb(255, 255, 0)    -- OBJ pal0 idx1 = yellow
+  for fy = 0, 7 do
+    for fx = 0, 7 do
+      m7pixel(1, fx, fy, 0x81)         -- high priority (bit7) + colour 1
+      m7pixel(2, fx, fy, 0x01)         -- low priority + colour 1
+    end
+  end
+  for ty = 0, 27 do
+    m7.map[ty] = {}
+    for tx = 0, 31 do m7.map[ty][tx] = (tx < 16) and 1 or 2 end
+  end
+  obj.char_base = 0x4000
+  obj.size_sel = 1                     -- large pair = 32x32
+  for row = 0, 3 do                    -- fill the 4x4 tile block solid (index 1)
+    for col = 0, 3 do
+      local base = 0x4000 + (row * 16 + col) * 16
+      for y = 0, 7 do vram[base + y] = 0x00ff end
+    end
+  end
+  obj[0].tile = 0; obj[0].pal = 0; obj[0].prio = 2
+  obj[0].large = true                  -- 32x32
+  obj[0].x = 112; obj[0].y = 88; obj[0].on = true
+end
+`;
+
+const DIRECT_SRC = `-- ppu.toys :: direct-color (8bpp Mode 7, CGRAM bypass, smooth colour field)
+function frame(t, f)
+  mode = 7; brightness = 15
+  m7.a, m7.d = 1, 1
+  direct_color = true
+  local done = {}
+  for ty = 0, 27 do
+    m7.map[ty] = {}
+    for tx = 0, 31 do
+      local r = floor(tx * 7 / 31)
+      local g = floor(ty * 7 / 27)
+      local b = 1 + floor((tx + ty) * 2 / 58)
+      local idx = r + g * 8 + b * 64
+      m7.map[ty][tx] = idx
+      if not done[idx] then
+        done[idx] = true
+        for fy = 0, 7 do for fx = 0, 7 do m7pixel(idx, fx, fy, idx) end end
+      end
+    end
+  end
+end
+`;
+
 export const DEMOS: Demo[] = [
   { id: "dusk-parallax", label: "dusk-parallax", source: DUSK_SRC, assets: [sky(), hills(), hero()] },
   { id: "mode7-floor", label: "mode7-floor", source: MODE7_SRC, assets: [track()] },
@@ -292,4 +372,7 @@ export const DEMOS: Demo[] = [
   { id: "spotlight", label: "spotlight", source: SPOTLIGHT_SRC, assets: [ribbons()] },
   { id: "glow", label: "glow", source: GLOW_SRC, assets: [ribbons()] },
   { id: "sprite-storm", label: "sprite-storm", source: SPRITE_STORM_SRC, assets: [] },
+  { id: "mosaic", label: "mosaic", source: MOSAIC_SRC, assets: [ramp()] },
+  { id: "mode7-extbg", label: "mode7-extbg", source: EXTBG_SRC, assets: [] },
+  { id: "direct-color", label: "direct-color", source: DIRECT_SRC, assets: [] },
 ];

@@ -65,6 +65,20 @@ export function extbg(registers: RegisterView[]): boolean {
   return (regValue(registers, "SETINI", 0) & 0x40) !== 0;
 }
 
+export interface MosaicView {
+  size: number; // block edge in px (1 = off)
+  layers: string[]; // BG1..BG4 with the mosaic enable bit set
+}
+
+/** MOSAIC $2106 — block edge (bits 0-3, +1 = px; 1 = off) + per-BG enable (bits 4-7). */
+export function mosaic(registers: RegisterView[]): MosaicView {
+  const m = regValue(registers, "MOSAIC", 0);
+  return {
+    size: (m & 0x0f) + 1,
+    layers: ["BG1", "BG2", "BG3", "BG4"].filter((_, i) => m & (1 << (4 + i))),
+  };
+}
+
 export interface WindowRangesView {
   w1: [number, number];
   w2: [number, number];

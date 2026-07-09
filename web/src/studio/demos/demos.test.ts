@@ -12,6 +12,9 @@ describe("DEMOS", () => {
       "spotlight",
       "glow",
       "sprite-storm",
+      "mosaic",
+      "mode7-extbg",
+      "direct-color",
     ]);
   });
 
@@ -93,5 +96,30 @@ describe("DEMOS", () => {
     expect(d.source).toContain("obj.size_sel = 7"); // 16x32 non-square path
     expect(d.source).toContain("obj.first = f % N"); // OAM-start rotation -> flicker
     expect(d.source).toContain("obj[i].large = (i % 12 == 0)");
+  });
+
+  it("mosaic carries the ramp asset and animates the block size", () => {
+    const d = DEMOS.find((x) => x.id === "mosaic")!;
+    expect(d.assets.map((a) => a.id)).toEqual(["ramp"]);
+    expect(d.assets[0].width).toBe(256);
+    expect(d.assets[0].height).toBe(224);
+    expect(d.assets[0].data.length).toBe(256 * 224 * 4);
+    expect(d.source).toContain("bg[1].mosaic = true");
+    expect(d.source).toContain("mosaic = floor(f / 8) % 16");
+  });
+
+  it("mode7-extbg pokes a split-priority floor + a between-layers sprite, no asset", () => {
+    const d = DEMOS.find((x) => x.id === "mode7-extbg")!;
+    expect(d.assets).toEqual([]); // authored via m7pixel / m7.map / vram[], no import
+    expect(d.source).toContain("m7.extbg = true");
+    expect(d.source).toContain("m7pixel(1, fx, fy, 0x81)"); // high-priority floor pixel
+    expect(d.source).toContain("obj[0].prio = 2"); // sprite sits between the floor levels
+  });
+
+  it("direct-color builds an 8bpp Mode 7 field via the CGRAM bypass, no asset", () => {
+    const d = DEMOS.find((x) => x.id === "direct-color")!;
+    expect(d.assets).toEqual([]); // indices poked directly, colour = index (no palette)
+    expect(d.source).toContain("direct_color = true");
+    expect(d.source).toContain("m7pixel(idx, fx, fy, idx)");
   });
 });

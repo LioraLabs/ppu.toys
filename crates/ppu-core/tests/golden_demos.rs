@@ -13,6 +13,9 @@ const GLOW_GOLDEN: &str = "tests/fixtures/golden_glow.png";
 const TM_MASK_GOLDEN: &str = "tests/fixtures/golden_tm_mask.png";
 const SHADOW_GOLDEN: &str = "tests/fixtures/golden_shadow.png";
 const SPRITE_STORM_GOLDEN: &str = "tests/fixtures/golden_sprite_storm.png";
+const MOSAIC_GOLDEN: &str = "tests/fixtures/golden_mosaic.png";
+const EXTBG_GOLDEN: &str = "tests/fixtures/golden_extbg.png";
+const DIRECT_GOLDEN: &str = "tests/fixtures/golden_direct_color.png";
 
 const DUSK_SRC: &str = r#"-- ppu.toys :: dusk-parallax (Mode 1: parallax BG scroll + CGRAM colour-cycle + sprite)
 local SPEED = 12
@@ -167,6 +170,83 @@ function frame(t, f)
   obj.first = f % N                        -- rotate OAM eval start -> flicker
 end
 "#;
+
+const MOSAIC_SRC: &str = r#"-- ppu.toys :: mosaic (BG1 pixelation; block size steps every 8 frames)
+function frame(t, f)
+  mode = 3; brightness = 15
+  bg[1].source = "ramp"
+  bg[1].mosaic = true
+  mosaic = floor(f / 8) % 16
+end
+"#;
+
+const EXTBG_SRC: &str = r#"-- ppu.toys :: mode7-extbg (per-pixel floor priority; sprite between the two levels)
+function frame(t, f)
+  mode = 7; brightness = 15
+  m7.a, m7.d = 1, 1
+  m7.extbg = true
+  cgram[1] = rgb(216, 64, 64)          -- Mode 7 floor colour 1 = red
+  cgram[128 + 1] = rgb(255, 255, 0)    -- OBJ pal0 idx1 = yellow
+  for fy = 0, 7 do
+    for fx = 0, 7 do
+      m7pixel(1, fx, fy, 0x81)         -- high priority (bit7) + colour 1
+      m7pixel(2, fx, fy, 0x01)         -- low priority + colour 1
+    end
+  end
+  for ty = 0, 27 do
+    m7.map[ty] = {}
+    for tx = 0, 31 do m7.map[ty][tx] = (tx < 16) and 1 or 2 end
+  end
+  obj.char_base = 0x4000
+  obj.size_sel = 1                     -- large pair = 32x32
+  for row = 0, 3 do                    -- fill the 4x4 tile block solid (index 1)
+    for col = 0, 3 do
+      local base = 0x4000 + (row * 16 + col) * 16
+      for y = 0, 7 do vram[base + y] = 0x00ff end
+    end
+  end
+  obj[0].tile = 0; obj[0].pal = 0; obj[0].prio = 2
+  obj[0].large = true                  -- 32x32
+  obj[0].x = 112; obj[0].y = 88; obj[0].on = true
+end
+"#;
+
+const DIRECT_SRC: &str = r#"-- ppu.toys :: direct-color (8bpp Mode 7, CGRAM bypass, smooth colour field)
+function frame(t, f)
+  mode = 7; brightness = 15
+  m7.a, m7.d = 1, 1
+  direct_color = true
+  local done = {}
+  for ty = 0, 27 do
+    m7.map[ty] = {}
+    for tx = 0, 31 do
+      local r = floor(tx * 7 / 31)
+      local g = floor(ty * 7 / 27)
+      local b = 1 + floor((tx + ty) * 2 / 58)
+      local idx = r + g * 8 + b * 64
+      m7.map[ty][tx] = idx
+      if not done[idx] then
+        done[idx] = true
+        for fy = 0, 7 do for fx = 0, 7 do m7pixel(idx, fx, fy, idx) end end
+      end
+    end
+  end
+end
+"#;
+
+fn ramp() -> Vec<u8> {
+    let mut data = vec![0u8; WIDTH * HEIGHT * 4];
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            let i = (y * WIDTH + x) * 4;
+            data[i] = ((x % 32) * 8) as u8;
+            data[i + 1] = ((y % 32) * 8) as u8;
+            data[i + 2] = 128;
+            data[i + 3] = 255;
+        }
+    }
+    data
+}
 
 fn sky() -> Vec<u8> {
     const W: usize = WIDTH;
@@ -334,8 +414,14 @@ fn demo_engine(src: &str) -> LuaEngine {
     e.upload_asset("mode0_bg1".into(), WIDTH as u32, HEIGHT as u32, mode0_bg1());
     e.upload_asset("mode0_bg2".into(), WIDTH as u32, HEIGHT as u32, mode0_bg2());
     e.upload_asset("panel".into(), WIDTH as u32, HEIGHT as u32, panel());
+    e.upload_asset("ramp".into(), WIDTH as u32, HEIGHT as u32, ramp());
     e.set_source(src).unwrap();
     e
+}
+
+/// One RGBA pixel at (x, y) in a WIDTH*HEIGHT framebuffer.
+fn px(fb: &[u8], x: usize, y: usize) -> &[u8] {
+    &fb[(y * WIDTH + x) * 4..][..4]
 }
 
 fn render_storm(f: u32) -> (Vec<u8>, ppu_core::ObjOverflow) {
@@ -748,4 +834,111 @@ fn regen_golden_sprite_storm() {
     let mut e = demo_engine(SPRITE_STORM_SRC);
     let lt = e.frame(1.0, 90).unwrap();
     write_png(SPRITE_STORM_GOLDEN, &render_frame(&lt, e.memory()));
+}
+
+// ── M8 effects demos: mosaic / Mode 7 EXTBG / direct colour ──────────────────
+
+#[test]
+fn mosaic_demo_pixelates_bg1_into_8px_blocks() {
+    let (fb, _) = render_demo(MOSAIC_SRC);
+    // f=60 -> mosaic size 7 -> 8px blocks; each block replicates its top-left texel.
+    for &(x, y) in &[(1usize, 0usize), (7, 0), (0, 7), (7, 7)] {
+        assert_eq!(px(&fb, x, y), px(&fb, 0, 0), "block(0,0) not flat at ({x},{y})");
+    }
+    // adjacent block differs (ramp steps within 8px); period-32 block matches.
+    assert_ne!(px(&fb, 8, 0), px(&fb, 0, 0), "block(8,0) should differ");
+    assert_eq!(px(&fb, 32, 0), px(&fb, 0, 0), "ramp period 32 aligns with blocks");
+    // vs mosaic OFF: the fine sub-block detail survives -> the frame differs.
+    let off = MOSAIC_SRC.replace("bg[1].mosaic = true", "bg[1].mosaic = false");
+    let (base, _) = render_demo(&off);
+    assert_ne!(base, fb, "mosaic did not change the frame");
+}
+
+#[test]
+fn mosaic_demo_matches_golden_png() {
+    assert!(Path::new(MOSAIC_GOLDEN).exists());
+    let (actual, _) = render_demo(MOSAIC_SRC);
+    let expected = decode_png(MOSAIC_GOLDEN);
+    assert_eq!(actual.len(), expected.len());
+    assert_eq!(actual, expected, "mosaic demo differs from golden PNG");
+}
+
+#[test]
+#[ignore = "regenerates the committed mosaic demo golden PNG"]
+fn regen_golden_mosaic() {
+    let (fb, _) = render_demo(MOSAIC_SRC);
+    write_png(MOSAIC_GOLDEN, &fb);
+}
+
+fn is_red(p: &[u8]) -> bool {
+    p[0] > 150 && p[1] < 120 && p[2] < 120 && p[3] == 255
+}
+fn is_yellow(p: &[u8]) -> bool {
+    p[0] > 180 && p[1] > 180 && p[2] < 100 && p[3] == 255
+}
+
+#[test]
+fn extbg_demo_places_sprite_between_floor_priority_levels() {
+    let (fb, _) = render_demo(EXTBG_SRC);
+    // Sprite spans x 112..144, y 88..120. Left of the x=128 split -> HIGH floor covers it;
+    // right of the split -> LOW floor, the sprite shows through.
+    assert!(is_red(px(&fb, 120, 104)), "high floor must cover the sprite left of split");
+    assert!(is_yellow(px(&fb, 136, 104)), "sprite must ride over the low floor right of split");
+    // Floor away from the sprite is red on both halves (same colour, different priority).
+    assert!(is_red(px(&fb, 40, 104)), "left floor red");
+    assert!(is_red(px(&fb, 210, 104)), "right floor red");
+    // EXTBG off -> the sprite flat-overlays BOTH halves, so the left pixel is yellow.
+    let off = EXTBG_SRC.replace("m7.extbg = true", "m7.extbg = false");
+    let (flat, _) = render_demo(&off);
+    assert!(is_yellow(px(&flat, 120, 104)), "EXTBG off should overlay the sprite everywhere");
+}
+
+#[test]
+fn extbg_demo_matches_golden_png() {
+    assert!(Path::new(EXTBG_GOLDEN).exists());
+    let (actual, _) = render_demo(EXTBG_SRC);
+    let expected = decode_png(EXTBG_GOLDEN);
+    assert_eq!(actual.len(), expected.len());
+    assert_eq!(actual, expected, "extbg demo differs from golden PNG");
+}
+
+#[test]
+#[ignore = "regenerates the committed Mode 7 EXTBG demo golden PNG"]
+fn regen_golden_extbg() {
+    let (fb, _) = render_demo(EXTBG_SRC);
+    write_png(EXTBG_GOLDEN, &fb);
+}
+
+#[test]
+fn direct_color_demo_bypasses_empty_cgram_into_smooth_gradient() {
+    let (fb, e) = render_demo(DIRECT_SRC);
+    // CGRAM is untouched (all zero) yet the floor is fully coloured -> direct-colour bypass.
+    assert!(e.memory().cgram.iter().all(|&c| c == 0), "CGRAM must stay empty");
+    // Every pixel opaque (idx >= 64, never 0) -> full-screen gradient, no backdrop.
+    assert!(fb.chunks_exact(4).all(|p| p[3] == 255), "gradient must fill the frame");
+    // Many distinct colours despite an empty palette.
+    let colors = fb
+        .chunks_exact(4)
+        .map(|p| (p[0], p[1], p[2]))
+        .collect::<std::collections::HashSet<_>>();
+    assert!(colors.len() > 32, "expected a rich gradient, got {} colours", colors.len());
+    // Smooth axes: red rises left->right, green rises top->bottom.
+    assert!(px(&fb, 248, 0)[0] > px(&fb, 0, 0)[0], "red should rise with x");
+    assert!(px(&fb, 0, 216)[1] > px(&fb, 0, 0)[1], "green should rise with y");
+}
+
+#[test]
+fn direct_color_demo_matches_golden_png() {
+    assert!(Path::new(DIRECT_GOLDEN).exists());
+    let (actual, _) = render_demo(DIRECT_SRC);
+    let expected = decode_png(DIRECT_GOLDEN);
+    assert_eq!(actual.len(), expected.len());
+    assert_eq!(actual, expected, "direct-color demo differs from golden PNG");
+}
+
+#[test]
+#[ignore = "regenerates the committed direct-color demo golden PNG"]
+fn regen_golden_direct_color() {
+    let (fb, _) = render_demo(DIRECT_SRC);
+    write_png(DIRECT_GOLDEN, &fb);
 }
