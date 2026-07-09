@@ -19,7 +19,7 @@
 use crate::bg::{apply_brightness, render_bg_layer_scanline_px, BgPixel};
 use crate::linetable::LineTable;
 use crate::memory::{rgb15, unpack_rgb15, Memory};
-use crate::mode7::render_mode7_scanline;
+use crate::mode7::{render_mode7_scanline, render_mode7_scanline_px};
 use crate::modes::mode_info;
 use crate::registers::RegRow;
 use crate::sprite::{bin_line, render_scanline_for};
@@ -235,34 +235,75 @@ pub(crate) fn composite_screen(
 
     // 2. BG + OBJ.
     if row.mode == 7 {
-        // Mode 7 is a single BG layer (mode7.rs owns its own compositing);
-        // sprites still overlay on top, ordered among themselves by prio.
-        if row.bg[0].visible && mask & 0x01 != 0 {
-            let mut tmp = vec![0u8; WIDTH * 4];
-            render_mode7_scanline(row, mem, y, &mut tmp);
+        if row.extbg() {
+            // EXTBG: the Mode-7 plane splits into two per-pixel priority levels
+            // (bit 7) interleaved with OBJ prio via `mode7_extbg_ladder`. Resolve
+            // per pixel like the tile-mode path; the only BG participant is the
+            // Mode-7 plane at layer 0.
+            let m7 = if row.bg[0].visible {
+                render_mode7_scanline_px(row, mem, y, WIDTH)
+            } else {
+                vec![None; WIDTH]
+            };
+            let obj = render_scanline_for(mem, obj, y, WIDTH);
+            let ladder = mode7_extbg_ladder();
             for (x, slot) in line.iter_mut().enumerate() {
-                if hidden(0, x) {
-                    continue;
-                }
-                let p = &tmp[x * 4..x * 4 + 4];
-                if p[3] != 0 {
-                    *slot = [p[0], p[1], p[2], 255];
-                    src[x] = PixelSource::Bg(0);
+                for rung in &ladder {
+                    if !slot_enabled(mask, rung) {
+                        continue;
+                    }
+                    let layer_bit = match rung {
+                        Slot::Bg { layer, .. } => *layer,
+                        Slot::Obj { .. } => 4,
+                    };
+                    if hidden(layer_bit, x) {
+                        continue;
+                    }
+                    let hit = match *rung {
+                        Slot::Bg { prio, .. } => m7[x]
+                            .filter(|p| p.prio == prio)
+                            .map(|p| (p.rgba, PixelSource::Bg(0))),
+                        Slot::Obj { prio } => obj[x]
+                            .filter(|s| s.prio == prio)
+                            .map(|s| (s.rgba, PixelSource::Obj { pal: s.pal })),
+                    };
+                    if let Some((rgba, source)) = hit {
+                        *slot = rgba;
+                        src[x] = source;
+                        break;
+                    }
                 }
             }
-        }
-        if mask & (1 << 4) != 0 {
-            for (x, (slot, sp)) in line
-                .iter_mut()
-                .zip(render_scanline_for(mem, obj, y, WIDTH))
-                .enumerate()
-            {
-                if hidden(4, x) {
-                    continue;
+        } else {
+            // EXTBG off (today's behavior, byte-identical): single Mode-7 floor,
+            // sprites overlaid on top ordered among themselves by prio.
+            if row.bg[0].visible && mask & 0x01 != 0 {
+                let mut tmp = vec![0u8; WIDTH * 4];
+                render_mode7_scanline(row, mem, y, &mut tmp);
+                for (x, slot) in line.iter_mut().enumerate() {
+                    if hidden(0, x) {
+                        continue;
+                    }
+                    let p = &tmp[x * 4..x * 4 + 4];
+                    if p[3] != 0 {
+                        *slot = [p[0], p[1], p[2], 255];
+                        src[x] = PixelSource::Bg(0);
+                    }
                 }
-                if let Some(s) = sp {
-                    *slot = s.rgba;
-                    src[x] = PixelSource::Obj { pal: s.pal };
+            }
+            if mask & (1 << 4) != 0 {
+                for (x, (slot, sp)) in line
+                    .iter_mut()
+                    .zip(render_scanline_for(mem, obj, y, WIDTH))
+                    .enumerate()
+                {
+                    if hidden(4, x) {
+                        continue;
+                    }
+                    if let Some(s) = sp {
+                        *slot = s.rgba;
+                        src[x] = PixelSource::Obj { pal: s.pal };
+                    }
                 }
             }
         }
@@ -732,6 +773,80 @@ mod tests {
                 Slot::Bg { layer: 0, prio: false },
                 Slot::Obj { prio: 0 },
             ]
+        );
+    }
+
+    /// Build an EXTBG Mode-7 scene: plane pixel col0 = HIGH priority (bit7) color1,
+    /// col1 = LOW priority color1. A sprite (yellow) spanning both columns at the
+    /// given OBJ prio. Returns the rendered framebuffer.
+    fn extbg_scene(obj_prio: u8, extbg: bool) -> Vec<u8> {
+        let mut m = Memory::new();
+        m.cgram[0] = rgb15(0, 0, 0);
+        m.cgram[1] = rgb15(255, 0, 0); // Mode-7 color 1 = red
+        m.cgram[128 + 1] = rgb15(255, 255, 0); // OBJ pal0 idx1 = yellow
+        // Mode-7 tile 0 (map cells default to tile 0): char (0,0)=0x81 hi+color1,
+        // char (1,0)=0x01 lo+color1. HIGH byte = char lane, LOW byte = map (0=tile0).
+        m.vram[0] = 0x81 << 8;
+        m.vram[1] = 0x01 << 8;
+        // Sprite char 1 covering screen x=0 and x=1 (4bpp plane0 row0 bits 7,6).
+        m.obsel.char_base = 0x4000;
+        m.vram[0x4000 + 16] = 0x00c0;
+        m.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 1,
+            pal: 0,
+            prio: obj_prio,
+            ..Obj::default()
+        };
+        let mut src = LineTableRow::default();
+        src.mode = 7;
+        if extbg {
+            src.setini = 0x40;
+        }
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        render_frame(&lt, &m)
+    }
+
+    #[test]
+    fn extbg_sprite_renders_between_mode7_priority_levels() {
+        // OBJ prio 2 sits BELOW the high floor but ABOVE the low floor.
+        let fb = extbg_scene(2, true);
+        assert_eq!(
+            &fb[0..4],
+            &unpack_rgb15(rgb15(255, 0, 0)),
+            "col0 high floor beats OBJ2"
+        );
+        assert_eq!(
+            &fb[4..8],
+            &unpack_rgb15(rgb15(255, 255, 0)),
+            "col1 OBJ2 beats low floor"
+        );
+    }
+
+    #[test]
+    fn extbg_obj_prio0_sinks_below_both_floor_levels() {
+        // OBJ prio 0 is the back rung: both floor pixels win.
+        let fb = extbg_scene(0, true);
+        assert_eq!(&fb[0..4], &unpack_rgb15(rgb15(255, 0, 0))); // high floor
+        assert_eq!(&fb[4..8], &unpack_rgb15(rgb15(255, 0, 0))); // low floor wins over OBJ0
+    }
+
+    #[test]
+    fn extbg_off_keeps_flat_sprite_overlay() {
+        // EXTBG off: sprites ALWAYS overlay the single Mode-7 floor regardless of
+        // OBJ priority (no interleave) — today's behavior, unchanged.
+        let fb = extbg_scene(0, false);
+        assert_eq!(
+            &fb[0..4],
+            &unpack_rgb15(rgb15(255, 255, 0)),
+            "sprite overlays col0"
+        );
+        assert_eq!(
+            &fb[4..8],
+            &unpack_rgb15(rgb15(255, 255, 0)),
+            "sprite overlays col1"
         );
     }
 
