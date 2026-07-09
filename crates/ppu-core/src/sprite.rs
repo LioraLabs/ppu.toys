@@ -60,8 +60,8 @@ pub fn sprites_on_line(mem: &Memory, y: usize) -> Vec<usize> {
     out
 }
 
-/// One OBJ tile is 4bpp: 16 VRAM words. Sprites index the OBJ name table 16
-/// tiles wide (right = +1, down = +16), masked to 9 bits.
+/// One OBJ tile is 4bpp: 16 VRAM words. Name-table addressing (16-wide row wrap,
+/// row step, second-table gap) lives in [`obj_tile_addr`] below.
 const OBJ_WORDS_PER_TILE: u32 = 16;
 
 /// VRAM word address of the OBJ tile at block offset (`col`, `row`) from the
