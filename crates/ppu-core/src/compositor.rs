@@ -145,6 +145,24 @@ fn mode1_ladder(bg3_high: bool) -> Vec<Slot> {
     l
 }
 
+/// Authentic Mode 7 EXTBG priority ladder, front (index 0) to back. SETINI.6
+/// splits the single Mode-7 plane into two priority sub-levels by each pixel's
+/// bit 7: HIGH pixels (`prio: true`) sit above OBJ prio 1-2, LOW pixels
+/// (`prio: false`) below them — so a sprite at OBJ prio 1/2 renders BETWEEN the
+/// two floor levels. `layer: 0` is the Mode-7 plane (TM/TS BG1 bit 0). Pinned by
+/// `mode7_extbg_ladder_orders_front_to_back`; do not reorder without a hardware
+/// reference.
+fn mode7_extbg_ladder() -> [Slot; 6] {
+    [
+        Slot::Obj { prio: 3 },
+        Slot::Bg { layer: 0, prio: true }, // Mode-7 high (bit7 = 1)
+        Slot::Obj { prio: 2 },
+        Slot::Obj { prio: 1 },
+        Slot::Bg { layer: 0, prio: false }, // Mode-7 low (bit7 = 0)
+        Slot::Obj { prio: 0 },
+    ]
+}
+
 fn tile_mode_ladder(mode: u8) -> Vec<Slot> {
     let Some(info) = mode_info(mode) else {
         return vec![
@@ -698,6 +716,22 @@ mod tests {
                 layer: 2,
                 prio: true
             })
+        );
+    }
+
+    #[test]
+    fn mode7_extbg_ladder_orders_front_to_back() {
+        // Authentic EXTBG front->back: OBJ3, M7-high, OBJ2, OBJ1, M7-low, OBJ0.
+        assert_eq!(
+            mode7_extbg_ladder(),
+            [
+                Slot::Obj { prio: 3 },
+                Slot::Bg { layer: 0, prio: true },
+                Slot::Obj { prio: 2 },
+                Slot::Obj { prio: 1 },
+                Slot::Bg { layer: 0, prio: false },
+                Slot::Obj { prio: 0 },
+            ]
         );
     }
 
