@@ -9,6 +9,17 @@ use crate::memory::{unpack_rgb15, Memory};
 /// dropped in OAM-index order (lowest index kept).
 pub const MAX_SPRITES_PER_LINE: usize = 32;
 
+/// SNES per-line OBJ *time* (tile-fetch) limit: 34 8x8 tile-slivers.
+pub const MAX_TILES_PER_LINE: usize = 34;
+
+/// The OAMADD-derived evaluation start sprite. OAMADD ($2102 + $2103 bit 0) is a
+/// 9-bit OAM *word* address; the low OAM table stores 2 words (4 bytes) per
+/// sprite, so the priority-rotation start sprite is `(oam_addr >> 1) & 0x7f`
+/// (wraps within the 128-sprite table).
+pub fn obj_first_sprite(oam_addr: u16) -> usize {
+    (oam_addr >> 1) as usize & 0x7f
+}
+
 /// One composited sprite pixel: resolved colour plus the sprite's priority so
 /// the downstream BG/OBJ compositor (E5) can interleave it with BG layers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -146,6 +157,18 @@ mod tests {
 
     fn mem() -> Memory {
         Memory::new()
+    }
+
+    #[test]
+    fn obj_first_sprite_decodes_oamadd_word_address() {
+        // OAMADD is a 9-bit OAM *word* address; the low table stores 2 words per
+        // sprite, so the start sprite is (oam_addr >> 1) & 0x7f.
+        assert_eq!(obj_first_sprite(0x000), 0); // word 0   -> sprite 0
+        assert_eq!(obj_first_sprite(0x001), 0); // word 1   -> still sprite 0
+        assert_eq!(obj_first_sprite(0x002), 1); // word 2   -> sprite 1
+        assert_eq!(obj_first_sprite(0x00a), 5); // word 10  -> sprite 5
+        assert_eq!(obj_first_sprite(0x0fe), 0x7f); // word 254 -> sprite 127
+        assert_eq!(obj_first_sprite(0x100), 0); // word 256 -> (128 & 0x7f) = 0 (wrap)
     }
 
     #[test]
