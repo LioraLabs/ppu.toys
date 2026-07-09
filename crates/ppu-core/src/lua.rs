@@ -333,6 +333,10 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     // scalar registers
     ctx.set_global("mode", 1).unwrap();
     ctx.set_global("brightness", 15).unwrap();
+    // MOSAIC ($2106): global block size 0..15; per-layer enable via bg[n].mosaic.
+    ctx.set_global("mosaic", 0).unwrap();
+    ctx.set_global("direct_color", false).unwrap();
+    ctx.set_global("force_blank", false).unwrap();
     // TM/TS main/sub screen designation ($212C/$212D). Playground defaults:
     // all five layers on the main screen (like brightness=15/visible=true),
     // nothing on the sub screen (authentic power-on).
@@ -362,6 +366,7 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
         layer.set(ctx, "map_base", 0).unwrap();
         layer.set(ctx, "screen_size", 0).unwrap();
         layer.set(ctx, "char_base", 0).unwrap();
+        layer.set(ctx, "mosaic", false).unwrap();
         // Per-cell tilemap poke surface: map[col][row] = {tile,pal,prio,flip_x,flip_y}.
         layer.set(ctx, "map", Table::new(&ctx)).unwrap();
         bg.set(ctx, i, layer).unwrap();
@@ -385,6 +390,7 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     m7.set(ctx, "wrap", 0).unwrap();
     m7.set(ctx, "flip_x", false).unwrap();
     m7.set(ctx, "flip_y", false).unwrap();
+    m7.set(ctx, "extbg", false).unwrap();
     // Mode 7 tilemap poke: m7.map[ty][tx] = tile# (low byte of the interleaved word).
     m7.set(ctx, "map", Table::new(&ctx)).unwrap();
     ctx.set_global("m7", m7).unwrap();
@@ -601,11 +607,20 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
     if let Some(v) = ctx.get_global("CGWSEL").to_integer() {
         row.cgwsel = v as u8;
     }
+    // Friendly alias: direct_color=true forces CGWSEL bit 0 (raw CGWSEL still works;
+    // OR keeps both authoring styles valid and both-off byte-identical).
+    if ctx.get_global("direct_color").to_bool() {
+        row.cgwsel |= 0x01;
+    }
+    row.force_blank = ctx.get_global("force_blank").to_bool();
     if let Some(v) = ctx.get_global("CGADSUB").to_integer() {
         row.cgadsub = v as u8;
     }
     if let Some(v) = ctx.get_global("COLDATA").to_integer() {
         row.coldata = v as u16;
+    }
+    if let Some(v) = ctx.get_global("mosaic").to_integer() {
+        row.mosaic_size = v as u8; // wrap; quantize::mosaic_size masks to 4 bits at build
     }
     if let Value::Table(bg) = ctx.get_global("bg") {
         for i in 0..4 {
@@ -636,6 +651,8 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
                 if let Some(v) = layer.get(ctx, "char_base").to_integer() {
                     row.bg[i].char_base = v as u32;
                 }
+                // MOSAIC per-BG enable; unset/nil -> false (off, matches default).
+                row.mosaic_enable[i] = layer.get(ctx, "mosaic").to_bool();
             }
         }
     }
@@ -664,6 +681,8 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
         }
         row.m7.flip_x = m7.get(ctx, "flip_x").to_bool();
         row.m7.flip_y = m7.get(ctx, "flip_y").to_bool();
+        // SETINI.6 EXTBG: fold the DSL bool into the register byte's bit 6.
+        row.setini = (row.setini & !0x40) | ((m7.get(ctx, "extbg").to_bool() as u8) << 6);
     }
     row
 }
@@ -689,6 +708,10 @@ fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
     ctx.set_global("CGWSEL", row.cgwsel as i64).unwrap();
     ctx.set_global("CGADSUB", row.cgadsub as i64).unwrap();
     ctx.set_global("COLDATA", row.coldata as i64).unwrap();
+    ctx.set_global("mosaic", row.mosaic_size as i64).unwrap();
+    ctx.set_global("direct_color", (row.cgwsel & 0x01) != 0)
+        .unwrap();
+    ctx.set_global("force_blank", row.force_blank).unwrap();
     if let Value::Table(bg) = ctx.get_global("bg") {
         for i in 0..4 {
             if let Value::Table(layer) = bg.get(ctx, (i + 1) as i64) {
@@ -718,6 +741,9 @@ fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
                 layer
                     .set(ctx, "char_base", row.bg[i].char_base as i64)
                     .unwrap();
+                layer
+                    .set(ctx, "mosaic", row.mosaic_enable[i])
+                    .unwrap();
             }
         }
     }
@@ -731,6 +757,7 @@ fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
         m7.set(ctx, "wrap", row.m7.repeat as i64).unwrap();
         m7.set(ctx, "flip_x", row.m7.flip_x).unwrap();
         m7.set(ctx, "flip_y", row.m7.flip_y).unwrap();
+        m7.set(ctx, "extbg", row.setini & 0x40 != 0).unwrap();
     }
 }
 

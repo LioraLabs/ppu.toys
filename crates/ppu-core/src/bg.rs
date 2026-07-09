@@ -116,6 +116,19 @@ fn offset_per_tile(layer: &RegBg, mem: &Memory, screen_x: usize) -> ColumnOffset
     }
 }
 
+/// Direct color (CGWSEL.0): build a BGR555 word from an 8bpp pixel `index` and the
+/// 3-bit tilemap `pal`. Index bits `bbgggrrr` fill each channel's high bits; the
+/// palette bits fill one low bit per channel (R<-pal0, G<-pal1, B<-pal2), matching
+/// fullsnes' BGR233->BGR555 expansion. Mode 7 has no per-tile palette, so `pal = 0`.
+pub(crate) fn direct_color_bgr555(index: u8, pal: u8) -> u16 {
+    let idx = index as u16;
+    let pal = pal as u16;
+    let r5 = ((idx & 0x07) << 2) | ((pal & 0x01) << 1);
+    let g5 = (((idx >> 3) & 0x07) << 2) | (pal & 0x02);
+    let b5 = (((idx >> 6) & 0x03) << 3) | (pal & 0x04);
+    (b5 << 10) | (g5 << 5) | r5
+}
+
 /// One rasterized BG pixel candidate: the resolved CGRAM color plus the
 /// tilemap entry's priority bit, so the compositor's priority pass
 /// (m4/compositing) can interleave it with layer order and sprites.
@@ -149,12 +162,19 @@ pub fn render_bg_layer_scanline_px(
         _ => (32, 32),
     };
     let words_per_char = layer.bpp as u32 * 4; // 2bpp = 8 words, 4bpp = 16, 8bpp = 32
+    // Mosaic: snap sample coords to the block's top-left. `mosaic` is the block
+    // edge in pixels (1 = off, so `by == y` / `bx == x` and output is unchanged).
+    // Documented simplification: `by` is anchored to absolute screen row 0, not
+    // a frame-latched counter (no mid-frame HDMA $2106 block-boundary latch).
+    let block = layer.mosaic.max(1) as i64;
+    let sy = (y as i64 / block * block) as usize;
     (0..width)
         .map(|x| {
-            let opt = offset_per_tile(layer, mem, x);
-            let wx = (x as i64 + layer.scroll_x as i64 + opt.h as i64)
+            let sx = (x as i64 / block * block) as usize;
+            let opt = offset_per_tile(layer, mem, sx);
+            let wx = (sx as i64 + layer.scroll_x as i64 + opt.h as i64)
                 .rem_euclid((tiles_w * ts) as i64) as u32;
-            let wy = (y as i64 + layer.scroll_y as i64 + opt.v as i64)
+            let wy = (sy as i64 + layer.scroll_y as i64 + opt.v as i64)
                 .rem_euclid((tiles_h * ts) as i64) as u32;
             let entry = mem.vram
                 [map_entry_addr(layer.map_base, layer.screen_size, wx / ts, wy / ts) as usize];
@@ -173,13 +193,7 @@ pub fn render_bg_layer_scanline_px(
                 return None; // color 0 = transparent
             }
             let color = if layer.bpp == 8 && layer.direct_color {
-                // Direct color: 8bpp index bits + tilemap palette form BGR555 directly.
-                let pal = (entry >> 10) & 0x07;
-                let idx = index as u16;
-                let r5 = ((idx & 0x07) << 2) | ((pal & 0x01) << 1);
-                let g5 = (((idx >> 3) & 0x07) << 2) | (pal & 0x02);
-                let b5 = (((idx >> 6) & 0x03) << 3) | (pal & 0x04);
-                (b5 << 10) | (g5 << 5) | r5
+                direct_color_bgr555(index, ((entry >> 10) & 0x07) as u8)
             } else {
                 let cgram_index = if layer.bpp == 8 {
                     index as usize
@@ -667,5 +681,41 @@ mod tests {
     fn map_entry_addr_wraps_vram() {
         // map_base at the top of VRAM: screen 1 wraps around to word 0.
         assert_eq!(map_entry_addr(0x7c00, 1, 32, 0), 0x0000);
+    }
+
+    #[test]
+    fn mosaic_replicates_top_left_pixel_across_block_both_axes() {
+        let mut m = Memory::new();
+        m.cgram[1] = rgb15(255, 0, 0);
+        // Char 1 at 0x1000: only pixel (0,0) lit (index 1). Map cell (0,0) -> tile 1.
+        m.vram[0x1000 + 16] = 0b1000_0000;
+        m.vram[0] = 1;
+        let mut l = layer(0);
+        l.char_base = 0x1000;
+        l.mosaic = 2; // 2x2 blocks
+        // Row y=0: block top row. x=0 lit; x=1 replicates the block's top-left (x=0).
+        let l0 = render_bg_layer_scanline_px(&l, &m, 0, 4);
+        assert!(l0[0].is_some());
+        assert!(l0[1].is_some()); // horizontal replication within the block
+        assert!(l0[2].is_none()); // next block samples x=2 (empty)
+        // Row y=1 snaps up to by=0, so the same top row replicates vertically.
+        let l1 = render_bg_layer_scanline_px(&l, &m, 1, 4);
+        assert!(l1[0].is_some());
+        assert!(l1[1].is_some());
+    }
+
+    #[test]
+    fn mosaic_off_is_identical_to_raw_sampling() {
+        let mut m = Memory::new();
+        m.cgram[1] = rgb15(0, 255, 0);
+        m.vram[0x1000 + 16] = 0b1000_0000; // char 1 pixel (0,0)
+        m.vram[0] = 1;
+        let mut l = layer(0);
+        l.char_base = 0x1000;
+        // Only pixel (0,0) is lit; with mosaic off (block 1) x=1 stays transparent.
+        l.mosaic = 1;
+        let line = render_bg_layer_scanline_px(&l, &m, 0, 4);
+        assert!(line[0].is_some());
+        assert!(line[1].is_none());
     }
 }
