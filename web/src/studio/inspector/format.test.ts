@@ -9,6 +9,7 @@ import {
   windowRanges,
   extbg,
   displayFlags,
+  mosaic,
 } from "./format";
 import type { RegisterView } from "../../ppu/core";
 
@@ -84,6 +85,12 @@ describe("inspector m6 decoders", () => {
     expect(extbg(regs({ SETINI: 0x40 }))).toBe(true);
     expect(extbg(regs({ SETINI: 0x00 }))).toBe(false);
     expect(extbg(regs({ SETINI: 0x80 }))).toBe(false); // other bits don't enable it
+  });
+
+  it("mosaic decodes $2106 block size and per-BG enables", () => {
+    expect(mosaic(regs({ MOSAIC: 0x37 }))).toEqual({ size: 8, layers: ["BG1", "BG2"] });
+    expect(mosaic(regs({ MOSAIC: 0x00 }))).toEqual({ size: 1, layers: [] });
+    expect(mosaic(regs({ MOSAIC: 0x80 }))).toEqual({ size: 1, layers: ["BG4"] });
   });
 
   it("displayFlags decodes CGWSEL.0 direct colour and INIDISP.7 force blank", () => {
