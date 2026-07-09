@@ -260,6 +260,29 @@ function frame(t, f)
 end
 `;
 
+const SPRITE_STORM_SRC = `-- ppu.toys :: sprite-storm (authentic OBJ flicker: >32 sprites on one band, OAM start rotates each frame)
+function frame(t, f)
+  mode = 1; brightness = 15
+  obj.char_base = 0x4000
+  obj.size_sel = 7           -- small 16x32 (non-square), large 32x32
+  -- solid 4bpp OBJ tiles (index 1) so large sprites fill fully
+  for tn = 0, 63 do
+    local base = 0x4000 + tn * 16
+    for y = 0, 7 do vram[base + y] = 0x00ff end
+  end
+  cgram[0] = rgb(24, 16, 48)               -- backdrop
+  for p = 0, 7 do cgram[128 + p * 16 + 1] = hsl(p * 44, 0.8, 0.55) end
+  local N = 48
+  for i = 0, N - 1 do
+    obj[i].tile = 0; obj[i].pal = i % 8
+    obj[i].x = 8 + (i * 5) % 232; obj[i].y = 96
+    obj[i].large = (i % 12 == 0)           -- a few 32x32 among the 16x32 storm
+    obj[i].on = true
+  end
+  obj.first = f % N                        -- rotate OAM eval start -> flicker
+end
+`;
+
 export const DEMOS: Demo[] = [
   { id: "dusk-parallax", label: "dusk-parallax", source: DUSK_SRC, assets: [sky(), hills(), hero()] },
   { id: "mode7-floor", label: "mode7-floor", source: MODE7_SRC, assets: [track()] },
@@ -268,4 +291,5 @@ export const DEMOS: Demo[] = [
   { id: "translucency", label: "translucency", source: TRANSLUCENCY_SRC, assets: [panel(), ribbons()] },
   { id: "spotlight", label: "spotlight", source: SPOTLIGHT_SRC, assets: [ribbons()] },
   { id: "glow", label: "glow", source: GLOW_SRC, assets: [ribbons()] },
+  { id: "sprite-storm", label: "sprite-storm", source: SPRITE_STORM_SRC, assets: [] },
 ];
