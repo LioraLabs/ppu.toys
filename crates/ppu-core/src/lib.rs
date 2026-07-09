@@ -87,7 +87,7 @@ pub struct OamSprite {
     pub tile: u16,
     pub pal: u8,
     pub prio: u8,
-    pub size: u8,
+    pub large: bool,
     #[serde(rename = "flipX")]
     pub flip_x: bool,
     #[serde(rename = "flipY")]
@@ -103,12 +103,28 @@ impl From<&Obj> for OamSprite {
             tile: o.tile,
             pal: o.pal,
             prio: o.prio,
-            size: o.size,
+            large: o.large,
             flip_x: o.flip_x,
             flip_y: o.flip_y,
             on: o.on,
         }
     }
+}
+
+/// Per-frame OBJ overflow diagnostic for the `$213E` STAT77 inspector badges.
+/// Read-only status: `range_over`/`time_over` are set if
+/// ANY scanline overflowed; `max_sprites`/`max_tiles` are the busiest line's
+/// in-range sprite count and attempted tile-sliver count across the frame.
+#[derive(Serialize, Default, Clone, Debug, PartialEq, Eq)]
+pub struct ObjOverflow {
+    #[serde(rename = "rangeOver")]
+    pub range_over: bool,
+    #[serde(rename = "timeOver")]
+    pub time_over: bool,
+    #[serde(rename = "maxSprites")]
+    pub max_sprites: u16,
+    #[serde(rename = "maxTiles")]
+    pub max_tiles: u16,
 }
 
 /// An uploaded image source, mapped to the JS `AssetInfo` shape.
@@ -122,7 +138,7 @@ pub struct AssetInfo {
 /// Derive the inspector register list from the resolved absolute row. Values are
 /// the register bit pattern (masked to the register's display width); `changed`
 /// is true when `prev` held a different value for that addr.
-pub fn derive_registers(row: &RegRow, prev: &HashMap<u16, i32>) -> Vec<Register> {
+pub fn derive_registers(row: &RegRow, obsel: &Obsel, prev: &HashMap<u16, i32>) -> Vec<Register> {
     let scroll = |v: i16| (v as u16 & 0x1fff) as i32; // 13-bit display width; ponytail: real BG H/VOFS are 10-bit, uniform 13-bit mask is a v1 inspector simplification
     let m7 = |v: i16| (v as u16) as i32; // raw Q8 bit pattern (16-bit)
                                          // BGMODE: mode bits 0-2 | BG3-priority bit 3 | BG1..BG4 16x16-tile flags in bits 4-7.
@@ -139,9 +155,15 @@ pub fn derive_registers(row: &RegRow, prev: &HashMap<u16, i32>) -> Vec<Register>
     };
     let m7sel =
         (row.m7.flip_x as i32) | ((row.m7.flip_y as i32) << 1) | ((row.m7.repeat as i32) << 6);
-    let entries: [(u16, &str, i32); 37] = [
+    // OBSEL ($2101): char-base name field bits 0-2 (char_base >> 13) | name-select
+    // bits 3-4 | size-select bits 5-7.
+    let obsel_val = ((obsel.char_base >> 13) as i32)
+        | ((obsel.name_select as i32) << 3)
+        | ((obsel.size_sel as i32) << 5);
+    let entries: [(u16, &str, i32); 38] = [
         (0x2100, "INIDISP", row.brightness as i32),
         (0x2105, "BGMODE", bgmode),
+        (0x2101, "OBSEL", obsel_val),
         (0x2107, "BG1SC", sc(&row.bg[0])),
         (0x2108, "BG2SC", sc(&row.bg[1])),
         (0x2109, "BG3SC", sc(&row.bg[2])),
@@ -195,7 +217,7 @@ mod wasm;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::registers::{LineTableRow, RegRow};
+    use crate::registers::{LineTableRow, Obsel, RegRow};
     use std::collections::HashMap;
 
     #[test]
@@ -204,7 +226,7 @@ mod tests {
         ltr.brightness = 7;
         ltr.mode = 3;
         let row = RegRow::from(&ltr);
-        let regs = derive_registers(&row, &HashMap::new());
+        let regs = derive_registers(&row, &Obsel::default(), &HashMap::new());
         let inidisp = regs.iter().find(|r| r.name == "INIDISP").unwrap();
         assert_eq!(inidisp.addr, 0x2100);
         assert_eq!(inidisp.value, 7);
@@ -215,12 +237,12 @@ mod tests {
     #[test]
     fn derive_registers_changed_flag_tracks_prev() {
         let row = RegRow::from(&LineTableRow::default()); // brightness 15, mode 1
-        let first = derive_registers(&row, &HashMap::new());
+        let first = derive_registers(&row, &Obsel::default(), &HashMap::new());
         assert!(first.iter().all(|r| !r.changed));
         let mut prev = HashMap::new();
         prev.insert(0x2100u16, 7i32);
         prev.insert(0x2105u16, 1i32);
-        let next = derive_registers(&row, &prev);
+        let next = derive_registers(&row, &Obsel::default(), &prev);
         assert!(next.iter().find(|r| r.addr == 0x2100).unwrap().changed);
         assert!(!next.iter().find(|r| r.addr == 0x2105).unwrap().changed);
     }
@@ -229,7 +251,7 @@ mod tests {
     fn derive_registers_shows_absolute_scroll() {
         let mut row = RegRow::from(&LineTableRow::default());
         row.bg[0].scroll_x = 419; // absolute, already quantized
-        let regs = derive_registers(&row, &HashMap::new());
+        let regs = derive_registers(&row, &Obsel::default(), &HashMap::new());
         let bg1hofs = regs.iter().find(|r| r.name == "BG1HOFS").unwrap();
         assert_eq!(bg1hofs.value, 419); // truthful, matches what renders
     }
@@ -238,7 +260,7 @@ mod tests {
     fn derive_registers_masks_negative_scroll_to_13_bit() {
         let mut row = RegRow::from(&LineTableRow::default());
         row.bg[0].scroll_x = -256; // absolute i16
-        let regs = derive_registers(&row, &HashMap::new());
+        let regs = derive_registers(&row, &Obsel::default(), &HashMap::new());
         let bg1hofs = regs.iter().find(|r| r.name == "BG1HOFS").unwrap();
         // (-256i16 as u16) & 0x1fff = 0xFF00 & 0x1FFF = 0x1F00 = 7936
         assert_eq!(bg1hofs.value, 7936);
@@ -250,7 +272,7 @@ mod tests {
         ltr.bg[0].tile_size = 16; // BGMODE bit 4
         ltr.bg[3].tile_size = 16; // BGMODE bit 7
         let row = RegRow::from(&ltr);
-        let regs = derive_registers(&row, &HashMap::new());
+        let regs = derive_registers(&row, &Obsel::default(), &HashMap::new());
         let bgmode = regs.iter().find(|r| r.name == "BGMODE").unwrap();
         assert_eq!(bgmode.value, 0x91); // 1 | 1<<4 | 1<<7
     }
@@ -261,7 +283,7 @@ mod tests {
         ltr.bg[0].screen_size = 3;
         ltr.bg[0].map_base = 0x0800; // field 2 -> bits 2-7 = 2
         let row = RegRow::from(&ltr);
-        let regs = derive_registers(&row, &HashMap::new());
+        let regs = derive_registers(&row, &Obsel::default(), &HashMap::new());
         let bg1sc = regs.iter().find(|r| r.name == "BG1SC").unwrap();
         assert_eq!(bg1sc.addr, 0x2107);
         assert_eq!(bg1sc.value, 0x0b); // 3 | 2<<2
@@ -277,7 +299,7 @@ mod tests {
         ltr.bg[1].char_base = 0x2000; // field 2 -> high nibble of BG12NBA
         ltr.bg[2].char_base = 0x3000; // field 3 -> low nibble of BG34NBA
         let row = RegRow::from(&ltr);
-        let regs = derive_registers(&row, &HashMap::new());
+        let regs = derive_registers(&row, &Obsel::default(), &HashMap::new());
         let nba12 = regs.iter().find(|r| r.name == "BG12NBA").unwrap();
         assert_eq!(nba12.addr, 0x210b);
         assert_eq!(nba12.value, 0x21);
@@ -292,7 +314,7 @@ mod tests {
         ltr.m7.flip_x = true;
         ltr.m7.repeat = 3;
         let row = RegRow::from(&ltr);
-        let regs = derive_registers(&row, &HashMap::new());
+        let regs = derive_registers(&row, &Obsel::default(), &HashMap::new());
         let m7sel = regs.iter().find(|r| r.name == "M7SEL").unwrap();
         assert_eq!(m7sel.addr, 0x211a);
         assert_eq!(m7sel.value, 0xc1); // bit0 flip_x | bits6-7 repeat=3
@@ -313,7 +335,24 @@ mod tests {
         assert_eq!(json["flipY"], false);
         assert_eq!(json["on"], true);
         assert_eq!(json["tile"], 5);
+        assert_eq!(json["large"], false);
         assert!(json.get("flip_x").is_none());
+    }
+
+    #[test]
+    fn obj_overflow_serializes_camelcase() {
+        let ov = ObjOverflow {
+            range_over: true,
+            time_over: false,
+            max_sprites: 40,
+            max_tiles: 34,
+        };
+        let json = serde_json::to_value(&ov).unwrap();
+        assert_eq!(json["rangeOver"], true);
+        assert_eq!(json["timeOver"], false);
+        assert_eq!(json["maxSprites"], 40);
+        assert_eq!(json["maxTiles"], 34);
+        assert!(json.get("range_over").is_none());
     }
 
     #[test]
@@ -336,7 +375,7 @@ mod tests {
         ltr.cgadsub = 0x81;
         ltr.coldata = 0x7c1f;
         let row = RegRow::from(&ltr);
-        let regs = derive_registers(&row, &HashMap::new());
+        let regs = derive_registers(&row, &Obsel::default(), &HashMap::new());
         let val = |name: &str| regs.iter().find(|r| r.name == name).unwrap().value;
         assert_eq!(val("TM"), 0x13);
         assert_eq!(val("TS"), 0x04);
@@ -358,5 +397,20 @@ mod tests {
         assert_eq!(addr("TM"), 0x212c);
         assert_eq!(addr("CGADSUB"), 0x2131);
         assert_eq!(addr("COLDATA"), 0x2132);
+    }
+
+    #[test]
+    fn derive_registers_includes_obsel() {
+        let row = RegRow::from(&LineTableRow::default());
+        let obsel = Obsel {
+            char_base: 0x2000, // >>13 = 1 in bits 0-2
+            name_select: 2,    // bits 3-4 = 0b10
+            size_sel: 5,       // bits 5-7 = 0b101
+        };
+        let regs = derive_registers(&row, &obsel, &HashMap::new());
+        let o = regs.iter().find(|r| r.name == "OBSEL").unwrap();
+        assert_eq!(o.addr, 0x2101);
+        // 1 | (2<<3) | (5<<5) = 1 | 16 | 160 = 177
+        assert_eq!(o.value, 0xB1);
     }
 }

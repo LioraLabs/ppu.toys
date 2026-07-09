@@ -8,8 +8,8 @@ use js_sys::{Reflect, Uint8ClampedArray};
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    derive_registers, render_frame, AssetInfo, LuaEngine, LuaErrorView, OamSprite, Register,
-    SetSourceResult, HEIGHT, WIDTH,
+    derive_registers, render_frame_stats, AssetInfo, LuaEngine, LuaErrorView, ObjOverflow,
+    OamSprite, Register, SetSourceResult, HEIGHT, WIDTH,
 };
 
 #[wasm_bindgen]
@@ -19,6 +19,7 @@ pub struct PpuCore {
     registers: Vec<Register>,
     cgram: Vec<u16>,
     oam: Vec<OamSprite>,
+    obj_overflow: ObjOverflow,
     prev_reg: HashMap<u16, i32>,
     /// Layer-visibility overrides: bg[0..3] = bg1..bg4, plus obj. `None` = leave
     /// whatever the Lua program set; `Some(v)` forces the layer on/off.
@@ -36,6 +37,7 @@ impl PpuCore {
             registers: Vec::new(),
             cgram: vec![0; 256],
             oam: Vec::new(),
+            obj_overflow: ObjOverflow::default(),
             prev_reg: HashMap::new(),
             bg_visible: [None; 4],
             obj_visible: None,
@@ -92,13 +94,15 @@ impl PpuCore {
         }
 
         let mem = self.engine.memory();
-        self.framebuffer = render_frame(&lt, mem);
+        let (fb, overflow) = render_frame_stats(&lt, mem);
+        self.framebuffer = fb;
+        self.obj_overflow = overflow;
         self.cgram = mem.cgram.to_vec();
         self.oam = mem.oam.iter().map(OamSprite::from).collect();
 
         // Registers + changed flags vs the previous frame, snapshotted from the
         // resolved top scanline (row 0).
-        self.registers = derive_registers(&lt.rows[0], &self.prev_reg);
+        self.registers = derive_registers(&lt.rows[0], &mem.obsel, &self.prev_reg);
         self.prev_reg = self.registers.iter().map(|r| (r.addr, r.value)).collect();
         Ok(())
     }
@@ -121,6 +125,11 @@ impl PpuCore {
 
     pub fn oam(&self) -> Result<JsValue, JsValue> {
         serde_wasm_bindgen::to_value(&self.oam).map_err(Into::into)
+    }
+
+    #[wasm_bindgen(js_name = objOverflow)]
+    pub fn obj_overflow(&self) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(&self.obj_overflow).map_err(Into::into)
     }
 
     #[wasm_bindgen(js_name = listAssets)]
