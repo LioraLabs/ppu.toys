@@ -333,6 +333,8 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     // scalar registers
     ctx.set_global("mode", 1).unwrap();
     ctx.set_global("brightness", 15).unwrap();
+    // MOSAIC ($2106): global block size 0..15; per-layer enable via bg[n].mosaic.
+    ctx.set_global("mosaic", 0).unwrap();
     // TM/TS main/sub screen designation ($212C/$212D). Playground defaults:
     // all five layers on the main screen (like brightness=15/visible=true),
     // nothing on the sub screen (authentic power-on).
@@ -362,6 +364,7 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
         layer.set(ctx, "map_base", 0).unwrap();
         layer.set(ctx, "screen_size", 0).unwrap();
         layer.set(ctx, "char_base", 0).unwrap();
+        layer.set(ctx, "mosaic", false).unwrap();
         // Per-cell tilemap poke surface: map[col][row] = {tile,pal,prio,flip_x,flip_y}.
         layer.set(ctx, "map", Table::new(&ctx)).unwrap();
         bg.set(ctx, i, layer).unwrap();
@@ -607,6 +610,9 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
     if let Some(v) = ctx.get_global("COLDATA").to_integer() {
         row.coldata = v as u16;
     }
+    if let Some(v) = ctx.get_global("mosaic").to_integer() {
+        row.mosaic_size = v as u8; // wrap; quantize::mosaic_size masks to 4 bits at build
+    }
     if let Value::Table(bg) = ctx.get_global("bg") {
         for i in 0..4 {
             if let Value::Table(layer) = bg.get(ctx, (i + 1) as i64) {
@@ -636,6 +642,8 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
                 if let Some(v) = layer.get(ctx, "char_base").to_integer() {
                     row.bg[i].char_base = v as u32;
                 }
+                // MOSAIC per-BG enable; unset/nil -> false (off, matches default).
+                row.mosaic_enable[i] = layer.get(ctx, "mosaic").to_bool();
             }
         }
     }
@@ -689,6 +697,7 @@ fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
     ctx.set_global("CGWSEL", row.cgwsel as i64).unwrap();
     ctx.set_global("CGADSUB", row.cgadsub as i64).unwrap();
     ctx.set_global("COLDATA", row.coldata as i64).unwrap();
+    ctx.set_global("mosaic", row.mosaic_size as i64).unwrap();
     if let Value::Table(bg) = ctx.get_global("bg") {
         for i in 0..4 {
             if let Value::Table(layer) = bg.get(ctx, (i + 1) as i64) {
@@ -717,6 +726,9 @@ fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
                     .unwrap();
                 layer
                     .set(ctx, "char_base", row.bg[i].char_base as i64)
+                    .unwrap();
+                layer
+                    .set(ctx, "mosaic", row.mosaic_enable[i])
                     .unwrap();
             }
         }
