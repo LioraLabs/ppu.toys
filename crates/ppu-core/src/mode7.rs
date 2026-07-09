@@ -55,9 +55,20 @@ pub fn render_mode7_scanline(row: &RegRow, mem: &Memory, y: usize, out: &mut [u8
     let width = out.len() / 4;
     let m7 = &row.m7;
     let bg = &row.bg[0];
-    let sy = if m7.flip_y { 255 - y as i32 } else { y as i32 };
+    // Mode 7 mosaic is driven by the BG1 enable bit; block edge = size+1 (1 = off).
+    // Snap the screen coordinate to the block's top-left before flip+affine, so the
+    // whole block resolves to its top-left texel. Same absolute-row-0 anchoring
+    // simplification as the tile BG path (no mid-frame HDMA block-boundary latch).
+    let block = if row.mosaic_enable[0] {
+        row.mosaic_size as i32 + 1
+    } else {
+        1
+    };
+    let my = y as i32 / block * block;
+    let sy = if m7.flip_y { 255 - my } else { my };
     for x in 0..width {
-        let sx = if m7.flip_x { 255 - x as i32 } else { x as i32 };
+        let mx = x as i32 / block * block;
+        let sx = if m7.flip_x { 255 - mx } else { mx };
         let (u, v) = mode7_texel(m7, bg.scroll_x, bg.scroll_y, sx, sy);
         let in_field = (0..FIELD).contains(&u) && (0..FIELD).contains(&v);
         let index = match (in_field, m7.repeat) {
@@ -345,5 +356,42 @@ mod tests {
         let row = RegRow::from(&src);
         render_mode7_scanline(&row, &mem, 0, &mut out);
         assert_eq!(&out[0..4], &unpack_rgb15(rgb15(255, 0, 0))); // v=-1 wraps to 1023
+    }
+
+    #[test]
+    fn mosaic_bg1_bit_pixelates_mode7_both_axes() {
+        let mut mem = Memory::new();
+        mem.cgram[5] = rgb15(255, 0, 0);
+        set_map(&mut mem, 0, 0, 7);
+        set_char(&mut mem, 7, 0, 0, 5); // ONLY plane pixel (0,0) is lit
+        let mut src = LineTableRow::default();
+        src.mosaic_size = 1; // 2x2 blocks
+        src.mosaic_enable[0] = true; // BG1 bit drives Mode 7
+        let row = RegRow::from(&src);
+        // Row y=0: x=0 lit; x=1 replicates the block top-left (samples plane x=0).
+        let mut out = [0u8; 4 * 4];
+        render_mode7_scanline(&row, &mem, 0, &mut out);
+        assert_eq!(&out[0..4], &unpack_rgb15(rgb15(255, 0, 0)));
+        assert_eq!(&out[4..8], &unpack_rgb15(rgb15(255, 0, 0))); // horizontal replicate
+        // Row y=1 snaps up to sample plane row 0 -> same lit pixel replicated down.
+        render_mode7_scanline(&row, &mem, 1, &mut out);
+        assert_eq!(&out[0..4], &unpack_rgb15(rgb15(255, 0, 0)));
+    }
+
+    #[test]
+    fn mode7_mosaic_ignores_non_bg1_enable_bits() {
+        let mut mem = Memory::new();
+        mem.cgram[5] = rgb15(255, 0, 0);
+        set_map(&mut mem, 0, 0, 7);
+        set_char(&mut mem, 7, 0, 0, 5); // only plane pixel (0,0) lit
+        let mut src = LineTableRow::default();
+        src.mosaic_size = 1;
+        src.mosaic_enable = [false, true, true, true]; // BG2-4 set, BG1 clear
+        let row = RegRow::from(&src);
+        let mut out = [0u8; 4 * 4];
+        render_mode7_scanline(&row, &mem, 0, &mut out);
+        // BG1 bit clear -> no mosaic -> x=1 samples plane x=1 (empty) = transparent.
+        assert_eq!(&out[0..4], &unpack_rgb15(rgb15(255, 0, 0)));
+        assert_eq!(&out[4..8], &[0, 0, 0, 0]);
     }
 }
