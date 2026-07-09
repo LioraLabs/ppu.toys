@@ -4,6 +4,7 @@ import type { CompletionContext, CompletionResult, Completion } from "@codemirro
 const GLOBALS: Completion[] = [
   { label: "mode", type: "variable", detail: "int 0..7 — background mode" },
   { label: "brightness", type: "variable", detail: "int 0..15 — INIDISP" },
+  { label: "mosaic", type: "variable", detail: "int 0..15 block size ($2106); enable per layer via bg[n].mosaic=true" },
   { label: "bg", type: "variable", detail: "bg[1..4].scroll/.source/.visible" },
   { label: "m7", type: "variable", detail: "Mode 7 affine .a .b .c .d .cx .cy" },
   { label: "cgram", type: "variable", detail: "cgram[0..255] palette" },
