@@ -359,6 +359,14 @@ pub fn render_frame_stats(lt: &LineTable, mem: &Memory) -> (Vec<u8>, ObjOverflow
     let rows = lt.rows.len().min(HEIGHT);
     for y in 0..rows {
         let row = &lt.rows[y];
+        if row.force_blank {
+            // Forced blank: no rendering this line; output opaque black.
+            for x in 0..WIDTH {
+                let o = (y * WIDTH + x) * 4;
+                fb[o..o + 4].copy_from_slice(&[0, 0, 0, 255]);
+            }
+            continue;
+        }
         // Bin OBJ once per line; both screens reuse the identical capped set.
         let bin = bin_line(mem, y);
         stats.range_over |= bin.range_over;
@@ -1061,5 +1069,26 @@ mod tests {
         assert_eq!(&fb[0..4], &unpack_rgb15(rgb15(255, 0, 0)));
         // render_frame is exactly the framebuffer half of render_frame_stats.
         assert_eq!(render_frame(&lt, &m), fb);
+    }
+
+    #[test]
+    fn force_blank_line_outputs_black_over_bright_content() {
+        // BG1 index 1 = red across the row, brightness 15 -> visible red normally.
+        let mut def = LineTableRow::default();
+        def.force_blank = true;
+        let mut m = Memory::new();
+        m.cgram[1] = rgb15(255, 0, 0);
+        // put a solid BG1 tile so a non-blanked line would be red
+        for w in 0..8 {
+            m.vram[w] = 0x00ff;
+        } // char row plane bits -> index 1s
+        let lt = LineTableBuilder::new(def).build(HEIGHT);
+        let fb = render_frame(&lt, &m);
+        // Every pixel of line 0 is opaque black despite bright red BG content.
+        assert_eq!(&fb[0..4], &[0, 0, 0, 255]);
+        assert_eq!(
+            &fb[(WIDTH - 1) * 4..(WIDTH - 1) * 4 + 4],
+            &[0, 0, 0, 255]
+        );
     }
 }
