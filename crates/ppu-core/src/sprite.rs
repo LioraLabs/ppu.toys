@@ -48,27 +48,101 @@ fn sprite_dims(size_sel: u8, large: bool) -> (u32, u32) {
     OBJ_SIZE_PAIRS[(size_sel & 7) as usize][large as usize]
 }
 
-/// OAM indices of the (at most [`MAX_SPRITES_PER_LINE`]) sprites that are `on`
-/// and cover scanline `y`, in ascending OAM order. Deterministic per-line
-/// binning: lowest indices win when the line is over-subscribed.
-pub fn sprites_on_line(mem: &Memory, y: usize) -> Vec<usize> {
-    let y = y as i64;
+/// Per-scanline OAM evaluation result. `sprites` are the kept OBJ indices in
+/// EVALUATION order (priority rotation applied), already trimmed by BOTH caps
+/// (<=32 sprites, <=34 tile-slivers). The counts/flags feed `$213E` STAT77.
+///
+/// Off-screen-X rule (documented simplification, per fullsnes): the range/time
+/// test is Y-ONLY. A sprite whose Y covers the line consumes a range slot and
+/// its tile-slivers even when it is fully off-screen horizontally; the renderer
+/// clips it per-pixel. Time-over drops WHOLE sprites (we do not model partial
+/// tile fetches straddling the 34-tile budget).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LineBin {
+    /// Kept + rendered sprites, in evaluation order.
+    pub sprites: Vec<usize>,
+    /// Total in-range sprites (Y test) this line, before the 32 cap (diagnostic).
+    pub sprite_count: u16,
+    /// Attempted tile-slivers among the range-kept (<=32) sprites (diagnostic).
+    pub tile_count: u16,
+    /// >32 sprites covered this line (STAT77 bit 6).
+    pub range_over: bool,
+    /// >34 tile-slivers among the range-kept sprites (STAT77 bit 7).
+    pub time_over: bool,
+}
+
+/// Evaluate OAM for scanline `y`: apply priority-rotation eval order and BOTH
+/// per-line caps, returning the kept set plus the STAT77 diagnostic counts.
+///
+/// Two-pass, matching the hardware pipeline:
+///   1. Range: scan all 128 sprites in eval order, Y-test; count in-range and
+///      keep the first 32. `range_over` when more than 32 were in range.
+///   2. Time: walk the range-kept in eval order summing `w/8` slivers; keep the
+///      eval-order prefix that fits within 34 (whole-sprite drop). `time_over`
+///      when the range-kept attempted more than 34 slivers.
+pub fn bin_line(mem: &Memory, y: usize) -> LineBin {
+    let yi = y as i64;
     let size_sel = mem.obsel.size_sel;
-    let mut out = Vec::with_capacity(MAX_SPRITES_PER_LINE);
-    for (i, o) in mem.oam.iter().enumerate() {
+    let start = if mem.priority_rotate {
+        obj_first_sprite(mem.oam_addr)
+    } else {
+        0
+    };
+
+    // Pass 1 — range (Y-only), eval order, cap at 32.
+    let mut in_range: Vec<usize> = Vec::with_capacity(MAX_SPRITES_PER_LINE);
+    let mut sprite_count = 0u16;
+    for k in 0..128usize {
+        let i = (start + k) & 0x7f;
+        let o = &mem.oam[i];
         if !o.on {
             continue;
         }
-        let top = o.y as i64;
         let (_w, h) = sprite_dims(size_sel, o.large);
-        if y >= top && y < top + h as i64 {
-            out.push(i);
-            if out.len() == MAX_SPRITES_PER_LINE {
-                break;
+        let top = o.y as i64;
+        if yi < top || yi >= top + h as i64 {
+            continue;
+        }
+        sprite_count += 1;
+        if in_range.len() < MAX_SPRITES_PER_LINE {
+            in_range.push(i);
+        }
+    }
+    let range_over = sprite_count as usize > MAX_SPRITES_PER_LINE;
+
+    // Pass 2 — time (tile-fetch), eval order, keep prefix fitting in 34 slivers.
+    let mut sprites: Vec<usize> = Vec::with_capacity(in_range.len());
+    let mut tile_count = 0u16;
+    let mut kept_tiles = 0usize;
+    let mut budget_hit = false;
+    for &i in &in_range {
+        let (w, _h) = sprite_dims(size_sel, mem.oam[i].large);
+        let slivers = (w / 8) as usize;
+        tile_count += slivers as u16;
+        if !budget_hit {
+            if kept_tiles + slivers > MAX_TILES_PER_LINE {
+                budget_hit = true; // this sprite + all after are time-dropped
+            } else {
+                kept_tiles += slivers;
+                sprites.push(i);
             }
         }
     }
-    out
+    let time_over = tile_count as usize > MAX_TILES_PER_LINE;
+
+    LineBin {
+        sprites,
+        sprite_count,
+        tile_count,
+        range_over,
+        time_over,
+    }
+}
+
+/// OAM indices of the sprites kept + rendered on scanline `y`, in evaluation
+/// order. Thin wrapper over [`bin_line`] for callers that only need the set.
+pub fn sprites_on_line(mem: &Memory, y: usize) -> Vec<usize> {
+    bin_line(mem, y).sprites
 }
 
 /// One OBJ tile is 4bpp: 16 VRAM words. Name-table addressing (16-wide row wrap,
@@ -245,6 +319,75 @@ mod tests {
         assert_eq!(on.len(), MAX_SPRITES_PER_LINE);
         assert_eq!(on.first(), Some(&0));
         assert_eq!(on.last(), Some(&(MAX_SPRITES_PER_LINE - 1)));
+    }
+
+    #[test]
+    fn bin_line_range_cap_keeps_first_32_and_flags_over() {
+        let mut mem = mem();
+        for i in 0..40usize {
+            mem.oam[i] = Obj { on: true, x: 0, y: 0, large: false, ..Obj::default() };
+        }
+        let bin = bin_line(&mem, 0);
+        assert_eq!(bin.sprites.len(), MAX_SPRITES_PER_LINE);
+        assert_eq!(bin.sprites.first(), Some(&0));
+        assert_eq!(bin.sprites.last(), Some(&(MAX_SPRITES_PER_LINE - 1)));
+        assert_eq!(bin.sprite_count, 40); // all in-range counted for the diagnostic
+        assert!(bin.range_over);
+        assert!(!bin.time_over); // 32 * 1 sliver = 32 tiles, under 34
+    }
+
+    #[test]
+    fn bin_line_time_cap_drops_whole_sprites_and_flags_over() {
+        // Size sel 2 large = 64x64 -> 8 slivers each. 5 sprites = 40 slivers > 34.
+        let mut mem = mem();
+        mem.obsel.size_sel = 2;
+        for i in 0..5usize {
+            mem.oam[i] = Obj { on: true, x: 0, y: 0, large: true, ..Obj::default() };
+        }
+        let bin = bin_line(&mem, 0);
+        // 4 sprites * 8 = 32 tiles fit; the 5th (would be 40) is dropped whole.
+        assert_eq!(bin.sprites, vec![0, 1, 2, 3]);
+        assert_eq!(bin.sprite_count, 5); // range-side: all 5 are in range
+        assert_eq!(bin.tile_count, 40); // attempted slivers among the range-kept
+        assert!(bin.time_over);
+        assert!(!bin.range_over);
+    }
+
+    #[test]
+    fn bin_line_rotation_changes_eval_order_and_dropped_sprite() {
+        // 33 8x8 sprites on the line: 32 kept, 1 dropped. Which one is dropped
+        // depends on eval order. Rotation start = sprite 1 -> eval order is
+        // 1,2,...,32,0 (wraps); the 33rd evaluated (index 0) is the drop.
+        let mut mem = mem();
+        for i in 0..33usize {
+            mem.oam[i] = Obj { on: true, x: 0, y: 0, large: false, ..Obj::default() };
+        }
+        mem.priority_rotate = true;
+        mem.oam_addr = 2; // obj_first_sprite(2) = 1
+        let bin = bin_line(&mem, 0);
+        assert_eq!(bin.sprites.len(), 32);
+        assert_eq!(bin.sprites.first(), Some(&1)); // eval starts at 1
+        assert!(!bin.sprites.contains(&0)); // index 0 is the wrapped-last drop
+        assert!(bin.range_over);
+        // Rotation OFF drops index 32 instead (ascending eval).
+        mem.priority_rotate = false;
+        let bin = bin_line(&mem, 0);
+        assert!(bin.sprites.contains(&0));
+        assert!(!bin.sprites.contains(&32));
+    }
+
+    #[test]
+    fn bin_line_offscreen_x_sprite_still_counts_toward_caps() {
+        // Documented rule (fullsnes): the range/time test is Y-ONLY. A sprite that
+        // is fully off-screen horizontally (X < -w or X >= 256) but whose Y covers
+        // the line still consumes a range slot and its tile-slivers.
+        let mut mem = mem();
+        mem.oam[0] = Obj { on: true, x: 300, y: 0, large: false, ..Obj::default() }; // off right
+        mem.oam[1] = Obj { on: true, x: -300, y: 0, large: false, ..Obj::default() }; // off left
+        let bin = bin_line(&mem, 0);
+        assert_eq!(bin.sprite_count, 2);
+        assert_eq!(bin.tile_count, 2);
+        assert_eq!(bin.sprites, vec![0, 1]); // both kept in the set (renderer clips X)
     }
 
     /// Write a 4bpp OBJ char (16 words) at OBJ char base 0x2000, tile `n`,
