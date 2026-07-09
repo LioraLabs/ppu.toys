@@ -160,7 +160,7 @@ pub fn derive_registers(row: &RegRow, obsel: &Obsel, prev: &HashMap<u16, i32>) -
     let obsel_val = ((obsel.char_base >> 13) as i32)
         | ((obsel.name_select as i32) << 3)
         | ((obsel.size_sel as i32) << 5);
-    let entries: [(u16, &str, i32); 38] = [
+    let entries: [(u16, &str, i32); 39] = [
         (0x2100, "INIDISP", row.brightness as i32),
         (0x2105, "BGMODE", bgmode),
         (0x2101, "OBSEL", obsel_val),
@@ -199,6 +199,7 @@ pub fn derive_registers(row: &RegRow, obsel: &Obsel, prev: &HashMap<u16, i32>) -
         (0x2130, "CGWSEL", row.cgwsel as i32),
         (0x2131, "CGADSUB", row.cgadsub as i32),
         (0x2132, "COLDATA", row.coldata as i32),
+        (0x2133, "SETINI", row.setini as i32),
     ];
     entries
         .iter()
@@ -232,6 +233,17 @@ mod tests {
         assert_eq!(inidisp.value, 7);
         let bgmode = regs.iter().find(|r| r.name == "BGMODE").unwrap();
         assert_eq!(bgmode.value, 3);
+    }
+
+    #[test]
+    fn derive_registers_reports_setini_extbg() {
+        let mut ltr = LineTableRow::default();
+        ltr.setini = 0x40; // EXTBG on
+        let row = RegRow::from(&ltr);
+        let regs = derive_registers(&row, &Obsel::default(), &HashMap::new());
+        let setini = regs.iter().find(|r| r.name == "SETINI").unwrap();
+        assert_eq!(setini.addr, 0x2133);
+        assert_eq!(setini.value, 0x40);
     }
 
     #[test]
