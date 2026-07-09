@@ -80,7 +80,7 @@ pub struct Obj {
     pub tile: u16,
     pub pal: u8,  // 0..7: selects the OBJ CGRAM sub-palette (cgram[128 + pal*16 + index])
     pub prio: u8, // 0..3: sprite priority, carried to the compositor
-    pub size: u8, // sprite size selector -> sprite_dim (8/16/32/64)
+    pub large: bool, // OAM high-table size bit: picks small/large from the OBSEL size-pair
     pub flip_x: bool,
     pub flip_y: bool,
     pub on: bool,

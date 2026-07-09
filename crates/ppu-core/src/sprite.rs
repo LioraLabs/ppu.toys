@@ -9,9 +9,6 @@ use crate::memory::{unpack_rgb15, Memory};
 /// dropped in OAM-index order (lowest index kept).
 pub const MAX_SPRITES_PER_LINE: usize = 32;
 
-/// Edge length of one OBJ tile cell, in pixels.
-const TILE: u32 = 8;
-
 /// One composited sprite pixel: resolved colour plus the sprite's priority so
 /// the downstream BG/OBJ compositor (E5) can interleave it with BG layers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,9 +19,22 @@ pub struct SpritePixel {
     pub pal: u8,
 }
 
-/// Pixel edge length of a sprite given its size selector: 8, 16, 32, 64.
-fn sprite_dim(size: u8) -> u32 {
-    TILE << (size.min(3) as u32)
+/// Authentic OBSEL size-pair table: `size_sel` (0..7) -> [(small W,H), (large W,H)].
+const OBJ_SIZE_PAIRS: [[(u32, u32); 2]; 8] = [
+    [(8, 8), (16, 16)],
+    [(8, 8), (32, 32)],
+    [(8, 8), (64, 64)],
+    [(16, 16), (32, 32)],
+    [(16, 16), (64, 64)],
+    [(32, 32), (64, 64)],
+    [(16, 32), (32, 64)],
+    [(16, 32), (32, 32)],
+];
+
+/// (width, height) in pixels for a sprite, from the frame `size_sel` (OBSEL bits
+/// 5-7) and the per-OAM `large` bit (OAM high table). `size_sel` masked to 3 bits.
+fn sprite_dims(size_sel: u8, large: bool) -> (u32, u32) {
+    OBJ_SIZE_PAIRS[(size_sel & 7) as usize][large as usize]
 }
 
 /// OAM indices of the (at most [`MAX_SPRITES_PER_LINE`]) sprites that are `on`
@@ -32,14 +42,15 @@ fn sprite_dim(size: u8) -> u32 {
 /// binning: lowest indices win when the line is over-subscribed.
 pub fn sprites_on_line(mem: &Memory, y: usize) -> Vec<usize> {
     let y = y as i64;
+    let size_sel = mem.obsel.size_sel;
     let mut out = Vec::with_capacity(MAX_SPRITES_PER_LINE);
     for (i, o) in mem.oam.iter().enumerate() {
         if !o.on {
             continue;
         }
         let top = o.y as i64;
-        let dim = sprite_dim(o.size) as i64;
-        if y >= top && y < top + dim {
+        let (_w, h) = sprite_dims(size_sel, o.large);
+        if y >= top && y < top + h as i64 {
             out.push(i);
             if out.len() == MAX_SPRITES_PER_LINE {
                 break;
@@ -63,12 +74,13 @@ const OBJ_WORDS_PER_TILE: u32 = 16;
 pub fn render_scanline(mem: &Memory, y: usize, width: usize) -> Vec<Option<SpritePixel>> {
     let mut out = vec![None; width];
     let char_base = mem.obsel.char_base as u32;
+    let size_sel = mem.obsel.size_sel;
     for i in sprites_on_line(mem, y) {
         let o = mem.oam[i];
-        let dim = sprite_dim(o.size);
-        let row = (y as i64 - o.y as i64) as u32; // 0..dim (binning guarantees in-range)
+        let (w, h) = sprite_dims(size_sel, o.large);
+        let row = (y as i64 - o.y as i64) as u32; // 0..h (binning guarantees in-range)
         let pal_base = 128 + (o.pal as usize & 7) * 16;
-        for sx in 0..dim {
+        for sx in 0..w {
             let screen_x = o.x as i64 + sx as i64;
             if screen_x < 0 || screen_x >= width as i64 {
                 continue;
@@ -77,8 +89,8 @@ pub fn render_scanline(mem: &Memory, y: usize, width: usize) -> Vec<Option<Sprit
             if slot.is_some() {
                 continue; // a lower OAM index already painted this pixel
             }
-            let px = if o.flip_x { dim - 1 - sx } else { sx };
-            let py = if o.flip_y { dim - 1 - row } else { row };
+            let px = if o.flip_x { w - 1 - sx } else { sx };
+            let py = if o.flip_y { h - 1 - row } else { row };
             // Name-table walk: +1 per column, +16 per row (masked to 9 bits).
             // Hardware wraps the column within the tile's own 16-wide row
             // (`(tile & 0x1f0) | ((tile + col) & 0xf)`); the simpler carry here
@@ -132,19 +144,26 @@ mod tests {
             on: true,
             x: 5,
             y: 10,
-            size: 0,
+            large: false,
             ..Obj::default()
         };
         assert_eq!(sprites_on_line(&mem, 10), vec![0]);
     }
 
     #[test]
-    fn sprite_dim_maps_size_selector() {
-        assert_eq!(sprite_dim(0), 8);
-        assert_eq!(sprite_dim(1), 16);
-        assert_eq!(sprite_dim(2), 32);
-        assert_eq!(sprite_dim(3), 64);
-        assert_eq!(sprite_dim(9), 64); // clamped
+    fn sprite_dims_size_pair_table() {
+        // sel 0: small 8x8 / large 16x16
+        assert_eq!(sprite_dims(0, false), (8, 8));
+        assert_eq!(sprite_dims(0, true), (16, 16));
+        // sel 2: small 8x8 / large 64x64
+        assert_eq!(sprite_dims(2, true), (64, 64));
+        // sel 6: rectangular — small 16x32 / large 32x64
+        assert_eq!(sprite_dims(6, false), (16, 32));
+        assert_eq!(sprite_dims(6, true), (32, 64));
+        // sel 7: small 16x32 / large 32x32
+        assert_eq!(sprite_dims(7, false), (16, 32));
+        assert_eq!(sprite_dims(7, true), (32, 32));
+        assert_eq!(sprite_dims(8, false), (8, 8)); // size_sel masked to 3 bits
     }
 
     #[test]
@@ -154,21 +173,21 @@ mod tests {
             on: true,
             x: 0,
             y: 10,
-            size: 0,
+            large: false,
             ..Obj::default()
         }; // rows 10..18
         mem.oam[1] = Obj {
             on: false,
             x: 0,
             y: 10,
-            size: 0,
+            large: false,
             ..Obj::default()
         }; // off
         mem.oam[2] = Obj {
             on: true,
             x: 0,
             y: 100,
-            size: 0,
+            large: false,
             ..Obj::default()
         }; // elsewhere
         assert_eq!(sprites_on_line(&mem, 12), vec![0]);
@@ -184,7 +203,7 @@ mod tests {
                 on: true,
                 x: 0,
                 y: 0,
-                size: 0,
+                large: false,
                 ..Obj::default()
             };
         }
@@ -229,7 +248,7 @@ mod tests {
             x: 10,
             y: 5,
             tile: 1,
-            size: 0,
+            large: false,
             ..Obj::default()
         };
         let line = render_scanline(&mem, 5, crate::WIDTH);
@@ -305,7 +324,7 @@ mod tests {
             x: 0,
             y: 0,
             tile: 1,
-            size: 1,
+            large: true,
             ..Obj::default()
         };
         let at = |mm: &Memory, y: usize, x: usize| {
