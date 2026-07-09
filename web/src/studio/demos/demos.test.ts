@@ -11,6 +11,7 @@ describe("DEMOS", () => {
       "translucency",
       "spotlight",
       "glow",
+      "sprite-storm",
     ]);
   });
 
@@ -84,5 +85,13 @@ describe("DEMOS", () => {
     expect(g.source).toContain("CGADSUB = 0x01");
     expect(g.source).toContain("COLDATA = rgb(120, 60, 0)");
     for (const a of t.assets) expect(a.data.length).toBe(a.width * a.height * 4);
+  });
+
+  it("sprite-storm packs a rotating over-limit OBJ band with no image asset", () => {
+    const d = DEMOS.find((x) => x.id === "sprite-storm")!;
+    expect(d.assets).toEqual([]); // pokes solid OBJ tiles via vram[], no import
+    expect(d.source).toContain("obj.size_sel = 7"); // 16x32 non-square path
+    expect(d.source).toContain("obj.first = f % N"); // OAM-start rotation -> flicker
+    expect(d.source).toContain("obj[i].large = (i % 12 == 0)");
   });
 });

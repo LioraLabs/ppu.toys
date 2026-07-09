@@ -218,3 +218,12 @@
 }
 .reg-winband--1 { background: color-mix(in srgb, var(--accent-cyan) 70%, transparent); }
 .reg-winband--2 { background: color-mix(in srgb, var(--accent-magenta) 45%, transparent); }
+
+.oam-badges { display: flex; gap: 4px; margin: 2px 0 4px; }
+.oam-badge {
+  font-family: var(--font-mono); font-size: 9px; padding: 1px 5px;
+  border-radius: 3px; letter-spacing: .04em;
+}
+.oam-badge.range { background: rgba(255, 120, 60, .22); color: #ffb488; }
+.oam-badge.time { background: rgba(120, 140, 255, .22); color: #9fb0ff; }
+.oam-maxline { color: var(--text-dim2); }

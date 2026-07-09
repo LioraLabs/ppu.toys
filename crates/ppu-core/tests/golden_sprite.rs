@@ -28,88 +28,52 @@ fn put_obj(mem: &mut Memory, n: usize, grid: [[u8; 8]; 8]) {
     }
 }
 
-/// A right-pointing arrow, asymmetric on both axes so flips are visible.
-const ARROW: [[u8; 8]; 8] = [
-    [0, 1, 0, 0, 0, 0, 0, 0],
-    [0, 1, 1, 0, 0, 0, 0, 0],
-    [1, 2, 2, 3, 0, 0, 0, 0],
-    [1, 2, 2, 2, 3, 3, 0, 0],
-    [1, 1, 2, 3, 0, 0, 0, 0],
-    [0, 1, 1, 0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0, 0, 0, 0],
-];
-
-/// Solid 8x8 block of index `c` with a transparent 2x2 notch (orientation cue).
-fn block(c: u8) -> [[u8; 8]; 8] {
-    let mut g = [[c; 8]; 8];
-    (g[0][0], g[0][1], g[1][0], g[1][1]) = (0, 0, 0, 0);
-    g
-}
-
 fn fixture() -> (ppu_core::LineTable, Memory) {
     let mut mem = Memory::new();
     mem.obsel.char_base = CHAR_BASE as u16;
+    mem.obsel.size_sel = 7; // small 16x32 (non-square) / large 32x32 (square)
     mem.cgram[0] = rgb15(24, 16, 40); // backdrop
 
-    // OBJ sub-palette 0 (cgram[128 + 1..]).
-    let pal0 = [
-        rgb15(224, 64, 32),
-        rgb15(255, 200, 96),
-        rgb15(255, 255, 255),
-    ];
-    for (i, &c) in pal0.iter().enumerate() {
-        mem.cgram[128 + 1 + i] = c;
+    // Solid index-1 across a run of OBJ tiles so every sprite is a clean filled
+    // rectangle regardless of size (16x32 samples an 8-tile block, 32x32 a 16-tile block).
+    let solid = [[1u8; 8]; 8];
+    for n in 0..96usize {
+        put_obj(&mut mem, n, solid);
     }
-    // OBJ sub-palette 2 (cgram[128 + 32 + 1..]) — a recolor for a second sprite.
-    mem.cgram[128 + 32 + 1] = rgb15(64, 160, 255);
-    mem.cgram[128 + 32 + 2] = rgb15(160, 224, 255);
-    // OBJ sub-palette 1 for the 16x16 blocks.
-    mem.cgram[128 + 16 + 4] = rgb15(96, 224, 120);
-    mem.cgram[128 + 16 + 5] = rgb15(48, 160, 80);
-    mem.cgram[128 + 16 + 6] = rgb15(200, 255, 210);
-    mem.cgram[128 + 16 + 7] = rgb15(24, 96, 48);
 
-    // Chars: arrow = tile 1; a 16x16 sprite = quadrant tiles 2/3/18/19.
-    put_obj(&mut mem, 1, ARROW);
-    put_obj(&mut mem, 2, block(4));
-    put_obj(&mut mem, 3, block(5));
-    put_obj(&mut mem, 18, block(6));
-    put_obj(&mut mem, 19, block(7));
+    // Eight OBJ sub-palettes, one vivid colour each at index 1 (cgram[128 + p*16 + 1]).
+    let pal_colors = [
+        rgb15(224, 64, 32),
+        rgb15(64, 160, 255),
+        rgb15(96, 224, 120),
+        rgb15(255, 200, 96),
+        rgb15(220, 80, 220),
+        rgb15(80, 220, 220),
+        rgb15(240, 240, 120),
+        rgb15(200, 200, 200),
+    ];
+    for (p, &c) in pal_colors.iter().enumerate() {
+        mem.cgram[128 + p * 16 + 1] = c;
+    }
 
-    // OAM: a row of arrows with alternating flips + palettes; one 16x16 block;
-    // a priority-tagged arrow; an arrow clipped off the left edge.
+    // A band of six 16x32 non-square sprites (large=false), alternating palettes.
     for i in 0..6usize {
         mem.oam[i] = Obj {
             on: true,
-            x: (16 + i * 24) as i16,
-            y: (20 + (i % 3) * 8) as u8,
-            tile: 1,
-            pal: if i % 2 == 0 { 0 } else { 2 },
-            flip_x: i % 2 == 1,
-            flip_y: i % 4 == 3,
-            large: false,
+            x: (12 + i * 40) as i16,
+            y: 24,
+            tile: 0,
+            pal: (i % 8) as u8,
             prio: (i % 4) as u8,
+            large: false,
             ..Obj::default()
         };
     }
-    mem.oam[6] = Obj {
-        on: true,
-        x: 180,
-        y: 120,
-        tile: 2,
-        pal: 1,
-        large: true,
-        ..Obj::default()
-    };
-    mem.oam[7] = Obj {
-        on: true,
-        x: -4,
-        y: 80,
-        tile: 1,
-        pal: 0,
-        ..Obj::default()
-    }; // clipped left
+    // Two 32x32 large sprites lower down.
+    mem.oam[6] = Obj { on: true, x: 40, y: 120, tile: 0, pal: 2, large: true, ..Obj::default() };
+    mem.oam[7] = Obj { on: true, x: 150, y: 120, tile: 0, pal: 4, large: true, ..Obj::default() };
+    // A 16x32 sprite clipped off the left edge (renderer clips per-pixel).
+    mem.oam[8] = Obj { on: true, x: -8, y: 80, tile: 0, pal: 1, large: false, ..Obj::default() };
 
     let lt = LineTableBuilder::new(LineTableRow::default()).build(HEIGHT);
     (lt, mem)
@@ -124,29 +88,27 @@ fn decode_png(path: &str) -> Vec<u8> {
     buf
 }
 
-/// Structural sanity independent of the committed PNG: sprites and backdrop
-/// both contribute pixels (guards against an all-backdrop golden being frozen).
+fn px(fb: &[u8], x: usize, y: usize) -> [u8; 4] {
+    let o = (y * WIDTH + x) * 4;
+    [fb[o], fb[o + 1], fb[o + 2], fb[o + 3]]
+}
+
 #[test]
-fn sprite_fixture_draws_sprites_over_backdrop() {
+fn sprite_fixture_draws_size_pair_sprites_over_backdrop() {
     let (lt, mem) = fixture();
     let fb = render_frame(&lt, &mem);
-    let count = |c: [u8; 4]| fb.chunks(4).filter(|p| *p == c).count();
-    assert!(
-        count(unpack_rgb15(rgb15(224, 64, 32))) > 0,
-        "arrow body missing"
-    );
-    assert!(
-        count(unpack_rgb15(rgb15(96, 224, 120))) > 0,
-        "16x16 block missing"
-    );
-    assert!(
-        count(unpack_rgb15(rgb15(64, 160, 255))) > 0,
-        "recolored arrow missing"
-    );
-    assert!(
-        count(unpack_rgb15(rgb15(24, 16, 40))) > 0,
-        "backdrop missing"
-    );
+    let red = unpack_rgb15(rgb15(224, 64, 32)); // pal 0 -> first 16x32 sprite
+    let green = unpack_rgb15(rgb15(96, 224, 120)); // pal 2 -> a 32x32 large sprite
+    // First sprite is a filled 16x32 NON-SQUARE: top-left + far corner present, and
+    // exactly 16 wide (the column one past its width is NOT its colour).
+    assert_eq!(px(&fb, 12, 24), red, "non-square sprite top-left");
+    assert_eq!(px(&fb, 27, 55), red, "non-square sprite fills its full 16x32 extent");
+    assert_ne!(px(&fb, 28, 24), red, "non-square sprite must be only 16 px wide");
+    // A large 32x32 sprite fills its whole footprint.
+    assert_eq!(px(&fb, 40, 120), green, "large 32x32 top-left");
+    assert_eq!(px(&fb, 71, 151), green, "large sprite fills its full 32x32 extent");
+    // Backdrop where nothing is drawn.
+    assert_eq!(px(&fb, 250, 210), unpack_rgb15(rgb15(24, 16, 40)), "backdrop missing");
 }
 
 #[test]

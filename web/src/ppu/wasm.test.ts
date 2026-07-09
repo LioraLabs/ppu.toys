@@ -76,4 +76,15 @@ describe("wrapWasmCore", () => {
     expect(Array.from(ppu.vram())).toEqual([]);
     expect(ppu.importReports()).toEqual([]);
   });
+
+  it("forwards objOverflow and falls back when the getter is absent", () => {
+    const ov = { rangeOver: true, timeOver: false, maxSprites: 40, maxTiles: 34 };
+    expect(wrapWasmCore(fakeCore({ objOverflow: () => ov })).frame(0, 0).objOverflow).toEqual(ov);
+    expect(wrapWasmCore(fakeCore()).frame(0, 0).objOverflow).toEqual({
+      rangeOver: false,
+      timeOver: false,
+      maxSprites: 0,
+      maxTiles: 0,
+    });
+  });
 });

@@ -3,6 +3,7 @@ import {
   FrameResult,
   RegisterView,
   OamSprite,
+  ObjOverflow,
   AssetInfo,
   ImportReport,
   WIDTH,
@@ -152,7 +153,13 @@ export class MockPpuCore implements PpuCore {
       });
     }
 
-    return { framebuffer, registers, cgram, oam };
+    const objOverflow: ObjOverflow = {
+      rangeOver: false,
+      timeOver: false,
+      maxSprites: objOn ? oam.filter((s) => s.on).length : 0,
+      maxTiles: objOn ? oam.filter((s) => s.on).length : 0,
+    };
+    return { framebuffer, registers, cgram, oam, objOverflow };
   }
 }
 
