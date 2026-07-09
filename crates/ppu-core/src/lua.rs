@@ -438,6 +438,8 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
         }
         obj.set(ctx, i, o).unwrap();
     }
+    obj.set(ctx, "priority_rotate", false).unwrap();
+    obj.set(ctx, "oam_addr", 0).unwrap();
     ctx.set_global("obj", obj).unwrap();
 
     // hidden hook registry
@@ -920,6 +922,14 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
         mem.obsel.name_select = crate::quantize::obj_name_select(
             obj.get(ctx, "name_select").to_integer().unwrap_or(0) as u8,
         );
+        mem.priority_rotate = obj.get(ctx, "priority_rotate").to_bool();
+        mem.oam_addr = (obj.get(ctx, "oam_addr").to_integer().unwrap_or(0).max(0) as u16) & 0x1ff;
+        // Friendly sugar: obj.first = N turns rotation on and points OAMADD at
+        // sprite N (word address N<<1). Overrides the raw fields when present.
+        if let Some(n) = obj.get(ctx, "first").to_integer() {
+            mem.priority_rotate = true;
+            mem.oam_addr = ((n.max(0) as u16 & 0x7f) << 1) & 0x1ff;
+        }
         for i in 0..128 {
             if let Value::Table(o) = obj.get(ctx, i as i64) {
                 let e = &mut mem.oam[i];
