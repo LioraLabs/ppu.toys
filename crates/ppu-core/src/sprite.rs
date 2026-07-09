@@ -64,6 +64,22 @@ pub fn sprites_on_line(mem: &Memory, y: usize) -> Vec<usize> {
 /// tiles wide (right = +1, down = +16), masked to 9 bits.
 const OBJ_WORDS_PER_TILE: u32 = 16;
 
+/// VRAM word address of the OBJ tile at block offset (`col`, `row`) from the
+/// sprite's base `tile`, in the 16-wide OBJ name table. Right (+col) wraps within
+/// the tile's own 16-tile row (`(name & 0x1f0) | ((name + col) & 0xf)`); down
+/// (+row) steps +16, wrapping the 9-bit name. Names >= 256 live in the second
+/// name table at `char_base + (name_select + 1) * 0x1000` (word-addressed).
+fn obj_tile_addr(char_base: u32, name_select: u32, tile: u16, col: u32, row: u32) -> u16 {
+    let row_tile = (tile as u32 + row * 16) & 0x1ff;
+    let name = (row_tile & 0x1f0) | ((row_tile + col) & 0x0f);
+    let addr = if name < 256 {
+        char_base + name * OBJ_WORDS_PER_TILE
+    } else {
+        char_base + (name_select + 1) * 0x1000 + (name - 256) * OBJ_WORDS_PER_TILE
+    };
+    (addr & 0x7fff) as u16
+}
+
 /// Composite every visible sprite for scanline `y` into a `width`-long row of
 /// `Option<SpritePixel>` (`None` = transparent). Real OBJ pixel sampling: per
 /// covering sprite (lowest OAM index first), fetch its 4bpp char from the OBSEL
@@ -75,6 +91,7 @@ pub fn render_scanline(mem: &Memory, y: usize, width: usize) -> Vec<Option<Sprit
     let mut out = vec![None; width];
     let char_base = mem.obsel.char_base as u32;
     let size_sel = mem.obsel.size_sel;
+    let name_select = mem.obsel.name_select as u32;
     for i in sprites_on_line(mem, y) {
         let o = mem.oam[i];
         let (w, h) = sprite_dims(size_sel, o.large);
@@ -91,13 +108,7 @@ pub fn render_scanline(mem: &Memory, y: usize, width: usize) -> Vec<Option<Sprit
             }
             let px = if o.flip_x { w - 1 - sx } else { sx };
             let py = if o.flip_y { h - 1 - row } else { row };
-            // Name-table walk: +1 per column, +16 per row (masked to 9 bits).
-            // Hardware wraps the column within the tile's own 16-wide row
-            // (`(tile & 0x1f0) | ((tile + col) & 0xf)`); the simpler carry here
-            // only diverges when a wide sprite's base column nibble + width
-            // crosses 16 — acceptable for this educational core.
-            let tile_index = (o.tile as u32 + px / 8 + (py / 8) * 16) & 0x1ff;
-            let addr = ((char_base + tile_index * OBJ_WORDS_PER_TILE) & 0x7fff) as u16;
+            let addr = obj_tile_addr(char_base, name_select, o.tile, px / 8, py / 8);
             let index = char_pixel_index(mem, addr, 4, px % 8, py % 8);
             if index == 0 {
                 continue; // color 0 = transparent
@@ -410,5 +421,59 @@ mod tests {
         assert_eq!(fb.len(), 32 * 32 * 4);
         assert!(fb.chunks(4).all(|px| px[3] == 255));
         assert_eq!(&fb[0..4], &unpack_rgb15(rgb15(0, 0, 40)));
+    }
+
+    #[test]
+    fn obj_tile_addr_wraps_column_within_16_row() {
+        // Base tile at column nibble 0xF: right (+1 col) wraps to column 0 of the
+        // SAME 16-tile row (name 0x0F -> 0x00), NOT a naive carry into 0x10.
+        let cb = 0x2000;
+        assert_eq!(obj_tile_addr(cb, 0, 0x0f, 0, 0), 0x2000 + 0x0f * 16);
+        assert_eq!(obj_tile_addr(cb, 0, 0x0f, 1, 0), 0x2000 + 0x00 * 16); // wrapped
+                                                                          // Down (+1 row) steps +16 within the name space.
+        assert_eq!(obj_tile_addr(cb, 0, 0x0f, 0, 1), 0x2000 + 0x1f * 16);
+    }
+
+    #[test]
+    fn obj_tile_addr_second_nametable_uses_name_select_gap() {
+        // Name >= 256 lands in the second table at char_base + (name_select+1)*0x1000.
+        let cb = 0x2000;
+        // Tile 0xF0 down 16 rows -> name 0xF0 + 16*16 = 0x1F0 (>=256).
+        // name_select 0: gap 0x1000 -> addr = 0x2000 + 0x1000 + (0x1F0-0x100)*16.
+        let name = 0x1f0u32;
+        assert_eq!(
+            obj_tile_addr(cb, 0, 0xf0, 0, 16),
+            ((0x2000 + 0x1000 + (name - 0x100) * 16) & 0x7fff) as u16
+        );
+        // name_select 2: gap (2+1)*0x1000 = 0x3000.
+        assert_eq!(
+            obj_tile_addr(cb, 2, 0xf0, 0, 16),
+            ((0x2000 + 0x3000 + (name - 0x100) * 16) & 0x7fff) as u16
+        );
+    }
+
+    #[test]
+    fn rectangular_sprite_samples_full_wxh_block() {
+        let mut mem = obj_mem();
+        mem.obsel.size_sel = 6; // large -> 32x64 (4 tiles wide, 8 tall)
+        mem.cgram[128 + 1] = rgb15(255, 0, 0);
+        // Put a marker pixel at (0,0) of the bottom-right block tile of a 32x64 sprite:
+        // col 3 (x 24..31), row 7 (y 56..63) -> tile (0 + 7*16) then +3 col = tile 115.
+        let mut g = [[0u8; 8]; 8];
+        g[0][0] = 1;
+        put_obj_char(&mut mem, 115, g);
+        mem.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 0,
+            large: true,
+            ..Obj::default()
+        };
+        // The marker sits at screen (24, 56): far right column, bottom row of the block.
+        assert!(render_scanline(&mem, 56, crate::WIDTH)[24].is_some());
+        // The sprite is 64 tall, so row 63 is still covered; row 64 is not.
+        assert_eq!(sprites_on_line(&mem, 63), vec![0]);
+        assert_eq!(sprites_on_line(&mem, 64), Vec::<usize>::new());
     }
 }
