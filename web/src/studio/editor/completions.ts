@@ -4,6 +4,8 @@ import type { CompletionContext, CompletionResult, Completion } from "@codemirro
 const GLOBALS: Completion[] = [
   { label: "mode", type: "variable", detail: "int 0..7 — background mode" },
   { label: "brightness", type: "variable", detail: "int 0..15 — INIDISP" },
+  { label: "direct_color", type: "variable", detail: "bool — CGWSEL.0 8bpp direct colour" },
+  { label: "force_blank", type: "variable", detail: "bool — INIDISP.7 force blank" },
   { label: "bg", type: "variable", detail: "bg[1..4].scroll/.source/.visible" },
   { label: "m7", type: "variable", detail: "Mode 7 affine .a .b .c .d .cx .cy" },
   { label: "cgram", type: "variable", detail: "cgram[0..255] palette" },
