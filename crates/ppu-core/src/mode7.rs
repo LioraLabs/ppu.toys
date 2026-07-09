@@ -44,6 +44,26 @@ fn field_pixel(mem: &Memory, px: i64, py: i64) -> u8 {
     (mem.vram[(tile * 64 + fy * 8 + fx) as usize] >> 8) as u8
 }
 
+/// Raw 8bpp Mode-7 plane index (0..255) at screen pixel (`x`,`y`): applies
+/// flip, the affine transform, and out-of-field `repeat` handling — the shared
+/// sampling both the direct-CGRAM path and the EXTBG path build on.
+fn mode7_raw_index(row: &RegRow, mem: &Memory, y: usize, x: usize) -> u8 {
+    let m7 = &row.m7;
+    let bg = &row.bg[0];
+    let sy = if m7.flip_y { 255 - y as i32 } else { y as i32 };
+    let sx = if m7.flip_x { 255 - x as i32 } else { x as i32 };
+    let (u, v) = mode7_texel(m7, bg.scroll_x, bg.scroll_y, sx, sy);
+    let in_field = (0..FIELD).contains(&u) && (0..FIELD).contains(&v);
+    match (in_field, m7.repeat) {
+        (false, 2) => 0, // out-of-field transparent
+        (false, 3) => {
+            let (fx, fy) = (u.rem_euclid(8), v.rem_euclid(8));
+            (mem.vram[(fy * 8 + fx) as usize] >> 8) as u8
+        }
+        _ => field_pixel(mem, u.rem_euclid(FIELD), v.rem_euclid(FIELD)),
+    }
+}
+
 /// Sample the Mode 7 floor for scanline `y` into `out` (length `width * 4`):
 /// affine-map each screen pixel through `mode7_texel` (scroll from
 /// `row.bg[0]`, DSL `bg[1]`), then map LOW byte -> char HIGH byte -> CGRAM.
@@ -53,22 +73,8 @@ fn field_pixel(mem: &Memory, px: i64, py: i64) -> u8 {
 /// the compositor's job.
 pub fn render_mode7_scanline(row: &RegRow, mem: &Memory, y: usize, out: &mut [u8]) {
     let width = out.len() / 4;
-    let m7 = &row.m7;
-    let bg = &row.bg[0];
-    let sy = if m7.flip_y { 255 - y as i32 } else { y as i32 };
     for x in 0..width {
-        let sx = if m7.flip_x { 255 - x as i32 } else { x as i32 };
-        let (u, v) = mode7_texel(m7, bg.scroll_x, bg.scroll_y, sx, sy);
-        let in_field = (0..FIELD).contains(&u) && (0..FIELD).contains(&v);
-        let index = match (in_field, m7.repeat) {
-            (false, 2) => 0, // out-of-field transparent
-            (false, 3) => {
-                // out-of-field tile-0 fill: tile 0's char at the sub-tile pos
-                let (fx, fy) = (u.rem_euclid(8), v.rem_euclid(8));
-                (mem.vram[(fy * 8 + fx) as usize] >> 8) as u8
-            }
-            _ => field_pixel(mem, u.rem_euclid(FIELD), v.rem_euclid(FIELD)),
-        };
+        let index = mode7_raw_index(row, mem, y, x);
         let oi = x * 4;
         out[oi..oi + 4].copy_from_slice(&if index == 0 {
             [0, 0, 0, 0] // palette index 0 = transparent
@@ -76,6 +82,35 @@ pub fn render_mode7_scanline(row: &RegRow, mem: &Memory, y: usize, out: &mut [u8
             unpack_rgb15(mem.cgram[index as usize])
         });
     }
+}
+
+/// One EXTBG Mode-7 pixel: resolved color + per-pixel priority (bit 7 of the
+/// raw plane index). Analogous to `BgPixel`; `None` = transparent (color 0).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Mode7Pixel {
+    pub rgba: [u8; 4],
+    pub prio: bool,
+}
+
+/// EXTBG (SETINI.6) sampling for scanline `y`: each raw plane index splits into
+/// bit 7 = priority and low 7 bits (0..127) = CGRAM color. Color 0 = transparent
+/// (`None`). Only used when `RegRow::extbg()`; the non-EXTBG path is unchanged.
+pub fn render_mode7_scanline_px(
+    row: &RegRow,
+    mem: &Memory,
+    y: usize,
+    width: usize,
+) -> Vec<Option<Mode7Pixel>> {
+    (0..width)
+        .map(|x| {
+            let raw = mode7_raw_index(row, mem, y, x);
+            let color = raw & 0x7f;
+            (color != 0).then(|| Mode7Pixel {
+                rgba: unpack_rgb15(mem.cgram[color as usize]),
+                prio: raw & 0x80 != 0,
+            })
+        })
+        .collect()
 }
 
 /// Render every scanline of a resolved line table as Mode 7 over `mem` into a
@@ -345,5 +380,39 @@ mod tests {
         let row = RegRow::from(&src);
         render_mode7_scanline(&row, &mem, 0, &mut out);
         assert_eq!(&out[0..4], &unpack_rgb15(rgb15(255, 0, 0))); // v=-1 wraps to 1023
+    }
+
+    #[test]
+    fn non_extbg_scanline_unchanged_after_raw_index_extraction() {
+        // Guard: the raw-index extraction MUST NOT change non-EXTBG output.
+        // 8bpp index 200 resolves through the full 256-color CGRAM as before.
+        let mut mem = Memory::new();
+        mem.cgram[200] = rgb15(1, 2, 3);
+        set_map(&mut mem, 0, 0, 7);
+        set_char(&mut mem, 7, 0, 0, 200);
+        let row = RegRow::from(&LineTableRow::default());
+        let mut out = [0u8; 4];
+        render_mode7_scanline(&row, &mem, 0, &mut out);
+        assert_eq!(&out[0..4], &unpack_rgb15(rgb15(1, 2, 3)));
+    }
+
+    #[test]
+    fn extbg_px_splits_bit7_priority_from_low7_color() {
+        let mut mem = Memory::new();
+        mem.cgram[5] = rgb15(255, 0, 0);
+        set_map(&mut mem, 0, 0, 7);
+        set_char(&mut mem, 7, 0, 0, 0x85); // bit7 set (high) + color 5
+        set_char(&mut mem, 7, 1, 0, 0x03); // bit7 clear (low) + color 3
+        set_char(&mut mem, 7, 2, 0, 0x80); // bit7 set but color 0 -> transparent
+        mem.cgram[3] = rgb15(0, 255, 0);
+        let row = RegRow::from(&LineTableRow::default());
+        let px = render_mode7_scanline_px(&row, &mem, 0, 8);
+        let hi = px[0].expect("x0 opaque");
+        assert!(hi.prio); // bit7 -> high priority
+        assert_eq!(hi.rgba, unpack_rgb15(rgb15(255, 0, 0))); // color = low 7 bits = 5
+        let lo = px[1].expect("x1 opaque");
+        assert!(!lo.prio); // bit7 clear -> low priority
+        assert_eq!(lo.rgba, unpack_rgb15(rgb15(0, 255, 0))); // color 3
+        assert!(px[2].is_none()); // masked color 0 is transparent even with bit7
     }
 }
