@@ -86,6 +86,33 @@ pub struct Obj {
     pub on: bool,
 }
 
+impl Obj {
+    /// The SNES OAM *high table* nibble for this sprite: bit 0 = X bit 8 (the 9th
+    /// X bit / sign, set when `x` does not fit in unsigned 8 bits), bit 1 = the
+    /// `large` size bit. (Actual OAM serialization packs 4 sprites per byte — S5.)
+    pub fn oam_high_bits(&self) -> u8 {
+        let x_bit8 = ((self.x as i32) & !0xff) != 0; // outside 0..=255 -> bit 8 set
+        (x_bit8 as u8) | ((self.large as u8) << 1)
+    }
+
+    /// Reconstruct the size + 9-bit signed X from the low-table X byte and the
+    /// high-table nibble (inverse of the OAM split). X is `low_x | (bit8 << 8)`,
+    /// interpreted as 9-bit signed (bit 8 = sign).
+    pub fn from_oam_high(low_x: u8, high_bits: u8) -> Obj {
+        let raw = (low_x as u16) | (((high_bits & 1) as u16) << 8); // 9-bit
+        let x = if raw & 0x100 != 0 {
+            (raw | 0xfe00) as i16 // sign-extend bit 8
+        } else {
+            raw as i16
+        };
+        Obj {
+            x,
+            large: high_bits & 0b10 != 0,
+            ..Obj::default()
+        }
+    }
+}
+
 /// Frame-global OBJ binding registers (OBSEL $2101). `char_base` is the OBJ
 /// tile-data base as an EFFECTIVE VRAM word address (name base, bits 0-2);
 /// `name_select` is the second name-table gap selector (bits 3-4); `size_sel`
@@ -435,6 +462,31 @@ mod tests {
         assert_eq!(reg.m7.a, 256); // identity 1.0 in Q8
         assert_eq!(reg.m7.d, 256);
         assert_eq!(reg.bg[0].scroll_x, 0);
+    }
+
+    #[test]
+    fn obj_oam_high_table_round_trips_x_bit8_and_large() {
+        // OAM high table packs 2 bits/sprite: bit0 = X bit 8 (the sign of the 9-bit
+        // signed X), bit1 = the `large` size bit. Values below stay in 9-bit signed
+        // range (-256..=255) — the only X range OAM can hold.
+        let cases: [(i16, bool, u8); 6] = [
+            (0, false, 0b00),
+            (255, false, 0b00),   // fits in 8 bits, no X bit 8
+            (100, true, 0b10),    // large only
+            (-1, false, 0b01),    // negative -> X bit 8 set
+            (-200, false, 0b01),
+            (-256, true, 0b11),   // most-negative X + large
+        ];
+        for (x, large, bits) in cases {
+            let o = Obj { x, large, ..Obj::default() };
+            assert_eq!(o.oam_high_bits(), bits, "high bits for x={x} large={large}");
+            // Round-trip: the low X byte + the high nibble reconstruct x (9-bit
+            // signed) and large exactly.
+            let low_x = (x as u16 & 0xff) as u8;
+            let r = Obj::from_oam_high(low_x, o.oam_high_bits());
+            assert_eq!(r.x, x, "x round-trip for x={x}");
+            assert_eq!(r.large, large, "large round-trip for x={x}");
+        }
     }
 
     #[test]
