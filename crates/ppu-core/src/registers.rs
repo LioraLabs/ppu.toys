@@ -512,14 +512,18 @@ mod tests {
         // range (-256..=255) — the only X range OAM can hold.
         let cases: [(i16, bool, u8); 6] = [
             (0, false, 0b00),
-            (255, false, 0b00),   // fits in 8 bits, no X bit 8
-            (100, true, 0b10),    // large only
-            (-1, false, 0b01),    // negative -> X bit 8 set
+            (255, false, 0b00), // fits in 8 bits, no X bit 8
+            (100, true, 0b10),  // large only
+            (-1, false, 0b01),  // negative -> X bit 8 set
             (-200, false, 0b01),
-            (-256, true, 0b11),   // most-negative X + large
+            (-256, true, 0b11), // most-negative X + large
         ];
         for (x, large, bits) in cases {
-            let o = Obj { x, large, ..Obj::default() };
+            let o = Obj {
+                x,
+                large,
+                ..Obj::default()
+            };
             assert_eq!(o.oam_high_bits(), bits, "high bits for x={x} large={large}");
             // Round-trip: the low X byte + the high nibble reconstruct x (9-bit
             // signed) and large exactly.

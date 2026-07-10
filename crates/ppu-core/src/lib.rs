@@ -39,6 +39,12 @@ pub use modes::*;
 mod window;
 pub use window::*;
 
+mod pins;
+pub use pins::*;
+
+mod trace;
+pub use trace::*;
+
 // m4/importer: shared tile-BG importer + reusable quantize/tiles core.
 pub mod import;
 
@@ -77,6 +83,18 @@ pub struct LuaErrorView {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+}
+
+impl From<LuaError> for LuaErrorView {
+    fn from(e: LuaError) -> Self {
+        LuaErrorView {
+            message: e.message,
+            line: e.line,
+            file: e.file,
+        }
+    }
 }
 
 /// A sprite mapped to the JS `OamSprite` shape (camelCase flip fields).
