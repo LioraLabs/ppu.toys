@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { MockPpuCore } from "../ppu/mock";
 import type { LuaError } from "../ppu/core";
 import { CodeEditor } from "./editor/CodeEditor";
 import { useTransportRuntimeError } from "./transport/transport";
 import { DEMOS } from "./demos/demos";
-import { loadDemo } from "./demos/loadDemo";
+import { openSketchStore, useOpenSketch } from "./sketches/openSketch";
+import { restoreOpenContext } from "./sketches/restore";
 
 export interface EditorPaneProps {
   /** PpuCore.setSource-shaped sink. Defaults to a local mock so the editor is
@@ -15,30 +16,51 @@ export interface EditorPaneProps {
 export function EditorPane({ onSource }: EditorPaneProps) {
   // local fallback core so setSource is genuinely exercised standalone
   const fallback = useMemo(() => new MockPpuCore(), []);
-  const sink = onSource ?? ((src: string) => fallback.setSource(src));
+  const coreSink = onSource ?? ((src: string) => fallback.setSource(src));
   const runtimeError = useTransportRuntimeError();
 
-  const [demoId, setDemoId] = useState(DEMOS[0].id);
-  const demo = DEMOS.find((d) => d.id === demoId) ?? DEMOS[0];
+  const { context, session, dirty } = useOpenSketch();
 
-  // load the active demo's bundled sources into the core + asset store; re-run
-  // on every selection. The keyed CodeEditor below remounts with the new source
-  // and re-runs setSource, so the loader only needs to handle assets.
+  // (re)load the context's assets on every EXPLICIT open. Keyed on session so
+  // a lazy fork (same session, same live assets) does not reload anything.
   useEffect(() => {
-    loadDemo(demo);
-  }, [demo]);
+    void restoreOpenContext(openSketchStore.state().context);
+  }, [session]);
+
+  const fileName =
+    context.kind === "sketch" ? context.sketch.files[0]?.name ?? "main.lua" : "main.lua";
+  const doc =
+    context.kind === "sketch"
+      ? context.sketch.files[0]?.source ?? ""
+      : DEMOS.find((d) => d.id === context.demoId)?.source ?? "";
+
+  // run the source AND record it into the open sketch; the first change to a
+  // demo lazily forks it (openSketch no-ops on the pristine mount push)
+  const sink = (src: string) => {
+    openSketchStore.editFile(fileName, src);
+    return coreSink(src);
+  };
 
   return (
     <section className="editor">
       <div className="editor-tabs">
+        {context.kind === "sketch" && (
+          <button type="button" className="etab etab--active">
+            <span className="etab-dot" />
+            {context.sketch.name}
+            {dirty ? " *" : ""}
+          </button>
+        )}
         {DEMOS.map((d) => (
           <button
             key={d.id}
             type="button"
-            className={"etab" + (d.id === demoId ? " etab--active" : "")}
-            onClick={() => setDemoId(d.id)}
+            className={
+              "etab" + (context.kind === "demo" && d.id === context.demoId ? " etab--active" : "")
+            }
+            onClick={() => void openSketchStore.openDemo(d.id)}
           >
-            {d.id === demoId && <span className="etab-dot" />}
+            {context.kind === "demo" && d.id === context.demoId && <span className="etab-dot" />}
             {d.label}.lua
           </button>
         ))}
@@ -46,7 +68,7 @@ export function EditorPane({ onSource }: EditorPaneProps) {
         <div className="etab-status">vim · Lua 5.4</div>
       </div>
       <div className="editor-body" data-editor-slot>
-        <CodeEditor key={demoId} initialDoc={demo.source} onSource={sink} runtimeError={runtimeError} />
+        <CodeEditor key={session} initialDoc={doc} onSource={sink} runtimeError={runtimeError} />
       </div>
     </section>
   );
