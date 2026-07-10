@@ -55,3 +55,52 @@ describe("ppuCompletions", () => {
     expect(ppuCompletions(ctx)).toBeNull();
   });
 });
+
+describe("M8 DSL audit", () => {
+  it("offers window/color-math/screen registers and vram as globals", () => {
+    const labels = complete("W")!.options.map((o) => o.label);
+    for (const g of ["TM", "TS", "WH0", "WH1", "WH2", "WH3", "W12SEL", "W34SEL",
+      "WOBJSEL", "WBGLOG", "WOBJLOG", "TMW", "TSW", "CGWSEL", "CGADSUB", "COLDATA",
+      "coldata", "m7pixel", "vram"]) {
+      expect(labels).toContain(g);
+    }
+  });
+
+  it("annotates completions with their hardware register", () => {
+    const opts = complete("m")!.options;
+    const detail = (label: string) => opts.find((o) => o.label === label)?.detail ?? "";
+    expect(detail("mosaic")).toContain("$2106");
+    expect(detail("brightness")).toContain("$2100");
+    expect(detail("cgram")).toContain("$2121");
+    expect(detail("hdma")).toContain("HDMA");
+  });
+
+  it("offers bg[n]. layer members", () => {
+    const labels = complete("bg[1].")!.options.map((o) => o.label);
+    for (const m of ["scroll", "source", "visible", "tile_size", "map_base",
+      "screen_size", "char_base", "mosaic", "map"]) {
+      expect(labels).toContain(m);
+    }
+    expect(labels).not.toContain("brightness");
+  });
+
+  it("offers sprite members on indexed obj[n]. but sheet/OBSEL on plain obj.", () => {
+    const sprite = complete("obj[12].")!.options.map((o) => o.label);
+    for (const m of ["x", "y", "tile", "pal", "prio", "flip_x", "flip_y", "on", "large"]) {
+      expect(sprite).toContain(m);
+    }
+    expect(sprite).not.toContain("sheet");
+    const plain = complete("obj.")!.options.map((o) => o.label);
+    expect(plain).toContain("sheet");
+    expect(plain).toContain("priority_rotate");
+    expect(plain).toContain("oam_addr");
+    expect(plain).not.toContain("large");
+  });
+
+  it("completes the partial word after bg[n].", () => {
+    const res = complete("bg[2].sc")!;
+    expect(res.options.map((o) => o.label)).toContain("scroll");
+    // `from` must sit right after the dot so "sc" is replaced, not appended
+    expect(res.from).toBe("bg[2].".length);
+  });
+});
