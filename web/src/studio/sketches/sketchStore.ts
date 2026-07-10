@@ -42,7 +42,10 @@ function openDb(): Promise<IDBDatabase> {
       const req = indexedDB.open(DB_NAME, 1);
       req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: "id" });
       req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
+      req.onerror = () => {
+        dbPromise = null; // don't cache the failure — allow a retry next call
+        reject(req.error);
+      };
     });
   }
   return dbPromise;
