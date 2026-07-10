@@ -2,24 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import type { Poke } from "./pokes";
 import { poke } from "./pokeStore";
 import { Copyable, useCopyToast } from "../inspector/copyToast";
-import { cgLabel } from "../inspector/tracemem/trace";
+import { bgr555ToHex, cgLabel } from "../inspector/tracemem/trace";
+import { hexToBgr555 } from "../inspector/compose/model";
 import "./pokes.css";
-
-/** #rrggbb -> BGR555 (matches memory.rs rgb15 packing: b<<10 | g<<5 | r, 5 bits each). */
-export function hexToBgr555(hex: string): number {
-  const n = parseInt(hex.slice(1), 16);
-  const r = (n >> 16) & 0xff,
-    g = (n >> 8) & 0xff,
-    b = n & 0xff;
-  return ((b >> 3) << 10) | ((g >> 3) << 5) | (r >> 3);
-}
-
-export function bgr555ToHex(v: number): string {
-  const r = (v & 0x1f) << 3,
-    g = ((v >> 5) & 0x1f) << 3,
-    b = ((v >> 10) & 0x1f) << 3;
-  return `#${[r, g, b].map((c) => c.toString(16).padStart(2, "0")).join("")}`;
-}
 
 export function cgramPoke(index: number, bgr555: number): Poke {
   return {

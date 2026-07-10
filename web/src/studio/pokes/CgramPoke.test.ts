@@ -3,7 +3,9 @@ import "fake-indexeddb/auto";
 import { openSketchStore, openContextFiles } from "../sketches/openSketch";
 import { POKES_FILE } from "./pokes";
 import { poke } from "./pokeStore";
-import { bgr555ToHex, cgramPoke, hexToBgr555 } from "./CgramPoke";
+import { cgramPoke } from "./CgramPoke";
+import { bgr555ToHex } from "../inspector/tracemem/trace";
+import { hexToBgr555 } from "../inspector/compose/model";
 
 describe("hexToBgr555 / bgr555ToHex", () => {
   it.each([0x0000, 0x7fff, 0x1a3f, 0x03e0])("round-trips 15-bit value 0x%s", (v) => {

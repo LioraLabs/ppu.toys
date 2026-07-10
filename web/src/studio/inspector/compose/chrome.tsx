@@ -14,7 +14,11 @@ export function PokeDot({ c, addr }: { c: Compositor; addr: number }) {
   if (!p) return null;
   const match = pokeMatchesLive(p, c.frame.registers);
   const state =
-    match === null ? "poked" : match ? "poked · live matches" : "poked · overridden by script";
+    match === null
+      ? "poked"
+      : match
+        ? "poked · live matches"
+        : "poked · live value differs (script write or quantization)";
   return (
     <button
       type="button"
