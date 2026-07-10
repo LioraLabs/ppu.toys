@@ -1,14 +1,17 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { LibraryPanel } from "./sketches/LibraryPanel";
 
 function RailItem({
   active,
   label,
   className,
+  onClick,
   children,
 }: {
   active?: boolean;
   label: string;
   className?: string;
+  onClick?: () => void;
   children: ReactNode;
 }) {
   return (
@@ -16,6 +19,7 @@ function RailItem({
       className={"rail-item" + (active ? " rail-item--active" : "") + (className ? " " + className : "")}
       title={label}
       aria-label={label}
+      onClick={onClick}
     >
       {children}
     </button>
@@ -23,9 +27,11 @@ function RailItem({
 }
 
 export function ActivityRail() {
+  const [filesOpen, setFilesOpen] = useState(false);
   return (
+    <>
     <nav className="rail">
-      <RailItem label="Files">
+      <RailItem label="Files" active={filesOpen} onClick={() => setFilesOpen((v) => !v)}>
         <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth={1.4} strokeLinecap="round" strokeLinejoin="round">
           <rect x="3" y="2.5" width="12" height="13" rx="2"/>
           <line x1="3" y1="6" x2="15" y2="6"/>
@@ -73,5 +79,7 @@ export function ActivityRail() {
         </svg>
       </RailItem>
     </nav>
+    {filesOpen && <LibraryPanel onClose={() => setFilesOpen(false)} />}
+    </>
   );
 }

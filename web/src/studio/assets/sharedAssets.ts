@@ -17,6 +17,11 @@ export const assetStore = {
     assets = i === -1 ? [...assets, a] : assets.map((x) => (x.id === a.id ? a : x));
     for (const l of listeners) l();
   },
+  /** Replace the whole list — opening a sketch/demo resets to its assets. */
+  reset() {
+    assets = [];
+    for (const l of listeners) l();
+  },
   subscribe(cb: () => void) {
     listeners.add(cb);
     return () => listeners.delete(cb);
