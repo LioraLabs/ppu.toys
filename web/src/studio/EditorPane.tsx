@@ -20,6 +20,9 @@ export interface EditorPaneProps {
   onSource?: (src: string) => { ok: boolean; error?: LuaError };
 }
 
+/** Stable empty-errors identity so a clean doc never re-dispatches diagnostics. */
+const NO_ERRORS: LuaError[] = [];
+
 export function EditorPane({ onSources, onSource }: EditorPaneProps) {
   const state = useOpenSketch();
   const { session } = state;
@@ -88,13 +91,22 @@ export function EditorPane({ onSources, onSource }: EditorPaneProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.context, pusher]);
 
-  // ── route {file,line} errors: inline on the open tab, dots on the rest
-  const routed = routeErrorsByFile(
-    files.map((f) => f.name),
-    active,
-    [compileError, runtimeError],
+  // ── route {file,line} errors: inline on the open tab, dots on the rest.
+  // Memoized so the active tab's error array keeps its identity across
+  // renders — CodeEditor's diagnostics effect only re-dispatches when the
+  // errors (or the doc) actually change, not on every keystroke re-render.
+  const routed = useMemo(
+    () =>
+      routeErrorsByFile(
+        files.map((f) => f.name),
+        active,
+        [compileError, runtimeError],
+      ),
+    // files derives from context; context identity changes on every store emit
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [state.context, active, compileError, runtimeError],
   );
-  const errorFiles = new Set(routed.keys());
+  const errorFiles = useMemo(() => new Set(routed.keys()), [routed]);
 
   const rename = (from: string, to: string): boolean => {
     if (!openSketchStore.renameFile(from, to)) return false;
@@ -109,6 +121,10 @@ export function EditorPane({ onSources, onSource }: EditorPaneProps) {
   const remove = (name: string) => {
     openSketchStore.deleteFile(name);
     docKeys.delete(name); // key is never reused: a re-added name gets a fresh doc
+    // re-anchor the NAMED active state too — a later rename to the deleted
+    // name must not silently steal activation
+    if (activeName === name)
+      setActiveName(openContextFiles(openSketchStore.state())[0]?.name ?? "main.lua");
   };
 
   const activeFile = files.find((f) => f.name === active);
@@ -131,7 +147,7 @@ export function EditorPane({ onSources, onSource }: EditorPaneProps) {
           docKey={keyFor(active)}
           doc={activeFile?.source ?? ""}
           onChange={(src) => openSketchStore.editFile(active, src)}
-          errors={routed.get(active) ?? []}
+          errors={routed.get(active) ?? NO_ERRORS}
         />
       </div>
     </section>
