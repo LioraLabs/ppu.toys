@@ -2,7 +2,7 @@ import { HEIGHT, WIDTH, type ImportReport, type PlaneId } from "../../ppu/core";
 import { ppuCore } from "../../ppu/instance";
 import { bgMode, formatAddr, formatValue } from "./format";
 import { useInspectorFrame } from "./useInspectorFrame";
-import { Copyable, useCopyToast } from "./tracemem/copyToast";
+import { Copyable, useCopyToast } from "./copyToast";
 import { PixelCanvas } from "./tracemem/PixelCanvas";
 import { ModeBadge, PlaneSeg, TraceCaption, TraceChain } from "./tracemem/TraceChain";
 import { CgramGrid, VramBar, VramLegend } from "./tracemem/MemoryPanels";

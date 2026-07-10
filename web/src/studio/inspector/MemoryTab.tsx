@@ -1,6 +1,6 @@
 import { ppuCore } from "../../ppu/instance";
 import { useInspectorFrame } from "./useInspectorFrame";
-import { useCopyToast } from "./tracemem/copyToast";
+import { useCopyToast } from "./copyToast";
 import { cgramOwners, vramRegions } from "./tracemem/regions";
 import { CgramGrid, VramBar, VramLegend } from "./tracemem/MemoryPanels";
 import "./tracemem/tracemem.css";

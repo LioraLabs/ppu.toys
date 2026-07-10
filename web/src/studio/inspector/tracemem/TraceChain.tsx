@@ -14,7 +14,7 @@ import {
   tileWords,
   traceCaption,
 } from "./trace";
-import { Copyable } from "./copyToast";
+import { Copyable } from "../copyToast";
 import { pickPaletteIdx, selectObj, selectPixel, selectPlane, useTraceSelection } from "./stores";
 
 /** Plane segmented control (user-selected; shared store). */

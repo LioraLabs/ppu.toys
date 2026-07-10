@@ -1,20 +1,6 @@
 /* Trace + Memory tabs & Memory & Layers overlay. Own file so
-   inspector.css stays untouched (parallel Compose/Windows ticket). */
-
-/* -- copy + toast ---------------------------------------------------------- */
-.tm-toast {
-  position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
-  background: var(--txt); color: var(--bg);
-  font-family: var(--font-mono); font-size: 12px;
-  padding: 8px 14px; border-radius: 7px; z-index: 30; pointer-events: none;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4); white-space: nowrap;
-}
-.tm-copy {
-  appearance: none; background: none; border: none; padding: 0; margin: 0;
-  font: inherit; color: var(--orange); cursor: pointer;
-  border-bottom: 1px dotted var(--orange);
-}
-.tm-copy--cyan { color: var(--cyan); border-bottom-color: var(--cyan); }
+   inspector.css stays untouched (parallel Compose/Windows ticket).
+   Copy/toast chrome lives in ../copyToast.css (shared with Compose). */
 
 /* -- trace controls -------------------------------------------------------- */
 .tm-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

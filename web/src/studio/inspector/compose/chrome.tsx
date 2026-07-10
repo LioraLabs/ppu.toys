@@ -1,5 +1,5 @@
-import { useState } from "react";
 import { formatAddr, formatValue } from "../format";
+import { useCopyToast } from "../copyToast";
 import { releaseAllPins, releasePin } from "./pinStore";
 import type { Compositor } from "./useCompositor";
 
@@ -63,28 +63,25 @@ export function RegRow({
   note?: string;
   swatch?: string;
 }) {
-  const [copied, setCopied] = useState(false);
+  const { toast, copy } = useCopyToast();
   const value = c.read(addr);
-  const copy = () => {
-    void navigator.clipboard?.writeText(`${formatAddr(addr)}=${formatValue(value)}`).catch(() => {});
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 900);
-  };
+  const doCopy = () => copy(`${formatAddr(addr)}=${formatValue(value)}`);
   return (
     <div
       className="cmp-reg"
       role="button"
       tabIndex={0}
       title="click to copy"
-      onClick={copy}
-      onKeyDown={(e) => e.key === "Enter" && copy()}
+      onClick={doCopy}
+      onKeyDown={(e) => e.key === "Enter" && doCopy()}
     >
       <span className="cmp-reg-addr">{formatAddr(addr)}</span>
       <span className="cmp-reg-name">{name}</span>
       {swatch !== undefined && <span className="cmp-reg-swatch" style={{ background: swatch }} />}
       <span className="cmp-reg-val">{formatValue(value)}</span>
-      <span className="cmp-reg-note">{copied ? "copied" : (note ?? "")}</span>
+      <span className="cmp-reg-note">{note ?? ""}</span>
       <PinDot c={c} addr={addr} />
+      {toast}
     </div>
   );
 }

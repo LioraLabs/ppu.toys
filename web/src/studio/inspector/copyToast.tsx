@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import "./copyToast.css";
 
 /** House click-to-copy (handoff prototype: clipboard write + "Copied …" toast
- *  that fades after ~1.5 s). One hook instance per surface (tab / overlay). */
+ *  that fades after ~1.5 s). One hook instance per surface (tab / overlay / row). */
 export function useCopyToast(): { toast: ReactNode; copy: (label: string) => void } {
   const [msg, setMsg] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
