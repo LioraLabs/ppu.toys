@@ -31,8 +31,9 @@ Editing is live with error grace, not edit-then-recompile:
   (`crates/ppu-core/src/lua.rs`) builds the new VM and executes chunks into a
   local variable, only swapping it onto `self.lua`/`self.frame_fn` once every
   chunk and `frame`/`init` resolution succeeds — a syntax or runtime error
-  during load leaves the previous program (and its `frame_fn`) in place, so the
-  last good frame keeps rendering. The error is surfaced as a per-file inline
+  during chunk load leaves the previous program (and its `frame_fn`) in place,
+  so the last good frame keeps rendering (a runtime error thrown later, inside
+  `init()`/`frame()`, surfaces on the new program instead). The error is surfaced as a per-file inline
   diagnostic (`web/src/studio/editor/diagnostics.ts`: `routeErrorsByFile` maps
   `{file, line, message}` onto the owning tab, falling back to the active file
   when unattributed).
