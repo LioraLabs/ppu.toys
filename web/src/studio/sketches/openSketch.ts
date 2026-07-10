@@ -102,12 +102,16 @@ function forkFromDemo(demoId: string, files: SketchFile[]) {
   emit();
 }
 
-/** Files of the LIVE context (demo presents as a single main.lua). */
-function currentFiles(): SketchFile[] {
-  const ctx = context;
+/** Ordered files of a context (demo presents as a single main.lua). */
+function filesOf(ctx: OpenContext): SketchFile[] {
   if (ctx.kind === "sketch") return ctx.sketch.files;
   const src = DEMOS.find((d) => d.id === ctx.demoId)?.source ?? "";
   return [{ name: "main.lua", source: src }];
+}
+
+/** Files of the LIVE context. */
+function currentFiles(): SketchFile[] {
+  return filesOf(context);
 }
 
 /** Transform the open context's ordered files. Any file operation IS an edit,
@@ -161,13 +165,13 @@ export const openSketchStore = {
     openContext({ kind: "sketch", sketch });
   },
 
-  /** The editor doc changed. No-ops when the content is unchanged (the editor
-   *  pushes its doc once on mount); the first REAL edit of a demo forks it. */
+  /** The editor doc changed. No-ops when the content is unchanged, so a
+   *  pristine write-back can never fork; the first REAL edit of a demo forks it. */
   editFile(name: string, source: string): void {
     const ctx = context;
     if (ctx.kind === "demo") {
       const demoSrc = DEMOS.find((d) => d.id === ctx.demoId)?.source;
-      if (demoSrc === source) return; // pristine mount push, not an edit
+      if (demoSrc === source) return; // pristine content, not an edit
       forkFromDemo(ctx.demoId, [{ name, source }]);
       return;
     }
@@ -279,8 +283,5 @@ export function openContextLabel(s: OpenSketchState): string {
 /** Ordered files of the open context — the editor's tab list. A demo presents
  *  as a single read-only main.lua (the first edit forks it). */
 export function openContextFiles(s: OpenSketchState): SketchFile[] {
-  const ctx = s.context;
-  if (ctx.kind === "sketch") return ctx.sketch.files;
-  const src = DEMOS.find((d) => d.id === ctx.demoId)?.source ?? "";
-  return [{ name: "main.lua", source: src }];
+  return filesOf(s.context);
 }
