@@ -82,6 +82,15 @@ describe("lazy demo fork", () => {
     expect(sk.files).toEqual(demoFiles(demo));
     expect(sk.assets.map((a) => a.name)).toEqual(["sky.png"]);
   });
+
+  it("addAsset on a demo forks and notifies subscribers exactly ONCE", () => {
+    let emits = 0;
+    const unsub = openSketchStore.subscribe(() => emits++);
+    openSketchStore.addAsset({ name: "sky.png", png: new Uint8Array([1]) });
+    unsub();
+    expect(emits).toBe(1);
+    expect(openSketch().assets.map((a) => a.name)).toEqual(["sky.png"]);
+  });
 });
 
 describe("autosave", () => {
