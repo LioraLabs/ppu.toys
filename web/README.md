@@ -121,9 +121,10 @@ Bundled demos live in `web/src/studio/demos/demos.ts` as `{id, label, source,
 files?, assets}` — `files` is present only for multi-file demos (currently
 just `dusk-parallax`); single-file demos present as one `main.lua` via
 `demoFiles()`. Each demo's procedural pixel assets (raw RGBA, generated in TS
-to match `crates/ppu-core/tests/golden_demos.rs` byte-for-byte) are uploaded
-into the live core by `web/src/studio/demos/loadDemo.ts` when a demo is
-opened.
+mirroring the generators in `crates/ppu-core/tests/golden_demos.rs` — tuned
+for how the demos look on screen, not byte-identity with the fixtures) are
+uploaded into the live core by `web/src/studio/demos/loadDemo.ts` when a demo
+is opened.
 
 Users can also drop a PNG onto the output canvas
 (`web/src/studio/output/DropZone.tsx`): it is quantized into VRAM tiles + a

@@ -1,8 +1,8 @@
 /** Bundled flagship demos: Lua source + the procedural image sources they need,
  *  so each renders immediately without the user drag-dropping files. Pure +
  *  node-safe (no DOM): assets are raw RGBA, wrapped into ImageData by loadDemo.
- *  Pixel generators reproduce crates/ppu-core/tests/golden_demos.rs byte-for-byte
- *  so the live WASM output matches the proven golden fixtures. */
+ *  Pixel generators mirror crates/ppu-core/tests/golden_demos.rs (the Lua sources
+ *  ARE verbatim; some assets are retuned for on-screen looks — see below). */
 export interface DemoAsset {
   /** Literal slot id referenced from Lua (bg[n].source / obj.sheet). */
   id: string;
