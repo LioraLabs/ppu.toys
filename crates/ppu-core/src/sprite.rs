@@ -44,7 +44,7 @@ const OBJ_SIZE_PAIRS: [[(u32, u32); 2]; 8] = [
 
 /// (width, height) in pixels for a sprite, from the frame `size_sel` (OBSEL bits
 /// 5-7) and the per-OAM `large` bit (OAM high table). `size_sel` masked to 3 bits.
-fn sprite_dims(size_sel: u8, large: bool) -> (u32, u32) {
+pub(crate) fn sprite_dims(size_sel: u8, large: bool) -> (u32, u32) {
     OBJ_SIZE_PAIRS[(size_sel & 7) as usize][large as usize]
 }
 
@@ -154,7 +154,7 @@ const OBJ_WORDS_PER_TILE: u32 = 16;
 /// the tile's own 16-tile row (`(name & 0x1f0) | ((name + col) & 0xf)`); down
 /// (+row) steps +16, wrapping the 9-bit name. Names >= 256 live in the second
 /// name table at `char_base + (name_select + 1) * 0x1000` (word-addressed).
-fn obj_tile_addr(char_base: u32, name_select: u32, tile: u16, col: u32, row: u32) -> u16 {
+pub(crate) fn obj_tile_addr(char_base: u32, name_select: u32, tile: u16, col: u32, row: u32) -> u16 {
     let row_tile = (tile as u32 + row * 16) & 0x1ff;
     let name = (row_tile & 0x1f0) | ((row_tile + col) & 0x0f);
     let addr = if name < 256 {

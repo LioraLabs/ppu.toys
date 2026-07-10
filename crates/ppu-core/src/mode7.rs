@@ -35,19 +35,21 @@ pub fn mode7_texel(m7: &RegM7, scroll_x: i16, scroll_y: i16, x: i32, y: i32) -> 
 /// Mode 7 plane size in pixels: 128 tiles x 8 px.
 const FIELD: i64 = 1024;
 
-/// 8bpp palette index at plane pixel (`px`,`py`), both already wrapped into
-/// 0..1024: map LOW byte -> tile#, char HIGH byte -> pixel (linear 8bpp).
-fn field_pixel(mem: &Memory, px: i64, py: i64) -> u8 {
-    let (tx, ty) = (px >> 3, py >> 3);
-    let (fx, fy) = (px & 7, py & 7);
-    let tile = (mem.vram[(ty * 128 + tx) as usize] & 0x00ff) as i64;
-    (mem.vram[(tile * 64 + fy * 8 + fx) as usize] >> 8) as u8
+/// Every intermediate of the Mode-7 map -> char walk for screen pixel (x, y):
+/// shared by the raster paths (via `mode7_raw_index`) and the Trace seam.
+/// Out-of-field pixels: repeat 2 reports the wrapped coords with `index: 0`
+/// (transparent); repeat 3 reports the tile-0 fill (`tile: 0`, `map_addr: 0`).
+pub(crate) struct Mode7Sample {
+    pub tx: u16,
+    pub ty: u16,
+    pub map_addr: u16,
+    pub tile: u8,
+    pub fx: u8,
+    pub fy: u8,
+    pub index: u8,
 }
 
-/// Raw 8bpp Mode-7 plane index (0..255) at screen pixel (`x`,`y`): applies
-/// flip, the affine transform, and out-of-field `repeat` handling — the shared
-/// sampling both the direct-CGRAM path and the EXTBG path build on.
-fn mode7_raw_index(row: &RegRow, mem: &Memory, y: usize, x: usize) -> u8 {
+pub(crate) fn mode7_sample(row: &RegRow, mem: &Memory, y: usize, x: usize) -> Mode7Sample {
     let m7 = &row.m7;
     let bg = &row.bg[0];
     // Mode 7 mosaic is driven by the BG1 enable bit; block edge = size+1 (1 = off).
@@ -66,13 +68,54 @@ fn mode7_raw_index(row: &RegRow, mem: &Memory, y: usize, x: usize) -> u8 {
     let (u, v) = mode7_texel(m7, bg.scroll_x, bg.scroll_y, sx, sy);
     let in_field = (0..FIELD).contains(&u) && (0..FIELD).contains(&v);
     match (in_field, m7.repeat) {
-        (false, 2) => 0, // out-of-field transparent
+        (false, 2) => {
+            let (px, py) = (u.rem_euclid(FIELD), v.rem_euclid(FIELD));
+            let (tx, ty) = (px >> 3, py >> 3);
+            Mode7Sample {
+                tx: tx as u16,
+                ty: ty as u16,
+                map_addr: (ty * 128 + tx) as u16,
+                tile: (mem.vram[(ty * 128 + tx) as usize] & 0x00ff) as u8,
+                fx: (px & 7) as u8,
+                fy: (py & 7) as u8,
+                index: 0, // out-of-field transparent
+            }
+        }
         (false, 3) => {
             let (fx, fy) = (u.rem_euclid(8), v.rem_euclid(8));
-            (mem.vram[(fy * 8 + fx) as usize] >> 8) as u8
+            Mode7Sample {
+                tx: 0,
+                ty: 0,
+                map_addr: 0,
+                tile: 0,
+                fx: fx as u8,
+                fy: fy as u8,
+                index: (mem.vram[(fy * 8 + fx) as usize] >> 8) as u8,
+            }
         }
-        _ => field_pixel(mem, u.rem_euclid(FIELD), v.rem_euclid(FIELD)),
+        _ => {
+            let (px, py) = (u.rem_euclid(FIELD), v.rem_euclid(FIELD));
+            let (tx, ty) = (px >> 3, py >> 3);
+            let (fx, fy) = (px & 7, py & 7);
+            let tile = (mem.vram[(ty * 128 + tx) as usize] & 0x00ff) as u8;
+            Mode7Sample {
+                tx: tx as u16,
+                ty: ty as u16,
+                map_addr: (ty * 128 + tx) as u16,
+                tile,
+                fx: fx as u8,
+                fy: fy as u8,
+                index: (mem.vram[tile as usize * 64 + (fy * 8 + fx) as usize] >> 8) as u8,
+            }
+        }
     }
+}
+
+/// Raw 8bpp Mode-7 plane index (0..255) at screen pixel (`x`,`y`): applies
+/// flip, the affine transform, and out-of-field `repeat` handling — the shared
+/// sampling both the direct-CGRAM path and the EXTBG path build on.
+fn mode7_raw_index(row: &RegRow, mem: &Memory, y: usize, x: usize) -> u8 {
+    mode7_sample(row, mem, y, x).index
 }
 
 /// Sample the Mode 7 floor for scanline `y` into `out` (length `width * 4`):
