@@ -56,7 +56,12 @@ export function PreviewCanvas({
       onPointerDown={
         onPixelDown
           ? (e) => {
-              e.currentTarget.setPointerCapture(e.pointerId);
+              try {
+                e.currentTarget.setPointerCapture(e.pointerId);
+              } catch {
+                // Capture is a nicety (keeps drags alive off-canvas); an
+                // invalid pointer id must not swallow the click itself.
+              }
               const { x, y } = toPixel(e);
               onPixelDown(x, y);
             }
