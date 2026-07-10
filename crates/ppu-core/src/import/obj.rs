@@ -275,7 +275,11 @@ mod tests {
         for y in 0..16 {
             for x in 0..16 {
                 let on = (x / 8 + y / 8) % 2 == 0;
-                rgba.extend_from_slice(if on { &[255, 0, 0, 255] } else { &[0, 0, 255, 255] });
+                rgba.extend_from_slice(if on {
+                    &[255, 0, 0, 255]
+                } else {
+                    &[0, 0, 255, 255]
+                });
             }
         }
         let out = import_obj_sheet(&rgba, 16, 16);
