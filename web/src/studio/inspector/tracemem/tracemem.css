@@ -39,6 +39,7 @@
 .tm-chain { display: flex; align-items: stretch; gap: 10px; min-width: 0; overflow-x: auto; padding-bottom: 4px; }
 .tm-arrow { align-self: center; color: var(--faint); font-size: 18px; flex: none; }
 .tm-stage { display: flex; flex-direction: column; flex: none; width: 170px; }
+.tm-stage--source { width: 154px; }
 .tm-stage--char { width: 160px; }
 .tm-stage--pal { width: 200px; }
 .tm-stage--out { flex: 1; min-width: 150px; }
@@ -47,7 +48,7 @@
   flex: 1; display: flex; flex-direction: column; gap: 8px;
   background: var(--sunken); border: 1px solid var(--line); border-radius: 8px; padding: 10px;
 }
-.tm-minimap-wrap { position: relative; }
+.tm-minimap-wrap { position: relative; overflow: hidden; border-radius: 4px; }
 .tm-minimap {
   display: block; width: 100%; height: auto; border-radius: 4px;
   background: #000; cursor: crosshair; image-rendering: pixelated;

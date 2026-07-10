@@ -8,7 +8,7 @@ export function useCopyToast(): { toast: ReactNode; copy: (label: string) => voi
   useEffect(() => () => clearTimeout(timer.current), []);
   const copy = useCallback((label: string) => {
     try {
-      void navigator.clipboard?.writeText(label);
+      void navigator.clipboard?.writeText(label).catch(() => {});
     } catch {
       /* clipboard unavailable (permissions/tests) — the toast still confirms intent */
     }
