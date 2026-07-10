@@ -1,0 +1,186 @@
+/* Compose + Windows tabs & the Compositor overlay. Own file so the
+   parallel inspector tickets don't collide in inspector.css. Prefixes:
+   cmp- (compose / shared), winp- (windows tab), cmpo- (overlay layout). */
+
+/* ── pinned-override affordances ─────────────────────────────────────────── */
+.cmp-pinbar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 5px;
+  margin: 0 0 8px; padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, var(--orange) 45%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--orange) 8%, transparent);
+  font-family: var(--font-mono); font-size: 10px; color: var(--txt2);
+}
+.cmp-pinbar-label { color: var(--orange); }
+.cmp-pinchip {
+  display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px;
+  border: 1px solid var(--line); border-radius: 4px;
+  background: var(--chipbg); color: var(--txt2);
+  font: inherit; cursor: pointer;
+}
+.cmp-pinchip:hover { border-color: var(--orange); }
+.cmp-clearpins { margin-left: auto; color: var(--orange); }
+.cmp-pin {
+  border: 0; padding: 0 2px; background: none;
+  color: var(--orange); font-size: 9px; line-height: 1; cursor: pointer;
+}
+
+/* ── previews ────────────────────────────────────────────────────────────── */
+.cmp-previews { display: flex; align-items: flex-end; gap: 6px; margin-bottom: 8px; }
+.cmp-preview { flex: 1; min-width: 0; }
+.cmp-preview-label {
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+  font-family: var(--font-mono); font-size: 9px; color: var(--dim);
+  margin-bottom: 4px;
+}
+.cmp-preview canvas,
+.winp-canvas {
+  display: block; width: 100%; aspect-ratio: 8 / 7;
+  border-radius: 5px; border: 1px solid var(--line2);
+  background: #05060a; image-rendering: pixelated;
+}
+.cmp-preview--result canvas { border-color: var(--orange); }
+.cmp-preview--result .cmp-preview-label { color: var(--txt2); }
+.cmp-opglyph {
+  flex: none; font-family: var(--font-mono); font-size: 18px;
+  color: var(--orange); padding-bottom: 32px;
+}
+.cmp-opglyph--eq { color: var(--faint); }
+.cmp-mathtoggle {
+  border: 1px solid var(--line); border-radius: 3px; background: none;
+  padding: 0 3px; font-size: 9px; line-height: 1.4; color: var(--dim); cursor: pointer;
+}
+.cmp-mathtoggle--on { color: #08140c; background: var(--green); border-color: var(--green); }
+.cmp-eq {
+  font-family: var(--font-mono); font-size: 10px; color: var(--orange);
+  background: color-mix(in srgb, var(--orange) 8%, transparent);
+  border-radius: 5px; padding: 5px 8px; text-align: center; margin-bottom: 10px;
+}
+
+/* ── assignment matrix + math controls ──────────────────────────────────── */
+.cmp-cols { display: flex; gap: 10px; align-items: flex-start; }
+.cmp-matrix { flex: 1; min-width: 0; }
+.cmp-matrix-head,
+.cmp-matrix-row { display: flex; align-items: center; }
+.cmp-matrix-head { font-family: var(--font-mono); font-size: 9px; color: var(--dim); padding: 0 2px 5px; }
+.cmp-lay { flex: 1; }
+.cmp-col { width: 40px; display: flex; justify-content: center; align-items: center; gap: 2px; }
+.cmp-matrix-row { padding: 3px 2px; border-radius: 5px; }
+.cmp-matrix-row:hover { background: var(--hover); }
+.cmp-lname {
+  flex: 1; display: flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--txt2);
+}
+.cmp-ldot { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+.cmp-ldot--backdrop { border: 1px solid var(--line2); }
+.cmp-cellwrap { width: 40px; display: flex; justify-content: center; }
+.cmp-cell {
+  width: 26px; height: 18px; border-radius: 4px; border: 1px solid var(--line);
+  background: transparent; color: var(--dim);
+  font-family: var(--font-mono); font-size: 9px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; padding: 0;
+}
+.cmp-cell--main.cmp-cell--on { background: var(--orange); color: #15100a; }
+.cmp-cell--sub.cmp-cell--on { background: var(--cyan); color: #08141a; }
+.cmp-cell--math.cmp-cell--on { background: var(--green); color: #08140c; }
+.cmp-fixed { font-family: var(--font-mono); font-size: 9px; color: var(--faint); align-items: center; }
+.cmp-fixed--fix { color: var(--cyan); }
+
+.cmp-controls { flex: none; width: 180px; display: flex; flex-direction: column; gap: 8px; }
+.cmp-controls--fill { width: auto; }
+.cmp-ctl-label {
+  display: flex; align-items: center; gap: 5px;
+  font-family: var(--font-mono); font-size: 9px; color: var(--dim); margin-bottom: 4px;
+}
+.cmp-seg {
+  display: flex; gap: 2px; background: var(--sunken);
+  border: 1px solid var(--line); border-radius: 7px; padding: 2px;
+}
+.cmp-seg button {
+  flex: 1; text-align: center; padding: 4px 0; border: 0; border-radius: 5px;
+  font-family: var(--font-mono); font-size: 10px; cursor: pointer;
+  color: var(--mid); background: transparent;
+}
+.cmp-seg button.cmp-seg--on { background: var(--orange); color: #15100a; }
+.cmp-half {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  background: var(--sunken); border: 1px solid var(--line); border-radius: 7px;
+  padding: 6px 9px; font-family: var(--font-mono); font-size: 10.5px; color: var(--txt2);
+}
+.cmp-half-track {
+  width: 30px; height: 17px; border-radius: 9px; background: var(--faint);
+  position: relative; flex: none; transition: background 0.12s;
+}
+.cmp-half--on .cmp-half-track { background: var(--green); }
+.cmp-half-knob {
+  position: absolute; top: 2px; left: 2px; width: 13px; height: 13px;
+  border-radius: 50%; background: #fff; transition: left 0.12s;
+}
+.cmp-half--on .cmp-half-knob { left: 15px; }
+.cmp-swatches { display: flex; gap: 4px; flex-wrap: wrap; }
+.cmp-swatch { width: 24px; height: 24px; border-radius: 5px; border: 2px solid transparent; cursor: pointer; padding: 0; }
+.cmp-swatch--sel { border-color: var(--orange); }
+
+/* ── register readout rows ──────────────────────────────────────────────── */
+.cmp-regs { margin-top: 10px; display: flex; flex-direction: column; gap: 2px; }
+.cmp-regs--flat { margin-top: 0; margin-bottom: 14px; }
+.cmp-reg {
+  display: flex; align-items: center; gap: 8px; padding: 3px 6px;
+  border-radius: 5px; font-family: var(--font-mono); font-size: 10.5px;
+  color: var(--txt2); cursor: pointer;
+}
+.cmp-reg:hover { background: var(--hover); }
+.cmp-reg-addr { color: var(--orange); width: 46px; flex: none; }
+.cmp-reg-name { color: var(--mid); width: 74px; flex: none; }
+.cmp-reg-val { color: var(--txt2); }
+.cmp-reg-note { color: var(--dim2); flex: 1; text-align: right; }
+.cmp-reg-swatch { width: 10px; height: 10px; border-radius: 2px; border: 1px solid var(--line2); flex: none; }
+
+/* ── windows tab ────────────────────────────────────────────────────────── */
+.winp-canvas { border-radius: 6px; cursor: crosshair; touch-action: none; }
+.winp-caption { font-family: var(--font-mono); font-size: 9px; color: var(--dim2); margin: 6px 0 10px; text-align: center; }
+.winp-row { display: flex; gap: 8px; margin-bottom: 10px; }
+.winp-combine { flex: 1; min-width: 0; }
+.winp-area { flex: none; width: 130px; }
+.winp-bounds { display: flex; gap: 6px; margin-bottom: 12px; }
+.winp-bound { flex: 1; background: var(--sunken); border: 1px solid var(--line); border-radius: 6px; padding: 6px 4px; text-align: center; }
+.winp-bound-name {
+  display: flex; justify-content: center; align-items: center; gap: 3px;
+  font-family: var(--font-mono); font-size: 9px; color: var(--dim2);
+}
+.winp-bound-val { font-family: var(--font-mono); font-size: 13px; }
+.winp-bound--w1 .winp-bound-val { color: var(--orange); }
+.winp-bound--w2 .winp-bound-val { color: var(--cyan); }
+.winp-layers { display: flex; flex-direction: column; gap: 3px; margin-bottom: 12px; }
+.winp-layer { display: flex; align-items: center; gap: 9px; padding: 4px 6px; border-radius: 5px; }
+.winp-layer:hover { background: var(--hover); }
+.winp-lname { flex: 1; font-family: var(--font-mono); font-size: 11px; color: var(--txt2); }
+.winp-chip {
+  font-family: var(--font-mono); font-size: 9px; padding: 2px 7px;
+  border: 0; border-radius: 4px; background: var(--chipbg); color: var(--dim2); cursor: pointer;
+}
+.winp-chip--inv-on { color: var(--cyan); }
+.winp-chip--en { border: 1px solid var(--line); background: transparent; color: var(--dim); padding: 1px 8px; }
+.winp-chip--en-on { background: var(--orange); border-color: var(--orange); color: #15100a; }
+
+/* ── compositor overlay (3 panes) ───────────────────────────────────────── */
+.cmpo-body { display: flex; }
+.cmpo-left { width: 296px; flex: none; background: var(--panel); border-right: 1px solid var(--line); overflow: auto; padding: 14px; }
+.cmpo-center { flex: 1; min-width: 0; overflow: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 20px; }
+.cmpo-right { width: 300px; flex: none; background: var(--panel); border-left: 1px solid var(--line); overflow: auto; padding: 14px; }
+.cmpo-h {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.13em;
+  color: var(--dim); margin: 0 0 10px;
+}
+.cmpo-h--gap { margin-top: 16px; }
+.cmpo-hint { color: var(--faint); letter-spacing: 0; margin-left: 8px; }
+.cmpo-divider { border-top: 1px solid var(--line2); padding-top: 16px; }
+.cmp-previews--lg { align-items: center; }
+.cmp-previews--lg .cmp-preview { max-width: 300px; }
+.cmp-previews--lg .cmp-opglyph { font-size: 26px; padding-bottom: 0; }
+.cmp-previews--lg + .cmp-eq { display: inline-block; margin-top: 12px; font-size: 12px; padding: 8px 12px; }
+.cmpo-winrow { display: flex; gap: 18px; align-items: flex-start; }
+.cmpo-winleft { flex: none; width: 360px; }
+.cmpo-winleft .winp-bounds { margin: 10px 0 0; }
+.cmpo-winright { flex: 1; min-width: 0; display: flex; flex-direction: column; }
