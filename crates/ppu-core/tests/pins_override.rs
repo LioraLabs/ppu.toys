@@ -65,3 +65,17 @@ fn pins_do_not_leak_into_sticky_lua_globals() {
     let lt = e.frame(0.0, 0).unwrap();
     assert_eq!(lt.rows[0].brightness, 9);
 }
+
+#[test]
+fn set_source_preserves_pins_across_recompiles() {
+    // Live-edit recompiles go through set_source and must KEEP pins; only the
+    // UI's ▶ Run restart clears them (explicitly, through the seam).
+    let mut e = LuaEngine::new();
+    e.set_source(SRC).unwrap();
+    e.pins_mut().pin(0x2100, 0x0f);
+    e.set_source("function frame(t, f)\n    brightness = 6\nend")
+        .unwrap();
+    assert_eq!(e.pins().list().len(), 1); // pin survived the recompile
+    let lt = e.frame(0.0, 0).unwrap();
+    assert_eq!(lt.rows[0].brightness, 15); // and still wins over the new script
+}
