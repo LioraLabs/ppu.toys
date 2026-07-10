@@ -40,6 +40,12 @@ function dusk_palette(t)
 end
 "#;
 
+/// The single-file form of the flagship: files joined in tab order with "\n",
+/// mirroring the web `Demo.source` join in web/src/studio/demos/demos.ts.
+fn dusk_concat() -> String {
+    format!("{DUSK_MAIN_SRC}\n{DUSK_PALETTE_SRC}")
+}
+
 const MODE7_SRC: &str = r#"-- ppu.toys :: mode7-floor (the namesake; per-scanline affine floor)
 function frame(t, f)
   mode = 7; brightness = 15; bg[1].source = "track"
@@ -474,7 +480,7 @@ fn write_png(path: &str, fb: &[u8]) {
 
 #[test]
 fn dusk_parallax_uses_bg_imports_and_obj_import() {
-    let (fb, e) = render_demo(&format!("{DUSK_MAIN_SRC}\n{DUSK_PALETTE_SRC}"));
+    let (fb, e) = render_demo(&dusk_concat());
     assert!(e
         .import_reports()
         .iter()
@@ -495,14 +501,14 @@ fn dusk_parallax_uses_bg_imports_and_obj_import() {
 
 #[test]
 fn dusk_parallax_draws_sky_above_horizon() {
-    let (fb, _) = render_demo(&format!("{DUSK_MAIN_SRC}\n{DUSK_PALETTE_SRC}"));
+    let (fb, _) = render_demo(&dusk_concat());
     let px = &fb[(20 * WIDTH + 20) * 4..][..4];
     assert_ne!(px, &[0, 0, 0, 255], "sky pixel was backdrop black");
 }
 
 #[test]
 fn dusk_parallax_draws_obj_sprite_over_hills() {
-    let (fb, _) = render_demo(&format!("{DUSK_MAIN_SRC}\n{DUSK_PALETTE_SRC}"));
+    let (fb, _) = render_demo(&dusk_concat());
     let lower_half_has_sprite_yellow = (120..155).any(|y| {
         (0..WIDTH).any(|x| {
             let p = &fb[(y * WIDTH + x) * 4..][..4];
@@ -535,7 +541,7 @@ fn mode7_floor_draws_below_horizon() {
 #[test]
 fn dusk_parallax_demo_matches_golden_png() {
     assert!(Path::new(DUSK_GOLDEN).exists());
-    let (actual, _) = render_demo(&format!("{DUSK_MAIN_SRC}\n{DUSK_PALETTE_SRC}"));
+    let (actual, _) = render_demo(&dusk_concat());
     let expected = decode_png(DUSK_GOLDEN);
     assert_eq!(actual.len(), expected.len());
     assert!(
@@ -559,7 +565,7 @@ fn mode7_floor_demo_matches_golden_png() {
 #[test]
 #[ignore = "regenerates the committed dusk demo golden PNG"]
 fn regen_golden_dusk_parallax() {
-    let (fb, _) = render_demo(&format!("{DUSK_MAIN_SRC}\n{DUSK_PALETTE_SRC}"));
+    let (fb, _) = render_demo(&dusk_concat());
     write_png(DUSK_GOLDEN, &fb);
 }
 
@@ -1056,7 +1062,7 @@ fn dusk_parallax_multi_file_matches_golden_png() {
 
 #[test]
 fn dusk_parallax_multi_file_matches_single_file_concat() {
-    let (single, _) = render_demo(&format!("{DUSK_MAIN_SRC}\n{DUSK_PALETTE_SRC}"));
+    let (single, _) = render_demo(&dusk_concat());
     let mut e = demo_engine_files(&[
         ("main.lua", DUSK_MAIN_SRC),
         ("palette.lua", DUSK_PALETTE_SRC),

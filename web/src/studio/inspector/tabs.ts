@@ -14,7 +14,8 @@ export type OverlayId = "memory-layers" | "compositor";
  *  stay as `aux` detail tabs — VRAM's decoded tile + tilemap previews are not
  *  replicated by Memory (which shows address-space regions + CGRAM ownership),
  *  Sprites carries the load-bearing M7 RANGE/TIME-OVER badges, and Registers is
- *  the raw register truth. `aux` styles them secondary and routes no overlay. */
+ *  the raw register truth. `aux` is informational — overlay routing keys on the
+ *  tab id (aux tabs map to none) and no distinct styling exists today. */
 export const INSPECTOR_TABS: { id: TabId; label: string; aux?: boolean }[] = [
   { id: "trace", label: "Trace" },
   { id: "memory", label: "Memory" },
