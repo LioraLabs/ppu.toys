@@ -14,6 +14,7 @@ use piccolo::{
 use crate::import::obj::{apply_obj_import, import_obj_sheet, ObjImport};
 use crate::import::{BudgetReport, ImportCache, ImportKey, ImportOptions};
 use crate::import_m7::{import_mode7, Mode7Import, Mode7ImportReport};
+use crate::pins::Pins;
 use crate::{rgb15, LineTable, LineTableBuilder, LineTableRow, Memory, HEIGHT};
 
 /// Decoded RGBA staged for the importer, keyed by slot id. App-level (survives
@@ -74,6 +75,9 @@ pub struct LuaEngine {
     next_generation: u64,
     /// Per-layer import budgets produced by the most recent `frame()`.
     reports: Vec<ImportBudget>,
+    /// Pinned-override register set (M9). NOT reset by `set_source` — live-edit
+    /// recompiles keep pins; only an explicit `clear()` through the seam drops them.
+    pins: Pins,
 }
 
 impl Default for LuaEngine {
@@ -97,6 +101,7 @@ impl LuaEngine {
             obj_imports: HashMap::new(),
             next_generation: 0,
             reports: Vec::new(),
+            pins: Pins::default(),
         }
     }
 
@@ -148,6 +153,16 @@ impl LuaEngine {
     /// for the layer-visibility override).
     pub fn memory_mut(&mut self) -> &mut Memory {
         &mut self.memory
+    }
+
+    /// Pinned-override register set (M9). Applied as the FINAL LineTable hook in
+    /// `frame()`, after all script hdma hooks, so pins win everywhere. NOT cleared
+    /// by `set_source` — the UI's ▶ Run restart calls `clear()` through the seam.
+    pub fn pins(&self) -> &Pins {
+        &self.pins
+    }
+    pub fn pins_mut(&mut self) -> &mut Pins {
+        &mut self.pins
     }
 
     /// Compile and load a DSL source: builds a fresh VM, installs bindings, runs
@@ -287,6 +302,14 @@ impl LuaEngine {
                 }
             });
         }
+
+        // Pinned overrides: one final native hook over every scanline, registered
+        // AFTER all script hooks so it wins (later call wins).
+        if !self.pins.is_empty() {
+            let pins = self.pins.clone();
+            builder.hdma(0, HEIGHT - 1, move |_, row| pins.apply(row));
+        }
+
         let lt = builder.build(HEIGHT);
 
         // Restore sticky globals to the frame-wide defaults (hooks mutated them).
