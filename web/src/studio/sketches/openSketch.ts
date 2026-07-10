@@ -13,10 +13,13 @@ import {
 /** Debounce window between the last change and the autosave write. */
 export const AUTOSAVE_MS = 800;
 
-export const NEW_SKETCH_SOURCE = `-- ppu.toys sketch
+export const NEW_SKETCH_SOURCE = `-- ppu.toys sketch — flat SNES PPU globals, Lua 5.4
+-- registers: mode, brightness, bg[1..4], cgram[], obj[], m7, vram[]
+-- helpers: rgb(r,g,b), hsl(h,s,l), hdma(y0,y1,fn), sin/cos/floor, t, f
 function frame(t, f)
   mode = 0
   brightness = 15
+  cgram[0] = hsl(230, 0.5, 0.12 + 0.04 * sin(t)) -- breathing backdrop
 end
 `;
 
@@ -99,6 +102,25 @@ function forkFromDemo(demoId: string, files: SketchFile[]) {
   emit();
 }
 
+/** Files of the LIVE context (demo presents as a single main.lua). */
+function currentFiles(): SketchFile[] {
+  const ctx = context;
+  if (ctx.kind === "sketch") return ctx.sketch.files;
+  const src = DEMOS.find((d) => d.id === ctx.demoId)?.source ?? "";
+  return [{ name: "main.lua", source: src }];
+}
+
+/** Transform the open context's ordered files. Any file operation IS an edit,
+ *  so a demo context forks first, carrying its file list through `update`. */
+function mutateFiles(update: (files: SketchFile[]) => SketchFile[]) {
+  const ctx = context;
+  if (ctx.kind === "demo") {
+    forkFromDemo(ctx.demoId, update(currentFiles()));
+    return;
+  }
+  mutateSketch((s) => ({ ...s, files: update(s.files) }));
+}
+
 function openContext(next: OpenContext) {
   gen++; // invalidate any in-flight flush's state patch (its write still lands)
   context = next;
@@ -159,6 +181,47 @@ export const openSketchStore = {
     }));
   },
 
+  /** Append a new empty file with a unique fileN.lua name; returns the name.
+   *  Order is execution order — new files run last. Demos fork (add IS an edit). */
+  addFile(): string {
+    const taken = new Set(currentFiles().map((f) => f.name));
+    let n = taken.size + 1;
+    while (taken.has(`file${n}.lua`)) n++;
+    const name = `file${n}.lua`;
+    mutateFiles((files) => [...files, { name, source: "" }]);
+    return name;
+  },
+
+  /** Rename a file. Returns false (and no-ops) on empty/unknown/duplicate
+   *  names. Renaming a demo's file forks it. */
+  renameFile(from: string, to: string): boolean {
+    const next = to.trim();
+    const files = currentFiles();
+    if (!next || next === from) return false;
+    if (!files.some((f) => f.name === from)) return false;
+    if (files.some((f) => f.name === next)) return false;
+    mutateFiles((fs) => fs.map((f) => (f.name === from ? { ...f, name: next } : f)));
+    return true;
+  },
+
+  /** Delete a file. Refuses the last one — a sketch always has >= 1 file. */
+  deleteFile(name: string): void {
+    if (currentFiles().length <= 1) return;
+    mutateFiles((fs) => fs.filter((f) => f.name !== name));
+  },
+
+  /** Move files[from] to index `to`. Order is EXECUTION order (PICO-8). */
+  moveFile(from: number, to: number): void {
+    const len = currentFiles().length;
+    if (from === to || from < 0 || to < 0 || from >= len || to >= len) return;
+    mutateFiles((fs) => {
+      const next = [...fs];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+  },
+
   /** Record an uploaded PNG into the open sketch (an upload IS an edit, so a
    *  demo forks first — with its pristine source, since any prior edit would
    *  already have forked it). Same-named uploads replace. */
@@ -210,4 +273,13 @@ export function openContextLabel(s: OpenSketchState): string {
   return ctx.kind === "sketch"
     ? ctx.sketch.name
     : DEMOS.find((d) => d.id === ctx.demoId)?.label ?? ctx.demoId;
+}
+
+/** Ordered files of the open context — the editor's tab list. A demo presents
+ *  as a single read-only main.lua (the first edit forks it). */
+export function openContextFiles(s: OpenSketchState): SketchFile[] {
+  const ctx = s.context;
+  if (ctx.kind === "sketch") return ctx.sketch.files;
+  const src = DEMOS.find((d) => d.id === ctx.demoId)?.source ?? "";
+  return [{ name: "main.lua", source: src }];
 }
