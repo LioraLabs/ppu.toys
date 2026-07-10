@@ -8,8 +8,9 @@ use js_sys::{Reflect, Uint8ClampedArray};
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    derive_registers, render_frame_stats, AssetInfo, LuaEngine, LuaErrorView, ObjOverflow,
-    OamSprite, Register, SetSourceResult, HEIGHT, WIDTH,
+    derive_registers, render_frame_view, render_layer_view, trace_bg_screen, trace_bg_tile,
+    trace_obj, AssetInfo, LineTable, LuaEngine, LuaErrorView, ObjOverflow, OamSprite, Register,
+    SetSourceResult, HEIGHT, WIDTH,
 };
 
 #[wasm_bindgen]
@@ -25,6 +26,12 @@ pub struct PpuCore {
     /// whatever the Lua program set; `Some(v)` forces the layer on/off.
     bg_visible: [Option<bool>; 4],
     obj_visible: Option<bool>,
+    main_screen: Vec<u8>,
+    sub_screen: Vec<u8>,
+    math_mask: Vec<u8>,
+    /// Resolved LineTable of the most recent frame — the register context for
+    /// trace queries and layer views.
+    last_lt: Option<LineTable>,
 }
 
 #[wasm_bindgen]
@@ -41,6 +48,10 @@ impl PpuCore {
             prev_reg: HashMap::new(),
             bg_visible: [None; 4],
             obj_visible: None,
+            main_screen: vec![0; WIDTH * HEIGHT * 4],
+            sub_screen: vec![0; WIDTH * HEIGHT * 4],
+            math_mask: vec![0; WIDTH * HEIGHT],
+            last_lt: None,
         }
     }
 
@@ -94,9 +105,12 @@ impl PpuCore {
         }
 
         let mem = self.engine.memory();
-        let (fb, overflow) = render_frame_stats(&lt, mem);
-        self.framebuffer = fb;
-        self.obj_overflow = overflow;
+        let view = render_frame_view(&lt, mem);
+        self.framebuffer = view.framebuffer;
+        self.obj_overflow = view.overflow;
+        self.main_screen = view.main;
+        self.sub_screen = view.sub;
+        self.math_mask = view.math_mask;
         self.cgram = mem.cgram.to_vec();
         self.oam = mem.oam.iter().map(OamSprite::from).collect();
 
@@ -104,6 +118,7 @@ impl PpuCore {
         // resolved top scanline (row 0).
         self.registers = derive_registers(&lt.rows[0], &mem.obsel, &self.prev_reg);
         self.prev_reg = self.registers.iter().map(|r| (r.addr, r.value)).collect();
+        self.last_lt = Some(lt);
         Ok(())
     }
 
@@ -172,6 +187,105 @@ impl PpuCore {
             "obj" => self.obj_visible = Some(visible),
             _ => {}
         }
+    }
+
+    #[wasm_bindgen(js_name = mainScreen)]
+    pub fn main_screen(&self) -> Vec<u8> {
+        self.main_screen.clone()
+    }
+
+    #[wasm_bindgen(js_name = subScreen)]
+    pub fn sub_screen(&self) -> Vec<u8> {
+        self.sub_screen.clone()
+    }
+
+    #[wasm_bindgen(js_name = mathMask)]
+    pub fn math_mask(&self) -> Vec<u8> {
+        self.math_mask.clone()
+    }
+
+    /// Single-plane isolation render ("bg1".."bg4", "obj" — the setLayerVisible
+    /// ids). Transparent buffer before the first frame / for unknown ids.
+    #[wasm_bindgen(js_name = layerView)]
+    pub fn layer_view(&self, plane: &str) -> Vec<u8> {
+        let plane = match plane {
+            "bg1" => 0u8,
+            "bg2" => 1,
+            "bg3" => 2,
+            "bg4" => 3,
+            "obj" => 4,
+            _ => return vec![0; WIDTH * HEIGHT * 4],
+        };
+        match &self.last_lt {
+            Some(lt) => render_layer_view(lt, self.engine.memory(), plane),
+            None => vec![0; WIDTH * HEIGHT * 4],
+        }
+    }
+
+    /// Trace a BG plane (1..=4) at screen pixel (x, y). null when out of range,
+    /// before the first frame, or when the layer is absent in that row's mode.
+    #[wasm_bindgen(js_name = traceBgPixel)]
+    pub fn trace_bg_pixel(&self, layer: u8, x: u32, y: u32) -> Result<JsValue, JsValue> {
+        let Some(lt) = &self.last_lt else {
+            return Ok(JsValue::NULL);
+        };
+        if !(1..=4).contains(&layer) || x as usize >= WIDTH || y as usize >= HEIGHT {
+            return Ok(JsValue::NULL);
+        }
+        let row = &lt.rows[y as usize];
+        match trace_bg_screen(row, self.engine.memory(), layer as usize - 1, x as usize, y as usize) {
+            Some(t) => serde_wasm_bindgen::to_value(&t).map_err(Into::into),
+            None => Ok(JsValue::NULL),
+        }
+    }
+
+    /// Trace a BG plane at tilemap cell (tx, ty); `y` picks the register row.
+    #[wasm_bindgen(js_name = traceBgTile)]
+    pub fn trace_bg_tile_at(&self, layer: u8, tx: u32, ty: u32, y: u32) -> Result<JsValue, JsValue> {
+        let Some(lt) = &self.last_lt else {
+            return Ok(JsValue::NULL);
+        };
+        if !(1..=4).contains(&layer) || y as usize >= HEIGHT {
+            return Ok(JsValue::NULL);
+        }
+        let row = &lt.rows[y as usize];
+        match trace_bg_tile(row, self.engine.memory(), layer as usize - 1, tx, ty) {
+            Some(t) => serde_wasm_bindgen::to_value(&t).map_err(Into::into),
+            None => Ok(JsValue::NULL),
+        }
+    }
+
+    /// Trace OAM sprite `index` (0..=127). null when out of range.
+    #[wasm_bindgen(js_name = traceObj)]
+    pub fn trace_obj_at(&self, index: u32) -> Result<JsValue, JsValue> {
+        match trace_obj(self.engine.memory(), index as usize) {
+            Some(t) => serde_wasm_bindgen::to_value(&t).map_err(Into::into),
+            None => Ok(JsValue::NULL),
+        }
+    }
+
+    /// Pin a register override (M9): applied after frame()+hdma on every
+    /// scanline, winning over script writes. NOT cleared by setSource — the UI's
+    /// ▶ Run restart calls clearPins explicitly.
+    #[wasm_bindgen(js_name = pinRegister)]
+    pub fn pin_register(&mut self, addr: u32, value: i32) {
+        self.engine.pins_mut().pin(addr as u16, value);
+    }
+
+    #[wasm_bindgen(js_name = unpinRegister)]
+    pub fn unpin_register(&mut self, addr: u32) {
+        self.engine.pins_mut().unpin(addr as u16);
+    }
+
+    #[wasm_bindgen(js_name = clearPins)]
+    pub fn clear_pins(&mut self) {
+        self.engine.pins_mut().clear();
+    }
+
+    /// The pinned set, addr-ordered, as `[{addr, value}]`.
+    #[wasm_bindgen(js_name = listPins)]
+    pub fn list_pins(&self) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(&self.engine.pins().list()).map_err(Into::into)
     }
 }
 
