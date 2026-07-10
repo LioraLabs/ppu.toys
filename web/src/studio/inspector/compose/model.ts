@@ -1,11 +1,13 @@
 import { HEIGHT, WIDTH, type RegisterView } from "../../../ppu/core";
+import type { Poke } from "../../pokes/pokes";
 
 /** Pure decode/encode logic for the Compose/Windows tabs + Compositor overlay.
- *  The UI reads EFFECTIVE register values (pinned override wins over the live
- *  script-driven value; power-on default when the core omits the register) and
- *  turns every click into whole-register writes for the pin API — controls
- *  never poke one-shot state. Encodings mirror the core's derive_registers /
- *  pins::apply_one round-trip. */
+ *  The UI reads LIVE register values (power-on default when the core omits
+ *  the register) and turns every click into a whole-register write emitted as
+ *  a poke — a generated DSL assignment in pokes.lua. The script wins:
+ *  apply_pokes() runs at the top of frame(), so a later script write shows
+ *  its own value with the poke marker hollow. Encodings mirror the core's
+ *  derive_registers round-trip. */
 
 export const REG = {
   W12SEL: 0x2123,
@@ -28,32 +30,64 @@ export const REG = {
 /** Power-on defaults (core LineTableRow::default): TM = all five layers, rest 0. */
 const POWER_ON = new Map<number, number>([[REG.TM, 0x1f]]);
 
-export interface EffectiveReg {
-  value: number;
-  pinned: boolean;
+/** What a control displays for `addr`: the live value the core reports, else
+ *  the power-on default (the mock core omits most registers; the wasm core
+ *  reports all of them). */
+export function liveReg(registers: RegisterView[], addr: number): number {
+  return registers.find((r) => r.addr === addr)?.value ?? POWER_ON.get(addr) ?? 0;
 }
 
-/** What a control displays for `addr`: pinned override if present, else the
- *  live value the core reports, else the power-on default (the mock core
- *  omits most registers; the wasm core reports all of them). */
-export function effectiveReg(
-  registers: RegisterView[],
-  pins: RegWrite[],
-  addr: number,
-): EffectiveReg {
-  const pin = pins.find((p) => p.addr === addr);
-  if (pin) return { value: pin.value, pinned: true };
-  const live = registers.find((r) => r.addr === addr);
-  return { value: live?.value ?? POWER_ON.get(addr) ?? 0, pinned: false };
-}
-
-/** Effective-value accessor the encode helpers read through. */
+/** Live-value accessor the encode helpers read through. */
 export type ReadReg = (addr: number) => number;
 
-/** One register write for the pin API. */
+/** One whole-register write a control produces; the sink turns it into a poke. */
 export interface RegWrite {
   addr: number;
   value: number;
+}
+
+/** Every compose/windows register the UI writes, by $21xx address, to its DSL
+ *  flat-global mnemonic. This IS the poke inverse map — pokes emit `TM = 0x13`. */
+export const REG_LVALUES: Readonly<Record<number, string>> = {
+  0x2123: "W12SEL",
+  0x2124: "W34SEL",
+  0x2125: "WOBJSEL",
+  0x2126: "WH0",
+  0x2127: "WH1",
+  0x2128: "WH2",
+  0x2129: "WH3",
+  0x212a: "WBGLOG",
+  0x212b: "WOBJLOG",
+  0x212c: "TM",
+  0x212d: "TS",
+  0x212e: "TMW",
+  0x212f: "TSW",
+  0x2130: "CGWSEL",
+  0x2131: "CGADSUB",
+  0x2132: "COLDATA",
+};
+
+/** A register write as a poke: `TM = 0x13 -- $212C`. */
+export function regPoke(addr: number, value: number): Poke {
+  const lvalue = REG_LVALUES[addr];
+  if (!lvalue) throw new Error(`no DSL lvalue for $${addr.toString(16)}`);
+  return {
+    lvalue,
+    expr: `0x${value.toString(16).padStart(2, "0")}`,
+    note: `$${addr.toString(16).toUpperCase()}`,
+  };
+}
+
+const ADDR_BY_LVALUE = new Map(Object.entries(REG_LVALUES).map(([a, l]) => [l, Number(a)]));
+
+/** Solid/hollow decision for the poke marker: true = the live register equals
+ *  the poked value (solid), false = a later script write overrode it (hollow),
+ *  null = non-comparable (non-numeric expr or an lvalue this map doesn't know). */
+export function pokeMatchesLive(p: Poke, registers: RegisterView[]): boolean | null {
+  const want = Number(p.expr);
+  const addr = ADDR_BY_LVALUE.get(p.lvalue);
+  if (Number.isNaN(want) || addr === undefined) return null;
+  return liveReg(registers, addr) === want;
 }
 
 // ── Compose: screen assignment + color math ─────────────────────────────────
@@ -115,7 +149,7 @@ export const FIXED_COLOR_SWATCHES = [
   "#ffffff",
 ] as const;
 
-/** '#rrggbb' -> 15-bit BGR (the COLDATA display/pin encoding). */
+/** '#rrggbb' -> 15-bit BGR (the COLDATA display/poke encoding). */
 export function hexToBgr555(hex: string): number {
   const n = parseInt(hex.slice(1), 16);
   const r = (n >> 16) & 0xff;

@@ -1,21 +1,24 @@
 import { describe, expect, it } from "vitest";
 import type { RegisterView } from "../../../ppu/core";
+import { parsePokes, pokesToLua } from "../../pokes/pokes";
 import {
   BACKDROP_MATH_BIT,
   COMPOSE_LAYERS,
   FIXED_COLOR_SWATCHES,
   REG,
+  REG_LVALUES,
   WINDOW_LAYERS,
   areaValue,
   columnMask,
   combineValue,
   dimOutsideMask,
-  effectiveReg,
   equation,
   hexToBgr555,
+  liveReg,
   mathHalf,
   mathOp,
   nearestEdgeAddr,
+  regPoke,
   setArea,
   setCombine,
   tintMathRegion,
@@ -42,24 +45,39 @@ const rv = (addr: number, name: string, value: number): RegisterView => ({
   changed: false,
 });
 
-describe("effectiveReg", () => {
-  it("pinned override wins over the live register", () => {
-    const regs = [rv(REG.TM, "TM", 0x0b)];
-    expect(effectiveReg(regs, [{ addr: REG.TM, value: 0x1f }], REG.TM)).toEqual({
-      value: 0x1f,
-      pinned: true,
-    });
-  });
-
-  it("falls back to the live core-reported value when unpinned", () => {
-    const regs = [rv(REG.TM, "TM", 0x0b)];
-    expect(effectiveReg(regs, [], REG.TM)).toEqual({ value: 0x0b, pinned: false });
+describe("liveReg", () => {
+  it("reads the live core-reported value", () => {
+    expect(liveReg([rv(REG.TM, "TM", 0x0b)], REG.TM)).toBe(0x0b);
   });
 
   it("falls back to power-on defaults when the core omits the register (mock)", () => {
-    expect(effectiveReg([], [], REG.TM)).toEqual({ value: 0x1f, pinned: false });
-    expect(effectiveReg([], [], REG.TS)).toEqual({ value: 0, pinned: false });
-    expect(effectiveReg([], [], REG.CGADSUB)).toEqual({ value: 0, pinned: false });
+    expect(liveReg([], REG.TM)).toBe(0x1f);
+    expect(liveReg([], REG.TS)).toBe(0);
+    expect(liveReg([], REG.CGADSUB)).toBe(0);
+  });
+});
+
+describe("REG_LVALUES + regPoke", () => {
+  it("covers every REG address the UI writes", () => {
+    for (const addr of Object.values(REG)) {
+      expect(REG_LVALUES[addr]).toBeDefined();
+    }
+  });
+
+  it("regPoke emits the DSL assignment with a $-address note", () => {
+    expect(regPoke(0x212c, 0x13)).toEqual({ lvalue: "TM", expr: "0x13", note: "$212C" });
+    expect(regPoke(REG.WH0, 0)).toEqual({ lvalue: "WH0", expr: "0x00", note: "$2126" });
+  });
+
+  it("every mapped register round-trips through the pokes.lua generator", () => {
+    for (const key of Object.keys(REG_LVALUES)) {
+      const p = regPoke(Number(key), 0);
+      expect(parsePokes(pokesToLua([p]))).toEqual([p]);
+    }
+  });
+
+  it("throws on an unmapped address", () => {
+    expect(() => regPoke(0x2105, 7)).toThrow(/no DSL lvalue/);
   });
 });
 

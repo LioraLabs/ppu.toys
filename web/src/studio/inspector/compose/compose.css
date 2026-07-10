@@ -2,8 +2,8 @@
    parallel inspector tickets don't collide in inspector.css. Prefixes:
    cmp- (compose / shared), winp- (windows tab), cmpo- (overlay layout). */
 
-/* ── pinned-override affordances ─────────────────────────────────────────── */
-.cmp-pinbar {
+/* ── poke affordances ────────────────────────────────────────────────────── */
+.cmp-pokebar {
   display: flex; align-items: center; flex-wrap: wrap; gap: 5px;
   margin: 0 0 8px; padding: 5px 8px;
   border: 1px solid color-mix(in srgb, var(--orange) 45%, transparent);
@@ -11,19 +11,27 @@
   background: color-mix(in srgb, var(--orange) 8%, transparent);
   font-family: var(--font-mono); font-size: 10px; color: var(--txt2);
 }
-.cmp-pinbar-label { color: var(--orange); }
-.cmp-pinchip {
+.cmp-pokebar-label { color: var(--orange); }
+.cmp-pokechip {
   display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px;
   border: 1px solid var(--line); border-radius: 4px;
   background: var(--chipbg); color: var(--txt2);
   font: inherit; cursor: pointer;
 }
-.cmp-pinchip:hover { border-color: var(--orange); }
-.cmp-clearpins { margin-left: auto; color: var(--orange); }
-.cmp-pin {
-  border: 0; padding: 0 2px; background: none;
-  color: var(--orange); font-size: 9px; line-height: 1; cursor: pointer;
+.cmp-pokechip:hover { border-color: var(--orange); }
+.cmp-copypokes { margin-left: auto; color: var(--cyan); }
+.cmp-clearpokes { color: var(--orange); }
+.cmp-pokewarn {
+  display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--orange) 60%, transparent);
+  border-radius: 4px; color: var(--orange);
 }
+/* solid dot = live register matches the poke; hollow = script overrode it */
+.cmp-poke {
+  width: 7px; height: 7px; flex: none; padding: 0;
+  border: 0; border-radius: 50%; background: var(--orange); cursor: pointer;
+}
+.cmp-poke--overridden { border: 1px solid var(--orange); background: transparent; }
 
 /* ── previews ────────────────────────────────────────────────────────────── */
 .cmp-previews { display: flex; align-items: flex-end; gap: 6px; margin-bottom: 8px; }

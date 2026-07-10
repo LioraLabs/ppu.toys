@@ -16,14 +16,9 @@ import {
   withMathOp,
 } from "./model";
 import { screensFor } from "./screens";
-import { PinDot, RegRow } from "./chrome";
+import { PokeDot, RegRow } from "./chrome";
 import { BlitCanvas } from "../BlitCanvas";
 import type { Compositor } from "./useCompositor";
-
-/** ppu-61: the pin write path is gone; controls call this no-op until Task 7
- *  rewires them onto the generated pokes.lua writer. */
-/* ppu-61: replaced in Task 7 */
-function writePin(_addr: number, _value: number): void {}
 
 /** MAIN / SUB / RESULT previews straight from the core: the two compositor
  *  intermediates (pre-math, pre-brightness) and the live framebuffer. The ▦
@@ -101,15 +96,15 @@ function MatrixCell({
 }
 
 /** Per-layer MAIN/SUB/MATH toggle cells + the Backdrop row. Every click
- *  writes a pinned override of the whole register (TM / TS / CGADSUB) —
- *  the column headers wear the pin marker. */
+ *  pokes the whole register (TM / TS / CGADSUB) — the column headers wear
+ *  the poke marker. */
 export function AssignmentMatrix({ c }: { c: Compositor }) {
   const tm = c.read(REG.TM);
   const ts = c.read(REG.TS);
   const adsub = c.read(REG.CGADSUB);
   const toggle = (addr: number, current: number, bit: number) => {
     const w = toggleMaskBit(addr, current, bit);
-    writePin(w.addr, w.value);
+    c.write(w.addr, w.value);
   };
   return (
     <div className="cmp-matrix">
@@ -117,15 +112,15 @@ export function AssignmentMatrix({ c }: { c: Compositor }) {
         <span className="cmp-lay">LAYER</span>
         <span className="cmp-col">
           MAIN
-          <PinDot c={c} addr={REG.TM} />
+          <PokeDot c={c} addr={REG.TM} />
         </span>
         <span className="cmp-col">
           SUB
-          <PinDot c={c} addr={REG.TS} />
+          <PokeDot c={c} addr={REG.TS} />
         </span>
         <span className="cmp-col">
           MATH
-          <PinDot c={c} addr={REG.CGADSUB} />
+          <PokeDot c={c} addr={REG.CGADSUB} />
         </span>
       </div>
       {COMPOSE_LAYERS.map((l) => (
@@ -173,20 +168,20 @@ export function MathControls({ c, fill }: { c: Compositor; fill?: boolean }) {
       <div>
         <div className="cmp-ctl-label">
           OPERATION · $2131
-          <PinDot c={c} addr={REG.CGADSUB} />
+          <PokeDot c={c} addr={REG.CGADSUB} />
         </div>
         <div className="cmp-seg">
           <button
             type="button"
             className={op === "add" ? "cmp-seg--on" : ""}
-            onClick={() => writePin(REG.CGADSUB, withMathOp(adsub, "add"))}
+            onClick={() => c.write(REG.CGADSUB, withMathOp(adsub, "add"))}
           >
             + add
           </button>
           <button
             type="button"
             className={op === "sub" ? "cmp-seg--on" : ""}
-            onClick={() => writePin(REG.CGADSUB, withMathOp(adsub, "sub"))}
+            onClick={() => c.write(REG.CGADSUB, withMathOp(adsub, "sub"))}
           >
             − sub
           </button>
@@ -195,7 +190,7 @@ export function MathControls({ c, fill }: { c: Compositor; fill?: boolean }) {
       <button
         type="button"
         className={"cmp-half" + (half ? " cmp-half--on" : "")}
-        onClick={() => writePin(REG.CGADSUB, withMathHalf(adsub, !half))}
+        onClick={() => c.write(REG.CGADSUB, withMathHalf(adsub, !half))}
       >
         <span className="cmp-half-track">
           <span className="cmp-half-knob" />
@@ -205,7 +200,7 @@ export function MathControls({ c, fill }: { c: Compositor; fill?: boolean }) {
       <div>
         <div className="cmp-ctl-label">
           FIXED SUB COLOR · $2132
-          <PinDot c={c} addr={REG.COLDATA} />
+          <PokeDot c={c} addr={REG.COLDATA} />
         </div>
         <div className="cmp-swatches">
           {FIXED_COLOR_SWATCHES.map((hex) => (
@@ -217,7 +212,7 @@ export function MathControls({ c, fill }: { c: Compositor; fill?: boolean }) {
               title={`fixed sub color ${hex}`}
               aria-label={`fixed sub color ${hex}`}
               aria-pressed={coldata === hexToBgr555(hex)}
-              onClick={() => writePin(REG.COLDATA, hexToBgr555(hex))}
+              onClick={() => c.write(REG.COLDATA, hexToBgr555(hex))}
             />
           ))}
         </div>
