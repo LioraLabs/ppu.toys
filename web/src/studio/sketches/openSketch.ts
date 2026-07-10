@@ -127,8 +127,9 @@ function mutateOpen(update: (s: Sketch) => Sketch) {
 /** Ordered files of a context (single-file demos present as one main.lua;
  *  multi-file demos present as their ordered files). A sketch context's
  *  files are already normalized (see openContext/mutateOpen); a demo
- *  context's files are normalized here on read, since demos.ts doesn't
- *  carry pokes.lua yet (Task 10 will bake it in — this is the bridge). */
+ *  context's files are normalized here on read too — demos.ts already ships
+ *  pokes.lua first, so this is a no-op reassert, kept as the single seam
+ *  that guarantees it regardless of how demos.ts is authored. */
 function filesOf(ctx: OpenContext): SketchFile[] {
   if (ctx.kind === "sketch") return ctx.sketch.files;
   const demo = DEMOS.find((d) => d.id === ctx.demoId);

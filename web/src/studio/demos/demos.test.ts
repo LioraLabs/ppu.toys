@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { DEMOS, demoFiles } from "./demos";
+import { EMPTY_POKES } from "../pokes/pokes";
 
 describe("DEMOS", () => {
   it("ships all bundled demos in order", () => {
@@ -32,16 +33,26 @@ describe("DEMOS", () => {
     expect(d.source).toContain('obj.sheet = "hero"');
     expect(d.source).toContain("obj[0].prio = 3");
     expect(d.source).toContain("obj[0].pal = 0");
-    expect(d.files!.map((f) => f.name)).toEqual(["main.lua", "palette.lua"]);
+    expect(d.files!.map((f) => f.name)).toEqual(["pokes.lua", "main.lua", "palette.lua"]);
     expect(d.source).toBe(d.files!.map((f) => f.source).join("\n"));
-    expect(d.files![0].source).toContain("dusk_palette(t)");
-    expect(d.files![1].source).toContain("function dusk_palette");
-    expect(d.files![1].source).toContain("SPEED = 12");
+    expect(d.files![1].source).toContain("dusk_palette(t)");
+    expect(d.files![1].source).toContain("apply_pokes()");
+    expect(d.files![2].source).toContain("function dusk_palette");
+    expect(d.files![2].source).toContain("SPEED = 12");
   });
 
-  it("demoFiles presents single-file demos as one main.lua, multi-file as-is", () => {
+  it("every demo ships a generated pokes.lua first, main.lua calling apply_pokes()", () => {
+    for (const d of DEMOS) {
+      expect(d.files![0]).toEqual({ name: "pokes.lua", source: EMPTY_POKES });
+      const main = d.files!.find((f) => f.name === "main.lua")!;
+      expect(main.source).toContain("function frame(t, f)\n  apply_pokes()\n");
+    }
+  });
+
+  it("demoFiles presents a demo's ordered files, pokes.lua always first", () => {
     const single = DEMOS.find((x) => x.id === "mode7-floor")!;
-    expect(demoFiles(single)).toEqual([{ name: "main.lua", source: single.source }]);
+    expect(demoFiles(single)).toBe(single.files!);
+    expect(demoFiles(single).map((f) => f.name)).toEqual(["pokes.lua", "main.lua"]);
     const multi = DEMOS.find((x) => x.id === "dusk-parallax")!;
     expect(demoFiles(multi)).toBe(multi.files!);
   });

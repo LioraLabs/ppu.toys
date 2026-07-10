@@ -12,7 +12,8 @@ import { listSketches, loadSketch, saveSketch, _resetSketchStoreForTests } from 
 import { POKES_FILE, EMPTY_POKES } from "../pokes/pokes";
 
 const demo = DEMOS[0];
-const demoMain = demoFiles(demo)[0].source;
+const demoMain = demoFiles(demo).find((f) => f.name === "main.lua")!.source;
+const demoPalette = demoFiles(demo).find((f) => f.name === "palette.lua")!;
 
 /** The open sketch, or throw — keeps assertions terse. */
 function openSketch() {
@@ -64,7 +65,7 @@ describe("lazy demo fork", () => {
     expect(sk.files).toEqual([
       { name: POKES_FILE, source: EMPTY_POKES },
       { name: "main.lua", source: demoMain + "\n-- edit" },
-      demoFiles(demo)[1],
+      demoPalette,
     ]);
   });
 
@@ -82,7 +83,7 @@ describe("lazy demo fork", () => {
     openSketchStore.addAsset({ name: "sky.png", png: new Uint8Array([1, 2, 3]) });
     const sk = openSketch();
     expect(sk.forkedFrom).toBe(demo.id);
-    expect(sk.files).toEqual([{ name: POKES_FILE, source: EMPTY_POKES }, ...demoFiles(demo)]);
+    expect(sk.files).toEqual(demoFiles(demo)); // pokes.lua already ships first
     expect(sk.assets.map((a) => a.name)).toEqual(["sky.png"]);
   });
 
@@ -185,11 +186,8 @@ describe("open / new / switch", () => {
 });
 
 describe("openContextFiles", () => {
-  it("presents a multi-file demo as its ordered files, pokes.lua injected first", () => {
-    expect(openContextFiles(openSketchStore.state())).toEqual([
-      { name: POKES_FILE, source: EMPTY_POKES },
-      ...demoFiles(demo),
-    ]);
+  it("presents a multi-file demo as its ordered files, pokes.lua first", () => {
+    expect(openContextFiles(openSketchStore.state())).toEqual(demoFiles(demo));
   });
 
   it("presents the dusk-parallax demo as ordered multi-file tabs", () => {
@@ -240,11 +238,7 @@ describe("file operations", () => {
     expect(name).toBe("file3.lua");
     const sk = openSketch();
     expect(sk.forkedFrom).toBe(demo.id);
-    expect(sk.files).toEqual([
-      { name: POKES_FILE, source: EMPTY_POKES },
-      ...demoFiles(demo),
-      { name: "file3.lua", source: "" },
-    ]);
+    expect(sk.files).toEqual([...demoFiles(demo), { name: "file3.lua", source: "" }]);
     expect(openSketchStore.state().session).toBe(before);
   });
 
@@ -268,7 +262,7 @@ describe("file operations", () => {
     expect(openSketch().files).toEqual([
       { name: POKES_FILE, source: EMPTY_POKES },
       { name: "scene.lua", source: demoMain },
-      demoFiles(demo)[1],
+      demoPalette,
     ]);
   });
 
