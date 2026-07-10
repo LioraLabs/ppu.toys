@@ -72,10 +72,23 @@ fn top_level_runtime_error_attributes_the_failing_chunk() {
     let err = e
         .set_sources(&[
             ("a.lua", "x = 1"),
-            ("b.lua", "x = x + not_defined.field"), // indexes nil at load time
+            ("b.lua", "x = x + not_defined.field"), // indexes nil as the chunk executes
         ])
         .unwrap_err();
     assert_eq!(err.file.as_deref(), Some("b.lua"));
+}
+
+#[test]
+fn failed_recompile_keeps_the_previous_program_running() {
+    let mut e = LuaEngine::new();
+    e.set_sources(&[("main.lua", "function frame(t,f) brightness = 5 end")])
+        .unwrap();
+    assert_eq!(e.frame(0.0, 0).unwrap().rows[0].brightness, 5);
+    // Chunk error in the new sketch: the swap happens only after every chunk
+    // succeeds, so the previously loaded program must keep running untouched.
+    e.set_sources(&[("main.lua", "function frame(t,f)\n  = broken\nend")])
+        .unwrap_err();
+    assert_eq!(e.frame(0.0, 0).unwrap().rows[0].brightness, 5);
 }
 
 #[test]
