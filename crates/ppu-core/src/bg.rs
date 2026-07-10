@@ -177,10 +177,10 @@ pub(crate) fn sample_bg_pixel(layer: &RegBg, mem: &Memory, x: usize, y: usize) -
         _ => (32, 32),
     };
     let words_per_char = layer.bpp as u32 * 4; // 2bpp = 8 words, 4bpp = 16, 8bpp = 32
-    // Mosaic: snap sample coords to the block's top-left. `mosaic` is the block
-    // edge in pixels (1 = off, so `by == y` / `bx == x` and output is unchanged).
-    // Documented simplification: `by` is anchored to absolute screen row 0, not
-    // a frame-latched counter (no mid-frame HDMA $2106 block-boundary latch).
+                                               // Mosaic: snap sample coords to the block's top-left. `mosaic` is the block
+                                               // edge in pixels (1 = off, so `by == y` / `bx == x` and output is unchanged).
+                                               // Documented simplification: `by` is anchored to absolute screen row 0, not
+                                               // a frame-latched counter (no mid-frame HDMA $2106 block-boundary latch).
     let block = layer.mosaic.max(1) as i64;
     let sy = (y as i64 / block * block) as usize;
     let sx = (x as i64 / block * block) as usize;
@@ -205,7 +205,10 @@ pub(crate) fn sample_bg_pixel(layer: &RegBg, mem: &Memory, x: usize, y: usize) -
     let (cgram_index, color15) = if index == 0 {
         (None, 0)
     } else if layer.bpp == 8 && layer.direct_color {
-        (None, direct_color_bgr555(index, ((entry >> 10) & 0x07) as u8))
+        (
+            None,
+            direct_color_bgr555(index, ((entry >> 10) & 0x07) as u8),
+        )
     } else {
         let ci = if layer.bpp == 8 {
             index as u16
@@ -740,12 +743,12 @@ mod tests {
         let mut l = layer(0);
         l.char_base = 0x1000;
         l.mosaic = 2; // 2x2 blocks
-        // Row y=0: block top row. x=0 lit; x=1 replicates the block's top-left (x=0).
+                      // Row y=0: block top row. x=0 lit; x=1 replicates the block's top-left (x=0).
         let l0 = render_bg_layer_scanline_px(&l, &m, 0, 4);
         assert!(l0[0].is_some());
         assert!(l0[1].is_some()); // horizontal replication within the block
         assert!(l0[2].is_none()); // next block samples x=2 (empty)
-        // Row y=1 snaps up to by=0, so the same top row replicates vertically.
+                                  // Row y=1 snaps up to by=0, so the same top row replicates vertically.
         let l1 = render_bg_layer_scanline_px(&l, &m, 1, 4);
         assert!(l1[0].is_some());
         assert!(l1[1].is_some());

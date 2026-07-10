@@ -9,7 +9,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::{
     derive_registers, render_frame_view, render_layer_view, trace_bg_screen, trace_bg_tile,
-    trace_obj, AssetInfo, LineTable, LuaEngine, LuaErrorView, ObjOverflow, OamSprite, Register,
+    trace_obj, AssetInfo, LineTable, LuaEngine, LuaErrorView, OamSprite, ObjOverflow, Register,
     SetSourceResult, HEIGHT, WIDTH,
 };
 
@@ -233,7 +233,13 @@ impl PpuCore {
             return Ok(JsValue::NULL);
         }
         let row = &lt.rows[y as usize];
-        match trace_bg_screen(row, self.engine.memory(), layer as usize - 1, x as usize, y as usize) {
+        match trace_bg_screen(
+            row,
+            self.engine.memory(),
+            layer as usize - 1,
+            x as usize,
+            y as usize,
+        ) {
             Some(t) => serde_wasm_bindgen::to_value(&t).map_err(Into::into),
             None => Ok(JsValue::NULL),
         }
@@ -241,7 +247,13 @@ impl PpuCore {
 
     /// Trace a BG plane at tilemap cell (tx, ty); `y` picks the register row.
     #[wasm_bindgen(js_name = traceBgTile)]
-    pub fn trace_bg_tile_at(&self, layer: u8, tx: u32, ty: u32, y: u32) -> Result<JsValue, JsValue> {
+    pub fn trace_bg_tile_at(
+        &self,
+        layer: u8,
+        tx: u32,
+        ty: u32,
+        y: u32,
+    ) -> Result<JsValue, JsValue> {
         let Some(lt) = &self.last_lt else {
             return Ok(JsValue::NULL);
         };

@@ -151,8 +151,14 @@ mod tests {
         assert_eq!(
             p.list(),
             vec![
-                PinnedRegister { addr: 0x2100, value: 7 },
-                PinnedRegister { addr: 0x2130, value: 2 },
+                PinnedRegister {
+                    addr: 0x2100,
+                    value: 7
+                },
+                PinnedRegister {
+                    addr: 0x2130,
+                    value: 2
+                },
             ]
         );
         p.unpin(0x2100);
@@ -173,7 +179,14 @@ mod tests {
         assert!(row.force_blank);
         assert_eq!(row.mode, 1);
         assert!(row.bg3_priority);
-        assert_eq!([row.bg[0].tile_size, row.bg[1].tile_size, row.bg[3].tile_size], [16, 8, 16]);
+        assert_eq!(
+            [
+                row.bg[0].tile_size,
+                row.bg[1].tile_size,
+                row.bg[3].tile_size
+            ],
+            [16, 8, 16]
+        );
         assert_eq!(row.mosaic_size, 5);
         assert_eq!(row.mosaic_enable, [true, false, true, false]);
     }
@@ -256,7 +269,12 @@ mod tests {
             if w.addr == 0x2101 {
                 continue;
             }
-            assert_eq!((g.addr, g.value), (w.addr, w.value), "{} round-trip", w.name);
+            assert_eq!(
+                (g.addr, g.value),
+                (w.addr, w.value),
+                "{} round-trip",
+                w.name
+            );
         }
     }
 }

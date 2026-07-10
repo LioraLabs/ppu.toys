@@ -239,7 +239,13 @@ fn trace_mode7(row: &RegRow, mem: &Memory, x: usize, y: usize) -> BgTrace {
 /// registers. `layer` is 0-based here (bg[0..3]); the wasm shim converts from
 /// the seam's 1-based number. `None` = the layer does not exist in this row's
 /// mode. Works on hidden layers (visibility is reported, not enforced).
-pub fn trace_bg_screen(row: &RegRow, mem: &Memory, layer: usize, x: usize, y: usize) -> Option<BgTrace> {
+pub fn trace_bg_screen(
+    row: &RegRow,
+    mem: &Memory,
+    layer: usize,
+    x: usize,
+    y: usize,
+) -> Option<BgTrace> {
     if layer >= 4 {
         return None; // self-defending seam: never index outside bg[0..3]
     }
@@ -269,7 +275,13 @@ pub fn trace_bg_screen(row: &RegRow, mem: &Memory, layer: usize, x: usize, y: us
 
 /// Trace a BG plane at tilemap cell (tx, ty) — the Memory-grid selection.
 /// The caller (wasm shim) picks the register row.
-pub fn trace_bg_tile(row: &RegRow, mem: &Memory, layer: usize, tx: u32, ty: u32) -> Option<BgTrace> {
+pub fn trace_bg_tile(
+    row: &RegRow,
+    mem: &Memory,
+    layer: usize,
+    tx: u32,
+    ty: u32,
+) -> Option<BgTrace> {
     if layer >= 4 {
         return None; // self-defending seam: never index outside bg[0..3]
     }
@@ -445,9 +457,9 @@ mod tests {
     use super::*;
     use crate::linetable::LineTableBuilder;
     use crate::memory::rgb15;
+    use crate::memory::unpack_rgb15;
     use crate::registers::{LineTableRow, Obj, RegRow};
     use crate::render_frame;
-    use crate::memory::unpack_rgb15;
 
     /// BG1: char 1 at 0x1000 (pixel (0,0) = idx 1), map cell (1,0) = tile1 pal2
     /// prio1, scroll_x = 8 -> screen (0,0) lands on it.
@@ -555,7 +567,15 @@ mod tests {
         m.obsel.char_base = 0x4000;
         m.vram[0x4000 + 16] = 0x0080; // char 1 pixel (0,0) = 1
         m.cgram[128 + 5 * 16 + 1] = rgb15(255, 255, 0);
-        m.oam[3] = Obj { on: true, x: 10, y: 20, tile: 1, pal: 5, prio: 2, ..Obj::default() };
+        m.oam[3] = Obj {
+            on: true,
+            x: 10,
+            y: 20,
+            tile: 1,
+            pal: 5,
+            prio: 2,
+            ..Obj::default()
+        };
         let t = trace_obj(&m, 3).unwrap();
         assert_eq!(t.index, 3);
         assert_eq!(t.oam.tile, 1);
@@ -598,7 +618,14 @@ mod tests {
         m.obsel.char_base = 0x4000;
         m.vram[0x4000 + 16] = 0x0080;
         m.cgram[128 + 1] = rgb15(255, 255, 0);
-        m.oam[0] = Obj { on: true, x: 0, y: 0, tile: 1, prio: 0, ..Obj::default() };
+        m.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 1,
+            prio: 0,
+            ..Obj::default()
+        };
         let lt = LineTableBuilder::new(LineTableRow::default()).build(HEIGHT);
         let v = render_layer_view(&lt, &m, 4);
         assert_eq!(&v[0..4], &unpack_rgb15(rgb15(255, 255, 0)));

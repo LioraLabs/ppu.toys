@@ -481,7 +481,7 @@ mod tests {
         render_mode7_scanline(&row, &mem, 0, &mut out);
         assert_eq!(&out[0..4], &unpack_rgb15(rgb15(255, 0, 0)));
         assert_eq!(&out[4..8], &unpack_rgb15(rgb15(255, 0, 0))); // horizontal replicate
-        // Row y=1 snaps up to sample plane row 0 -> same lit pixel replicated down.
+                                                                 // Row y=1 snaps up to sample plane row 0 -> same lit pixel replicated down.
         render_mode7_scanline(&row, &mem, 1, &mut out);
         assert_eq!(&out[0..4], &unpack_rgb15(rgb15(255, 0, 0)));
     }

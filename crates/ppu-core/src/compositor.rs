@@ -155,10 +155,16 @@ fn mode1_ladder(bg3_high: bool) -> Vec<Slot> {
 fn mode7_extbg_ladder() -> [Slot; 6] {
     [
         Slot::Obj { prio: 3 },
-        Slot::Bg { layer: 0, prio: true }, // Mode-7 high (bit7 = 1)
+        Slot::Bg {
+            layer: 0,
+            prio: true,
+        }, // Mode-7 high (bit7 = 1)
         Slot::Obj { prio: 2 },
         Slot::Obj { prio: 1 },
-        Slot::Bg { layer: 0, prio: false }, // Mode-7 low (bit7 = 0)
+        Slot::Bg {
+            layer: 0,
+            prio: false,
+        }, // Mode-7 low (bit7 = 0)
         Slot::Obj { prio: 0 },
     ]
 }
@@ -851,10 +857,16 @@ mod tests {
             mode7_extbg_ladder(),
             [
                 Slot::Obj { prio: 3 },
-                Slot::Bg { layer: 0, prio: true },
+                Slot::Bg {
+                    layer: 0,
+                    prio: true
+                },
                 Slot::Obj { prio: 2 },
                 Slot::Obj { prio: 1 },
-                Slot::Bg { layer: 0, prio: false },
+                Slot::Bg {
+                    layer: 0,
+                    prio: false
+                },
                 Slot::Obj { prio: 0 },
             ]
         );
@@ -868,8 +880,8 @@ mod tests {
         m.cgram[0] = rgb15(0, 0, 0);
         m.cgram[1] = rgb15(255, 0, 0); // Mode-7 color 1 = red
         m.cgram[128 + 1] = rgb15(255, 255, 0); // OBJ pal0 idx1 = yellow
-        // Mode-7 tile 0 (map cells default to tile 0): char (0,0)=0x81 hi+color1,
-        // char (1,0)=0x01 lo+color1. HIGH byte = char lane, LOW byte = map (0=tile0).
+                                               // Mode-7 tile 0 (map cells default to tile 0): char (0,0)=0x81 hi+color1,
+                                               // char (1,0)=0x01 lo+color1. HIGH byte = char lane, LOW byte = map (0=tile0).
         m.vram[0] = 0x81 << 8;
         m.vram[1] = 0x01 << 8;
         // Sprite char 1 covering screen x=0 and x=1 (4bpp plane0 row0 bits 7,6).
@@ -1400,7 +1412,7 @@ mod tests {
         let view = render_frame_view(&lt, &m);
         assert_eq!(view.math_mask[0], 0b100); // prevent active, no math
         assert_eq!(view.math_mask[8], 0b001); // outside: math applied
-        // clip = inside (bits 6-7 = 10): bit1 set inside; math still applies there.
+                                              // clip = inside (bits 6-7 = 10): bit1 set inside; math still applies there.
         let (m, mut src) = color_window_scene(rgb15(255, 0, 0), rgb15(0, 0, 255));
         src.cgadsub = 0x01;
         src.cgwsel = 0x02 | (0b10 << 6);
