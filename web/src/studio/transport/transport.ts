@@ -172,10 +172,6 @@ export class Transport {
     return res;
   };
 
-  /** Single-file sugar: the whole sketch is one "main.lua". */
-  setSource = (src: string): { ok: boolean; error?: LuaError } =>
-    this.setSources([{ name: "main.lua", source: src }]);
-
   setLayerVisible = (id: string, visible: boolean) => {
     this.coreRef().setLayerVisible(id, visible);
     this.renderOnce();

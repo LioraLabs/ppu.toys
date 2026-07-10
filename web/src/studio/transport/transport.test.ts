@@ -38,13 +38,6 @@ describe("transport store", () => {
     expect(transport.getSnapshot().t).toBeCloseTo(LOOP_SECONDS * 0.5, 5);
   });
 
-  it("setSource forwards to the core and refreshes the snapshot", () => {
-    const before = transport.getSnapshot();
-    const res = transport.setSource("function frame() end");
-    expect(res.ok).toBe(true);
-    expect(transport.getSnapshot()).not.toBe(before);
-  });
-
   it("setSources forwards to the core and refreshes the snapshot", () => {
     const before = transport.getSnapshot();
     const res = transport.setSources([
@@ -144,20 +137,6 @@ describe("transport multi-file recompile", () => {
     expect(after.t).toBe(before.t);
     expect(after.f).toBe(before.f);
   });
-
-  it("setSource sugar wraps the source as a single main.lua", () => {
-    const seen: SourceFile[][] = [];
-    const core: PpuCore = {
-      ...makeCore({ throwing: false }),
-      setSources: (files: SourceFile[]) => {
-        seen.push(files);
-        return { ok: true };
-      },
-    };
-    const tr = new Transport(() => core);
-    tr.setSource("x = 1");
-    expect(seen).toEqual([[{ name: "main.lua", source: "x = 1" }]]);
-  });
 });
 
 describe("transport restart (▶ Run)", () => {
@@ -171,7 +150,7 @@ describe("transport restart (▶ Run)", () => {
       },
     };
     const tr = new Transport(() => core);
-    tr.setSource("function frame() end");
+    tr.setSources([{ name: "main.lua", source: "function frame() end" }]);
     tr.step(500);
     expect(tr.getSnapshot().t).toBeGreaterThan(0);
     tr.restart();

@@ -13,17 +13,12 @@ export interface EditorPaneProps {
    *  execution order. Defaults to the shared transport — a bare
    *  `<EditorPane />` is fully wired. */
   onSources?: (files: SourceFile[]) => { ok: boolean; error?: LuaError };
-  /** @deprecated Pre-M9 single-file sugar (the old Studio mount passes
-   *  transport.setSource). Honored only while the sketch has exactly ONE
-   *  file; multi-file programs push through the shared transport. The
-   *  Workspace-shell remount should drop this for onSources / the default. */
-  onSource?: (src: string) => { ok: boolean; error?: LuaError };
 }
 
 /** Stable empty-errors identity so a clean doc never re-dispatches diagnostics. */
 const NO_ERRORS: LuaError[] = [];
 
-export function EditorPane({ onSources, onSource }: EditorPaneProps) {
+export function EditorPane({ onSources }: EditorPaneProps) {
   const state = useOpenSketch();
   const { session } = state;
   const files = openContextFiles(state);
@@ -68,12 +63,7 @@ export function EditorPane({ onSources, onSource }: EditorPaneProps) {
   const sinkRef = useRef<(fs: SourceFile[]) => { ok: boolean; error?: LuaError }>(
     () => ({ ok: true }),
   );
-  sinkRef.current = (fs) =>
-    onSources
-      ? onSources(fs)
-      : onSource && fs.length === 1
-        ? onSource(fs[0].source)
-        : transport.setSources(fs);
+  sinkRef.current = (fs) => (onSources ? onSources(fs) : transport.setSources(fs));
   const pusher = useMemo(
     () => createSourcePusher((fs) => sinkRef.current(fs), setCompileError),
     [],
