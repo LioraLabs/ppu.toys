@@ -15,6 +15,7 @@ import {
   traceCaption,
 } from "./trace";
 import { Copyable } from "../copyToast";
+import { CgramPoke } from "../../pokes/CgramPoke";
 import { pickPaletteIdx, selectObj, selectPixel, selectPlane, useTraceSelection } from "./stores";
 
 /** Plane segmented control (user-selected; shared store). */
@@ -63,6 +64,7 @@ export function TraceChain({ frame, copy, variant }: { frame: FrameResult; copy:
   const isObj = sel.plane === "obj";
   const layer = isObj ? 0 : Number(sel.plane[2]);
   const [hover, setHover] = useState<{ x: number; y: number } | null>(null);
+  const [swatchPokeOpen, setSwatchPokeOpen] = useState(false);
 
   // Per-frame seam queries — the frame object identity changes every frame,
   // so `frame` in the deps re-queries the core exactly once per rendered frame.
@@ -135,7 +137,19 @@ export function TraceChain({ frame, copy, variant }: { frame: FrameResult; copy:
    *  palette stage in the tab; its own "CGRAM COLOR" stage in the overlay). */
   const palettePick = (
     <div className="tm-palpick">
-      <div className="tm-swatch" style={{ backgroundColor: bgr555ToHex(bgr) }} />
+      <span className="tm-swatch-wrap">
+        <button
+          type="button"
+          className="tm-swatch tm-swatch--btn"
+          style={{ backgroundColor: bgr555ToHex(bgr) }}
+          disabled={cgAddr === null}
+          title={cgAddr === null ? "direct color — CGRAM bypassed, nothing to poke" : `poke ${cgLabel(cgAddr)}`}
+          onClick={() => setSwatchPokeOpen(true)}
+        />
+        {swatchPokeOpen && cgAddr !== null && (
+          <CgramPoke index={cgAddr} current={bgr} onClose={() => setSwatchPokeOpen(false)} />
+        )}
+      </span>
       <div className="tm-meta">
         <div>
           idx <span className="tm-strong">{pickIdx}</span>

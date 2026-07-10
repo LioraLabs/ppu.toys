@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { formatAddr, cgram15ToCss } from "../format";
 import { cgLabel } from "./trace";
 import type { CgramOwner, VramRegion } from "./regions";
+import { CgramPoke } from "../../pokes/CgramPoke";
 
 const pct = (words: number) => `${(words / 0x8000) * 100}%`;
 
@@ -46,26 +48,32 @@ export function VramLegend({ regions, onCopy }: { regions: VramRegion[]; onCopy:
 }
 
 /** CGRAM ownership: 16 palettes x 16 entries; transparent index-0 column gets a
- *  diagonal hairline; owner legend on the left; click copies "CG $xx". */
-export function CgramGrid({
-  cgram,
-  owners,
-  onCopy,
-}: {
-  cgram: Uint16Array;
-  owners: CgramOwner[];
-  onCopy: (label: string) => void;
-}) {
+ *  diagonal hairline; owner legend on the left; click opens the CGRAM
+ *  color-picker poke for that entry (only one open at a time per grid). */
+export function CgramGrid({ cgram, owners }: { cgram: Uint16Array; owners: CgramOwner[] }) {
+  const [open, setOpen] = useState<number | null>(null);
   return (
     <div className="tm-cgrid">
       {owners.map((owner, row) => (
-        <CgramRow key={row} row={row} owner={owner} cgram={cgram} onCopy={onCopy} />
+        <CgramRow key={row} row={row} owner={owner} cgram={cgram} open={open} onOpen={setOpen} />
       ))}
     </div>
   );
 }
 
-function CgramRow({ row, owner, cgram, onCopy }: { row: number; owner: CgramOwner; cgram: Uint16Array; onCopy: (label: string) => void }) {
+function CgramRow({
+  row,
+  owner,
+  cgram,
+  open,
+  onOpen,
+}: {
+  row: number;
+  owner: CgramOwner;
+  cgram: Uint16Array;
+  open: number | null;
+  onOpen: (i: number | null) => void;
+}) {
   return (
     <>
       <span className={"tm-cgowner" + (owner.used ? "" : " tm-cgowner--unused")} title={owner.label}>
@@ -74,14 +82,16 @@ function CgramRow({ row, owner, cgram, onCopy }: { row: number; owner: CgramOwne
       {Array.from({ length: 16 }, (_, col) => {
         const i = row * 16 + col;
         return (
-          <button
-            key={col}
-            type="button"
-            className={"tm-cgcell" + (col === 0 ? " tm-cgcell--zero" : "")}
-            style={{ backgroundColor: cgram15ToCss(cgram[i] ?? 0) }}
-            title={cgLabel(i)}
-            onClick={() => onCopy(cgLabel(i))}
-          />
+          <span key={col} className="tm-cgcell-wrap">
+            <button
+              type="button"
+              className={"tm-cgcell" + (col === 0 ? " tm-cgcell--zero" : "")}
+              style={{ backgroundColor: cgram15ToCss(cgram[i] ?? 0) }}
+              title={cgLabel(i)}
+              onClick={() => onOpen(i)}
+            />
+            {open === i && <CgramPoke index={i} current={cgram[i] ?? 0} onClose={() => onOpen(null)} />}
+          </span>
         );
       })}
     </>

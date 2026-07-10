@@ -60,6 +60,10 @@
 .tm-pal--used { border-color: #fff; }
 .tm-pal--sel { outline: 2px solid var(--orange); outline-offset: -1px; }
 .tm-swatch { width: 34px; height: 34px; border-radius: 5px; border: 1px solid var(--line2); flex: none; }
+.tm-swatch-wrap { position: relative; flex: none; }
+.tm-swatch--btn { appearance: none; padding: 0; cursor: pointer; }
+.tm-swatch--btn:disabled { cursor: default; }
+.tm-swatch--btn:not(:disabled):hover { outline: 1px solid #fff; outline-offset: -1px; }
 .tm-palpick { display: flex; gap: 10px; align-items: flex-start; }
 .tm-note {
   margin-top: 8px; padding: 8px 12px; border-radius: 6px;
@@ -93,6 +97,7 @@
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 6px;
 }
 .tm-cgowner--unused { color: var(--faint); }
+.tm-cgcell-wrap { position: relative; display: block; width: 12px; height: 12px; }
 .tm-cgcell { appearance: none; width: 12px; height: 12px; border: none; padding: 0; cursor: pointer; border-radius: 1px; }
 .tm-cgcell:hover { outline: 1px solid #fff; outline-offset: -1px; }
 .tm-cgcell--zero {

@@ -123,7 +123,7 @@ export function MemoryLayersOverlay({ onCollapse }: { onCollapse: () => void }) 
             <VramBar regions={regions} onCopy={copy} />
             <VramLegend regions={regions} onCopy={copy} />
             <div className="tm-ov-head">CGRAM ownership</div>
-            <CgramGrid cgram={frame.cgram} owners={owners} onCopy={copy} />
+            <CgramGrid cgram={frame.cgram} owners={owners} />
           </main>
           <aside className="tm-ov-right">
             <div className="tm-ov-head">Live output</div>
