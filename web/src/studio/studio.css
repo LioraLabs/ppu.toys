@@ -144,10 +144,38 @@
 .drop-main { font-family: var(--font-sans); font-size: 12px; color: var(--mid); }
 .drop-sub { font-family: var(--font-mono); font-size: 9px; color: var(--dim2); }
 .drop-sub--error { color: var(--red); }
-.inspector { flex: 1; min-height: 0; display: flex; flex-direction: column; border-top: 1px solid var(--border-subtle); }
-.insp-tabs { height: 34px; flex: none; display: flex; align-items: stretch; padding: 0 8px; border-bottom: 1px solid var(--border-subtle); }
-.insp-tab { display: flex; align-items: center; padding: 0 12px; font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); border-bottom: 2px solid transparent; cursor: pointer; }
-.insp-tab--active { color: var(--text-hi); border-bottom-color: var(--accent-orange); }
+.inspector { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.insp-tabs {
+  flex: none; display: flex; align-items: flex-end; gap: 2px;
+  padding: 8px 12px 0; border-bottom: 1px solid var(--line2);
+}
+.insp-tab {
+  appearance: none; -webkit-appearance: none; background: none; border: none; cursor: pointer;
+  padding: 5px 9px; border-radius: 6px 6px 0 0;
+  font-family: var(--font-mono); font-size: 11px; color: var(--dim);
+  border-bottom: 2px solid transparent;
+}
+.insp-tab--active { color: var(--txt); border-bottom-color: var(--orange); }
+.insp-expand {
+  height: 26px; padding: 0 9px; align-self: center; margin-bottom: 4px;
+  font-family: var(--font-mono); font-size: 11px;
+}
+
+/* Full-screen overlay chrome (Memory & Layers / Compositor). Bodies land in
+   the inspector tickets — only the scaffold is styled here. */
+.insp-overlay {
+  position: absolute; inset: 0; z-index: 20;
+  display: flex; flex-direction: column;
+  background: var(--bg);
+}
+.insp-overlay-bar {
+  height: 48px; flex: none;
+  display: flex; align-items: center; gap: 10px; padding: 0 14px;
+  background: var(--panel2); border-bottom: 1px solid var(--line);
+}
+.insp-overlay-title { font-family: var(--font-mono); font-size: 13px; color: var(--txt); }
+.insp-overlay-sub { font-family: var(--font-sans); font-size: 11px; color: var(--dim); }
+.insp-overlay-body { flex: 1; min-height: 0; overflow: auto; }
 .reg-list { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 8px 12px; }
 .reg-row { display: flex; align-items: center; gap: 10px; padding: 5px 8px; border-radius: 5px; font-family: var(--font-mono); font-size: 12px; }
 .reg-row:hover { background: var(--bg-hover-list); }
