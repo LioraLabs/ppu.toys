@@ -52,7 +52,7 @@ pub(crate) fn char_pixel_index(mem: &Memory, addr: u16, bpp: u8, fx: u32, fy: u3
 /// 4 32x32-entry screens of 0x400 words, arranged per the BGnSC screen size:
 /// 0 = 32x32; 1 = 64x32 (screen 1 right); 2 = 32x64 (screen 1 below);
 /// 3 = 64x64 (screens 0|1 over 2|3). Wraps mod VRAM.
-fn map_entry_addr(map_base: u16, screen_size: u8, tx: u32, ty: u32) -> u16 {
+pub(crate) fn map_entry_addr(map_base: u16, screen_size: u8, tx: u32, ty: u32) -> u16 {
     let screen = match screen_size {
         1 => tx / 32,
         2 => ty / 32,
@@ -138,6 +138,106 @@ pub struct BgPixel {
     pub prio: bool,
 }
 
+/// Every intermediate of the tilemap -> char -> palette walk for screen pixel
+/// (x, y) of one BG layer — the single source of truth shared by the scanline
+/// rasterizer below and the Trace seam (trace.rs). `None` when the layer's bpp
+/// is not 2/4/8 (absent in this mode). `index == 0` = transparent. `fx`/`fy`
+/// are fine coords WITHIN the tile (flips applied), i.e. where the sampled
+/// pixel lives in the stored (unflipped) tile data.
+pub(crate) struct BgSample {
+    pub tx: u32,
+    pub ty: u32,
+    pub map_addr: u16,
+    pub entry: u16,
+    /// VRAM word address of the exact (quadrant-adjusted) char row this pixel
+    /// was fetched from. Not currently surfaced through the Trace seam (which
+    /// recomputes the tile's own base char_addr instead — see trace::bg_tile);
+    /// kept on the sample for diagnostic parity with the scanline rasterizer.
+    #[allow(dead_code)]
+    pub char_addr: u16,
+    pub fx: u32,
+    pub fy: u32,
+    pub index: u8,
+    /// CGRAM index the color came from; `None` for direct color or index 0.
+    pub cgram_index: Option<u16>,
+    /// Resolved BGR555 color; 0 when index == 0 (transparent).
+    pub color15: u16,
+    pub prio: bool,
+}
+
+pub(crate) fn sample_bg_pixel(layer: &RegBg, mem: &Memory, x: usize, y: usize) -> Option<BgSample> {
+    if !matches!(layer.bpp, 2 | 4 | 8) {
+        return None;
+    }
+    let ts = layer.tile_size as u32; // pixel edge: 8 or 16
+    let (tiles_w, tiles_h): (u32, u32) = match layer.screen_size {
+        1 => (64, 32),
+        2 => (32, 64),
+        3 => (64, 64),
+        _ => (32, 32),
+    };
+    let words_per_char = layer.bpp as u32 * 4; // 2bpp = 8 words, 4bpp = 16, 8bpp = 32
+                                               // Mosaic: snap sample coords to the block's top-left. `mosaic` is the block
+                                               // edge in pixels (1 = off, so `by == y` / `bx == x` and output is unchanged).
+                                               // Documented simplification: `by` is anchored to absolute screen row 0, not
+                                               // a frame-latched counter (no mid-frame HDMA $2106 block-boundary latch).
+    let block = layer.mosaic.max(1) as i64;
+    let sy = (y as i64 / block * block) as usize;
+    let sx = (x as i64 / block * block) as usize;
+    let opt = offset_per_tile(layer, mem, sx);
+    let wx =
+        (sx as i64 + layer.scroll_x as i64 + opt.h as i64).rem_euclid((tiles_w * ts) as i64) as u32;
+    let wy =
+        (sy as i64 + layer.scroll_y as i64 + opt.v as i64).rem_euclid((tiles_h * ts) as i64) as u32;
+    let map_addr = map_entry_addr(layer.map_base, layer.screen_size, wx / ts, wy / ts);
+    let entry = mem.vram[map_addr as usize];
+    let (mut fx, mut fy) = (wx % ts, wy % ts);
+    if entry & 0x4000 != 0 {
+        fx = ts - 1 - fx; // H flip
+    }
+    if entry & 0x8000 != 0 {
+        fy = ts - 1 - fy; // V flip
+    }
+    // 16x16 tiles are four 8x8 chars: n, n+1 (right), n+16, n+17 (below).
+    let char_index = ((entry & 0x03ff) as u32 + fx / 8 + (fy / 8) * 16) & 0x03ff;
+    let char_addr = ((layer.char_base as u32 + char_index * words_per_char) & 0x7fff) as u16;
+    let index = char_pixel_index(mem, char_addr, layer.bpp, fx % 8, fy % 8);
+    let (cgram_index, color15) = if index == 0 {
+        (None, 0)
+    } else if layer.bpp == 8 && layer.direct_color {
+        (
+            None,
+            direct_color_bgr555(index, ((entry >> 10) & 0x07) as u8),
+        )
+    } else {
+        let ci = if layer.bpp == 8 {
+            index as u16
+        } else {
+            let pal = ((entry >> 10) & 0x07) as u16;
+            let mode0_band = if layer.mode == 0 && layer.bpp == 2 {
+                layer.layer as u16 * 32
+            } else {
+                0
+            };
+            mode0_band + pal * (1 << layer.bpp) + index as u16
+        };
+        (Some(ci), mem.cgram[ci as usize])
+    };
+    Some(BgSample {
+        tx: wx / ts,
+        ty: wy / ts,
+        map_addr,
+        entry,
+        char_addr,
+        fx,
+        fy,
+        index,
+        cgram_index,
+        color15,
+        prio: entry & 0x2000 != 0,
+    })
+}
+
 /// Render one BG layer for scanline `y` into `width` pixel candidates with
 /// their tilemap priority bit; `None` = transparent at that x. The real
 /// Mode-1 pipeline over byte-accurate VRAM: scroll -> tilemap fetch at
@@ -151,66 +251,16 @@ pub fn render_bg_layer_scanline_px(
     y: usize,
     width: usize,
 ) -> Vec<Option<BgPixel>> {
-    if !layer.visible || !matches!(layer.bpp, 2 | 4 | 8) {
+    if !layer.visible {
         return vec![None; width];
     }
-    let ts = layer.tile_size as u32; // pixel edge: 8 or 16
-    let (tiles_w, tiles_h): (u32, u32) = match layer.screen_size {
-        1 => (64, 32),
-        2 => (32, 64),
-        3 => (64, 64),
-        _ => (32, 32),
-    };
-    let words_per_char = layer.bpp as u32 * 4; // 2bpp = 8 words, 4bpp = 16, 8bpp = 32
-    // Mosaic: snap sample coords to the block's top-left. `mosaic` is the block
-    // edge in pixels (1 = off, so `by == y` / `bx == x` and output is unchanged).
-    // Documented simplification: `by` is anchored to absolute screen row 0, not
-    // a frame-latched counter (no mid-frame HDMA $2106 block-boundary latch).
-    let block = layer.mosaic.max(1) as i64;
-    let sy = (y as i64 / block * block) as usize;
     (0..width)
         .map(|x| {
-            let sx = (x as i64 / block * block) as usize;
-            let opt = offset_per_tile(layer, mem, sx);
-            let wx = (sx as i64 + layer.scroll_x as i64 + opt.h as i64)
-                .rem_euclid((tiles_w * ts) as i64) as u32;
-            let wy = (sy as i64 + layer.scroll_y as i64 + opt.v as i64)
-                .rem_euclid((tiles_h * ts) as i64) as u32;
-            let entry = mem.vram
-                [map_entry_addr(layer.map_base, layer.screen_size, wx / ts, wy / ts) as usize];
-            let (mut fx, mut fy) = (wx % ts, wy % ts);
-            if entry & 0x4000 != 0 {
-                fx = ts - 1 - fx; // H flip
-            }
-            if entry & 0x8000 != 0 {
-                fy = ts - 1 - fy; // V flip
-            }
-            // 16x16 tiles are four 8x8 chars: n, n+1 (right), n+16, n+17 (below).
-            let char_index = ((entry & 0x03ff) as u32 + fx / 8 + (fy / 8) * 16) & 0x03ff;
-            let addr = ((layer.char_base as u32 + char_index * words_per_char) & 0x7fff) as u16;
-            let index = char_pixel_index(mem, addr, layer.bpp, fx % 8, fy % 8);
-            if index == 0 {
-                return None; // color 0 = transparent
-            }
-            let color = if layer.bpp == 8 && layer.direct_color {
-                direct_color_bgr555(index, ((entry >> 10) & 0x07) as u8)
-            } else {
-                let cgram_index = if layer.bpp == 8 {
-                    index as usize
-                } else {
-                    let pal = ((entry >> 10) & 0x07) as usize;
-                    let mode0_band = if layer.mode == 0 && layer.bpp == 2 {
-                        layer.layer as usize * 8 * 4
-                    } else {
-                        0
-                    };
-                    mode0_band + pal * (1 << layer.bpp) + index as usize
-                };
-                mem.cgram[cgram_index] // 4bpp p*16, 2bpp p*4, 8bpp direct index
-            };
-            Some(BgPixel {
-                rgba: unpack_rgb15(color),
-                prio: entry & 0x2000 != 0,
+            sample_bg_pixel(layer, mem, x, y).and_then(|s| {
+                (s.index != 0).then(|| BgPixel {
+                    rgba: unpack_rgb15(s.color15),
+                    prio: s.prio,
+                })
             })
         })
         .collect()
@@ -693,15 +743,39 @@ mod tests {
         let mut l = layer(0);
         l.char_base = 0x1000;
         l.mosaic = 2; // 2x2 blocks
-        // Row y=0: block top row. x=0 lit; x=1 replicates the block's top-left (x=0).
+                      // Row y=0: block top row. x=0 lit; x=1 replicates the block's top-left (x=0).
         let l0 = render_bg_layer_scanline_px(&l, &m, 0, 4);
         assert!(l0[0].is_some());
         assert!(l0[1].is_some()); // horizontal replication within the block
         assert!(l0[2].is_none()); // next block samples x=2 (empty)
-        // Row y=1 snaps up to by=0, so the same top row replicates vertically.
+                                  // Row y=1 snaps up to by=0, so the same top row replicates vertically.
         let l1 = render_bg_layer_scanline_px(&l, &m, 1, 4);
         assert!(l1[0].is_some());
         assert!(l1[1].is_some());
+    }
+
+    #[test]
+    fn sample_bg_pixel_reports_the_full_walk() {
+        // char 1 at 0x1000, pixel (0,0) = index 1; map cell (1,0) = tile1 pal2 prio1;
+        // scroll_x = 8 puts screen x=0 on that cell.
+        let mut m = Memory::new();
+        m.cgram[2 * 16 + 1] = rgb15(0, 255, 0);
+        m.vram[0x1000 + 16] = 0x0080; // 4bpp char 1, plane0 row0 bit7
+        m.vram[0x0001] = 1 | (2 << 10) | (1 << 13);
+        let mut row = crate::registers::LineTableRow::default();
+        row.bg[0].scroll_x = 8.0;
+        row.bg[0].char_base = 0x1000;
+        let reg = crate::registers::RegRow::from(&row);
+        let s = sample_bg_pixel(&reg.bg[0], &m, 0, 0).unwrap();
+        assert_eq!((s.tx, s.ty), (1, 0));
+        assert_eq!(s.map_addr, 1);
+        assert_eq!(s.entry, 1 | (2 << 10) | (1 << 13));
+        assert_eq!(s.char_addr, 0x1000 + 16);
+        assert_eq!((s.fx, s.fy), (0, 0));
+        assert_eq!(s.index, 1);
+        assert_eq!(s.cgram_index, Some(33));
+        assert_eq!(s.color15, rgb15(0, 255, 0));
+        assert!(s.prio);
     }
 
     #[test]
