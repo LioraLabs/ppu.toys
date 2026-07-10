@@ -87,3 +87,41 @@ fn set_source_sugar_attributes_the_sole_file() {
     assert_eq!(err.file.as_deref(), Some("source"));
     assert_eq!(err.line, Some(2));
 }
+
+#[test]
+fn frame_runtime_error_attributes_frames_defining_file() {
+    let mut e = LuaEngine::new();
+    e.set_sources(&[
+        ("util.lua", "function safe() return 1 end"),
+        ("game.lua", "function frame(t,f) error('boom') end"),
+    ])
+    .unwrap();
+    let err = e.frame(0.0, 0).unwrap_err();
+    assert_eq!(err.file.as_deref(), Some("game.lua"));
+    assert!(err.message.contains("boom"));
+}
+
+#[test]
+fn hook_runtime_error_attributes_the_hooks_defining_file() {
+    let mut e = LuaEngine::new();
+    e.set_sources(&[
+        ("fx.lua", "function fx_hook(y) error('kaboom') end"),
+        ("main.lua", "function frame(t,f) hdma(0, 10, fx_hook) end"),
+    ])
+    .unwrap();
+    let err = e.frame(0.0, 0).unwrap_err();
+    assert_eq!(err.file.as_deref(), Some("fx.lua"));
+    assert!(err.message.contains("kaboom"));
+}
+
+#[test]
+fn init_runtime_error_attributes_inits_defining_file() {
+    let mut e = LuaEngine::new();
+    let err = e
+        .set_sources(&[
+            ("setup.lua", "function init() error('bad init') end"),
+            ("main.lua", "function frame(t,f) end"),
+        ])
+        .unwrap_err();
+    assert_eq!(err.file.as_deref(), Some("setup.lua"));
+}

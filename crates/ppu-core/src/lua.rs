@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use piccolo::{
-    Callback, CallbackReturn, Closure, Executor, Lua, PrototypeError, StashedFunction, StaticError,
-    Table, Value,
+    Callback, CallbackReturn, Closure, Executor, Function, Lua, PrototypeError, StashedFunction,
+    StaticError, Table, Value,
 };
 
 use crate::import::obj::{apply_obj_import, import_obj_sheet, ObjImport};
@@ -68,6 +68,8 @@ pub struct LuaEngine {
     lua: Rc<RefCell<Lua>>,
     frame_fn: Option<StashedFunction>,
     init_fn: Option<StashedFunction>,
+    /// Defining chunk of `frame_fn`, for runtime error attribution.
+    frame_file: Option<String>,
     memory: Memory,
     /// Uploaded image assets, keyed by slot id. Consumed by the `source =`
     /// importer; NOT PPU memory (survives recompiles).
@@ -100,6 +102,7 @@ impl LuaEngine {
             lua: Rc::new(RefCell::new(lua)),
             frame_fn: None,
             init_fn: None,
+            frame_file: None,
             memory: Memory::new(),
             assets: HashMap::new(),
             import_cache: ImportCache::default(),
@@ -186,20 +189,21 @@ impl LuaEngine {
             }
         }
 
-        let (frame_fn, init_fn) = lua.enter(|ctx| {
-            let frame_fn = match ctx.get_global("frame") {
-                Value::Function(f) => Some(ctx.stash(f)),
-                _ => None,
+        let (frame_fn, frame_file, init_fn, init_file) = lua.enter(|ctx| {
+            let (frame_fn, frame_file) = match ctx.get_global("frame") {
+                Value::Function(f) => (Some(ctx.stash(f)), function_chunk_name(&f)),
+                _ => (None, None),
             };
-            let init_fn = match ctx.get_global("init") {
-                Value::Function(f) => Some(ctx.stash(f)),
-                _ => None,
+            let (init_fn, init_file) = match ctx.get_global("init") {
+                Value::Function(f) => (Some(ctx.stash(f)), function_chunk_name(&f)),
+                _ => (None, None),
             };
-            (frame_fn, init_fn)
+            (frame_fn, frame_file, init_fn, init_file)
         });
 
         self.lua = Rc::new(RefCell::new(lua));
         self.frame_fn = frame_fn;
+        self.frame_file = frame_file;
         self.init_fn = init_fn;
         self.memory = Memory::new();
 
@@ -209,7 +213,11 @@ impl LuaEngine {
                 let f = ctx.fetch(&init);
                 ctx.stash(Executor::start(ctx, f, ()))
             });
-            l.execute::<()>(&ex).map_err(static_error_to_lua)?;
+            l.execute::<()>(&ex).map_err(|e| {
+                let mut err = static_error_to_lua(e);
+                err.file = init_file.clone();
+                err
+            })?;
         }
         Ok(())
     }
@@ -229,7 +237,11 @@ impl LuaEngine {
                     let func = ctx.fetch(&frame);
                     ctx.stash(Executor::start(ctx, func, (t, f as i64)))
                 });
-                l.execute::<()>(&ex).map_err(static_error_to_lua)?;
+                l.execute::<()>(&ex).map_err(|e| {
+                    let mut err = static_error_to_lua(e);
+                    err.file = self.frame_file.clone();
+                    err
+                })?;
             }
         }
 
@@ -262,7 +274,7 @@ impl LuaEngine {
         };
 
         // Collect registered hooks (stash each fn with its [y0,y1]).
-        let hooks: Vec<(usize, usize, StashedFunction)> = {
+        let hooks: Vec<(usize, usize, StashedFunction, Option<String>)> = {
             let mut l = self.lua.borrow_mut();
             l.enter(|ctx| {
                 let mut out = Vec::new();
@@ -273,7 +285,8 @@ impl LuaEngine {
                             let y0 = entry.get(ctx, 1).to_integer().unwrap_or(0).max(0) as usize;
                             let y1 = entry.get(ctx, 2).to_integer().unwrap_or(0).max(0) as usize;
                             if let Value::Function(func) = entry.get(ctx, 3) {
-                                out.push((y0, y1, ctx.stash(func)));
+                                let file = function_chunk_name(&func);
+                                out.push((y0, y1, ctx.stash(func), file));
                             }
                         }
                     }
@@ -286,7 +299,7 @@ impl LuaEngine {
         // globals to the working row, runs fn(y), and reads the row back.
         let err_sink: Rc<RefCell<Option<LuaError>>> = Rc::new(RefCell::new(None));
         let mut builder = LineTableBuilder::new(defaults.clone());
-        for (y0, y1, sf) in hooks {
+        for (y0, y1, sf, file) in hooks {
             let lua = self.lua.clone();
             let sink = err_sink.clone();
             builder.hdma(y0, y1, move |y, row| {
@@ -304,7 +317,9 @@ impl LuaEngine {
                         *row = l.enter(read_state);
                     }
                     Err(e) => {
-                        *sink.borrow_mut() = Some(static_error_to_lua(e));
+                        let mut err = static_error_to_lua(e);
+                        err.file = file.clone();
+                        *sink.borrow_mut() = Some(err);
                     }
                 }
             });
@@ -552,6 +567,18 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     });
     ctx.set_global("hdma", hdma).unwrap();
     ctx.set_global("scanline", hdma).unwrap();
+}
+
+/// Chunk (source file) name a Lua function was compiled from; `None` for
+/// native callbacks. Basis of runtime per-file error attribution (piccolo
+/// 0.3.3 has no tracebacks, so we attribute to the defining chunk).
+fn function_chunk_name(f: &Function<'_>) -> Option<String> {
+    match f {
+        Function::Closure(c) => {
+            Some(String::from_utf8_lossy(c.prototype().chunk_name.as_bytes()).into_owned())
+        }
+        _ => None,
+    }
 }
 
 fn static_error_to_lua(e: StaticError) -> LuaError {
