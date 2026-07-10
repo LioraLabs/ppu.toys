@@ -11,7 +11,7 @@ export function MemoryTab() {
   const frame = useInspectorFrame();
   const { toast, copy } = useCopyToast();
   const vram = ppuCore.vram();
-  const regions = vramRegions(frame.registers, vram, frame.oam);
+  const regions = vramRegions(frame.registers, vram);
   const owners = cgramOwners(frame.registers, vram, frame.oam);
   return (
     <div className="insp-scroll">

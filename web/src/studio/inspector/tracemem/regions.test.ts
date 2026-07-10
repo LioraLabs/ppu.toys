@@ -18,7 +18,6 @@ describe("vramRegions", () => {
     const r = vramRegions(
       regs({ BGMODE: 0x01, BG1SC: 0x10, BG2SC: 0x20, BG3SC: 0x30, BG12NBA: 0x42, BG34NBA: 0x06, OBSEL: 0x00 }),
       vram,
-      noOam,
     );
     const bg1map = r.find((x) => x.id === "bg1-map")!;
     expect(bg1map.start).toBe(0x1000); // (0x10>>2)<<10
@@ -41,7 +40,6 @@ describe("vramRegions", () => {
     const r = vramRegions(
       regs({ BGMODE: 0x11, BG1SC: 0x03, BG12NBA: 0x00, OBSEL: 0x00 }), // size 3 + BG1 16px tiles
       vram,
-      noOam,
     );
     const bg1map = r.find((x) => x.id === "bg1-map")!;
     expect(bg1map.end - bg1map.start).toBe(0x1000); // 64x64
@@ -51,7 +49,7 @@ describe("vramRegions", () => {
   });
 
   it("derives both OBJ tables from OBSEL", () => {
-    const r = vramRegions(regs({ BGMODE: 0x01, OBSEL: 0x0b }), new Uint16Array(0x8000), noOam);
+    const r = vramRegions(regs({ BGMODE: 0x01, OBSEL: 0x0b }), new Uint16Array(0x8000));
     const a = r.find((x) => x.id === "obj-a")!;
     const b = r.find((x) => x.id === "obj-b")!;
     expect(a.start).toBe(0x6000); // (0x0b & 7) << 13
@@ -61,7 +59,7 @@ describe("vramRegions", () => {
   });
 
   it("mode 7 is one interleaved region + OBJ", () => {
-    const r = vramRegions(regs({ BGMODE: 0x07, OBSEL: 0x00 }), new Uint16Array(0x8000), noOam);
+    const r = vramRegions(regs({ BGMODE: 0x07, OBSEL: 0x00 }), new Uint16Array(0x8000));
     const m7 = r.find((x) => x.id === "m7")!;
     expect([m7.start, m7.end]).toEqual([0, 0x4000]);
     expect(r.some((x) => x.id === "obj-a")).toBe(true);
@@ -69,7 +67,7 @@ describe("vramRegions", () => {
   });
 
   it("is sorted by start address", () => {
-    const r = vramRegions(regs({ BGMODE: 0x01, BG1SC: 0x40, OBSEL: 0x00 }), new Uint16Array(0x8000), noOam);
+    const r = vramRegions(regs({ BGMODE: 0x01, BG1SC: 0x40, OBSEL: 0x00 }), new Uint16Array(0x8000));
     const starts = r.map((x) => x.start);
     expect(starts).toEqual([...starts].sort((a, b) => a - b));
   });

@@ -49,7 +49,7 @@ export function MemoryLayersOverlay({ onCollapse }: { onCollapse: () => void }) 
   const vis = useLayerVis();
   const mode = bgMode(frame.registers);
   const vram = ppuCore.vram();
-  const regions = vramRegions(frame.registers, vram, frame.oam);
+  const regions = vramRegions(frame.registers, vram);
   const owners = cgramOwners(frame.registers, vram, frame.oam);
   const reports = ppuCore.importReports();
   return (

@@ -51,7 +51,7 @@ function maxTileUsed(vram: Uint16Array, mapBase: number, mapWords: number): numb
   return max;
 }
 
-export function vramRegions(registers: RegisterView[], vram: Uint16Array, _oam: OamSprite[]): VramRegion[] {
+export function vramRegions(registers: RegisterView[], vram: Uint16Array): VramRegion[] {
   const bgmode = reg(registers, "BGMODE");
   const mode = bgmode & 7;
   const bpp = MODE_BPP[mode] ?? MODE_BPP[1]; // modes 5/6 unsupported by the core -> mode-1 shape
