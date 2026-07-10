@@ -123,8 +123,9 @@ assignment in the script to the same lvalue overrides the poke for that
 frame. A poked control carries a dot marker (`PokeDot`,
 `inspector/compose/chrome.tsx`) — solid while the live register still reads
 the poked value, hollow ("poked · live value differs (script write or
-quantization)") once the script, or a lossy round-trip (e.g. CGRAM's 5-bit
-quantization), has moved it. To save a configuration beyond the session, copy
+quantization)") once a later script write has moved it — or when the engine
+masked an out-of-range poked value down to the register's real width. To save
+a configuration beyond the session, copy
 the generated `apply_pokes()` source (`PokeBar`'s "copy fn") into a file of
 your own under a new name — hand-edits to `pokes.lua` itself are overwritten
 by the next poke. Poking a bundled demo forks it like any other edit. Pokes

@@ -41,8 +41,9 @@ function dusk_palette(t)
 end
 "#;
 
-/// The single-file form of the flagship: files joined in tab order with "\n",
-/// mirroring the web `Demo.source` join in web/src/studio/demos/demos.ts.
+/// The single-file concat of the flagship's USER chunks (main + palette) for the
+/// multi-file parity golden. The pokes chunk is not part of this concat — it is
+/// prepended separately by `demo_engine_files`, mirroring web tab order.
 fn dusk_concat() -> String {
     format!("{DUSK_MAIN_SRC}\n{DUSK_PALETTE_SRC}")
 }

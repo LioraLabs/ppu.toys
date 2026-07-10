@@ -96,7 +96,7 @@ export function FileTabs(props: FileTabsProps) {
             ) : (
               <span className="ftab-name">{name}</span>
             )}
-            {files.length > 1 && !isGenerated && (
+            {files.length - floor > 1 && !isGenerated && (
               <button
                 type="button"
                 className="ftab-close"
