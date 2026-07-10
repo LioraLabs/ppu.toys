@@ -2,23 +2,26 @@ import "../styles/tokens.css";
 import "./studio.css";
 import { Toolbar } from "./Toolbar";
 import { ActivityRail } from "./ActivityRail";
-import { LeftDock } from "./LeftDock";
 import { EditorPane } from "./EditorPane";
 import { RightColumn } from "./RightColumn";
-import { StatusBar } from "./StatusBar";
 import { transport } from "./transport/transport";
+import { useOpenSketch } from "./sketches/openSketch";
+import { DEMOS } from "./demos/demos";
 
 export function Studio() {
+  const { context, dirty } = useOpenSketch();
+  const sketchName =
+    context.kind === "sketch"
+      ? context.sketch.name
+      : (DEMOS.find((d) => d.id === context.demoId)?.label ?? context.demoId);
   return (
     <div className="studio">
-      <Toolbar />
+      <Toolbar sketchName={sketchName} dirty={dirty} />
       <div className="studio-body">
         <ActivityRail />
-        <LeftDock />
         <EditorPane onSource={transport.setSource} />
         <RightColumn />
       </div>
-      <StatusBar />
     </div>
   );
 }

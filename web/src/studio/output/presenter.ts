@@ -194,7 +194,10 @@ export class Presenter {
     return false;
   }
 
-  /** Size the drawing buffer to an exact integer multiple of native (crisp). */
+  /** Size the drawing buffer to an exact integer multiple of native (crisp).
+   *  On-screen size is the stylesheet's concern (.display-canvas fills its box
+   *  with image-rendering: pixelated, per the Workspace handoff) — the presenter
+   *  never sets inline styles, it only picks the buffer resolution. */
   resize(k: number): void {
     this.k = Math.max(1, Math.round(k));
     if (this.gl) {
@@ -206,8 +209,6 @@ export class Presenter {
       this.canvas.width = WIDTH;
       this.canvas.height = HEIGHT;
     }
-    this.canvas.style.width = `${WIDTH * this.k}px`;
-    this.canvas.style.height = `${HEIGHT * this.k}px`;
   }
 
   render(framebuffer: Uint8ClampedArray, fx: PresentFx): void {

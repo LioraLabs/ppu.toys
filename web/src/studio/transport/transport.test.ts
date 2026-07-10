@@ -146,3 +146,50 @@ describe("transport multi-file recompile", () => {
     expect(seen).toEqual([[{ name: "main.lua", source: "x = 1" }]]);
   });
 });
+
+describe("transport restart (▶ Run)", () => {
+  it("rewinds the clock to t=0/f=0 and re-pushes the last sources", () => {
+    const seen: SourceFile[][] = [];
+    const core: PpuCore = {
+      ...makeCore({ throwing: false }),
+      setSources: (files: SourceFile[]) => {
+        seen.push(files);
+        return { ok: true };
+      },
+    };
+    const tr = new Transport(() => core);
+    tr.setSource("function frame() end");
+    tr.step(500);
+    expect(tr.getSnapshot().t).toBeGreaterThan(0);
+    tr.restart();
+    expect(tr.getSnapshot().t).toBe(0);
+    expect(tr.getSnapshot().f).toBe(0);
+    expect(seen).toEqual([
+      [{ name: "main.lua", source: "function frame() end" }],
+      [{ name: "main.lua", source: "function frame() end" }],
+    ]);
+  });
+
+  it("without prior sources it only rewinds (no setSources call)", () => {
+    const seen: SourceFile[][] = [];
+    const core: PpuCore = {
+      ...makeCore({ throwing: false }),
+      setSources: (files: SourceFile[]) => {
+        seen.push(files);
+        return { ok: true };
+      },
+    };
+    const tr = new Transport(() => core);
+    tr.step(100);
+    tr.restart();
+    expect(tr.getSnapshot().t).toBe(0);
+    expect(seen).toEqual([]);
+  });
+
+  it("resumes playback when paused", () => {
+    const tr = new Transport(() => makeCore({ throwing: false }));
+    tr.setPlaying(false);
+    tr.restart();
+    expect(tr.getSnapshot().playing).toBe(true);
+  });
+});

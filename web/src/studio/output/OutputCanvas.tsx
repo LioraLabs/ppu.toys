@@ -5,6 +5,7 @@ import { transport, useTransport } from "../transport/transport";
 import { Presenter } from "./presenter";
 import { loadFx, saveFx, type PresentFx } from "./fx";
 import { coreKind } from "../../ppu/instance";
+import { DropZone } from "./DropZone";
 
 /** Right-column Output: presents the SHARED core's framebuffer through a WebGL
  *  present pass (integer upscale + toggleable CRT/scanline/pixel-grid FX) and
@@ -20,7 +21,7 @@ export function OutputCanvas() {
   // presenter in Canvas2D mode, so the framebuffer still shows (effects off).
   const [forceCanvas2d, setForceCanvas2d] = useState(false);
 
-  const { t, f, playing, frame } = useTransport();
+  const { t, f, playing, fps, frame } = useTransport();
 
   // init the presenter, integer-scale sizing + initial paint. Re-runs once if
   // WebGL fails and we fall back to a remounted Canvas2D canvas.
@@ -73,7 +74,7 @@ export function OutputCanvas() {
   return (
     <div className="output">
       <div className="output-header">
-        <span className="section-header" style={{ padding: 0 }}>OUTPUT</span>
+        <span className="output-title">LIVE OUTPUT</span>
         <div className="tb-spacer" />
         <FxToggle label="CRT" on={fx.crt} onClick={() => setFx((s) => ({ ...s, crt: !s.crt }))} />
         <FxToggle label="SCAN" on={fx.scanline} onClick={() => setFx((s) => ({ ...s, scanline: !s.scanline }))} />
@@ -81,53 +82,59 @@ export function OutputCanvas() {
         <span className="pill">MODE 1</span>
         <span className="pill">256×224</span>
       </div>
-      <div
-        className="display"
-        ref={displayRef}
-        style={{ display: "grid", placeItems: "center" }}
-      >
-        <canvas
-          ref={canvasRef}
-          // key flips on WebGL failure to mount a pristine canvas for Canvas2D
-          // (a canvas that once held a webgl context can't yield a 2D one).
-          key={forceCanvas2d ? "canvas2d" : "webgl"}
-          className="display-canvas"
-          width={WIDTH}
-          height={HEIGHT}
-        />
-        <span className="display-badge">{coreKind() === "wasm" ? "wasm-ppu" : "mock-ppu"}</span>
-      </div>
-      <div className="transport">
-        <button
-          className="play-btn"
-          aria-label={playing ? "Pause" : "Play"}
-          onClick={() => transport.toggle()}
-        >
-          {playing ? "⏸" : "▶"}
-        </button>
-        <div className="scrubber">
-          <div className="scrubber-fill" style={{ width: `${scrub * 100}%` }} />
-          <div className="scrubber-handle" style={{ left: `${scrub * 100}%` }} />
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.001}
-            value={scrub}
-            onChange={(e) => transport.scrub(Number(e.target.value))}
-            aria-label="Timeline scrubber"
-            style={{
-              position: "absolute",
-              inset: 0,
-              width: "100%",
-              margin: 0,
-              opacity: 0,
-              cursor: "pointer",
-            }}
+      <div className="output-row">
+        <div className="display" ref={displayRef}>
+          <canvas
+            ref={canvasRef}
+            // key flips on WebGL failure to mount a pristine canvas for Canvas2D
+            // (a canvas that once held a webgl context can't yield a 2D one).
+            key={forceCanvas2d ? "canvas2d" : "webgl"}
+            className="display-canvas"
+            width={WIDTH}
+            height={HEIGHT}
           />
+          <span className="display-badge">
+            {(forceCanvas2d ? "canvas" : "webgl") + " · " + (coreKind() === "wasm" ? "wasm-ppu" : "mock-ppu")}
+          </span>
         </div>
-        <span className="time">t={t.toFixed(1)}s</span>
-        <span className="fullscreen">⛶</span>
+        <div className="output-side">
+          <div className="transport">
+            <button
+              className="play-btn"
+              aria-label={playing ? "Pause" : "Play"}
+              onClick={() => transport.toggle()}
+            >
+              {playing ? "⏸" : "▶"}
+            </button>
+            <div className="scrubber">
+              <div className="scrubber-fill" style={{ width: `${scrub * 100}%` }} />
+              <div className="scrubber-handle" style={{ left: `${scrub * 100}%` }} />
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.001}
+                value={scrub}
+                onChange={(e) => transport.scrub(Number(e.target.value))}
+                aria-label="Timeline scrubber"
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  width: "100%",
+                  margin: 0,
+                  opacity: 0,
+                  cursor: "pointer",
+                }}
+              />
+            </div>
+          </div>
+          <div className="readout">
+            <span>t={t.toFixed(1)}s</span>
+            <span>frame {f}</span>
+            <span>{fps}fps</span>
+          </div>
+          <DropZone />
+        </div>
       </div>
     </div>
   );

@@ -1,44 +1,117 @@
+/* Design tokens — Workspace handoff (design_handoff_ppu_toys_workspace/README.md,
+   "Design Tokens"). Two final palettes: dark (default, :root) and light
+   ([data-theme="light"] set on <html> by the toolbar theme toggle).
+   Component CSS should use the handoff names; the legacy alias block keeps
+   pre-M9 panel CSS (inspector.css, assets.css, editor) working in both themes. */
+
 :root {
   /* Backgrounds */
-  --bg-card: #0e1015;
-  --bg-bar: #15171e;       /* toolbar + status bar */
-  --bg-tabbar: #12141a;
-  --bg-rail: #121419;
-  --bg-dock: #101218;      /* left dock + right column */
-  --bg-editor: #0d0f14;
-  --bg-pill: #1d2129;
-  --bg-grid: #0b0d12;      /* palette grid + sprite tile */
-  --bg-display: #06050b;
-  --bg-hover-list: #171a21;
-  --bg-hover-rail: #1c2029;
-  --bg-rail-active: #231a10;
+  --bg: #0e1015;
+  --panel: #101218;
+  --panel2: #12141a;
+  --editor: #0d0f14;
+  --sunken: #0b0d12;
+  --raised: #1d2129;
+  --chipbg: #1d2129;
+  --hover: #171a21;
 
-  /* Borders */
-  --border-primary: #262a33;
-  --border-subtle: #1e222b;
-  --border-palette: #20242d;
-  --border-display: #201420;
-  --border-button: #2f3542;
-  --border-button-hover: #3a414f;
-  --divider: #2a2f3a;
+  /* Lines */
+  --line: #262a33;
+  --line2: #1e222b;
 
   /* Text */
-  --text-hi: #e7e9ef;
-  --text-code: #c8ccd6;
-  --text-mid: #9aa1ae;
-  --text-dim: #6b7280;
-  --text-dim2: #5f6573;
-  --text-dimmer: #4f5562;
-  --text-dimmer2: #3f4654;
+  --txt: #e7e9ef;
+  --txt2: #c8ccd6;
+  --mid: #9aa1ae;
+  --dim: #6b7280;
+  --dim2: #5f6573;
+  --faint: #3f4654;
 
-  /* Accents (Direction B: orange-led) */
-  --accent-orange: #ff9540;
-  --accent-orange-hover: #ffa758;
-  --accent-magenta: #ff4d9d;
-  --accent-green: #5ec97a;
-  --accent-green2: #7ddc8b;
-  --accent-cyan: #5fc9e8;
-  --accent-yellow: #ffd166;
+  /* Accents */
+  --orange: #ff9540;
+  --magenta: #ff4d9d;
+  --green: #5ec97a;
+  --cyan: #5fc9e8;
+  --yellow: #ffd166;
+  --purple: #b9a3e8;
+  --red: #ff5d6a;
+
+  --scrollbar-thumb: #2c313c;
+}
+
+[data-theme="light"] {
+  --bg: #eef1f5;
+  --panel: #ffffff;
+  --panel2: #f5f7fa;
+  --editor: #ffffff;
+  --sunken: #eef1f6;
+  --raised: #e8ecf2;
+  --chipbg: #eef1f6;
+  --hover: #eef1f6;
+
+  --line: #d7dde5;
+  --line2: #e6eaf0;
+
+  --txt: #1b2129;
+  --txt2: #2f3542;
+  --mid: #586171;
+  --dim: #7a8492;
+  --dim2: #98a1af;
+  --faint: #b6bec9;
+
+  /* Accents darkened for contrast on light backgrounds */
+  --orange: #d9660a;
+  --magenta: #c81f74;
+  --green: #1c8a4a;
+  --cyan: #1187a6;
+  --yellow: #a9790a;
+  --purple: #6b4fa0;
+  --red: #d83a48;
+
+  --scrollbar-thumb: #c3cad4;
+}
+
+:root {
+  /* ── Legacy aliases (pre-M9 names). var() resolves per-theme because the
+     primitives above are overridden on the same root element. ── */
+  --bg-card: var(--bg);
+  --bg-bar: var(--panel2);
+  --bg-tabbar: var(--panel2);
+  --bg-rail: var(--panel2);
+  --bg-dock: var(--panel);
+  --bg-editor: var(--editor);
+  --bg-pill: var(--raised);
+  --bg-grid: var(--sunken);
+  --bg-display: #05060a;
+  --bg-hover-list: var(--hover);
+  --bg-hover-rail: var(--hover);
+  --bg-rail-active: color-mix(in srgb, var(--orange) 14%, transparent);
+
+  --border-primary: var(--line);
+  --border-subtle: var(--line2);
+  --border-palette: var(--line2);
+  --border-display: var(--line2);
+  --border-button: var(--line);
+  --border-button-hover: var(--mid);
+  --divider: var(--line);
+
+  --text-hi: var(--txt);
+  --text-main: var(--txt);
+  --text-code: var(--txt2);
+  --text-mid: var(--mid);
+  --text-dim: var(--dim);
+  --text-dim2: var(--dim2);
+  --text-dimmer: var(--dim2);
+  --text-dimmer2: var(--faint);
+
+  --accent: var(--orange);
+  --accent-orange: var(--orange);
+  --accent-orange-hover: color-mix(in srgb, var(--orange) 85%, #ffffff);
+  --accent-magenta: var(--magenta);
+  --accent-green: var(--green);
+  --accent-green2: var(--green);
+  --accent-cyan: var(--cyan);
+  --accent-yellow: var(--yellow);
 
   /* Radii */
   --radius-card: 3px;
@@ -50,20 +123,24 @@
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
   --font-sans: "IBM Plex Sans", system-ui, sans-serif;
 
-  /* Layout sizes (handoff measurements) */
-  --toolbar-h: 52px;
-  --statusbar-h: 30px;
-  --rail-w: 56px;
-  --dock-w: 250px;
-  --right-w: 470px;
+  /* Layout (handoff measurements) */
+  --toolbar-h: 50px;
+  --rail-w: 54px;
+  --right-w: 600px;
 }
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; }
 body {
   margin: 0;
-  background: var(--bg-card);
-  color: var(--text-code);
+  background: var(--bg);
+  color: var(--txt2);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
 }
+
+/* Custom scrollbars (handoff "Misc": 9px, subtle thumb) */
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+* { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
