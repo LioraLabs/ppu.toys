@@ -1,6 +1,3 @@
-/** Inspector tab model. The four Workspace tabs come first (their bodies land
- *  in the Trace/Memory and Compose/Windows inspector tickets); the legacy tabs
- *  stay functional through the transition — the final set is a done-gate call. */
 export type TabId =
   | "trace"
   | "memory"
@@ -12,17 +9,23 @@ export type TabId =
 
 export type OverlayId = "memory-layers" | "compositor";
 
-export const INSPECTOR_TABS: { id: TabId; label: string; legacy?: boolean }[] = [
+/** M9 done-gate decision: the full set is permanent.
+ *  Trace/Memory/Compose/Windows are the workspace tabs; Registers/Sprites/VRAM
+ *  stay as `aux` detail tabs — VRAM's decoded tile + tilemap previews are not
+ *  replicated by Memory (which shows address-space regions + CGRAM ownership),
+ *  Sprites carries the load-bearing M7 RANGE/TIME-OVER badges, and Registers is
+ *  the raw register truth. `aux` styles them secondary and routes no overlay. */
+export const INSPECTOR_TABS: { id: TabId; label: string; aux?: boolean }[] = [
   { id: "trace", label: "Trace" },
   { id: "memory", label: "Memory" },
   { id: "compose", label: "Compose" },
   { id: "windows", label: "Windows" },
-  { id: "registers", label: "Registers", legacy: true },
-  { id: "sprites", label: "Sprites", legacy: true },
-  { id: "vram", label: "VRAM", legacy: true },
+  { id: "registers", label: "Registers", aux: true },
+  { id: "sprites", label: "Sprites", aux: true },
+  { id: "vram", label: "VRAM", aux: true },
 ];
 
-/** Which full-screen overlay ⤢ Expand opens for a tab (legacy tabs: none). */
+/** Which full-screen overlay ⤢ Expand opens for a tab (aux tabs: none). */
 export function overlayForTab(id: TabId): OverlayId | null {
   switch (id) {
     case "trace":
