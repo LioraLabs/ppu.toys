@@ -5,15 +5,12 @@ import { ActivityRail } from "./ActivityRail";
 import { EditorPane } from "./EditorPane";
 import { RightColumn } from "./RightColumn";
 import { transport } from "./transport/transport";
-import { useOpenSketch } from "./sketches/openSketch";
-import { DEMOS } from "./demos/demos";
+import { useOpenSketch, openContextLabel } from "./sketches/openSketch";
 
 export function Studio() {
-  const { context, dirty } = useOpenSketch();
-  const sketchName =
-    context.kind === "sketch"
-      ? context.sketch.name
-      : (DEMOS.find((d) => d.id === context.demoId)?.label ?? context.demoId);
+  const state = useOpenSketch();
+  const { dirty } = state;
+  const sketchName = openContextLabel(state);
   return (
     <div className="studio">
       <Toolbar sketchName={sketchName} dirty={dirty} />
