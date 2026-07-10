@@ -403,7 +403,7 @@ fn mode0_bg2() -> Vec<u8> {
     data
 }
 
-fn demo_engine(src: &str) -> LuaEngine {
+fn demo_engine_files(files: &[(&str, &str)]) -> LuaEngine {
     let mut e = LuaEngine::new();
     e.upload_asset("sky".into(), WIDTH as u32, HEIGHT as u32, sky());
     e.upload_asset("hills".into(), WIDTH as u32, HEIGHT as u32, hills());
@@ -415,8 +415,12 @@ fn demo_engine(src: &str) -> LuaEngine {
     e.upload_asset("mode0_bg2".into(), WIDTH as u32, HEIGHT as u32, mode0_bg2());
     e.upload_asset("panel".into(), WIDTH as u32, HEIGHT as u32, panel());
     e.upload_asset("ramp".into(), WIDTH as u32, HEIGHT as u32, ramp());
-    e.set_source(src).unwrap();
+    e.set_sources(files).unwrap();
     e
+}
+
+fn demo_engine(src: &str) -> LuaEngine {
+    demo_engine_files(&[("source", src)])
 }
 
 /// One RGBA pixel at (x, y) in a WIDTH*HEIGHT framebuffer.
@@ -941,4 +945,17 @@ fn direct_color_demo_matches_golden_png() {
 fn regen_golden_direct_color() {
     let (fb, _) = render_demo(DIRECT_SRC);
     write_png(DIRECT_GOLDEN, &fb);
+}
+
+#[test]
+fn multi_file_split_renders_identical_to_single_file() {
+    let (single, _) = render_demo(OFFSET_SRC);
+
+    let (helper, rest) = OFFSET_SRC.split_once("function frame").unwrap();
+    let main = format!("function frame{rest}");
+    let mut e = demo_engine_files(&[("util.lua", helper), ("main.lua", &main)]);
+    let lt = e.frame(1.0, 60).unwrap();
+    let multi = render_frame(&lt, e.memory());
+
+    assert!(single == multi, "multi-file split must be framebuffer-identical");
 }

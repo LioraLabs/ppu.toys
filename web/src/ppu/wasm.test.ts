@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { wrapWasmCore, type WasmCoreLike } from "./wasm";
-import type { ImportReport } from "./core";
+import type { ImportReport, SourceFile } from "./core";
 
 function fakeCore(over: Partial<WasmCoreLike> = {}): WasmCoreLike {
   return {
@@ -86,5 +86,40 @@ describe("wrapWasmCore", () => {
       maxSprites: 0,
       maxTiles: 0,
     });
+  });
+
+  it("forwards setSources to the core when present", () => {
+    const seen: SourceFile[][] = [];
+    const ppu = wrapWasmCore(
+      fakeCore({
+        setSources: (files) => {
+          seen.push(files);
+          return { ok: false, error: { message: "boom", line: 2, file: "util.lua" } };
+        },
+      }),
+    );
+    const files = [{ name: "util.lua", source: "x = = 1" }];
+    const res = ppu.setSources(files);
+    expect(seen).toEqual([files]);
+    expect(res.ok).toBe(false);
+    expect(res.error?.file).toBe("util.lua");
+  });
+
+  it("setSources falls back to concatenated setSource on an older module", () => {
+    const seen: string[] = [];
+    const ppu = wrapWasmCore(
+      fakeCore({
+        setSource: (src: string) => {
+          seen.push(src);
+          return { ok: true };
+        },
+      }),
+    );
+    const res = ppu.setSources([
+      { name: "a.lua", source: "x = 1" },
+      { name: "b.lua", source: "y = 2" },
+    ]);
+    expect(res.ok).toBe(true);
+    expect(seen).toEqual(["x = 1\ny = 2"]);
   });
 });

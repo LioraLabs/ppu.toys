@@ -1,6 +1,14 @@
+/** One source file of a multi-file sketch. Order is semantic (execution order). */
+export interface SourceFile {
+  name: string;
+  source: string;
+}
+
 export interface LuaError {
   message: string;
   line?: number;
+  /** Source file the error is attributed to (multi-file sketches). */
+  file?: string;
 }
 
 export interface RegisterView {
@@ -79,7 +87,11 @@ export interface FrameResult {
 /** The one hard seam. Headless — no canvas. Both the mock and the real WASM
  *  module implement this; JS owns presentation. */
 export interface PpuCore {
+  /** Single-file sugar for setSources([{ name: "main.lua", source: src }]). */
   setSource(src: string): { ok: boolean; error?: LuaError };
+  /** Compile + run chunks in list order into ONE shared global scope (PICO-8
+   *  semantics); frame()/init() resolve after all chunks. Errors carry `file`. */
+  setSources(files: SourceFile[]): { ok: boolean; error?: LuaError };
   frame(t: number, f: number): FrameResult;
   uploadTexture(slot: string, imageData: ImageData): void;
   setLayerVisible(id: string, visible: boolean): void;

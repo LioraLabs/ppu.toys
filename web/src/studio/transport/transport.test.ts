@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { transport, Transport } from "./transport";
-import type { PpuCore, FrameResult } from "../../ppu/core";
+import type { PpuCore, FrameResult, SourceFile } from "../../ppu/core";
 import { LOOP_SECONDS } from "../output/clock";
 
 describe("transport store", () => {
@@ -45,6 +45,16 @@ describe("transport store", () => {
     expect(transport.getSnapshot()).not.toBe(before);
   });
 
+  it("setSources forwards to the core and refreshes the snapshot", () => {
+    const before = transport.getSnapshot();
+    const res = transport.setSources([
+      { name: "util.lua", source: "function tint() return 5 end" },
+      { name: "main.lua", source: "function frame() end" },
+    ]);
+    expect(res.ok).toBe(true);
+    expect(transport.getSnapshot()).not.toBe(before);
+  });
+
   it("setLayerVisible reaches the shared core (hiding bg1 darkens output)", () => {
     transport.scrub(0.05);
     transport.setLayerVisible("bg1", false);
@@ -67,8 +77,9 @@ function fakeFrame(): FrameResult {
 function makeCore(state: { throwing: boolean }): PpuCore {
   return {
     setSource: () => ({ ok: true }),
+    setSources: () => ({ ok: true }),
     frame: () => {
-      if (state.throwing) throw { message: "attempt to index a nil value", line: 3 };
+      if (state.throwing) throw { message: "attempt to index a nil value", line: 3, file: "fx.lua" };
       return fakeFrame();
     },
     uploadTexture: () => {},
@@ -87,6 +98,7 @@ describe("transport runtime-error guard", () => {
     const err = tr.getSnapshot().runtimeError;
     expect(err?.message).toContain("nil value");
     expect(err?.line).toBe(3);
+    expect(err?.file).toBe("fx.lua"); // per-file attribution survives the guard
   });
 
   it("keeps the same error object identity while the error is unchanged", () => {
@@ -105,5 +117,32 @@ describe("transport runtime-error guard", () => {
     state.throwing = false;
     tr.step(16);
     expect(tr.getSnapshot().runtimeError).toBeUndefined();
+  });
+});
+
+describe("transport multi-file recompile", () => {
+  it("a successful setSources preserves the running clock (M9 contract)", () => {
+    const tr = new Transport(() => makeCore({ throwing: false }));
+    tr.step(100);
+    tr.step(100);
+    const before = tr.getSnapshot();
+    tr.setSources([{ name: "main.lua", source: "function frame() end" }]);
+    const after = tr.getSnapshot();
+    expect(after.t).toBe(before.t);
+    expect(after.f).toBe(before.f);
+  });
+
+  it("setSource sugar wraps the source as a single main.lua", () => {
+    const seen: SourceFile[][] = [];
+    const core: PpuCore = {
+      ...makeCore({ throwing: false }),
+      setSources: (files: SourceFile[]) => {
+        seen.push(files);
+        return { ok: true };
+      },
+    };
+    const tr = new Transport(() => core);
+    tr.setSource("x = 1");
+    expect(seen).toEqual([[{ name: "main.lua", source: "x = 1" }]]);
   });
 });

@@ -8,13 +8,15 @@ import {
   ObjOverflow,
   AssetInfo,
   ImportReport,
+  SourceFile,
 } from "./core";
 
 /** The slice of the wasm-bindgen core the adapter calls. Extracted so the adapter
  *  is unit-testable without instantiating the real wasm module. `frame()` returns
- *  void on success and THROWS a `{message, line?}` object on a Lua runtime error. */
+ *  void on success and THROWS a `{message, line?, file?}` object on a Lua runtime error. */
 export interface WasmCoreLike {
   setSource(src: string): unknown;
+  setSources?: (files: SourceFile[]) => unknown;
   frame(t: number, f: number): void;
   framebuffer(): ArrayLike<number>;
   registers(): unknown;
@@ -35,6 +37,17 @@ export function wrapWasmCore(core: WasmCoreLike): PpuCore {
   return {
     setSource(src: string) {
       return core.setSource(src) as { ok: boolean; error?: LuaError };
+    },
+    setSources(files: SourceFile[]) {
+      if (core.setSources) {
+        return core.setSources(files) as { ok: boolean; error?: LuaError };
+      }
+      // Older wasm module: concatenation keeps the shared-global semantics
+      // (only per-file error attribution is lost).
+      return core.setSource(files.map((f) => f.source).join("\n")) as {
+        ok: boolean;
+        error?: LuaError;
+      };
     },
     frame(t: number, f: number): FrameResult {
       core.frame(t, f); // throws on Lua runtime error -> transport.safeFrame surfaces it

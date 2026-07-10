@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { ppuCore } from "../../ppu/instance";
-import type { FrameResult, LuaError, PpuCore } from "../../ppu/core";
+import type { FrameResult, LuaError, PpuCore, SourceFile } from "../../ppu/core";
 import { advanceClock, scrubToClock, type Clock } from "../output/clock";
 
 export interface TransportState {
@@ -14,8 +14,12 @@ export interface TransportState {
 
 function toLuaError(e: unknown): LuaError {
   if (e && typeof e === "object" && "message" in e) {
-    const o = e as { message: unknown; line?: unknown };
-    return { message: String(o.message), line: typeof o.line === "number" ? o.line : undefined };
+    const o = e as { message: unknown; line?: unknown; file?: unknown };
+    return {
+      message: String(o.message),
+      line: typeof o.line === "number" ? o.line : undefined,
+      file: typeof o.file === "string" ? o.file : undefined,
+    };
   }
   return { message: String(e) };
 }
@@ -23,7 +27,7 @@ function toLuaError(e: unknown): LuaError {
 function luaErrorEq(a: LuaError | undefined, b: LuaError | undefined): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
-  return a.message === b.message && a.line === b.line;
+  return a.message === b.message && a.line === b.line && a.file === b.file;
 }
 
 /** ONE shared transport: owns the single rAF clock and drives the single shared
@@ -149,11 +153,15 @@ export class Transport {
     this.renderOnce();
   }
 
-  setSource = (src: string): { ok: boolean; error?: LuaError } => {
-    const res = this.coreRef().setSource(src);
-    this.renderOnce();
+  setSources = (files: SourceFile[]): { ok: boolean; error?: LuaError } => {
+    const res = this.coreRef().setSources(files);
+    this.renderOnce(); // re-render at the CURRENT clock — recompile never resets t/f
     return res;
   };
+
+  /** Single-file sugar: the whole sketch is one "main.lua". */
+  setSource = (src: string): { ok: boolean; error?: LuaError } =>
+    this.setSources([{ name: "main.lua", source: src }]);
 
   setLayerVisible = (id: string, visible: boolean) => {
     this.coreRef().setLayerVisible(id, visible);
