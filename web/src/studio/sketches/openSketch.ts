@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { DEMOS, demoFiles } from "../demos/demos";
+import { POKES_FILE, EMPTY_POKES } from "../pokes/pokes";
 import {
   newSketchObject,
   createSketch,
@@ -17,11 +18,20 @@ export const NEW_SKETCH_SOURCE = `-- ppu.toys sketch — flat SNES PPU globals, 
 -- registers: mode, brightness, bg[1..4], cgram[], obj[], m7, vram[]
 -- helpers: rgb(r,g,b), hsl(h,s,l), hdma(y0,y1,fn), sin/cos/floor, t, f
 function frame(t, f)
+  apply_pokes()
   mode = 0
   brightness = 15
   cgram[0] = hsl(230, 0.5, 0.12 + 0.04 * sin(t)) -- breathing backdrop
 end
 `;
+
+/** pokes.lua is reserved: always present, always index 0. The ONLY generated
+ *  file — every point where files enter or are read from the open context
+ *  normalizes through this. */
+function ensurePokesFirst(files: SketchFile[]): SketchFile[] {
+  const pokes = files.find((f) => f.name === POKES_FILE) ?? { name: POKES_FILE, source: EMPTY_POKES };
+  return [pokes, ...files.filter((f) => f.name !== POKES_FILE)];
+}
 
 /** What the editor is looking at: a read-only bundled demo, or a stored
  *  sketch. Demos become sketches lazily — see editFile/addAsset. */
@@ -106,7 +116,8 @@ function sketchToMutate(ctx: OpenContext): Sketch {
  *  could double-fork; `session` is untouched, so the editor survives the
  *  lazy fork. Persistence rides the scheduled autosave (saveSketch upserts). */
 function mutateOpen(update: (s: Sketch) => Sketch) {
-  context = { kind: "sketch", sketch: update(sketchToMutate(context)) };
+  const next = update(sketchToMutate(context));
+  context = { kind: "sketch", sketch: { ...next, files: ensurePokesFirst(next.files) } };
   dirty = true;
   gen++;
   schedule();
@@ -114,11 +125,14 @@ function mutateOpen(update: (s: Sketch) => Sketch) {
 }
 
 /** Ordered files of a context (single-file demos present as one main.lua;
- *  multi-file demos present as their ordered files). */
+ *  multi-file demos present as their ordered files). A sketch context's
+ *  files are already normalized (see openContext/mutateOpen); a demo
+ *  context's files are normalized here on read, since demos.ts doesn't
+ *  carry pokes.lua yet (Task 10 will bake it in — this is the bridge). */
 function filesOf(ctx: OpenContext): SketchFile[] {
   if (ctx.kind === "sketch") return ctx.sketch.files;
   const demo = DEMOS.find((d) => d.id === ctx.demoId);
-  return demo ? demoFiles(demo) : [{ name: "main.lua", source: "" }];
+  return ensurePokesFirst(demo ? demoFiles(demo) : [{ name: "main.lua", source: "" }]);
 }
 
 /** Files of the LIVE context. */
@@ -133,7 +147,10 @@ function mutateFiles(update: (files: SketchFile[]) => SketchFile[]) {
 
 function openContext(next: OpenContext) {
   gen++; // invalidate any in-flight flush's state patch (its write still lands)
-  context = next;
+  context =
+    next.kind === "sketch"
+      ? { kind: "sketch", sketch: { ...next.sketch, files: ensurePokesFirst(next.sketch.files) } }
+      : next;
   dirty = false;
   session++;
   emit();
@@ -166,13 +183,17 @@ export const openSketchStore = {
   async newSketch(): Promise<void> {
     await flush();
     const sketch = await createSketch("untitled", [
+      { name: POKES_FILE, source: EMPTY_POKES },
       { name: "main.lua", source: NEW_SKETCH_SOURCE },
     ]);
     openContext({ kind: "sketch", sketch });
   },
 
   /** The editor doc changed. No-ops when the content is unchanged, so a
-   *  pristine write-back can never fork; the first REAL edit of a demo forks it. */
+   *  pristine write-back can never fork; the first REAL edit of a demo forks it.
+   *  pokes.lua's CRUD reservation (below) is about user-facing add/rename/
+   *  delete/reorder — the poke store's own write path calls editFile(POKES_FILE,
+   *  ...) directly and must keep working. */
   editFile(name: string, source: string): void {
     const cur = currentFiles().find((f) => f.name === name);
     if (cur && cur.source === source) return; // pristine content, not an edit
@@ -184,20 +205,26 @@ export const openSketchStore = {
   },
 
   /** Append a new empty file with a unique fileN.lua name; returns the name.
-   *  Order is execution order — new files run last. Demos fork (add IS an edit). */
+   *  Order is execution order — new files run last. Demos fork (add IS an edit).
+   *  pokes.lua doesn't count toward the numbering (it's not a user file) and
+   *  can never collide with the fileN.lua pattern, but the exclusion is kept
+   *  explicit for clarity. */
   addFile(): string {
-    const taken = new Set(currentFiles().map((f) => f.name));
-    let n = taken.size + 1;
+    const files = currentFiles();
+    const taken = new Set(files.map((f) => f.name));
+    let n = files.filter((f) => f.name !== POKES_FILE).length + 1;
     while (taken.has(`file${n}.lua`)) n++;
     const name = `file${n}.lua`;
-    mutateFiles((files) => [...files, { name, source: "" }]);
+    mutateFiles((fs) => [...fs, { name, source: "" }]);
     return name;
   },
 
   /** Rename a file. Returns false (and no-ops) on empty/unknown/duplicate
-   *  names. Renaming a demo's file forks it. */
+   *  names, or on touching the reserved pokes.lua (as source or target).
+   *  Renaming a demo's file forks it. */
   renameFile(from: string, to: string): boolean {
     const next = to.trim();
+    if (from === POKES_FILE || next === POKES_FILE) return false;
     const files = currentFiles();
     if (!next || next === from) return false;
     if (!files.some((f) => f.name === from)) return false;
@@ -206,17 +233,22 @@ export const openSketchStore = {
     return true;
   },
 
-  /** Delete a file. Refuses the last one — a sketch always has >= 1 file. */
+  /** Delete a file. No-ops on the reserved pokes.lua. Refuses the last
+   *  REAL (non-pokes) file — a sketch always has >= 1 user file. */
   deleteFile(name: string): void {
+    if (name === POKES_FILE) return;
     const files = currentFiles();
-    if (files.length <= 1 || !files.some((f) => f.name === name)) return;
+    const realCount = files.filter((f) => f.name !== POKES_FILE).length;
+    if (realCount <= 1 || !files.some((f) => f.name === name)) return;
     mutateFiles((fs) => fs.filter((f) => f.name !== name));
   },
 
-  /** Move files[from] to index `to`. Order is EXECUTION order (PICO-8). */
+  /** Move files[from] to index `to`. Order is EXECUTION order (PICO-8).
+   *  No-ops if either endpoint is index 0 — pokes.lua is pinned first. */
   moveFile(from: number, to: number): void {
     const len = currentFiles().length;
     if (from === to || from < 0 || to < 0 || from >= len || to >= len) return;
+    if (from === 0 || to === 0) return;
     mutateFiles((fs) => {
       const next = [...fs];
       const [moved] = next.splice(from, 1);
