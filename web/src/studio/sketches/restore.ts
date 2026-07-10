@@ -13,8 +13,15 @@ import type { OpenContext } from "./openSketch";
  *  procedural assets replay first (literal ids), then the sketch's stored
  *  PNGs register in array order through the same registerAsset/assetId
  *  dedupe as the original uploads — reproducing the exact ids the sketch's
- *  Lua source was written against. */
-export async function restoreOpenContext(ctx: OpenContext): Promise<void> {
+ *  Lua source was written against.
+ *
+ *  `cancelled` makes overlapping runs safe (StrictMode double-effects, rapid
+ *  opens): a superseded run must stop mutating the shared list after its next
+ *  await, or its assets interleave with the newer context's reset/replay. */
+export async function restoreOpenContext(
+  ctx: OpenContext,
+  cancelled: () => boolean = () => false,
+): Promise<void> {
   assetStore.reset();
   if (ctx.kind === "demo") {
     const demo = DEMOS.find((d) => d.id === ctx.demoId);
@@ -28,6 +35,7 @@ export async function restoreOpenContext(ctx: OpenContext): Promise<void> {
   for (const a of ctx.sketch.assets) {
     const blob = new Blob([a.png as BlobPart], { type: "image/png" });
     const decoded = await decodeImageBlob(blob, a.name);
+    if (cancelled()) return;
     const asset = registerAsset(transport.uploadTexture, assetStore.list(), decoded);
     assetStore.add(asset);
   }

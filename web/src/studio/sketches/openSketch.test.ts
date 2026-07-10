@@ -143,4 +143,17 @@ describe("open / new / switch", () => {
     const loaded = await loadSketch(id);
     expect(loaded!.files[0].source).toBe("-- keep me");
   });
+
+  it("renaming the open sketch survives subsequent edits and the flush", async () => {
+    openSketchStore.editFile("main.lua", "-- a");
+    openSketchStore.rename("my toy");
+    expect(openContextLabel(openSketchStore.state())).toBe("my toy");
+    openSketchStore.editFile("main.lua", "-- b"); // must not resurrect the old name
+    await openSketchStore.flush();
+    const list = await listSketches();
+    expect(list).toHaveLength(1);
+    expect(list[0].name).toBe("my toy");
+    const loaded = await loadSketch(list[0].id);
+    expect(loaded!.files[0].source).toBe("-- b");
+  });
 });

@@ -176,6 +176,13 @@ export const openSketchStore = {
     }));
   },
 
+  /** Rename the OPEN sketch through the live context (renaming it directly in
+   *  the store would be reverted by the next autosave flush, which puts the
+   *  stale in-memory name back). No-op on a demo context. */
+  rename(name: string): void {
+    mutateSketch((s) => ({ ...s, name }));
+  },
+
   /** Persist pending changes now (autosave uses this; tests + open paths too). */
   flush,
 

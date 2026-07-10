@@ -23,8 +23,16 @@ export function EditorPane({ onSource }: EditorPaneProps) {
 
   // (re)load the context's assets on every EXPLICIT open. Keyed on session so
   // a lazy fork (same session, same live assets) does not reload anything.
+  // The cleanup cancels a superseded run (StrictMode double-effects, rapid
+  // opens) so overlapping restores can't interleave duplicate assets.
   useEffect(() => {
-    void restoreOpenContext(openSketchStore.state().context);
+    let cancelled = false;
+    restoreOpenContext(openSketchStore.state().context, () => cancelled).catch((e) =>
+      console.error("asset restore failed", e),
+    );
+    return () => {
+      cancelled = true;
+    };
   }, [session]);
 
   const fileName =
@@ -58,7 +66,9 @@ export function EditorPane({ onSource }: EditorPaneProps) {
             className={
               "etab" + (context.kind === "demo" && d.id === context.demoId ? " etab--active" : "")
             }
-            onClick={() => void openSketchStore.openDemo(d.id)}
+            onClick={() =>
+              openSketchStore.openDemo(d.id).catch((e) => console.error("open demo failed", e))
+            }
           >
             {context.kind === "demo" && d.id === context.demoId && <span className="etab-dot" />}
             {d.label}.lua

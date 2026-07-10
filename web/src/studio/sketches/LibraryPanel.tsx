@@ -43,19 +43,39 @@ export function LibraryPanel({ onClose }: { onClose: () => void }) {
   const open = useOpenSketch();
   const openId = open.context.kind === "sketch" ? open.context.sketch.id : undefined;
 
+  const logErr = (what: string) => (e: unknown) => console.error(what, e);
+
   const rename = (s: SketchMeta) => {
     const name = window.prompt("Rename sketch", s.name)?.trim();
-    if (name) void renameSketch(s.id, name);
+    if (!name) return;
+    // the OPEN sketch must be renamed through the live context — a direct
+    // store write would be reverted by the next autosave flush
+    if (s.id === openId) {
+      openSketchStore.rename(name);
+      openSketchStore.flush().catch(logErr("rename flush failed"));
+    } else {
+      renameSketch(s.id, name).catch(logErr("rename failed"));
+    }
+  };
+  const duplicate = async (s: SketchMeta) => {
+    // include any not-yet-flushed edits when duplicating the open sketch
+    if (s.id === openId) await openSketchStore.flush();
+    await duplicateSketch(s.id);
   };
   const remove = (s: SketchMeta) => {
-    if (window.confirm(`Delete "${s.name}"?`)) void deleteSketch(s.id);
+    if (window.confirm(`Delete "${s.name}"?`))
+      deleteSketch(s.id).catch(logErr("delete failed"));
   };
 
   return (
     <aside className="library" aria-label="Sketch library">
       <header className="library-head">
         <span className="library-title">SKETCHES</span>
-        <button type="button" className="library-btn" onClick={() => void openSketchStore.newSketch()}>
+        <button
+          type="button"
+          className="library-btn"
+          onClick={() => openSketchStore.newSketch().catch(logErr("new sketch failed"))}
+        >
           New
         </button>
         <button type="button" className="library-btn" onClick={onClose} aria-label="Close library">
@@ -72,7 +92,7 @@ export function LibraryPanel({ onClose }: { onClose: () => void }) {
               type="button"
               className="library-open"
               onClick={() => {
-                void openSketchStore.openSketch(s.id);
+                openSketchStore.openSketch(s.id).catch(logErr("open sketch failed"));
                 onClose();
               }}
             >
@@ -83,7 +103,11 @@ export function LibraryPanel({ onClose }: { onClose: () => void }) {
               <button type="button" className="library-btn" onClick={() => rename(s)}>
                 Rename
               </button>
-              <button type="button" className="library-btn" onClick={() => void duplicateSketch(s.id)}>
+              <button
+                type="button"
+                className="library-btn"
+                onClick={() => duplicate(s).catch(logErr("duplicate failed"))}
+              >
                 Dup
               </button>
               <button
