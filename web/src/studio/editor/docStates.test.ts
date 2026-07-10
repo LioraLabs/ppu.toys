@@ -43,4 +43,30 @@ describe("createDocStates", () => {
     expect(docs.acquire("b", "bbb").doc.toString()).toBe("bbb");
     expect(undoDepth(docs.acquire("b", ""))).toBe(0);
   });
+
+  it("generated files get a read-only EditorState", () => {
+    const docs = createDocStates([history()]);
+    const st = docs.acquire("pokes.lua", "function apply_pokes()\nend\n", true);
+    expect(st.readOnly).toBe(true);
+  });
+
+  it("non-generated files are editable", () => {
+    const docs = createDocStates([history()]);
+    const st = docs.acquire("main.lua", "x = 1", false);
+    expect(st.readOnly).toBe(false);
+  });
+
+  it("refreshes a generated doc when the source changes externally", () => {
+    const docs = createDocStates([history()]);
+    docs.acquire("pokes.lua", "v1", true);
+    const b = docs.acquire("pokes.lua", "v2", true);
+    expect(b.doc.toString()).toBe("v2");
+  });
+
+  it("does not rebuild a generated doc when the source is unchanged", () => {
+    const docs = createDocStates([history()]);
+    const a = docs.acquire("pokes.lua", "v1", true);
+    const b = docs.acquire("pokes.lua", "v1", true);
+    expect(b).toBe(a);
+  });
 });

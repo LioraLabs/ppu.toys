@@ -19,6 +19,10 @@ export interface CodeEditorProps {
   docKey: string;
   /** Seed content for a doc this editor instance has not seen yet. */
   doc: string;
+  /** True for a machine-generated, read-only doc (pokes.lua) — the state is
+   *  rebuilt from `doc` whenever it changes externally instead of treating
+   *  the editor buffer as the source of truth. */
+  generated?: boolean;
   /** Called on every document change with the new source. */
   onChange: (src: string) => void;
   /** Errors already routed to THIS doc (compile + runtime), see
@@ -29,14 +33,14 @@ export interface CodeEditorProps {
 /** ONE CodeMirror view for the whole pane; per-file EditorStates swap through
  *  it so tab switches preserve undo history (docStates). Source pushing and
  *  error routing live in EditorPane — this component only edits and displays. */
-export function CodeEditor({ docKey, doc, onChange, errors }: CodeEditorProps) {
+export function CodeEditor({ docKey, doc, generated = false, onChange, errors }: CodeEditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const docsRef = useRef<DocStates | null>(null);
   const keyRef = useRef(docKey);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
-  const initial = useRef({ docKey, doc });
+  const initial = useRef({ docKey, doc, generated });
 
   useEffect(() => {
     if (!host.current) return;
@@ -57,7 +61,7 @@ export function CodeEditor({ docKey, doc, onChange, errors }: CodeEditorProps) {
     keyRef.current = initial.current.docKey;
     const view = new EditorView({
       parent: host.current,
-      state: docs.acquire(initial.current.docKey, initial.current.doc),
+      state: docs.acquire(initial.current.docKey, initial.current.doc, initial.current.generated),
     });
     viewRef.current = view;
     return () => {
@@ -69,15 +73,24 @@ export function CodeEditor({ docKey, doc, onChange, errors }: CodeEditorProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // tab switch: save the outgoing state, swap in the incoming one
+  // tab switch: save the outgoing state, swap in the incoming one. A
+  // generated doc also refreshes IN PLACE (same key) when its source
+  // changes externally — e.g. the inspector rewrites pokes.lua while its
+  // tab is open — since its truth lives outside the editor buffer.
   useEffect(() => {
     const view = viewRef.current;
     const docs = docsRef.current;
-    if (!view || !docs || keyRef.current === docKey) return;
+    if (!view || !docs) return;
+    if (keyRef.current === docKey) {
+      if (generated && view.state.doc.toString() !== doc) {
+        view.setState(docs.acquire(docKey, doc, generated));
+      }
+      return;
+    }
     docs.store(keyRef.current, view.state);
     keyRef.current = docKey;
-    view.setState(docs.acquire(docKey, doc));
-  }, [docKey, doc]);
+    view.setState(docs.acquire(docKey, doc, generated));
+  }, [docKey, doc, generated]);
 
   // (re)display the routed diagnostics for the active doc
   useEffect(() => {
