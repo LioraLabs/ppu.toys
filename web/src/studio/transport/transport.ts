@@ -154,9 +154,11 @@ export class Transport {
     this.renderOnce();
   }
 
-  /** ▶ Run: deterministic restart — re-push the last sources so the core builds
-   *  a fresh program, rewind the clock to t=0/f=0, resume playback. */
+  /** ▶ Run: deterministic restart — drop pinned overrides (recompile keeps them;
+   *  only Run clears), re-push the last sources so the core builds a fresh
+   *  program, rewind the clock to t=0/f=0, resume playback. */
   restart = () => {
+    this.coreRef().clearPins();
     if (this.lastSources !== null) this.coreRef().setSources(this.lastSources);
     this.clock = { t: 0, f: 0 };
     this.setPlaying(true);

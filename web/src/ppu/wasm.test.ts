@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { wrapWasmCore, type WasmCoreLike } from "./wasm";
 import type { ImportReport, SourceFile } from "./core";
+import { WIDTH, HEIGHT, type BgTrace } from "./core";
 
 function fakeCore(over: Partial<WasmCoreLike> = {}): WasmCoreLike {
   return {
@@ -121,5 +122,65 @@ describe("wrapWasmCore", () => {
     ]);
     expect(res.ok).toBe(true);
     expect(seen).toEqual(["x = 1\ny = 2"]);
+  });
+});
+
+describe("wrapWasmCore view seams", () => {
+  it("assembles screens() from the three intermediate getters", () => {
+    const ppu = wrapWasmCore(
+      fakeCore({
+        mainScreen: () => new Uint8Array([1, 2, 3, 255]),
+        subScreen: () => new Uint8Array([4, 5, 6, 255]),
+        mathMask: () => new Uint8Array([1]),
+      }),
+    );
+    const s = ppu.screens();
+    expect(Array.from(s.main)).toEqual([1, 2, 3, 255]);
+    expect(Array.from(s.sub)).toEqual([4, 5, 6, 255]);
+    expect(Array.from(s.mathMask)).toEqual([1]);
+  });
+
+  it("falls back to zeroed screen buffers when the glue lacks the getters", () => {
+    const s = wrapWasmCore(fakeCore()).screens();
+    expect(s.main.length).toBe(WIDTH * HEIGHT * 4);
+    expect(s.sub.length).toBe(WIDTH * HEIGHT * 4);
+    expect(s.mathMask.length).toBe(WIDTH * HEIGHT);
+    expect(s.main.every((b) => b === 0)).toBe(true);
+  });
+
+  it("forwards layerView and falls back to a transparent buffer", () => {
+    const buf = new Uint8Array(4).fill(9);
+    expect(Array.from(wrapWasmCore(fakeCore({ layerView: () => buf })).layerView("bg1"))).toEqual([
+      9, 9, 9, 9,
+    ]);
+    expect(wrapWasmCore(fakeCore()).layerView("obj").length).toBe(WIDTH * HEIGHT * 4);
+  });
+
+  it("forwards trace queries and maps missing glue to null", () => {
+    const trace = { regs: { mode: 1 } } as unknown as BgTrace;
+    const ppu = wrapWasmCore(fakeCore({ traceBgPixel: () => trace }));
+    expect(ppu.traceBgPixel(1, 0, 0)).toBe(trace);
+    const bare = wrapWasmCore(fakeCore());
+    expect(bare.traceBgPixel(1, 0, 0)).toBeNull();
+    expect(bare.traceBgTile(1, 0, 0, 0)).toBeNull();
+    expect(bare.traceObj(0)).toBeNull();
+  });
+
+  it("forwards pin calls and lists pins with an empty fallback", () => {
+    const calls: unknown[] = [];
+    const ppu = wrapWasmCore(
+      fakeCore({
+        pinRegister: (a: number, v: number) => calls.push(["pin", a, v]),
+        unpinRegister: (a: number) => calls.push(["unpin", a]),
+        clearPins: () => calls.push(["clear"]),
+        listPins: () => [{ addr: 0x2100, value: 7 }],
+      }),
+    );
+    ppu.pin(0x2100, 7);
+    ppu.unpin(0x2100);
+    ppu.clearPins();
+    expect(calls).toEqual([["pin", 0x2100, 7], ["unpin", 0x2100], ["clear"]]);
+    expect(ppu.listPins()).toEqual([{ addr: 0x2100, value: 7 }]);
+    expect(wrapWasmCore(fakeCore()).listPins()).toEqual([]);
   });
 });

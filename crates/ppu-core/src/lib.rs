@@ -39,6 +39,12 @@ pub use modes::*;
 mod window;
 pub use window::*;
 
+mod pins;
+pub use pins::*;
+
+mod trace;
+pub use trace::*;
+
 // m4/importer: shared tile-BG importer + reusable quantize/tiles core.
 pub mod import;
 

@@ -87,6 +87,19 @@ function makeCore(state: { throwing: boolean }): PpuCore {
     listAssets: () => [],
     vram: () => new Uint16Array(0),
     importReports: () => [],
+    screens: () => ({
+      main: new Uint8ClampedArray(0),
+      sub: new Uint8ClampedArray(0),
+      mathMask: new Uint8Array(0),
+    }),
+    layerView: () => new Uint8ClampedArray(0),
+    traceBgPixel: () => null,
+    traceBgTile: () => null,
+    traceObj: () => null,
+    pin: () => {},
+    unpin: () => {},
+    clearPins: () => {},
+    listPins: () => [],
   };
 }
 
@@ -191,5 +204,20 @@ describe("transport restart (▶ Run)", () => {
     tr.setPlaying(false);
     tr.restart();
     expect(tr.getSnapshot().playing).toBe(true);
+  });
+
+  it("clears pinned overrides (M9 contract: recompile keeps pins, Run drops them)", () => {
+    let cleared = 0;
+    const core: PpuCore = {
+      ...makeCore({ throwing: false }),
+      clearPins: () => {
+        cleared += 1;
+      },
+    };
+    const tr = new Transport(() => core);
+    tr.setSources([{ name: "main.lua", source: "function frame() end" }]);
+    expect(cleared).toBe(0); // recompile must NOT clear pins
+    tr.restart();
+    expect(cleared).toBe(1);
   });
 });

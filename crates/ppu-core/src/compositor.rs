@@ -155,10 +155,16 @@ fn mode1_ladder(bg3_high: bool) -> Vec<Slot> {
 fn mode7_extbg_ladder() -> [Slot; 6] {
     [
         Slot::Obj { prio: 3 },
-        Slot::Bg { layer: 0, prio: true }, // Mode-7 high (bit7 = 1)
+        Slot::Bg {
+            layer: 0,
+            prio: true,
+        }, // Mode-7 high (bit7 = 1)
         Slot::Obj { prio: 2 },
         Slot::Obj { prio: 1 },
-        Slot::Bg { layer: 0, prio: false }, // Mode-7 low (bit7 = 0)
+        Slot::Bg {
+            layer: 0,
+            prio: false,
+        }, // Mode-7 low (bit7 = 0)
         Slot::Obj { prio: 0 },
     ]
 }
@@ -354,12 +360,13 @@ pub(crate) fn composite_screen(
 }
 
 /// Blend one resolved MAIN pixel against the SUB screen (or COLDATA), returning
-/// the pre-brightness RGBA. Applies CGADSUB add/sub/half gated by the main
-/// source layer's enable bit and (for sprites) the OBJ palette-4-7 rule, plus
-/// the CGWSEL color-window regions: `clip` forces the main pixel to black
-/// before math and suppresses half (even when math is disabled for the
-/// layer), and `prevent` disables math for the column entirely. `main`/`sub`
-/// are the resolved RGBA pixels; `src_main`/`src_sub` their sources.
+/// the pre-brightness RGBA plus whether color math was applied. Applies
+/// CGADSUB add/sub/half gated by the main source layer's enable bit and (for
+/// sprites) the OBJ palette-4-7 rule, plus the CGWSEL color-window regions:
+/// `clip` forces the main pixel to black before math and suppresses half
+/// (even when math is disabled for the layer), and `prevent` disables math
+/// for the column entirely. `main`/`sub` are the resolved RGBA pixels;
+/// `src_main`/`src_sub` their sources.
 fn blend_pixel(
     row: &RegRow,
     main: [u8; 4],
@@ -368,7 +375,7 @@ fn blend_pixel(
     src_sub: PixelSource,
     clip: bool,
     prevent: bool,
-) -> [u8; 4] {
+) -> ([u8; 4], bool) {
     let math_enabled = !prevent
         && row.math_layer_enabled(src_main.math_layer())
         && match src_main {
@@ -377,7 +384,7 @@ fn blend_pixel(
         };
     if !math_enabled {
         // Clip still blackens the main pixel even when math is off for it.
-        return if clip { [0, 0, 0, 255] } else { main };
+        return (if clip { [0, 0, 0, 255] } else { main }, false);
     }
     let main15 = if clip {
         0
@@ -394,7 +401,10 @@ fn blend_pixel(
     };
     // Half is suppressed inside clip-to-black and when the sub pixel is backdrop.
     let half = row.math_half() && !clip && !sub_is_backdrop;
-    unpack_rgb15(color_math(main15, sub15, row.math_subtract(), half))
+    (
+        unpack_rgb15(color_math(main15, sub15, row.math_subtract(), half)),
+        true,
+    )
 }
 
 /// Phase-2 compositor entry: resolved `LineTable` (224 rows) + `Memory` -> full
@@ -404,12 +414,33 @@ pub fn render_frame(lt: &LineTable, mem: &Memory) -> Vec<u8> {
     render_frame_stats(lt, mem).0
 }
 
+/// Everything the compositor computed for one frame: the final framebuffer
+/// plus the per-screen intermediates the inspector renders (M9 view seam).
+/// View data only — `framebuffer` is byte-identical to `render_frame`'s
+/// output; the compositor's rendering semantics are unchanged.
+pub struct FrameView {
+    /// 256x224 RGBA, post-math post-brightness (THE framebuffer).
+    pub framebuffer: Vec<u8>,
+    pub overflow: ObjOverflow,
+    /// Main-screen composite, pre-color-math, pre-brightness (RGBA).
+    pub main: Vec<u8>,
+    /// Sub-screen composite, pre-color-math, pre-brightness (RGBA).
+    pub sub: Vec<u8>,
+    /// One byte per pixel: bit0 = color math applied, bit1 = clip-to-black
+    /// region active, bit2 = prevent-math region active. Force-blank lines = 0.
+    pub math_mask: Vec<u8>,
+}
+
 /// Compositor entry that ALSO returns the per-frame OBJ overflow diagnostic
-/// (`$213E` STAT77). The per-line OBJ bin is computed ONCE here and reused by the
-/// main and sub `composite_screen` passes, so both screens composite the exact
+/// (`$213E` STAT77) and the pre-math/pre-brightness intermediates (M9 view
+/// seam). The per-line OBJ bin is computed ONCE here and reused by the main
+/// and sub `composite_screen` passes, so both screens composite the exact
 /// same deterministically-capped sprite set (no drift).
-pub fn render_frame_stats(lt: &LineTable, mem: &Memory) -> (Vec<u8>, ObjOverflow) {
+pub fn render_frame_view(lt: &LineTable, mem: &Memory) -> FrameView {
     let mut fb = vec![0u8; WIDTH * HEIGHT * 4];
+    let mut vmain = vec![0u8; WIDTH * HEIGHT * 4];
+    let mut vsub = vec![0u8; WIDTH * HEIGHT * 4];
+    let mut vmask = vec![0u8; WIDTH * HEIGHT];
     let mut main = vec![[0u8; 4]; WIDTH];
     let mut sub = vec![[0u8; 4]; WIDTH];
     let mut src_main = vec![PixelSource::Backdrop; WIDTH];
@@ -423,6 +454,8 @@ pub fn render_frame_stats(lt: &LineTable, mem: &Memory) -> (Vec<u8>, ObjOverflow
             for x in 0..WIDTH {
                 let o = (y * WIDTH + x) * 4;
                 fb[o..o + 4].copy_from_slice(&[0, 0, 0, 255]);
+                vmain[o..o + 4].copy_from_slice(&[0, 0, 0, 255]);
+                vsub[o..o + 4].copy_from_slice(&[0, 0, 0, 255]);
             }
             continue;
         }
@@ -452,6 +485,11 @@ pub fn render_frame_stats(lt: &LineTable, mem: &Memory) -> (Vec<u8>, ObjOverflow
             &mut sub,
             &mut src_sub,
         );
+        let row_off = y * WIDTH * 4;
+        for x in 0..WIDTH {
+            vmain[row_off + x * 4..row_off + x * 4 + 4].copy_from_slice(&main[x]);
+            vsub[row_off + x * 4..row_off + x * 4 + 4].copy_from_slice(&sub[x]);
+        }
         let bri = row.brightness;
         let cw_sel = row.color_window();
         let ranges = row.window_ranges();
@@ -461,7 +499,9 @@ pub fn render_frame_stats(lt: &LineTable, mem: &Memory) -> (Vec<u8>, ObjOverflow
             let inside = in_window(&cw_sel, &ranges, x);
             let clip = region_active(clip_mode, inside);
             let prevent = region_active(prevent_mode, inside);
-            let px = blend_pixel(row, main[x], sub[x], src_main[x], src_sub[x], clip, prevent);
+            let (px, applied) =
+                blend_pixel(row, main[x], sub[x], src_main[x], src_sub[x], clip, prevent);
+            vmask[y * WIDTH + x] = applied as u8 | ((clip as u8) << 1) | ((prevent as u8) << 2);
             let o = (y * WIDTH + x) * 4;
             fb[o] = apply_brightness(px[0], bri);
             fb[o + 1] = apply_brightness(px[1], bri);
@@ -469,7 +509,21 @@ pub fn render_frame_stats(lt: &LineTable, mem: &Memory) -> (Vec<u8>, ObjOverflow
             fb[o + 3] = 255;
         }
     }
-    (fb, stats)
+    FrameView {
+        framebuffer: fb,
+        overflow: stats,
+        main: vmain,
+        sub: vsub,
+        math_mask: vmask,
+    }
+}
+
+/// Compositor entry that ALSO returns the per-frame OBJ overflow diagnostic
+/// (`$213E` STAT77). The framebuffer/stats half of [`render_frame_view`],
+/// which owns the actual render loop.
+pub fn render_frame_stats(lt: &LineTable, mem: &Memory) -> (Vec<u8>, ObjOverflow) {
+    let v = render_frame_view(lt, mem);
+    (v.framebuffer, v.overflow)
 }
 
 #[cfg(test)]
@@ -803,10 +857,16 @@ mod tests {
             mode7_extbg_ladder(),
             [
                 Slot::Obj { prio: 3 },
-                Slot::Bg { layer: 0, prio: true },
+                Slot::Bg {
+                    layer: 0,
+                    prio: true
+                },
                 Slot::Obj { prio: 2 },
                 Slot::Obj { prio: 1 },
-                Slot::Bg { layer: 0, prio: false },
+                Slot::Bg {
+                    layer: 0,
+                    prio: false
+                },
                 Slot::Obj { prio: 0 },
             ]
         );
@@ -820,8 +880,8 @@ mod tests {
         m.cgram[0] = rgb15(0, 0, 0);
         m.cgram[1] = rgb15(255, 0, 0); // Mode-7 color 1 = red
         m.cgram[128 + 1] = rgb15(255, 255, 0); // OBJ pal0 idx1 = yellow
-        // Mode-7 tile 0 (map cells default to tile 0): char (0,0)=0x81 hi+color1,
-        // char (1,0)=0x01 lo+color1. HIGH byte = char lane, LOW byte = map (0=tile0).
+                                               // Mode-7 tile 0 (map cells default to tile 0): char (0,0)=0x81 hi+color1,
+                                               // char (1,0)=0x01 lo+color1. HIGH byte = char lane, LOW byte = map (0=tile0).
         m.vram[0] = 0x81 << 8;
         m.vram[1] = 0x01 << 8;
         // Sprite char 1 covering screen x=0 and x=1 (4bpp plane0 row0 bits 7,6).
@@ -1306,5 +1366,83 @@ mod tests {
         // Every pixel of line 0 is opaque black despite bright red BG content.
         assert_eq!(&fb[0..4], &[0, 0, 0, 255]);
         assert_eq!(&fb[(WIDTH - 1) * 4..(WIDTH - 1) * 4 + 4], &[0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn render_frame_view_framebuffer_is_byte_identical_to_render_frame() {
+        let (m, mut src) = two_screen_scene(rgb15(255, 0, 0), rgb15(0, 0, 255));
+        src.cgadsub = 0x40 | 0x01; // the M6 half-add scene
+        src.cgwsel = 0x02;
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        let view = render_frame_view(&lt, &m);
+        assert_eq!(view.framebuffer, render_frame(&lt, &m));
+    }
+
+    #[test]
+    fn view_exposes_pre_math_main_and_sub_composites() {
+        // half-add: fb blends to (15,0,15) but the intermediates keep the raw screens.
+        let (m, mut src) = two_screen_scene(rgb15(255, 0, 0), rgb15(0, 0, 255));
+        src.cgadsub = 0x40 | 0x01;
+        src.cgwsel = 0x02;
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        let view = render_frame_view(&lt, &m);
+        assert_eq!(&view.main[0..4], &unpack_rgb15(rgb15(255, 0, 0))); // BG1 pre-math
+        assert_eq!(&view.sub[0..4], &unpack_rgb15(rgb15(0, 0, 255))); // BG2 sub screen
+        assert_eq!(view.math_mask[0] & 1, 1); // math applied here
+        assert_eq!(&view.framebuffer[0..4], &unpack_rgb15((15 << 10) | 15));
+    }
+
+    #[test]
+    fn view_screens_are_pre_brightness() {
+        let (m, mut src) = two_screen_scene(rgb15(255, 0, 0), rgb15(0, 0, 255));
+        src.brightness = 0; // fb black, intermediates un-attenuated
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        let view = render_frame_view(&lt, &m);
+        assert_eq!(&view.framebuffer[0..4], &[0, 0, 0, 255]);
+        assert_eq!(&view.main[0..4], &unpack_rgb15(rgb15(255, 0, 0)));
+    }
+
+    #[test]
+    fn math_mask_flags_applied_clip_and_prevent_regions() {
+        // prevent = inside window (bits 4-5 = 10): inside -> bit2 set + bit0 clear.
+        let (m, mut src) = color_window_scene(rgb15(255, 0, 0), rgb15(0, 0, 255));
+        src.cgadsub = 0x01;
+        src.cgwsel = 0x02 | (0b10 << 4);
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        let view = render_frame_view(&lt, &m);
+        assert_eq!(view.math_mask[0], 0b100); // prevent active, no math
+        assert_eq!(view.math_mask[8], 0b001); // outside: math applied
+                                              // clip = inside (bits 6-7 = 10): bit1 set inside; math still applies there.
+        let (m, mut src) = color_window_scene(rgb15(255, 0, 0), rgb15(0, 0, 255));
+        src.cgadsub = 0x01;
+        src.cgwsel = 0x02 | (0b10 << 6);
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        let view = render_frame_view(&lt, &m);
+        assert_eq!(view.math_mask[0], 0b011); // clip region + math applied
+        assert_eq!(view.math_mask[8], 0b001);
+    }
+
+    #[test]
+    fn math_mask_reports_clip_region_with_math_disabled() {
+        // clip=always but no CGADSUB layer enabled: the pixel is blackened via
+        // the no-math early return -> bit1 (clip) set, bit0 (applied) clear.
+        let (m, mut src) = two_screen_scene(rgb15(255, 0, 0), rgb15(0, 0, 255));
+        src.cgadsub = 0x00;
+        src.cgwsel = 0b11 << 6;
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        let view = render_frame_view(&lt, &m);
+        assert_eq!(view.math_mask[0], 0b010);
+        assert_eq!(&view.framebuffer[0..4], &[0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn force_blank_line_blanks_view_buffers() {
+        let (m, mut src) = two_screen_scene(rgb15(255, 0, 0), rgb15(0, 0, 255));
+        src.force_blank = true;
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        let view = render_frame_view(&lt, &m);
+        assert_eq!(&view.main[0..4], &[0, 0, 0, 255]);
+        assert_eq!(&view.sub[0..4], &[0, 0, 0, 255]);
+        assert_eq!(view.math_mask[0], 0);
     }
 }
