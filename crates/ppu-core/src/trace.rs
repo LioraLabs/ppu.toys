@@ -293,7 +293,7 @@ pub fn trace_bg_tile(
         let ty = ty & 127;
         let map_addr = (ty * 128 + tx) as u16;
         let entry = mem.vram[map_addr as usize];
-        let tile = (entry & 0x00ff) as u16;
+        let tile = entry & 0x00ff;
         let char_addr = tile.wrapping_mul(64);
         let pixels = (0..64)
             .map(|i| (mem.vram[tile as usize * 64 + i] >> 8) as u8)
