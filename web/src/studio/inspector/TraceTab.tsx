@@ -1,6 +1,22 @@
-/** TRACE — the pixel-pipeline explorer. Body lands in the Trace/Memory
- *  inspector ticket; this file is its mount point, kept separate so parallel
- *  merges don't collide. */
+import { useInspectorFrame } from "./useInspectorFrame";
+import { useCopyToast } from "./tracemem/copyToast";
+import { ModeBadge, PlaneSeg, TraceCaption, TraceChain } from "./tracemem/TraceChain";
+import "./tracemem/tracemem.css";
+
+/** TRACE — the pixel-pipeline explorer. Plane is user-selected; mode is
+ *  REPORTED from the live frame (M9 deviation — scripts own the mode). */
 export function TraceTab() {
-  return <div className="insp-empty">Trace — pixel pipeline explorer coming soon.</div>;
+  const frame = useInspectorFrame();
+  const { toast, copy } = useCopyToast();
+  return (
+    <div className="insp-scroll">
+      <div className="tm-controls">
+        <PlaneSeg />
+        <ModeBadge frame={frame} />
+      </div>
+      <TraceCaption frame={frame} />
+      <TraceChain frame={frame} copy={copy} variant="tab" />
+      {toast}
+    </div>
+  );
 }
