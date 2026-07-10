@@ -39,9 +39,6 @@ pub use modes::*;
 mod window;
 pub use window::*;
 
-mod pins;
-pub use pins::*;
-
 mod trace;
 pub use trace::*;
 
