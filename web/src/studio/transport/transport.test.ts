@@ -79,7 +79,7 @@ function makeCore(state: { throwing: boolean }): PpuCore {
     setSource: () => ({ ok: true }),
     setSources: () => ({ ok: true }),
     frame: () => {
-      if (state.throwing) throw { message: "attempt to index a nil value", line: 3 };
+      if (state.throwing) throw { message: "attempt to index a nil value", line: 3, file: "fx.lua" };
       return fakeFrame();
     },
     uploadTexture: () => {},
@@ -98,6 +98,7 @@ describe("transport runtime-error guard", () => {
     const err = tr.getSnapshot().runtimeError;
     expect(err?.message).toContain("nil value");
     expect(err?.line).toBe(3);
+    expect(err?.file).toBe("fx.lua"); // per-file attribution survives the guard
   });
 
   it("keeps the same error object identity while the error is unchanged", () => {

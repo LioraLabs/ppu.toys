@@ -13,7 +13,7 @@ import {
 
 /** The slice of the wasm-bindgen core the adapter calls. Extracted so the adapter
  *  is unit-testable without instantiating the real wasm module. `frame()` returns
- *  void on success and THROWS a `{message, line?}` object on a Lua runtime error. */
+ *  void on success and THROWS a `{message, line?, file?}` object on a Lua runtime error. */
 export interface WasmCoreLike {
   setSource(src: string): unknown;
   setSources?: (files: SourceFile[]) => unknown;

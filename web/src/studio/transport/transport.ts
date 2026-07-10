@@ -14,8 +14,12 @@ export interface TransportState {
 
 function toLuaError(e: unknown): LuaError {
   if (e && typeof e === "object" && "message" in e) {
-    const o = e as { message: unknown; line?: unknown };
-    return { message: String(o.message), line: typeof o.line === "number" ? o.line : undefined };
+    const o = e as { message: unknown; line?: unknown; file?: unknown };
+    return {
+      message: String(o.message),
+      line: typeof o.line === "number" ? o.line : undefined,
+      file: typeof o.file === "string" ? o.file : undefined,
+    };
   }
   return { message: String(e) };
 }
@@ -23,7 +27,7 @@ function toLuaError(e: unknown): LuaError {
 function luaErrorEq(a: LuaError | undefined, b: LuaError | undefined): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
-  return a.message === b.message && a.line === b.line;
+  return a.message === b.message && a.line === b.line && a.file === b.file;
 }
 
 /** ONE shared transport: owns the single rAF clock and drives the single shared
