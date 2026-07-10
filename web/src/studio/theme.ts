@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useLayoutEffect, useState } from "react";
 
 export type Theme = "dark" | "light";
 
@@ -22,10 +22,12 @@ function loadTheme(): Theme {
 }
 
 /** Theme state: owns the `data-theme` attribute on <html> (tokens.css keys the
- *  light palette off [data-theme="light"]) and persists the choice. */
+ *  light palette off [data-theme="light"]) and persists the choice. Holds local
+ *  state and is intended for a single consumer (the Toolbar) — if a second
+ *  consumer ever needs it, lift to a shared store. */
 export function useTheme() {
   const [theme, setTheme] = useState<Theme>(loadTheme);
-  useEffect(() => {
+  useLayoutEffect(() => {
     document.documentElement.dataset.theme = theme;
     try {
       localStorage.setItem(STORAGE_KEY, theme);
