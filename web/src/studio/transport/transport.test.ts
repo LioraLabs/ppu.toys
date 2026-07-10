@@ -76,6 +76,19 @@ function makeCore(state: { throwing: boolean }): PpuCore {
     listAssets: () => [],
     vram: () => new Uint16Array(0),
     importReports: () => [],
+    screens: () => ({
+      main: new Uint8ClampedArray(0),
+      sub: new Uint8ClampedArray(0),
+      mathMask: new Uint8Array(0),
+    }),
+    layerView: () => new Uint8ClampedArray(0),
+    traceBgPixel: () => null,
+    traceBgTile: () => null,
+    traceObj: () => null,
+    pin: () => {},
+    unpin: () => {},
+    clearPins: () => {},
+    listPins: () => [],
   };
 }
 
