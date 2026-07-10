@@ -272,29 +272,6 @@ impl PpuCore {
         }
     }
 
-    /// Pin a register override (M9): applied after frame()+hdma on every
-    /// scanline, winning over script writes. NOT cleared by setSource — the UI's
-    /// ▶ Run restart calls clearPins explicitly.
-    #[wasm_bindgen(js_name = pinRegister)]
-    pub fn pin_register(&mut self, addr: u32, value: i32) {
-        self.engine.pins_mut().pin(addr as u16, value);
-    }
-
-    #[wasm_bindgen(js_name = unpinRegister)]
-    pub fn unpin_register(&mut self, addr: u32) {
-        self.engine.pins_mut().unpin(addr as u16);
-    }
-
-    #[wasm_bindgen(js_name = clearPins)]
-    pub fn clear_pins(&mut self) {
-        self.engine.pins_mut().clear();
-    }
-
-    /// The pinned set, addr-ordered, as `[{addr, value}]`.
-    #[wasm_bindgen(js_name = listPins)]
-    pub fn list_pins(&self) -> Result<JsValue, JsValue> {
-        serde_wasm_bindgen::to_value(&self.engine.pins().list()).map_err(Into::into)
-    }
 }
 
 impl Default for PpuCore {
