@@ -107,3 +107,43 @@ describe("transport runtime-error guard", () => {
     expect(tr.getSnapshot().runtimeError).toBeUndefined();
   });
 });
+
+describe("transport restart (▶ Run)", () => {
+  it("rewinds the clock to t=0/f=0 and re-sets the last source", () => {
+    const calls: string[] = [];
+    const core = makeCore({ throwing: false });
+    core.setSource = (src: string) => {
+      calls.push(src);
+      return { ok: true };
+    };
+    const tr = new Transport(() => core);
+    tr.setSource("function frame() end");
+    tr.step(500);
+    expect(tr.getSnapshot().t).toBeGreaterThan(0);
+    tr.restart();
+    expect(tr.getSnapshot().t).toBe(0);
+    expect(tr.getSnapshot().f).toBe(0);
+    expect(calls).toEqual(["function frame() end", "function frame() end"]);
+  });
+
+  it("without a prior source it only rewinds (no setSource call)", () => {
+    const calls: string[] = [];
+    const core = makeCore({ throwing: false });
+    core.setSource = (src: string) => {
+      calls.push(src);
+      return { ok: true };
+    };
+    const tr = new Transport(() => core);
+    tr.step(100);
+    tr.restart();
+    expect(tr.getSnapshot().t).toBe(0);
+    expect(calls).toEqual([]);
+  });
+
+  it("resumes playback when paused", () => {
+    const tr = new Transport(() => makeCore({ throwing: false }));
+    tr.setPlaying(false);
+    tr.restart();
+    expect(tr.getSnapshot().playing).toBe(true);
+  });
+});

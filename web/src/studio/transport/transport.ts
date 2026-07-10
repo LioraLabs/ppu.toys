@@ -41,6 +41,7 @@ export class Transport {
   private lastTs = 0;
   private fpsMs = 0;
   private fpsCount = 0;
+  private lastSource: string | null = null;
 
   constructor(private coreRef: () => PpuCore = () => ppuCore) {
     this.frame = this.safeFrame(0, 0);
@@ -149,7 +150,17 @@ export class Transport {
     this.renderOnce();
   }
 
+  /** ▶ Run: deterministic restart — re-push the last source so the core builds
+   *  a fresh program, rewind the clock to t=0/f=0, resume playback. */
+  restart = () => {
+    if (this.lastSource !== null) this.coreRef().setSource(this.lastSource);
+    this.clock = { t: 0, f: 0 };
+    this.setPlaying(true);
+    this.renderOnce();
+  };
+
   setSource = (src: string): { ok: boolean; error?: LuaError } => {
+    this.lastSource = src;
     const res = this.coreRef().setSource(src);
     this.renderOnce();
     return res;
