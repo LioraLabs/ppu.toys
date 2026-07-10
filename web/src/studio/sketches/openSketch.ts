@@ -52,7 +52,10 @@ function emit() {
 
 function schedule() {
   if (timer) clearTimeout(timer);
-  timer = setTimeout(() => void flush(), AUTOSAVE_MS);
+  timer = setTimeout(() => {
+    // on failure dirty stays true (unsaved dot persists); the next edit retries
+    flush().catch((e) => console.error("sketch autosave failed", e));
+  }, AUTOSAVE_MS);
 }
 
 /** Persist the open sketch now (no-op when clean or on a demo). Captures its
