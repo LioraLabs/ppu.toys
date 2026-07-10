@@ -764,9 +764,7 @@ fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
                 layer
                     .set(ctx, "char_base", row.bg[i].char_base as i64)
                     .unwrap();
-                layer
-                    .set(ctx, "mosaic", row.mosaic_enable[i])
-                    .unwrap();
+                layer.set(ctx, "mosaic", row.mosaic_enable[i]).unwrap();
             }
         }
     }
