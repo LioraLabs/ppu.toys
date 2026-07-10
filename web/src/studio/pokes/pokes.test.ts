@@ -18,7 +18,7 @@ describe("poke generator/parser", () => {
       { lvalue: "WH0", expr: "40" },
     ];
     expect(parsePokes(pokesToLua(pokes))).toEqual(
-      [...pokes].sort((a, b) => a.lvalue.localeCompare(b.lvalue)),
+      [...pokes].sort((a, b) => (a.lvalue < b.lvalue ? -1 : 1)),
     );
   });
 
