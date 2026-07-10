@@ -1,0 +1,103 @@
+/* Sketch library panel — plain, token-only chrome. position:fixed off the
+   rail so studio.css / Studio.tsx stay untouched. */
+.library {
+  position: fixed;
+  left: var(--rail-w);
+  top: var(--toolbar-h);
+  bottom: 0;
+  width: 280px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-dock);
+  border-right: 1px solid var(--border-primary);
+  font-family: var(--font-sans);
+  color: var(--text-mid);
+}
+.library-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.library-title {
+  flex: 1;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+.library-btn {
+  background: none;
+  border: 1px solid var(--border-button);
+  border-radius: var(--radius-pill);
+  color: var(--text-mid);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.library-btn:hover {
+  border-color: var(--border-button-hover);
+  color: var(--text-hi);
+}
+.library-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.library-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  flex: 1;
+}
+.library-empty {
+  padding: 12px 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.library-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: var(--radius-pill);
+  padding: 2px 4px;
+}
+.library-row:hover {
+  background: var(--bg-hover-list);
+}
+.library-row--open .library-name {
+  color: var(--accent-orange);
+}
+.library-open {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  padding: 6px 4px;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+.library-name {
+  font-size: 13px;
+  color: var(--text-hi);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.library-updated {
+  font-size: 11px;
+  color: var(--text-dim2);
+  flex: none;
+}
+.library-actions {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}

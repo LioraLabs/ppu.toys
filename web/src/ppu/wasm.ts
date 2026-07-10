@@ -8,24 +8,46 @@ import {
   ObjOverflow,
   AssetInfo,
   ImportReport,
+  SourceFile,
+  CompositorScreens,
+  PlaneId,
+  BgTrace,
+  ObjTrace,
+  PinnedRegister,
 } from "./core";
 
 /** The slice of the wasm-bindgen core the adapter calls. Extracted so the adapter
  *  is unit-testable without instantiating the real wasm module. `frame()` returns
- *  void on success and THROWS a `{message, line?}` object on a Lua runtime error. */
+ *  void on success and THROWS a `{message, line?, file?}` object on a Lua runtime error.
+ *
+ *  Every method is REQUIRED: the pkg is always built from this same tree
+ *  (content-cached `cook wasm`), so an "older wasm module" cannot exist — a
+ *  contract mismatch must fail loudly at this boundary, not degrade silently. */
 export interface WasmCoreLike {
   setSource(src: string): unknown;
+  setSources(files: SourceFile[]): unknown;
   frame(t: number, f: number): void;
   framebuffer(): ArrayLike<number>;
   registers(): unknown;
   cgram(): Uint16Array;
-  vram?: () => Uint16Array;
-  oam?: () => OamSprite[];
-  objOverflow?: () => ObjOverflow;
-  listAssets?: () => AssetInfo[];
-  importReports?: () => ImportReport[];
+  vram(): Uint16Array;
+  oam(): OamSprite[];
+  objOverflow(): ObjOverflow;
+  listAssets(): AssetInfo[];
+  importReports(): ImportReport[];
   uploadTexture(slot: string, imageData: ImageData): void;
   setLayerVisible(id: string, visible: boolean): void;
+  mainScreen(): ArrayLike<number>;
+  subScreen(): ArrayLike<number>;
+  mathMask(): ArrayLike<number>;
+  layerView(plane: string): ArrayLike<number>;
+  traceBgPixel(layer: number, x: number, y: number): unknown;
+  traceBgTile(layer: number, tx: number, ty: number, y: number): unknown;
+  traceObj(index: number): unknown;
+  pinRegister(addr: number, value: number): void;
+  unpinRegister(addr: number): void;
+  clearPins(): void;
+  listPins(): unknown;
 }
 
 /** Adapt a wasm-bindgen core to the PpuCore seam. Pure (no wasm load) so it can be
@@ -36,19 +58,17 @@ export function wrapWasmCore(core: WasmCoreLike): PpuCore {
     setSource(src: string) {
       return core.setSource(src) as { ok: boolean; error?: LuaError };
     },
+    setSources(files: SourceFile[]) {
+      return core.setSources(files) as { ok: boolean; error?: LuaError };
+    },
     frame(t: number, f: number): FrameResult {
       core.frame(t, f); // throws on Lua runtime error -> transport.safeFrame surfaces it
       return {
         framebuffer: new Uint8ClampedArray(core.framebuffer()),
         registers: core.registers() as RegisterView[],
         cgram: core.cgram(),
-        oam: core.oam?.() ?? [],
-        objOverflow: (core.objOverflow?.() as ObjOverflow) ?? {
-          rangeOver: false,
-          timeOver: false,
-          maxSprites: 0,
-          maxTiles: 0,
-        },
+        oam: core.oam(),
+        objOverflow: core.objOverflow(),
       };
     },
     uploadTexture(slot: string, imageData: ImageData) {
@@ -58,13 +78,46 @@ export function wrapWasmCore(core: WasmCoreLike): PpuCore {
       core.setLayerVisible(id, visible);
     },
     listAssets(): AssetInfo[] {
-      return core.listAssets?.() ?? [];
+      return core.listAssets();
     },
     vram(): Uint16Array {
-      return core.vram?.() ?? new Uint16Array(0);
+      return core.vram();
     },
     importReports(): ImportReport[] {
-      return core.importReports?.() ?? [];
+      return core.importReports();
+    },
+    screens(): CompositorScreens {
+      return {
+        main: new Uint8ClampedArray(core.mainScreen()),
+        sub: new Uint8ClampedArray(core.subScreen()),
+        mathMask: new Uint8Array(core.mathMask()),
+      };
+    },
+    layerView(plane: PlaneId): Uint8ClampedArray {
+      return new Uint8ClampedArray(core.layerView(plane));
+    },
+    // trace results: wasm-bindgen serializes a Rust `None` as undefined — the
+    // `?? null` below normalizes the VALUE, the methods themselves are required.
+    traceBgPixel(layer: number, x: number, y: number): BgTrace | null {
+      return (core.traceBgPixel(layer, x, y) as BgTrace | null | undefined) ?? null;
+    },
+    traceBgTile(layer: number, tx: number, ty: number, y: number): BgTrace | null {
+      return (core.traceBgTile(layer, tx, ty, y) as BgTrace | null | undefined) ?? null;
+    },
+    traceObj(index: number): ObjTrace | null {
+      return (core.traceObj(index) as ObjTrace | null | undefined) ?? null;
+    },
+    pin(addr: number, value: number) {
+      core.pinRegister(addr, value);
+    },
+    unpin(addr: number) {
+      core.unpinRegister(addr);
+    },
+    clearPins() {
+      core.clearPins();
+    },
+    listPins(): PinnedRegister[] {
+      return core.listPins() as PinnedRegister[];
     },
   };
 }

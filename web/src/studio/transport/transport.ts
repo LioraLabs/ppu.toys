@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { ppuCore } from "../../ppu/instance";
-import type { FrameResult, LuaError, PpuCore } from "../../ppu/core";
+import type { FrameResult, LuaError, PpuCore, SourceFile } from "../../ppu/core";
 import { advanceClock, scrubToClock, type Clock } from "../output/clock";
 
 export interface TransportState {
@@ -14,8 +14,12 @@ export interface TransportState {
 
 function toLuaError(e: unknown): LuaError {
   if (e && typeof e === "object" && "message" in e) {
-    const o = e as { message: unknown; line?: unknown };
-    return { message: String(o.message), line: typeof o.line === "number" ? o.line : undefined };
+    const o = e as { message: unknown; line?: unknown; file?: unknown };
+    return {
+      message: String(o.message),
+      line: typeof o.line === "number" ? o.line : undefined,
+      file: typeof o.file === "string" ? o.file : undefined,
+    };
   }
   return { message: String(e) };
 }
@@ -23,7 +27,7 @@ function toLuaError(e: unknown): LuaError {
 function luaErrorEq(a: LuaError | undefined, b: LuaError | undefined): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
-  return a.message === b.message && a.line === b.line;
+  return a.message === b.message && a.line === b.line && a.file === b.file;
 }
 
 /** ONE shared transport: owns the single rAF clock and drives the single shared
@@ -41,6 +45,7 @@ export class Transport {
   private lastTs = 0;
   private fpsMs = 0;
   private fpsCount = 0;
+  private lastSources: SourceFile[] | null = null;
 
   constructor(private coreRef: () => PpuCore = () => ppuCore) {
     this.frame = this.safeFrame(0, 0);
@@ -149,9 +154,47 @@ export class Transport {
     this.renderOnce();
   }
 
-  setSource = (src: string): { ok: boolean; error?: LuaError } => {
-    const res = this.coreRef().setSource(src);
+  /** ▶ Run: deterministic restart — drop pinned overrides (recompile keeps them;
+   *  only Run clears), re-push the last sources so the core builds a fresh
+   *  program, rewind the clock to t=0/f=0, resume playback. */
+  restart = () => {
+    this.clearPins(); // through the pin action, so the pin-set change notifies
+    if (this.lastSources !== null) this.coreRef().setSources(this.lastSources);
+    this.clock = { t: 0, f: 0 };
+    this.setPlaying(true);
     this.renderOnce();
+  };
+
+  /** Pinned register overrides (M9). The pin SET lives in the core; these
+   *  actions are its only write path (single-writer invariant). Each renders
+   *  once at the current clock — renderOnce, not step(0), so a paused write
+   *  shows immediately without feeding the FPS accumulator. */
+  pin = (addr: number, value: number) => {
+    this.coreRef().pin(addr, value);
+    this.renderOnce();
+  };
+
+  /** Batch pin (multi-register encodes like combine/area) in ONE re-render. */
+  pinMany = (writes: readonly { addr: number; value: number }[]) => {
+    for (const w of writes) this.coreRef().pin(w.addr, w.value);
+    this.renderOnce();
+  };
+
+  /** Drop one pin — the register falls back to the script-driven value. */
+  unpin = (addr: number) => {
+    this.coreRef().unpin(addr);
+    this.renderOnce();
+  };
+
+  clearPins = () => {
+    this.coreRef().clearPins();
+    this.renderOnce();
+  };
+
+  setSources = (files: SourceFile[]): { ok: boolean; error?: LuaError } => {
+    this.lastSources = files;
+    const res = this.coreRef().setSources(files);
+    this.renderOnce(); // re-render at the CURRENT clock — recompile never resets t/f
     return res;
   };
 

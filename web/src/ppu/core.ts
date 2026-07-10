@@ -1,6 +1,14 @@
+/** One source file of a multi-file sketch. Order is semantic (execution order). */
+export interface SourceFile {
+  name: string;
+  source: string;
+}
+
 export interface LuaError {
   message: string;
   line?: number;
+  /** Source file the error is attributed to (multi-file sketches). */
+  file?: string;
 }
 
 export interface RegisterView {
@@ -76,10 +84,93 @@ export interface FrameResult {
   objOverflow: ObjOverflow; // $213E STAT77 per-frame flags + busiest-line counts
 }
 
+/** One pinned register override (M9): addr/value use the same encoding as
+ *  RegisterView (the absolute bit pattern shown by the inspector). */
+export interface PinnedRegister {
+  addr: number;
+  value: number;
+}
+
+/** Compositor intermediates for the most recent frame(): the two per-screen
+ *  composites are PRE color-math and PRE brightness; mathMask is one byte per
+ *  pixel — bit0 = color math applied, bit1 = clip-to-black region, bit2 =
+ *  prevent-math region. */
+export interface CompositorScreens {
+  main: Uint8ClampedArray; // 256*224*4 RGBA
+  sub: Uint8ClampedArray; // 256*224*4 RGBA
+  mathMask: Uint8Array; // 256*224
+}
+
+/** Plane ids for layer views — same ids as setLayerVisible. */
+export type PlaneId = "bg1" | "bg2" | "bg3" | "bg4" | "obj";
+
+/** Trace chain for a BG selection: source registers -> tilemap entry + tile
+ *  pixel data (stored/unflipped, row-major) -> resolved color. `pixel` is
+ *  present for screen-pixel selections only. Mode-7 rows reuse the shape:
+ *  entry = the interleaved VRAM word, pixels = the 8x8 char, pal/flips = 0. */
+export interface BgTrace {
+  regs: {
+    mode: number;
+    layer: number; // 1-based, bg[n]
+    mapBase: number;
+    charBase: number;
+    tileSize: number;
+    screenSize: number;
+    bpp: number;
+    scrollX: number;
+    scrollY: number;
+    mosaic: number; // effective block edge, 1 = off
+    directColor: boolean;
+    visible: boolean;
+  };
+  tile: {
+    tx: number;
+    ty: number;
+    mapAddr: number;
+    entry: number;
+    tile: number;
+    pal: number;
+    prio: boolean;
+    flipX: boolean;
+    flipY: boolean;
+    charAddr: number;
+    pixels: number[]; // tileSize*tileSize palette indices (mode 7: 8x8)
+    paletteBase: number; // CGRAM base of the sub-palette (0 for 8bpp/direct)
+  };
+  pixel?: {
+    x: number;
+    y: number;
+    fx: number;
+    fy: number;
+    index: number;
+    cgramIndex?: number; // absent for direct color / transparent
+    bgr555: number;
+    rgb: [number, number, number];
+  };
+}
+
+/** Trace chain for an OAM sprite: OAM entry -> OBSEL char base -> stored
+ *  (unflipped) pixel grid -> sub-palette. */
+export interface ObjTrace {
+  index: number;
+  oam: OamSprite;
+  charBase: number;
+  charAddr: number;
+  width: number;
+  height: number;
+  pixels: number[]; // width*height palette indices, row-major
+  paletteBase: number; // 128 + pal*16
+  palette: number[]; // the 16 BGR555 words of the sub-palette
+}
+
 /** The one hard seam. Headless — no canvas. Both the mock and the real WASM
  *  module implement this; JS owns presentation. */
 export interface PpuCore {
+  /** Single-file sugar for setSources([{ name: "main.lua", source: src }]). */
   setSource(src: string): { ok: boolean; error?: LuaError };
+  /** Compile + run chunks in list order into ONE shared global scope (PICO-8
+   *  semantics); frame()/init() resolve after all chunks. Errors carry `file`. */
+  setSources(files: SourceFile[]): { ok: boolean; error?: LuaError };
   frame(t: number, f: number): FrameResult;
   uploadTexture(slot: string, imageData: ImageData): void;
   setLayerVisible(id: string, visible: boolean): void;
@@ -89,6 +180,25 @@ export interface PpuCore {
   vram(): Uint16Array;
   /** Per-import budget/overflow reports from the most recent frame. */
   importReports(): ImportReport[];
+  /** Compositor intermediates of the most recent frame() (M9 view seam). */
+  screens(): CompositorScreens;
+  /** Render ONE plane in isolation: 256*224*4 RGBA, alpha 0 = transparent.
+   *  Ignores TM/TS/windows/priority; honors mode, visibility and mosaic. */
+  layerView(plane: PlaneId): Uint8ClampedArray;
+  /** Trace a BG plane (1..4) at screen pixel (x, y); null when the layer is
+   *  absent in that scanline's mode. */
+  traceBgPixel(layer: number, x: number, y: number): BgTrace | null;
+  /** Trace a BG plane at tilemap cell (tx, ty); y picks the register row. */
+  traceBgTile(layer: number, tx: number, ty: number, y: number): BgTrace | null;
+  /** Trace OAM sprite index (0..127). */
+  traceObj(index: number): ObjTrace | null;
+  /** Pin a register override, applied after frame()+hdma on every scanline so
+   *  it wins over script writes. */
+  pin(addr: number, value: number): void;
+  unpin(addr: number): void;
+  /** Drop every pin — the ▶ Run restart path calls this. */
+  clearPins(): void;
+  listPins(): PinnedRegister[];
 }
 
 export const WIDTH = 256;

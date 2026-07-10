@@ -44,7 +44,7 @@ const OBJ_SIZE_PAIRS: [[(u32, u32); 2]; 8] = [
 
 /// (width, height) in pixels for a sprite, from the frame `size_sel` (OBSEL bits
 /// 5-7) and the per-OAM `large` bit (OAM high table). `size_sel` masked to 3 bits.
-fn sprite_dims(size_sel: u8, large: bool) -> (u32, u32) {
+pub(crate) fn sprite_dims(size_sel: u8, large: bool) -> (u32, u32) {
     OBJ_SIZE_PAIRS[(size_sel & 7) as usize][large as usize]
 }
 
@@ -154,7 +154,13 @@ const OBJ_WORDS_PER_TILE: u32 = 16;
 /// the tile's own 16-tile row (`(name & 0x1f0) | ((name + col) & 0xf)`); down
 /// (+row) steps +16, wrapping the 9-bit name. Names >= 256 live in the second
 /// name table at `char_base + (name_select + 1) * 0x1000` (word-addressed).
-fn obj_tile_addr(char_base: u32, name_select: u32, tile: u16, col: u32, row: u32) -> u16 {
+pub(crate) fn obj_tile_addr(
+    char_base: u32,
+    name_select: u32,
+    tile: u16,
+    col: u32,
+    row: u32,
+) -> u16 {
     let row_tile = (tile as u32 + row * 16) & 0x1ff;
     let name = (row_tile & 0x1f0) | ((row_tile + col) & 0x0f);
     let addr = if name < 256 {
@@ -336,7 +342,13 @@ mod tests {
     fn bin_line_range_cap_keeps_first_32_and_flags_over() {
         let mut mem = mem();
         for i in 0..40usize {
-            mem.oam[i] = Obj { on: true, x: 0, y: 0, large: false, ..Obj::default() };
+            mem.oam[i] = Obj {
+                on: true,
+                x: 0,
+                y: 0,
+                large: false,
+                ..Obj::default()
+            };
         }
         let bin = bin_line(&mem, 0);
         assert_eq!(bin.sprites.len(), MAX_SPRITES_PER_LINE);
@@ -353,7 +365,13 @@ mod tests {
         let mut mem = mem();
         mem.obsel.size_sel = 2;
         for i in 0..5usize {
-            mem.oam[i] = Obj { on: true, x: 0, y: 0, large: true, ..Obj::default() };
+            mem.oam[i] = Obj {
+                on: true,
+                x: 0,
+                y: 0,
+                large: true,
+                ..Obj::default()
+            };
         }
         let bin = bin_line(&mem, 0);
         // 4 sprites * 8 = 32 tiles fit; the 5th (would be 40) is dropped whole.
@@ -371,7 +389,13 @@ mod tests {
         // 1,2,...,32,0 (wraps); the 33rd evaluated (index 0) is the drop.
         let mut mem = mem();
         for i in 0..33usize {
-            mem.oam[i] = Obj { on: true, x: 0, y: 0, large: false, ..Obj::default() };
+            mem.oam[i] = Obj {
+                on: true,
+                x: 0,
+                y: 0,
+                large: false,
+                ..Obj::default()
+            };
         }
         mem.priority_rotate = true;
         mem.oam_addr = 2; // obj_first_sprite(2) = 1
@@ -393,8 +417,20 @@ mod tests {
         // is fully off-screen horizontally (X < -w or X >= 256) but whose Y covers
         // the line still consumes a range slot and its tile-slivers.
         let mut mem = mem();
-        mem.oam[0] = Obj { on: true, x: 300, y: 0, large: false, ..Obj::default() }; // off right
-        mem.oam[1] = Obj { on: true, x: -300, y: 0, large: false, ..Obj::default() }; // off left
+        mem.oam[0] = Obj {
+            on: true,
+            x: 300,
+            y: 0,
+            large: false,
+            ..Obj::default()
+        }; // off right
+        mem.oam[1] = Obj {
+            on: true,
+            x: -300,
+            y: 0,
+            large: false,
+            ..Obj::default()
+        }; // off left
         let bin = bin_line(&mem, 0);
         assert_eq!(bin.sprite_count, 2);
         assert_eq!(bin.tile_count, 2);
@@ -665,8 +701,20 @@ mod tests {
         g2[0][0] = 2;
         put_obj_char(&mut mem, 1, g1);
         put_obj_char(&mut mem, 2, g2);
-        mem.oam[0] = Obj { on: true, x: 0, y: 0, tile: 1, ..Obj::default() };
-        mem.oam[5] = Obj { on: true, x: 0, y: 0, tile: 2, ..Obj::default() };
+        mem.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 1,
+            ..Obj::default()
+        };
+        mem.oam[5] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            tile: 2,
+            ..Obj::default()
+        };
         // Explicit index order [5, 0]: sprite 5 is painted first -> wins the pixel.
         let line = render_scanline_for(&mem, &[5, 0], 0, crate::WIDTH);
         assert_eq!(line[0].unwrap().rgba, unpack_rgb15(rgb15(0, 0, 255)));

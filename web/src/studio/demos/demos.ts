@@ -1,8 +1,8 @@
 /** Bundled flagship demos: Lua source + the procedural image sources they need,
  *  so each renders immediately without the user drag-dropping files. Pure +
  *  node-safe (no DOM): assets are raw RGBA, wrapped into ImageData by loadDemo.
- *  Pixel generators reproduce crates/ppu-core/tests/golden_demos.rs byte-for-byte
- *  so the live WASM output matches the proven golden fixtures. */
+ *  Pixel generators mirror crates/ppu-core/tests/golden_demos.rs (the Lua sources
+ *  ARE verbatim; some assets are retuned for on-screen looks — see below). */
 export interface DemoAsset {
   /** Literal slot id referenced from Lua (bg[n].source / obj.sheet). */
   id: string;
@@ -11,11 +11,25 @@ export interface DemoAsset {
   data: Uint8ClampedArray; // width*height*4 RGBA
 }
 
+export interface DemoFile {
+  name: string;
+  source: string;
+}
+
 export interface Demo {
   id: string;
   label: string;
+  /** Single-file form. For multi-file demos this is the files joined in tab
+   *  order with "\n" — the concatenation the parity golden proves equivalent. */
   source: string;
+  /** Multi-file demos only. Tab order = chunk execution order (PICO-8 scope). */
+  files?: DemoFile[];
   assets: DemoAsset[];
+}
+
+/** Ordered files of a demo — single-file demos present as one main.lua. */
+export function demoFiles(d: Demo): DemoFile[] {
+  return d.files ?? [{ name: "main.lua", source: d.source }];
 }
 
 // ── procedural sources ───────────────────────────────────────────────────────
@@ -173,18 +187,27 @@ function ramp(): DemoAsset {
   return { id: "ramp", width: w, height: h, data };
 }
 
-// ── Lua sources (verbatim from golden_demos.rs DUSK_SRC / MODE7_SRC) ──────────
-const DUSK_SRC = `-- ppu.toys :: dusk-parallax (Mode 1: parallax BG scroll + CGRAM colour-cycle + sprite)
-local SPEED = 12
+// ── Lua sources (verbatim from golden_demos.rs DUSK_MAIN_SRC / DUSK_PALETTE_SRC / MODE7_SRC) ──
+const DUSK_MAIN_SRC = `-- ppu.toys :: dusk-parallax (Mode 1: parallax BG scroll + CGRAM colour-cycle + sprite)
+-- Multi-file flagship: SPEED + dusk_palette() live in palette.lua. Chunks run in
+-- tab order into ONE shared global scope; frame() resolves after all chunks, so
+-- main.lua may reference palette.lua globals freely (main.lua is convention, not magic).
 function frame(t, f)
   mode = 1; brightness = 15
   bg[1].source = "sky";   bg[2].source = "hills"
   bg[2].map_base = 0x0800; bg[2].char_base = 0x4000
   bg[1].scroll.x = t * SPEED
   bg[2].scroll.x = t * SPEED * 3
-  for i = 0, 7 do cgram[0x40 + i] = hsl((t*40 + i*12) % 360, 0.6, 0.5) end
+  dusk_palette(t)
   obj[0].tile = 4; obj[0].pal = 0; obj[0].prio = 3; obj[0].x = 120; obj[0].y = 132 + sin(t*3) * 4
   obj.char_base = 0x6000; obj.sheet = "hero"; obj[0].on = true
+end
+`;
+
+const DUSK_PALETTE_SRC = `-- dusk-parallax :: palette.lua — CGRAM colour-cycle ($40-$47), globals shared with main.lua
+SPEED = 12
+function dusk_palette(t)
+  for i = 0, 7 do cgram[0x40 + i] = hsl((t*40 + i*12) % 360, 0.6, 0.5) end
 end
 `;
 
@@ -364,7 +387,16 @@ end
 `;
 
 export const DEMOS: Demo[] = [
-  { id: "dusk-parallax", label: "dusk-parallax", source: DUSK_SRC, assets: [sky(), hills(), hero()] },
+  {
+    id: "dusk-parallax",
+    label: "dusk-parallax",
+    source: `${DUSK_MAIN_SRC}\n${DUSK_PALETTE_SRC}`,
+    files: [
+      { name: "main.lua", source: DUSK_MAIN_SRC },
+      { name: "palette.lua", source: DUSK_PALETTE_SRC },
+    ],
+    assets: [sky(), hills(), hero()],
+  },
   { id: "mode7-floor", label: "mode7-floor", source: MODE7_SRC, assets: [track()] },
   { id: "offset-per-tile", label: "offset-per-tile", source: OFFSET_SRC, assets: [ribbons()] },
   { id: "mode3-gradient", label: "mode3-gradient", source: MODE3_SRC, assets: [gradient()] },

@@ -17,19 +17,34 @@ const MOSAIC_GOLDEN: &str = "tests/fixtures/golden_mosaic.png";
 const EXTBG_GOLDEN: &str = "tests/fixtures/golden_extbg.png";
 const DIRECT_GOLDEN: &str = "tests/fixtures/golden_direct_color.png";
 
-const DUSK_SRC: &str = r#"-- ppu.toys :: dusk-parallax (Mode 1: parallax BG scroll + CGRAM colour-cycle + sprite)
-local SPEED = 12
+const DUSK_MAIN_SRC: &str = r#"-- ppu.toys :: dusk-parallax (Mode 1: parallax BG scroll + CGRAM colour-cycle + sprite)
+-- Multi-file flagship: SPEED + dusk_palette() live in palette.lua. Chunks run in
+-- tab order into ONE shared global scope; frame() resolves after all chunks, so
+-- main.lua may reference palette.lua globals freely (main.lua is convention, not magic).
 function frame(t, f)
   mode = 1; brightness = 15
   bg[1].source = "sky";   bg[2].source = "hills"
   bg[2].map_base = 0x0800; bg[2].char_base = 0x4000
   bg[1].scroll.x = t * SPEED
   bg[2].scroll.x = t * SPEED * 3
-  for i = 0, 7 do cgram[0x40 + i] = hsl((t*40 + i*12) % 360, 0.6, 0.5) end
+  dusk_palette(t)
   obj[0].tile = 4; obj[0].pal = 0; obj[0].prio = 3; obj[0].x = 120; obj[0].y = 132 + sin(t*3) * 4
   obj.char_base = 0x6000; obj.sheet = "hero"; obj[0].on = true
 end
 "#;
+
+const DUSK_PALETTE_SRC: &str = r#"-- dusk-parallax :: palette.lua — CGRAM colour-cycle ($40-$47), globals shared with main.lua
+SPEED = 12
+function dusk_palette(t)
+  for i = 0, 7 do cgram[0x40 + i] = hsl((t*40 + i*12) % 360, 0.6, 0.5) end
+end
+"#;
+
+/// The single-file form of the flagship: files joined in tab order with "\n",
+/// mirroring the web `Demo.source` join in web/src/studio/demos/demos.ts.
+fn dusk_concat() -> String {
+    format!("{DUSK_MAIN_SRC}\n{DUSK_PALETTE_SRC}")
+}
 
 const MODE7_SRC: &str = r#"-- ppu.toys :: mode7-floor (the namesake; per-scanline affine floor)
 function frame(t, f)
@@ -403,7 +418,7 @@ fn mode0_bg2() -> Vec<u8> {
     data
 }
 
-fn demo_engine(src: &str) -> LuaEngine {
+fn demo_engine_files(files: &[(&str, &str)]) -> LuaEngine {
     let mut e = LuaEngine::new();
     e.upload_asset("sky".into(), WIDTH as u32, HEIGHT as u32, sky());
     e.upload_asset("hills".into(), WIDTH as u32, HEIGHT as u32, hills());
@@ -415,8 +430,12 @@ fn demo_engine(src: &str) -> LuaEngine {
     e.upload_asset("mode0_bg2".into(), WIDTH as u32, HEIGHT as u32, mode0_bg2());
     e.upload_asset("panel".into(), WIDTH as u32, HEIGHT as u32, panel());
     e.upload_asset("ramp".into(), WIDTH as u32, HEIGHT as u32, ramp());
-    e.set_source(src).unwrap();
+    e.set_sources(files).unwrap();
     e
+}
+
+fn demo_engine(src: &str) -> LuaEngine {
+    demo_engine_files(&[("source", src)])
 }
 
 /// One RGBA pixel at (x, y) in a WIDTH*HEIGHT framebuffer.
@@ -461,7 +480,7 @@ fn write_png(path: &str, fb: &[u8]) {
 
 #[test]
 fn dusk_parallax_uses_bg_imports_and_obj_import() {
-    let (fb, e) = render_demo(DUSK_SRC);
+    let (fb, e) = render_demo(&dusk_concat());
     assert!(e
         .import_reports()
         .iter()
@@ -482,14 +501,14 @@ fn dusk_parallax_uses_bg_imports_and_obj_import() {
 
 #[test]
 fn dusk_parallax_draws_sky_above_horizon() {
-    let (fb, _) = render_demo(DUSK_SRC);
+    let (fb, _) = render_demo(&dusk_concat());
     let px = &fb[(20 * WIDTH + 20) * 4..][..4];
     assert_ne!(px, &[0, 0, 0, 255], "sky pixel was backdrop black");
 }
 
 #[test]
 fn dusk_parallax_draws_obj_sprite_over_hills() {
-    let (fb, _) = render_demo(DUSK_SRC);
+    let (fb, _) = render_demo(&dusk_concat());
     let lower_half_has_sprite_yellow = (120..155).any(|y| {
         (0..WIDTH).any(|x| {
             let p = &fb[(y * WIDTH + x) * 4..][..4];
@@ -522,7 +541,7 @@ fn mode7_floor_draws_below_horizon() {
 #[test]
 fn dusk_parallax_demo_matches_golden_png() {
     assert!(Path::new(DUSK_GOLDEN).exists());
-    let (actual, _) = render_demo(DUSK_SRC);
+    let (actual, _) = render_demo(&dusk_concat());
     let expected = decode_png(DUSK_GOLDEN);
     assert_eq!(actual.len(), expected.len());
     assert!(
@@ -546,7 +565,7 @@ fn mode7_floor_demo_matches_golden_png() {
 #[test]
 #[ignore = "regenerates the committed dusk demo golden PNG"]
 fn regen_golden_dusk_parallax() {
-    let (fb, _) = render_demo(DUSK_SRC);
+    let (fb, _) = render_demo(&dusk_concat());
     write_png(DUSK_GOLDEN, &fb);
 }
 
@@ -673,7 +692,10 @@ fn translucency_demo_blends_panel_half_over_scene() {
     assert_ne!(scene_px[..3], [0, 0, 0], "scene pixel went black");
     // Half-blend pulls the bright cyan panel toward the darker scene: the blended
     // green channel is below the panel's own ~230 full value.
-    assert!(panel_px[1] < 230, "no half-blend darkening applied to the panel");
+    assert!(
+        panel_px[1] < 230,
+        "no half-blend darkening applied to the panel"
+    );
 }
 
 #[test]
@@ -682,7 +704,10 @@ fn translucency_demo_matches_golden_png() {
     let (actual, _) = render_demo(TRANSLUCENCY_SRC);
     let expected = decode_png(TRANSLUCENCY_GOLDEN);
     assert_eq!(actual.len(), expected.len());
-    assert_eq!(actual, expected, "translucency demo differs from golden PNG");
+    assert_eq!(
+        actual, expected,
+        "translucency demo differs from golden PNG"
+    );
 }
 
 #[test]
@@ -728,7 +753,10 @@ fn glow_demo_adds_fixed_color_over_baseline() {
     let (base, _) = render_demo(&baseline_src);
     // The additive red channel must lift the frame overall (sum of R over the frame).
     let sum_r = |fb: &[u8]| fb.chunks_exact(4).map(|p| p[0] as u64).sum::<u64>();
-    assert!(sum_r(&glow) > sum_r(&base), "additive glow did not brighten the frame");
+    assert!(
+        sum_r(&glow) > sum_r(&base),
+        "additive glow did not brighten the frame"
+    );
 }
 
 #[test]
@@ -770,8 +798,15 @@ fn shadow_demo_subtracts_fixed_color_below_baseline() {
         .replace("CGADSUB = 0x81", "CGADSUB = 0x00")
         .replace("COLDATA = rgb(120, 120, 120)", "COLDATA = 0");
     let (base, _) = render_demo(&baseline_src);
-    let sum = |fb: &[u8]| fb.chunks_exact(4).map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64).sum::<u64>();
-    assert!(sum(&shadow) < sum(&base), "subtract did not darken the frame");
+    let sum = |fb: &[u8]| {
+        fb.chunks_exact(4)
+            .map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64)
+            .sum::<u64>()
+    };
+    assert!(
+        sum(&shadow) < sum(&base),
+        "subtract did not darken the frame"
+    );
 }
 
 #[test]
@@ -808,13 +843,24 @@ fn regen_golden_shadow() {
 fn sprite_storm_overflows_both_caps_and_flickers() {
     // Both per-line caps engage on the packed band.
     let (fb, ov) = render_storm(90);
-    assert!(ov.range_over, "sprite-storm must exceed the 32-sprite range cap");
-    assert!(ov.time_over, "sprite-storm must exceed the 34-tile time cap");
+    assert!(
+        ov.range_over,
+        "sprite-storm must exceed the 32-sprite range cap"
+    );
+    assert!(
+        ov.time_over,
+        "sprite-storm must exceed the 34-tile time cap"
+    );
     assert!(ov.max_sprites > 32);
     // Sprites actually draw over the backdrop.
-    assert!(fb.chunks_exact(4).any(|p| p[3] == 255 && p[..3] != [0, 0, 0]));
+    assert!(fb
+        .chunks_exact(4)
+        .any(|p| p[3] == 255 && p[..3] != [0, 0, 0]));
     // Authentic flicker: rotating the OAM start each frame changes the output.
-    assert!(render_storm(90).0 != render_storm(91).0, "OAM rotation must change survivors");
+    assert!(
+        render_storm(90).0 != render_storm(91).0,
+        "OAM rotation must change survivors"
+    );
 }
 
 #[test]
@@ -825,7 +871,10 @@ fn sprite_storm_demo_matches_golden_png() {
     let actual = render_frame(&lt, e.memory());
     let expected = decode_png(SPRITE_STORM_GOLDEN);
     assert_eq!(actual.len(), expected.len());
-    assert_eq!(actual, expected, "sprite-storm demo differs from golden PNG");
+    assert_eq!(
+        actual, expected,
+        "sprite-storm demo differs from golden PNG"
+    );
 }
 
 #[test]
@@ -843,11 +892,19 @@ fn mosaic_demo_pixelates_bg1_into_8px_blocks() {
     let (fb, _) = render_demo(MOSAIC_SRC);
     // f=60 -> mosaic size 7 -> 8px blocks; each block replicates its top-left texel.
     for &(x, y) in &[(1usize, 0usize), (7, 0), (0, 7), (7, 7)] {
-        assert_eq!(px(&fb, x, y), px(&fb, 0, 0), "block(0,0) not flat at ({x},{y})");
+        assert_eq!(
+            px(&fb, x, y),
+            px(&fb, 0, 0),
+            "block(0,0) not flat at ({x},{y})"
+        );
     }
     // adjacent block differs (ramp steps within 8px); period-32 block matches.
     assert_ne!(px(&fb, 8, 0), px(&fb, 0, 0), "block(8,0) should differ");
-    assert_eq!(px(&fb, 32, 0), px(&fb, 0, 0), "ramp period 32 aligns with blocks");
+    assert_eq!(
+        px(&fb, 32, 0),
+        px(&fb, 0, 0),
+        "ramp period 32 aligns with blocks"
+    );
     // vs mosaic OFF: the fine sub-block detail survives -> the frame differs.
     let off = MOSAIC_SRC.replace("bg[1].mosaic = true", "bg[1].mosaic = false");
     let (base, _) = render_demo(&off);
@@ -882,15 +939,24 @@ fn extbg_demo_places_sprite_between_floor_priority_levels() {
     let (fb, _) = render_demo(EXTBG_SRC);
     // Sprite spans x 112..144, y 88..120. Left of the x=128 split -> HIGH floor covers it;
     // right of the split -> LOW floor, the sprite shows through.
-    assert!(is_red(px(&fb, 120, 104)), "high floor must cover the sprite left of split");
-    assert!(is_yellow(px(&fb, 136, 104)), "sprite must ride over the low floor right of split");
+    assert!(
+        is_red(px(&fb, 120, 104)),
+        "high floor must cover the sprite left of split"
+    );
+    assert!(
+        is_yellow(px(&fb, 136, 104)),
+        "sprite must ride over the low floor right of split"
+    );
     // Floor away from the sprite is red on both halves (same colour, different priority).
     assert!(is_red(px(&fb, 40, 104)), "left floor red");
     assert!(is_red(px(&fb, 210, 104)), "right floor red");
     // EXTBG off -> the sprite flat-overlays BOTH halves, so the left pixel is yellow.
     let off = EXTBG_SRC.replace("m7.extbg = true", "m7.extbg = false");
     let (flat, _) = render_demo(&off);
-    assert!(is_yellow(px(&flat, 120, 104)), "EXTBG off should overlay the sprite everywhere");
+    assert!(
+        is_yellow(px(&flat, 120, 104)),
+        "EXTBG off should overlay the sprite everywhere"
+    );
 }
 
 #[test]
@@ -913,18 +979,34 @@ fn regen_golden_extbg() {
 fn direct_color_demo_bypasses_empty_cgram_into_smooth_gradient() {
     let (fb, e) = render_demo(DIRECT_SRC);
     // CGRAM is untouched (all zero) yet the floor is fully coloured -> direct-colour bypass.
-    assert!(e.memory().cgram.iter().all(|&c| c == 0), "CGRAM must stay empty");
+    assert!(
+        e.memory().cgram.iter().all(|&c| c == 0),
+        "CGRAM must stay empty"
+    );
     // Every pixel opaque (idx >= 64, never 0) -> full-screen gradient, no backdrop.
-    assert!(fb.chunks_exact(4).all(|p| p[3] == 255), "gradient must fill the frame");
+    assert!(
+        fb.chunks_exact(4).all(|p| p[3] == 255),
+        "gradient must fill the frame"
+    );
     // Many distinct colours despite an empty palette.
     let colors = fb
         .chunks_exact(4)
         .map(|p| (p[0], p[1], p[2]))
         .collect::<std::collections::HashSet<_>>();
-    assert!(colors.len() > 32, "expected a rich gradient, got {} colours", colors.len());
+    assert!(
+        colors.len() > 32,
+        "expected a rich gradient, got {} colours",
+        colors.len()
+    );
     // Smooth axes: red rises left->right, green rises top->bottom.
-    assert!(px(&fb, 248, 0)[0] > px(&fb, 0, 0)[0], "red should rise with x");
-    assert!(px(&fb, 0, 216)[1] > px(&fb, 0, 0)[1], "green should rise with y");
+    assert!(
+        px(&fb, 248, 0)[0] > px(&fb, 0, 0)[0],
+        "red should rise with x"
+    );
+    assert!(
+        px(&fb, 0, 216)[1] > px(&fb, 0, 0)[1],
+        "green should rise with y"
+    );
 }
 
 #[test]
@@ -933,7 +1015,10 @@ fn direct_color_demo_matches_golden_png() {
     let (actual, _) = render_demo(DIRECT_SRC);
     let expected = decode_png(DIRECT_GOLDEN);
     assert_eq!(actual.len(), expected.len());
-    assert_eq!(actual, expected, "direct-color demo differs from golden PNG");
+    assert_eq!(
+        actual, expected,
+        "direct-color demo differs from golden PNG"
+    );
 }
 
 #[test]
@@ -941,4 +1026,51 @@ fn direct_color_demo_matches_golden_png() {
 fn regen_golden_direct_color() {
     let (fb, _) = render_demo(DIRECT_SRC);
     write_png(DIRECT_GOLDEN, &fb);
+}
+
+#[test]
+fn multi_file_split_renders_identical_to_single_file() {
+    let (single, _) = render_demo(OFFSET_SRC);
+
+    let (helper, rest) = OFFSET_SRC.split_once("function frame").unwrap();
+    let main = format!("function frame{rest}");
+    let mut e = demo_engine_files(&[("util.lua", helper), ("main.lua", &main)]);
+    let lt = e.frame(1.0, 60).unwrap();
+    let multi = render_frame(&lt, e.memory());
+
+    assert!(
+        single == multi,
+        "multi-file split must be framebuffer-identical"
+    );
+}
+
+#[test]
+fn dusk_parallax_multi_file_matches_golden_png() {
+    let mut e = demo_engine_files(&[
+        ("main.lua", DUSK_MAIN_SRC),
+        ("palette.lua", DUSK_PALETTE_SRC),
+    ]);
+    let lt = e.frame(1.0, 60).unwrap();
+    let multi = render_frame(&lt, e.memory());
+    let expected = decode_png(DUSK_GOLDEN);
+    assert_eq!(multi.len(), expected.len());
+    assert!(
+        multi == expected,
+        "multi-file dusk must match the committed golden PNG"
+    );
+}
+
+#[test]
+fn dusk_parallax_multi_file_matches_single_file_concat() {
+    let (single, _) = render_demo(&dusk_concat());
+    let mut e = demo_engine_files(&[
+        ("main.lua", DUSK_MAIN_SRC),
+        ("palette.lua", DUSK_PALETTE_SRC),
+    ]);
+    let lt = e.frame(1.0, 60).unwrap();
+    let multi = render_frame(&lt, e.memory());
+    assert!(
+        single == multi,
+        "flagship split must be framebuffer-identical to its concatenation"
+    );
 }
