@@ -1,7 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { IDBFactory } from "fake-indexeddb";
 import { DEMOS } from "../demos/demos";
-import { openSketchStore, AUTOSAVE_MS, NEW_SKETCH_SOURCE, openContextLabel } from "./openSketch";
+import {
+  openSketchStore,
+  AUTOSAVE_MS,
+  NEW_SKETCH_SOURCE,
+  openContextLabel,
+  openContextFiles,
+} from "./openSketch";
 import { listSketches, loadSketch, _resetSketchStoreForTests } from "./sketchStore";
 
 const demo = DEMOS[0];
@@ -155,5 +161,104 @@ describe("open / new / switch", () => {
     expect(list[0].name).toBe("my toy");
     const loaded = await loadSketch(list[0].id);
     expect(loaded!.files[0].source).toBe("-- b");
+  });
+});
+
+describe("openContextFiles", () => {
+  it("presents a demo as a single main.lua", () => {
+    expect(openContextFiles(openSketchStore.state())).toEqual([
+      { name: "main.lua", source: demo.source },
+    ]);
+  });
+});
+
+describe("file operations", () => {
+  it("addFile appends a uniquely named empty file and returns the name", async () => {
+    await openSketchStore.newSketch();
+    const name = openSketchStore.addFile();
+    expect(name).toBe("file2.lua");
+    expect(openSketch().files.map((f) => f.name)).toEqual(["main.lua", "file2.lua"]);
+    expect(openSketch().files[1].source).toBe("");
+    expect(openSketchStore.state().dirty).toBe(true);
+  });
+
+  it("addFile skips names already taken", async () => {
+    await openSketchStore.newSketch();
+    openSketchStore.editFile("file2.lua", "-- taken");
+    expect(openSketchStore.addFile()).toBe("file3.lua");
+  });
+
+  it("addFile on a demo forks it, keeping the demo file first (session preserved)", () => {
+    const before = openSketchStore.state().session;
+    const name = openSketchStore.addFile();
+    expect(name).toBe("file2.lua");
+    const sk = openSketch();
+    expect(sk.forkedFrom).toBe(demo.id);
+    expect(sk.files).toEqual([
+      { name: "main.lua", source: demo.source },
+      { name: "file2.lua", source: "" },
+    ]);
+    expect(openSketchStore.state().session).toBe(before);
+  });
+
+  it("renameFile renames and reports success", async () => {
+    await openSketchStore.newSketch();
+    expect(openSketchStore.renameFile("main.lua", "palette.lua")).toBe(true);
+    expect(openSketch().files.map((f) => f.name)).toEqual(["palette.lua"]);
+  });
+
+  it("renameFile rejects empty, unknown, and duplicate targets", async () => {
+    await openSketchStore.newSketch();
+    openSketchStore.addFile(); // file2.lua
+    expect(openSketchStore.renameFile("main.lua", "  ")).toBe(false);
+    expect(openSketchStore.renameFile("nope.lua", "x.lua")).toBe(false);
+    expect(openSketchStore.renameFile("main.lua", "file2.lua")).toBe(false);
+    expect(openSketch().files.map((f) => f.name)).toEqual(["main.lua", "file2.lua"]);
+  });
+
+  it("renameFile on a demo forks with the renamed file", () => {
+    expect(openSketchStore.renameFile("main.lua", "scene.lua")).toBe(true);
+    expect(openSketch().files).toEqual([{ name: "scene.lua", source: demo.source }]);
+  });
+
+  it("deleteFile removes a file but refuses the last one", async () => {
+    await openSketchStore.newSketch();
+    openSketchStore.addFile();
+    openSketchStore.deleteFile("file2.lua");
+    expect(openSketch().files.map((f) => f.name)).toEqual(["main.lua"]);
+    openSketchStore.deleteFile("main.lua"); // last file: no-op
+    expect(openSketch().files).toHaveLength(1);
+  });
+
+  it("deleteFile of an unknown name is a clean no-op (stays saved)", async () => {
+    await openSketchStore.newSketch();
+    openSketchStore.addFile();
+    await openSketchStore.flush();
+    openSketchStore.deleteFile("nope.lua");
+    expect(openSketch().files).toHaveLength(2);
+    expect(openSketchStore.state().dirty).toBe(false); // no phantom unsaved dot
+  });
+
+  it("moveFile reorders (order is execution order) and persists through flush", async () => {
+    await openSketchStore.newSketch();
+    openSketchStore.addFile(); // file2.lua
+    openSketchStore.addFile(); // file3.lua
+    openSketchStore.moveFile(2, 0);
+    expect(openSketch().files.map((f) => f.name)).toEqual([
+      "file3.lua", "main.lua", "file2.lua",
+    ]);
+    await openSketchStore.flush();
+    const list = await listSketches();
+    const loaded = await loadSketch(list[0].id);
+    expect(loaded!.files.map((f) => f.name)).toEqual(["file3.lua", "main.lua", "file2.lua"]);
+  });
+
+  it("moveFile ignores out-of-range and identity moves", async () => {
+    await openSketchStore.newSketch();
+    openSketchStore.addFile();
+    openSketchStore.moveFile(0, 0);
+    openSketchStore.moveFile(0, 5);
+    openSketchStore.moveFile(-1, 0);
+    expect(openSketch().files.map((f) => f.name)).toEqual(["main.lua", "file2.lua"]);
   });
 });

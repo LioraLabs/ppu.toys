@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { EditorState } from "@codemirror/state";
-import { luaErrorToDiagnostics, luaErrorsToDiagnostics } from "./diagnostics";
+import { luaErrorToDiagnostics, luaErrorsToDiagnostics, routeErrorsByFile } from "./diagnostics";
 
 const DOC = "function frame(t, f)\n  brightness = bad\nend\n";
 
@@ -49,5 +49,35 @@ describe("luaErrorsToDiagnostics", () => {
     ]);
     expect(diags).toHaveLength(1);
     expect(diags[0].message).toBe("same");
+  });
+});
+
+describe("routeErrorsByFile", () => {
+  const files = ["main.lua", "palette.lua"];
+
+  it("routes errors to their owning file", () => {
+    const routed = routeErrorsByFile(files, "main.lua", [
+      { message: "boom", line: 2, file: "palette.lua" },
+    ]);
+    expect(routed.get("palette.lua")).toEqual([{ message: "boom", line: 2, file: "palette.lua" }]);
+    expect(routed.has("main.lua")).toBe(false);
+  });
+
+  it("falls back to the active file for missing or unknown file attribution", () => {
+    const routed = routeErrorsByFile(files, "palette.lua", [
+      { message: "no file" },
+      { message: "ghost", file: "deleted.lua" },
+    ]);
+    expect(routed.get("palette.lua")!.map((e) => e.message)).toEqual(["no file", "ghost"]);
+  });
+
+  it("skips undefined entries and groups several errors per file", () => {
+    const routed = routeErrorsByFile(files, "main.lua", [
+      undefined,
+      { message: "compile", file: "main.lua" },
+      { message: "runtime", file: "main.lua" },
+    ]);
+    expect(routed.get("main.lua")!.map((e) => e.message)).toEqual(["compile", "runtime"]);
+    expect(routed.size).toBe(1);
   });
 });

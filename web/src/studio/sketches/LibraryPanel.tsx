@@ -8,6 +8,7 @@ import {
   type SketchMeta,
 } from "./sketchStore";
 import { openSketchStore, useOpenSketch } from "./openSketch";
+import { DEMOS } from "../demos/demos";
 import "./sketches.css";
 
 function timeAgo(ms: number): string {
@@ -82,6 +83,26 @@ export function LibraryPanel({ onClose }: { onClose: () => void }) {
           ×
         </button>
       </header>
+      <ul className="library-list">
+        {DEMOS.map((d) => {
+          const isOpen = open.context.kind === "demo" && open.context.demoId === d.id;
+          return (
+            <li key={d.id} className={"library-row" + (isOpen ? " library-row--open" : "")}>
+              <button
+                type="button"
+                className="library-open"
+                onClick={() => {
+                  openSketchStore.openDemo(d.id).catch(logErr("open demo failed"));
+                  onClose();
+                }}
+              >
+                <span className="library-name">{d.label}</span>
+                <span className="library-updated">demo · read-only</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
       <ul className="library-list">
         {sketches.length === 0 && (
           <li className="library-empty">No sketches yet — edit a demo or hit New.</li>

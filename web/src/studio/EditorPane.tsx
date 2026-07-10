@@ -1,30 +1,37 @@
-import { useEffect, useMemo } from "react";
-import { MockPpuCore } from "../ppu/mock";
-import type { LuaError } from "../ppu/core";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { LuaError, SourceFile } from "../ppu/core";
 import { CodeEditor } from "./editor/CodeEditor";
-import { useTransportRuntimeError } from "./transport/transport";
-import { DEMOS } from "./demos/demos";
-import { openSketchStore, useOpenSketch } from "./sketches/openSketch";
+import { FileTabs } from "./editor/FileTabs";
+import { routeErrorsByFile } from "./editor/diagnostics";
+import { createSourcePusher } from "./editor/sourcePush";
+import { transport, useTransportRuntimeError } from "./transport/transport";
+import { openSketchStore, useOpenSketch, openContextFiles } from "./sketches/openSketch";
 import { restoreOpenContext } from "./sketches/restore";
 
 export interface EditorPaneProps {
-  /** PpuCore.setSource-shaped sink. Defaults to a local mock so the editor is
-   *  self-sufficient; Studio passes the shared core's setSource once wired. */
+  /** PpuCore.setSources-shaped sink for the whole multi-file program in
+   *  execution order. Defaults to the shared transport — a bare
+   *  `<EditorPane />` is fully wired. */
+  onSources?: (files: SourceFile[]) => { ok: boolean; error?: LuaError };
+  /** @deprecated Pre-M9 single-file sugar (the old Studio mount passes
+   *  transport.setSource). Honored only while the sketch has exactly ONE
+   *  file; multi-file programs push through the shared transport. The
+   *  Workspace-shell remount should drop this for onSources / the default. */
   onSource?: (src: string) => { ok: boolean; error?: LuaError };
 }
 
-export function EditorPane({ onSource }: EditorPaneProps) {
-  // local fallback core so setSource is genuinely exercised standalone
-  const fallback = useMemo(() => new MockPpuCore(), []);
-  const coreSink = onSource ?? ((src: string) => fallback.setSource(src));
-  const runtimeError = useTransportRuntimeError();
+/** Stable empty-errors identity so a clean doc never re-dispatches diagnostics. */
+const NO_ERRORS: LuaError[] = [];
 
-  const { context, session, dirty } = useOpenSketch();
+export function EditorPane({ onSources, onSource }: EditorPaneProps) {
+  const state = useOpenSketch();
+  const { session } = state;
+  const files = openContextFiles(state);
+  const runtimeError = useTransportRuntimeError();
+  const [compileError, setCompileError] = useState<LuaError | undefined>(undefined);
 
   // (re)load the context's assets on every EXPLICIT open. Keyed on session so
   // a lazy fork (same session, same live assets) does not reload anything.
-  // The cleanup cancels a superseded run (StrictMode double-effects, rapid
-  // opens) so overlapping restores can't interleave duplicate assets.
   useEffect(() => {
     let cancelled = false;
     restoreOpenContext(openSketchStore.state().context, () => cancelled).catch((e) =>
@@ -35,50 +42,113 @@ export function EditorPane({ onSource }: EditorPaneProps) {
     };
   }, [session]);
 
-  const fileName =
-    context.kind === "sketch" ? context.sketch.files[0]?.name ?? "main.lua" : "main.lua";
-  const doc =
-    context.kind === "sketch"
-      ? context.sketch.files[0]?.source ?? ""
-      : DEMOS.find((d) => d.id === context.demoId)?.source ?? "";
+  // ── active tab: by name, clamped to the live list (deletes/renames)
+  const [activeName, setActiveName] = useState(() => files[0]?.name ?? "main.lua");
+  const active = files.some((f) => f.name === activeName)
+    ? activeName
+    : (files[0]?.name ?? "main.lua");
+  useEffect(() => {
+    setActiveName(openContextFiles(openSketchStore.state())[0]?.name ?? "main.lua");
+  }, [session]);
 
-  // run the source AND record it into the open sketch; the first change to a
-  // demo lazily forks it (openSketch no-ops on the pristine mount push)
-  const sink = (src: string) => {
-    openSketchStore.editFile(fileName, src);
-    return coreSink(src);
+  // ── stable doc identities: survive renames (undo history follows the file),
+  //    never reused after a delete. Fresh map per session (editor remounts).
+  const docKeys = useMemo(() => new Map<string, string>(), [session]);
+  const uid = useRef(0);
+  const keyFor = (name: string): string => {
+    let k = docKeys.get(name);
+    if (!k) {
+      k = `doc${uid.current++}`;
+      docKeys.set(name, k);
+    }
+    return k;
   };
+
+  // ── debounced whole-program push (error grace lives in the engine)
+  const sinkRef = useRef<(fs: SourceFile[]) => { ok: boolean; error?: LuaError }>(
+    () => ({ ok: true }),
+  );
+  sinkRef.current = (fs) =>
+    onSources
+      ? onSources(fs)
+      : onSource && fs.length === 1
+        ? onSource(fs[0].source)
+        : transport.setSources(fs);
+  const pusher = useMemo(
+    () => createSourcePusher((fs) => sinkRef.current(fs), setCompileError),
+    [],
+  );
+  useEffect(() => () => pusher.dispose(), [pusher]);
+  // explicit open: run the program immediately
+  useEffect(() => {
+    pusher.pushNow(openContextFiles(openSketchStore.state()));
+  }, [session, pusher]);
+  // any store mutation (edit/add/rename/delete/reorder): debounced re-push.
+  // The pusher content-dedupes, so no-op emits (autosave flush) don't recompile.
+  useEffect(() => {
+    pusher.push(files);
+    // files is context-derived; context identity changes on every store emit
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.context, pusher]);
+
+  // ── route {file,line} errors: inline on the open tab, dots on the rest.
+  // Memoized so the active tab's error array keeps its identity across
+  // renders — CodeEditor's diagnostics effect only re-dispatches when the
+  // errors (or the doc) actually change, not on every keystroke re-render.
+  const routed = useMemo(
+    () =>
+      routeErrorsByFile(
+        files.map((f) => f.name),
+        active,
+        [compileError, runtimeError],
+      ),
+    // files derives from context; context identity changes on every store emit
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [state.context, active, compileError, runtimeError],
+  );
+  const errorFiles = useMemo(() => new Set(routed.keys()), [routed]);
+
+  const rename = (from: string, to: string): boolean => {
+    if (!openSketchStore.renameFile(from, to)) return false;
+    const k = docKeys.get(from);
+    if (k !== undefined) {
+      docKeys.set(to, k);
+      docKeys.delete(from);
+    }
+    if (activeName === from) setActiveName(to);
+    return true;
+  };
+  const remove = (name: string) => {
+    openSketchStore.deleteFile(name);
+    docKeys.delete(name); // key is never reused: a re-added name gets a fresh doc
+    // re-anchor the NAMED active state too — a later rename to the deleted
+    // name must not silently steal activation
+    if (activeName === name)
+      setActiveName(openContextFiles(openSketchStore.state())[0]?.name ?? "main.lua");
+  };
+
+  const activeFile = files.find((f) => f.name === active);
 
   return (
     <section className="editor">
-      <div className="editor-tabs">
-        {context.kind === "sketch" && (
-          <button type="button" className="etab etab--active">
-            <span className="etab-dot" />
-            {context.sketch.name}
-            {dirty ? " *" : ""}
-          </button>
-        )}
-        {DEMOS.map((d) => (
-          <button
-            key={d.id}
-            type="button"
-            className={
-              "etab" + (context.kind === "demo" && d.id === context.demoId ? " etab--active" : "")
-            }
-            onClick={() =>
-              openSketchStore.openDemo(d.id).catch((e) => console.error("open demo failed", e))
-            }
-          >
-            {context.kind === "demo" && d.id === context.demoId && <span className="etab-dot" />}
-            {d.label}.lua
-          </button>
-        ))}
-        <div className="etab-spacer" />
-        <div className="etab-status">vim · Lua 5.4</div>
-      </div>
+      <FileTabs
+        files={files.map((f) => f.name)}
+        active={active}
+        errorFiles={errorFiles}
+        onSelect={setActiveName}
+        onAdd={() => setActiveName(openSketchStore.addFile())}
+        onRename={rename}
+        onDelete={remove}
+        onReorder={(from, to) => openSketchStore.moveFile(from, to)}
+      />
       <div className="editor-body" data-editor-slot>
-        <CodeEditor key={session} initialDoc={doc} onSource={sink} runtimeError={runtimeError} />
+        <CodeEditor
+          key={session}
+          docKey={keyFor(active)}
+          doc={activeFile?.source ?? ""}
+          onChange={(src) => openSketchStore.editFile(active, src)}
+          errors={routed.get(active) ?? NO_ERRORS}
+        />
       </div>
     </section>
   );

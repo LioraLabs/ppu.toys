@@ -19,7 +19,7 @@ export function Studio() {
       <Toolbar sketchName={sketchName} dirty={dirty} />
       <div className="studio-body">
         <ActivityRail />
-        <EditorPane onSource={transport.setSource} />
+        <EditorPane onSources={transport.setSources} />
         <RightColumn />
       </div>
     </div>

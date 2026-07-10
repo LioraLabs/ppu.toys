@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { EditorState, type Extension } from "@codemirror/state";
+import { type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { StreamLanguage } from "@codemirror/language";
 import { lua } from "@codemirror/legacy-modes/mode/lua";
@@ -10,48 +10,39 @@ import { basicSetup } from "codemirror";
 import type { LuaError } from "../../ppu/core";
 import { ppuCompletions } from "./completions";
 import { luaErrorsToDiagnostics } from "./diagnostics";
+import { createDocStates, type DocStates } from "./docStates";
 import { ppuTheme } from "./theme";
 
 export interface CodeEditorProps {
-  initialDoc: string;
-  /** PpuCore.setSource-shaped callback; called on every document change. */
-  onSource: (src: string) => { ok: boolean; error?: LuaError };
-  /** Latest runtime error from the transport, shown alongside compile errors. */
-  runtimeError?: LuaError;
+  /** Stable identity of the active doc — survives renames, never reused
+   *  after a delete (the pane owns key allocation). */
+  docKey: string;
+  /** Seed content for a doc this editor instance has not seen yet. */
+  doc: string;
+  /** Called on every document change with the new source. */
+  onChange: (src: string) => void;
+  /** Errors already routed to THIS doc (compile + runtime), see
+   *  routeErrorsByFile. */
+  errors: (LuaError | undefined)[];
 }
 
-export function CodeEditor({ initialDoc, onSource, runtimeError }: CodeEditorProps) {
+/** ONE CodeMirror view for the whole pane; per-file EditorStates swap through
+ *  it so tab switches preserve undo history (docStates). Source pushing and
+ *  error routing live in EditorPane — this component only edits and displays. */
+export function CodeEditor({ docKey, doc, onChange, errors }: CodeEditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
-  // keep latest onSource without re-creating the editor
-  const onSourceRef = useRef(onSource);
-  onSourceRef.current = onSource;
-  // latest compile + runtime errors, so either source can re-dispatch the merged set
-  const compileErrorRef = useRef<LuaError | undefined>(undefined);
-  const runtimeErrorRef = useRef<LuaError | undefined>(runtimeError);
-  runtimeErrorRef.current = runtimeError;
+  const docsRef = useRef<DocStates | null>(null);
+  const keyRef = useRef(docKey);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const initial = useRef({ docKey, doc });
 
   useEffect(() => {
     if (!host.current) return;
-
-    const applyDiagnostics = (view: EditorView) => {
-      view.dispatch(
-        setDiagnostics(
-          view.state,
-          luaErrorsToDiagnostics(view.state, [compileErrorRef.current, runtimeErrorRef.current]),
-        ),
-      );
-    };
-
-    const pushSource = (view: EditorView, src: string) => {
-      compileErrorRef.current = onSourceRef.current(src).error;
-      applyDiagnostics(view);
-    };
-
     const updateListener = EditorView.updateListener.of((u) => {
-      if (u.docChanged) pushSource(u.view, u.state.doc.toString());
+      if (u.docChanged) onChangeRef.current(u.state.doc.toString());
     });
-
     const extensions: Extension[] = [
       vim({ status: true }), // first: takes key precedence
       basicSetup,
@@ -61,35 +52,39 @@ export function CodeEditor({ initialDoc, onSource, runtimeError }: CodeEditorPro
       ppuTheme,
       updateListener,
     ];
-
+    const docs = createDocStates(extensions);
+    docsRef.current = docs;
+    keyRef.current = initial.current.docKey;
     const view = new EditorView({
       parent: host.current,
-      state: EditorState.create({ doc: initialDoc, extensions }),
+      state: docs.acquire(initial.current.docKey, initial.current.doc),
     });
     viewRef.current = view;
-
-    // run an initial compile so setSource is called + diagnostics seed on mount
-    pushSource(view, initialDoc);
-
     return () => {
       viewRef.current = null;
+      docsRef.current = null;
       view.destroy();
     };
-    // editor is created once; live onSource is read via onSourceRef
+    // one view per mount; live props are read via refs
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // re-dispatch the merged diagnostics whenever the runtime error changes
+  // tab switch: save the outgoing state, swap in the incoming one
+  useEffect(() => {
+    const view = viewRef.current;
+    const docs = docsRef.current;
+    if (!view || !docs || keyRef.current === docKey) return;
+    docs.store(keyRef.current, view.state);
+    keyRef.current = docKey;
+    view.setState(docs.acquire(docKey, doc));
+  }, [docKey, doc]);
+
+  // (re)display the routed diagnostics for the active doc
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
-    view.dispatch(
-      setDiagnostics(
-        view.state,
-        luaErrorsToDiagnostics(view.state, [compileErrorRef.current, runtimeErrorRef.current]),
-      ),
-    );
-  }, [runtimeError]);
+    view.dispatch(setDiagnostics(view.state, luaErrorsToDiagnostics(view.state, errors)));
+  }, [errors, docKey]);
 
   return <div ref={host} className="cm-host" style={{ height: "100%" }} />;
 }
