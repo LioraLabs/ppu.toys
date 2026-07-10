@@ -67,19 +67,25 @@ export function EquationChip({ c }: { c: Compositor }) {
 }
 
 function MatrixCell({
+  layer,
   kind,
   on,
   onToggle,
 }: {
+  layer: string;
   kind: "main" | "sub" | "math";
   on: boolean;
   onToggle: () => void;
 }) {
+  const name = `${layer} ${kind} ${on ? "on" : "off"}`;
   return (
     <span className="cmp-cellwrap">
       <button
         type="button"
         className={`cmp-cell cmp-cell--${kind}` + (on ? " cmp-cell--on" : "")}
+        title={name}
+        aria-label={name}
+        aria-pressed={on}
         onClick={onToggle}
       >
         {on ? "●" : ""}
@@ -122,9 +128,10 @@ export function AssignmentMatrix({ c }: { c: Compositor }) {
             <span className="cmp-ldot" style={{ background: l.color }} />
             {l.label}
           </span>
-          <MatrixCell kind="main" on={(tm & (1 << l.bit)) !== 0} onToggle={() => toggle(REG.TM, tm, l.bit)} />
-          <MatrixCell kind="sub" on={(ts & (1 << l.bit)) !== 0} onToggle={() => toggle(REG.TS, ts, l.bit)} />
+          <MatrixCell layer={l.label} kind="main" on={(tm & (1 << l.bit)) !== 0} onToggle={() => toggle(REG.TM, tm, l.bit)} />
+          <MatrixCell layer={l.label} kind="sub" on={(ts & (1 << l.bit)) !== 0} onToggle={() => toggle(REG.TS, ts, l.bit)} />
           <MatrixCell
+            layer={l.label}
             kind="math"
             on={(adsub & (1 << l.bit)) !== 0}
             onToggle={() => toggle(REG.CGADSUB, adsub, l.bit)}
@@ -139,6 +146,7 @@ export function AssignmentMatrix({ c }: { c: Compositor }) {
         <span className="cmp-cellwrap cmp-fixed">—</span>
         <span className="cmp-cellwrap cmp-fixed cmp-fixed--fix">fix</span>
         <MatrixCell
+          layer="Backdrop"
           kind="math"
           on={(adsub & (1 << BACKDROP_MATH_BIT)) !== 0}
           onToggle={() => toggle(REG.CGADSUB, adsub, BACKDROP_MATH_BIT)}
@@ -200,7 +208,9 @@ export function MathControls({ c, fill }: { c: Compositor; fill?: boolean }) {
               type="button"
               className={"cmp-swatch" + (coldata === hexToBgr555(hex) ? " cmp-swatch--sel" : "")}
               style={{ background: hex }}
-              title={hex}
+              title={`fixed sub color ${hex}`}
+              aria-label={`fixed sub color ${hex}`}
+              aria-pressed={coldata === hexToBgr555(hex)}
               onClick={() => writePin(REG.COLDATA, hexToBgr555(hex))}
             />
           ))}
