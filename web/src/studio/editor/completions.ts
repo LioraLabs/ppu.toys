@@ -73,6 +73,7 @@ const OBJ_MEMBERS: Completion[] = [
   { label: "name_select", type: "property", detail: "name-select 0..3 (2nd table gap) · OBSEL $2101" },
   { label: "priority_rotate", type: "property", detail: "bool OAM priority rotation · OAMADDH.7" },
   { label: "oam_addr", type: "property", detail: "priority-rotation base sprite · OAMADD $2102" },
+  { label: "first", type: "property", detail: "sugar: rotate priority from sprite N · OAMADD $2102" },
 ];
 
 /** obj[n].* per-sprite members (OAM fields). */
@@ -114,7 +115,10 @@ function memberOptions(text: string): Completion[] {
 export function ppuCompletions(ctx: CompletionContext): CompletionResult | null {
   // member access: `bg[1].` / `obj[0].` / `math.` / `obj.` / `m7.`
   // (optionally with a partial word after the dot)
-  const member = ctx.matchBefore(/((?:bg|obj)\s*\[[^\]]*\]|math|obj|m7)\s*\.\w*/);
+  // the lookbehind anchors the base name: `myobj.` / `subbg[1].` must NOT
+  // complete as obj/bg (nested-bracket indices like bg[t[1]] degrade to the
+  // plain-globals path — acceptable)
+  const member = ctx.matchBefore(/(?<![\w.\]])((?:bg|obj)\s*\[[^\]]*\]|math|obj|m7)\s*\.\w*/);
   if (member) {
     const from = member.from + member.text.lastIndexOf(".") + 1;
     return { from, options: memberOptions(member.text) };

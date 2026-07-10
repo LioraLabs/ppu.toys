@@ -103,4 +103,17 @@ describe("M8 DSL audit", () => {
     // `from` must sit right after the dot so "sc" is replaced, not appended
     expect(res.from).toBe("bg[2].".length);
   });
+
+  it("does NOT treat user identifiers ending in a DSL name as member access", () => {
+    // myobj. / subbg[1]. / xm7. are user variables, not obj/bg/m7
+    expect(complete("myobj.")!.options.map((o) => o.label)).not.toContain("sheet");
+    expect(complete("subbg[1].")!.options.map((o) => o.label)).not.toContain("scroll");
+    expect(complete("xm7.")!.options.map((o) => o.label)).not.toContain("extbg");
+    // ...while the real bases still complete mid-expression
+    expect(complete("x = obj.")!.options.map((o) => o.label)).toContain("sheet");
+  });
+
+  it("offers the obj.first priority-rotation sugar", () => {
+    expect(complete("obj.")!.options.map((o) => o.label)).toContain("first");
+  });
 });
