@@ -16,12 +16,19 @@ import {
   toggleWindowInvert,
   windowBounds,
   windowRow,
+  type RegWrite,
   type WinLogic,
 } from "./model";
-import { writePin, writePins } from "./pinStore";
 import { PinDot, RegRow } from "./chrome";
 import { BlitCanvas } from "../BlitCanvas";
 import type { Compositor } from "./useCompositor";
+
+/** ppu-61: the pin write path is gone; controls call these no-ops until
+ *  Task 7 rewires them onto the generated pokes.lua writer. */
+/* ppu-61: replaced in Task 7 */
+function writePin(_addr: number, _value: number): void {}
+/* ppu-61: replaced in Task 7 */
+function writePins(_writes: RegWrite[]): void {}
 
 /** Edge-line colors (canvas fillStyle can't resolve CSS vars; dark accents). */
 const W1_COLOR = "#ff9540";

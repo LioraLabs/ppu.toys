@@ -1,4 +1,4 @@
-import { HEIGHT, WIDTH, type PinnedRegister, type RegisterView } from "../../../ppu/core";
+import { HEIGHT, WIDTH, type RegisterView } from "../../../ppu/core";
 
 /** Pure decode/encode logic for the Compose/Windows tabs + Compositor overlay.
  *  The UI reads EFFECTIVE register values (pinned override wins over the live
@@ -38,7 +38,7 @@ export interface EffectiveReg {
  *  omits most registers; the wasm core reports all of them). */
 export function effectiveReg(
   registers: RegisterView[],
-  pins: PinnedRegister[],
+  pins: RegWrite[],
   addr: number,
 ): EffectiveReg {
   const pin = pins.find((p) => p.addr === addr);

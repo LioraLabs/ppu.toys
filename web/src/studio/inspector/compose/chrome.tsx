@@ -1,55 +1,27 @@
 import { formatAddr, formatValue } from "../format";
 import { useCopyToast } from "../copyToast";
-import { releaseAllPins, releasePin } from "./pinStore";
 import type { Compositor } from "./useCompositor";
 
-/** Marker a pinned control wears; click = unpin that register. Renders
- *  nothing while the register is script-driven. */
+/** Marker a control wears when its register is overridden. Currently always
+ *  hidden — the pin seam is gone (isPinned is always false); stubbed until
+ *  Task 7 turns this into a PokeDot over the generated pokes. */
+/* ppu-61: replaced in Task 7 */
 export function PinDot({ c, addr }: { c: Compositor; addr: number }) {
   if (!c.isPinned(addr)) return null;
-  return (
-    <button
-      type="button"
-      className="cmp-pin"
-      title={`${formatAddr(addr)} pinned — script value overridden. Click to unpin.`}
-      onClick={(e) => {
-        e.stopPropagation();
-        releasePin(addr);
-      }}
-    >
-      ◉
-    </button>
-  );
+  return null;
 }
 
-/** Pinned-override summary: one chip per pin (click = unpin) + clear-all.
- *  Rendered by both docked tabs and the overlay; hidden while nothing is
- *  pinned. ▶ Run also clears every pin (transport.restart). */
+/** Override summary bar. Currently always hidden — the pin seam is gone
+ *  (c.pins is always empty); stubbed until Task 7 turns this into a
+ *  PokeBar over the generated pokes. */
+/* ppu-61: replaced in Task 7 */
 export function PinBar({ c }: { c: Compositor }) {
   if (c.pins.length === 0) return null;
-  return (
-    <div className="cmp-pinbar">
-      <span className="cmp-pinbar-label">◉ {c.pins.length} pinned</span>
-      {c.pins.map((p) => (
-        <button
-          key={p.addr}
-          type="button"
-          className="cmp-pinchip"
-          title="pinned override — click to unpin"
-          onClick={() => releasePin(p.addr)}
-        >
-          {formatAddr(p.addr)}={formatValue(p.value)} ✕
-        </button>
-      ))}
-      <button type="button" className="cmp-pinchip cmp-clearpins" onClick={releaseAllPins}>
-        clear all
-      </button>
-    </div>
-  );
+  return null;
 }
 
-/** One copyable register readout row: effective (live-or-pinned) value, note,
- *  optional color swatch, pin marker with individual unpin. */
+/** One copyable register readout row: effective (live-or-overridden) value,
+ *  note, optional color swatch, override marker. */
 export function RegRow({
   c,
   addr,

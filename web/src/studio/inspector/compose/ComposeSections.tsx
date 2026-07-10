@@ -15,10 +15,15 @@ import {
   withMathHalf,
   withMathOp,
 } from "./model";
-import { screensFor, writePin } from "./pinStore";
+import { screensFor } from "./screens";
 import { PinDot, RegRow } from "./chrome";
 import { BlitCanvas } from "../BlitCanvas";
 import type { Compositor } from "./useCompositor";
+
+/** ppu-61: the pin write path is gone; controls call this no-op until Task 7
+ *  rewires them onto the generated pokes.lua writer. */
+/* ppu-61: replaced in Task 7 */
+function writePin(_addr: number, _value: number): void {}
 
 /** MAIN / SUB / RESULT previews straight from the core: the two compositor
  *  intermediates (pre-math, pre-brightness) and the live framebuffer. The ▦

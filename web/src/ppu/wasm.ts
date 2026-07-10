@@ -13,7 +13,6 @@ import {
   PlaneId,
   BgTrace,
   ObjTrace,
-  PinnedRegister,
 } from "./core";
 
 /** The slice of the wasm-bindgen core the adapter calls. Extracted so the adapter
@@ -44,10 +43,6 @@ export interface WasmCoreLike {
   traceBgPixel(layer: number, x: number, y: number): unknown;
   traceBgTile(layer: number, tx: number, ty: number, y: number): unknown;
   traceObj(index: number): unknown;
-  pinRegister(addr: number, value: number): void;
-  unpinRegister(addr: number): void;
-  clearPins(): void;
-  listPins(): unknown;
 }
 
 /** Adapt a wasm-bindgen core to the PpuCore seam. Pure (no wasm load) so it can be
@@ -106,18 +101,6 @@ export function wrapWasmCore(core: WasmCoreLike): PpuCore {
     },
     traceObj(index: number): ObjTrace | null {
       return (core.traceObj(index) as ObjTrace | null | undefined) ?? null;
-    },
-    pin(addr: number, value: number) {
-      core.pinRegister(addr, value);
-    },
-    unpin(addr: number) {
-      core.unpinRegister(addr);
-    },
-    clearPins() {
-      core.clearPins();
-    },
-    listPins(): PinnedRegister[] {
-      return core.listPins() as PinnedRegister[];
     },
   };
 }

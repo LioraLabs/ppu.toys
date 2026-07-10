@@ -84,13 +84,6 @@ export interface FrameResult {
   objOverflow: ObjOverflow; // $213E STAT77 per-frame flags + busiest-line counts
 }
 
-/** One pinned register override (M9): addr/value use the same encoding as
- *  RegisterView (the absolute bit pattern shown by the inspector). */
-export interface PinnedRegister {
-  addr: number;
-  value: number;
-}
-
 /** Compositor intermediates for the most recent frame(): the two per-screen
  *  composites are PRE color-math and PRE brightness; mathMask is one byte per
  *  pixel — bit0 = color math applied, bit1 = clip-to-black region, bit2 =
@@ -192,13 +185,6 @@ export interface PpuCore {
   traceBgTile(layer: number, tx: number, ty: number, y: number): BgTrace | null;
   /** Trace OAM sprite index (0..127). */
   traceObj(index: number): ObjTrace | null;
-  /** Pin a register override, applied after frame()+hdma on every scanline so
-   *  it wins over script writes. */
-  pin(addr: number, value: number): void;
-  unpin(addr: number): void;
-  /** Drop every pin — the ▶ Run restart path calls this. */
-  clearPins(): void;
-  listPins(): PinnedRegister[];
 }
 
 export const WIDTH = 256;
