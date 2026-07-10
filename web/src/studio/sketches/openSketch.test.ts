@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { IDBFactory } from "fake-indexeddb";
-import { DEMOS } from "../demos/demos";
+import { DEMOS, demoFiles } from "../demos/demos";
 import {
   openSketchStore,
   AUTOSAVE_MS,
@@ -11,6 +11,7 @@ import {
 import { listSketches, loadSketch, _resetSketchStoreForTests } from "./sketchStore";
 
 const demo = DEMOS[0];
+const demoMain = demoFiles(demo)[0].source;
 
 /** The open sketch, or throw — keeps assertions terse. */
 function openSketch() {
@@ -43,21 +44,25 @@ describe("initial state", () => {
 
 describe("lazy demo fork", () => {
   it("does NOT fork when the editor pushes the pristine demo source on mount", () => {
-    openSketchStore.editFile("main.lua", demo.source);
+    openSketchStore.editFile("main.lua", demoMain);
     expect(openSketchStore.state().context.kind).toBe("demo");
     expect(openSketchStore.state().dirty).toBe(false);
   });
 
   it("forks into '<demo> (copy)' on the first real edit, keeping the session", () => {
     const before = openSketchStore.state().session;
-    openSketchStore.editFile("main.lua", demo.source + "\n-- edit");
+    openSketchStore.editFile("main.lua", demoMain + "\n-- edit");
     const s = openSketchStore.state();
     expect(s.session).toBe(before); // editor must NOT remount mid-typing
     expect(s.dirty).toBe(true);
     const sk = openSketch();
     expect(sk.name).toBe(`${demo.label} (copy)`);
     expect(sk.forkedFrom).toBe(demo.id);
-    expect(sk.files).toEqual([{ name: "main.lua", source: demo.source + "\n-- edit" }]);
+    // fork carries ALL demo files, only the edited one changes
+    expect(sk.files).toEqual([
+      { name: "main.lua", source: demoMain + "\n-- edit" },
+      demoFiles(demo)[1],
+    ]);
   });
 
   it("routes subsequent edits into the same sketch — exactly one row persisted", async () => {
@@ -74,7 +79,7 @@ describe("lazy demo fork", () => {
     openSketchStore.addAsset({ name: "sky.png", png: new Uint8Array([1, 2, 3]) });
     const sk = openSketch();
     expect(sk.forkedFrom).toBe(demo.id);
-    expect(sk.files).toEqual([{ name: "main.lua", source: demo.source }]);
+    expect(sk.files).toEqual(demoFiles(demo));
     expect(sk.assets.map((a) => a.name)).toEqual(["sky.png"]);
   });
 });
@@ -165,10 +170,31 @@ describe("open / new / switch", () => {
 });
 
 describe("openContextFiles", () => {
-  it("presents a demo as a single main.lua", () => {
-    expect(openContextFiles(openSketchStore.state())).toEqual([
-      { name: "main.lua", source: demo.source },
-    ]);
+  it("presents a multi-file demo as its ordered files", () => {
+    expect(openContextFiles(openSketchStore.state())).toEqual(demoFiles(demo));
+  });
+
+  it("presents the dusk-parallax demo as ordered multi-file tabs", () => {
+    const files = openContextFiles(openSketchStore.state());
+    expect(files.map((f) => f.name)).toEqual(["main.lua", "palette.lua"]);
+  });
+
+  it("pristine write-back of a demo file does not fork", () => {
+    const files = openContextFiles(openSketchStore.state());
+    openSketchStore.editFile("palette.lua", files[1].source);
+    expect(openSketchStore.state().context.kind).toBe("demo");
+  });
+
+  it("editing one demo file forks carrying ALL files", () => {
+    const files = openContextFiles(openSketchStore.state());
+    openSketchStore.editFile("palette.lua", files[1].source + "\n-- tweak");
+    const ctx = openSketchStore.state().context;
+    expect(ctx.kind).toBe("sketch");
+    if (ctx.kind !== "sketch") return;
+    expect(ctx.sketch.forkedFrom).toBe("dusk-parallax");
+    expect(ctx.sketch.files.map((f) => f.name)).toEqual(["main.lua", "palette.lua"]);
+    expect(ctx.sketch.files[0].source).toBe(files[0].source);
+    expect(ctx.sketch.files[1].source).toContain("-- tweak");
   });
 });
 
@@ -188,15 +214,17 @@ describe("file operations", () => {
     expect(openSketchStore.addFile()).toBe("file3.lua");
   });
 
-  it("addFile on a demo forks it, keeping the demo file first (session preserved)", () => {
+  it("addFile on a demo forks it, keeping the demo files first (session preserved)", () => {
     const before = openSketchStore.state().session;
+    // dusk-parallax already has 2 files (main.lua, palette.lua), so the next
+    // unique execution-order slot is file3.lua.
     const name = openSketchStore.addFile();
-    expect(name).toBe("file2.lua");
+    expect(name).toBe("file3.lua");
     const sk = openSketch();
     expect(sk.forkedFrom).toBe(demo.id);
     expect(sk.files).toEqual([
-      { name: "main.lua", source: demo.source },
-      { name: "file2.lua", source: "" },
+      ...demoFiles(demo),
+      { name: "file3.lua", source: "" },
     ]);
     expect(openSketchStore.state().session).toBe(before);
   });
@@ -216,9 +244,12 @@ describe("file operations", () => {
     expect(openSketch().files.map((f) => f.name)).toEqual(["main.lua", "file2.lua"]);
   });
 
-  it("renameFile on a demo forks with the renamed file", () => {
+  it("renameFile on a demo forks with the renamed file, keeping the rest", () => {
     expect(openSketchStore.renameFile("main.lua", "scene.lua")).toBe(true);
-    expect(openSketch().files).toEqual([{ name: "scene.lua", source: demo.source }]);
+    expect(openSketch().files).toEqual([
+      { name: "scene.lua", source: demoMain },
+      demoFiles(demo)[1],
+    ]);
   });
 
   it("deleteFile removes a file but refuses the last one", async () => {

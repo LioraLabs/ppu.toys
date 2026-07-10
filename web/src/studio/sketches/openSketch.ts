@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { DEMOS } from "../demos/demos";
+import { DEMOS, demoFiles } from "../demos/demos";
 import {
   newSketchObject,
   createSketch,
@@ -102,11 +102,12 @@ function forkFromDemo(demoId: string, files: SketchFile[]) {
   emit();
 }
 
-/** Ordered files of a context (demo presents as a single main.lua). */
+/** Ordered files of a context (single-file demos present as one main.lua;
+ *  multi-file demos present as their ordered files). */
 function filesOf(ctx: OpenContext): SketchFile[] {
   if (ctx.kind === "sketch") return ctx.sketch.files;
-  const src = DEMOS.find((d) => d.id === ctx.demoId)?.source ?? "";
-  return [{ name: "main.lua", source: src }];
+  const demo = DEMOS.find((d) => d.id === ctx.demoId);
+  return demo ? demoFiles(demo) : [{ name: "main.lua", source: "" }];
 }
 
 /** Files of the LIVE context. */
@@ -170,9 +171,15 @@ export const openSketchStore = {
   editFile(name: string, source: string): void {
     const ctx = context;
     if (ctx.kind === "demo") {
-      const demoSrc = DEMOS.find((d) => d.id === ctx.demoId)?.source;
-      if (demoSrc === source) return; // pristine content, not an edit
-      forkFromDemo(ctx.demoId, [{ name, source }]);
+      const files = filesOf(ctx);
+      const cur = files.find((f) => f.name === name);
+      if (cur && cur.source === source) return; // pristine content, not an edit
+      forkFromDemo(
+        ctx.demoId,
+        cur
+          ? files.map((f) => (f.name === name ? { name, source } : f))
+          : [...files, { name, source }],
+      );
       return;
     }
     const existing = ctx.sketch.files.find((f) => f.name === name);
@@ -228,13 +235,12 @@ export const openSketchStore = {
   },
 
   /** Record an uploaded PNG into the open sketch (an upload IS an edit, so a
-   *  demo forks first — with its pristine source, since any prior edit would
+   *  demo forks first — with all its pristine files, since any prior edit would
    *  already have forked it). Same-named uploads replace. */
   addAsset(asset: SketchAsset): void {
     const ctx = context;
     if (ctx.kind === "demo") {
-      const demoSrc = DEMOS.find((d) => d.id === ctx.demoId)?.source ?? "";
-      forkFromDemo(ctx.demoId, [{ name: "main.lua", source: demoSrc }]);
+      forkFromDemo(ctx.demoId, filesOf(ctx));
     }
     mutateSketch((s) => ({
       ...s,
@@ -280,8 +286,9 @@ export function openContextLabel(s: OpenSketchState): string {
     : DEMOS.find((d) => d.id === ctx.demoId)?.label ?? ctx.demoId;
 }
 
-/** Ordered files of the open context — the editor's tab list. A demo presents
- *  as a single read-only main.lua (the first edit forks it). */
+/** Ordered files of the open context — the editor's tab list. A single-file
+ *  demo presents as one read-only main.lua; a multi-file demo presents as its
+ *  ordered files (the first edit to any of them forks it). */
 export function openContextFiles(s: OpenSketchState): SketchFile[] {
   return filesOf(s.context);
 }

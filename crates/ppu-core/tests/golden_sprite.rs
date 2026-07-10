@@ -70,10 +70,34 @@ fn fixture() -> (ppu_core::LineTable, Memory) {
         };
     }
     // Two 32x32 large sprites lower down.
-    mem.oam[6] = Obj { on: true, x: 40, y: 120, tile: 0, pal: 2, large: true, ..Obj::default() };
-    mem.oam[7] = Obj { on: true, x: 150, y: 120, tile: 0, pal: 4, large: true, ..Obj::default() };
+    mem.oam[6] = Obj {
+        on: true,
+        x: 40,
+        y: 120,
+        tile: 0,
+        pal: 2,
+        large: true,
+        ..Obj::default()
+    };
+    mem.oam[7] = Obj {
+        on: true,
+        x: 150,
+        y: 120,
+        tile: 0,
+        pal: 4,
+        large: true,
+        ..Obj::default()
+    };
     // A 16x32 sprite clipped off the left edge (renderer clips per-pixel).
-    mem.oam[8] = Obj { on: true, x: -8, y: 80, tile: 0, pal: 1, large: false, ..Obj::default() };
+    mem.oam[8] = Obj {
+        on: true,
+        x: -8,
+        y: 80,
+        tile: 0,
+        pal: 1,
+        large: false,
+        ..Obj::default()
+    };
 
     let lt = LineTableBuilder::new(LineTableRow::default()).build(HEIGHT);
     (lt, mem)
@@ -99,16 +123,32 @@ fn sprite_fixture_draws_size_pair_sprites_over_backdrop() {
     let fb = render_frame(&lt, &mem);
     let red = unpack_rgb15(rgb15(224, 64, 32)); // pal 0 -> first 16x32 sprite
     let green = unpack_rgb15(rgb15(96, 224, 120)); // pal 2 -> a 32x32 large sprite
-    // First sprite is a filled 16x32 NON-SQUARE: top-left + far corner present, and
-    // exactly 16 wide (the column one past its width is NOT its colour).
+                                                   // First sprite is a filled 16x32 NON-SQUARE: top-left + far corner present, and
+                                                   // exactly 16 wide (the column one past its width is NOT its colour).
     assert_eq!(px(&fb, 12, 24), red, "non-square sprite top-left");
-    assert_eq!(px(&fb, 27, 55), red, "non-square sprite fills its full 16x32 extent");
-    assert_ne!(px(&fb, 28, 24), red, "non-square sprite must be only 16 px wide");
+    assert_eq!(
+        px(&fb, 27, 55),
+        red,
+        "non-square sprite fills its full 16x32 extent"
+    );
+    assert_ne!(
+        px(&fb, 28, 24),
+        red,
+        "non-square sprite must be only 16 px wide"
+    );
     // A large 32x32 sprite fills its whole footprint.
     assert_eq!(px(&fb, 40, 120), green, "large 32x32 top-left");
-    assert_eq!(px(&fb, 71, 151), green, "large sprite fills its full 32x32 extent");
+    assert_eq!(
+        px(&fb, 71, 151),
+        green,
+        "large sprite fills its full 32x32 extent"
+    );
     // Backdrop where nothing is drawn.
-    assert_eq!(px(&fb, 250, 210), unpack_rgb15(rgb15(24, 16, 40)), "backdrop missing");
+    assert_eq!(
+        px(&fb, 250, 210),
+        unpack_rgb15(rgb15(24, 16, 40)),
+        "backdrop missing"
+    );
 }
 
 #[test]

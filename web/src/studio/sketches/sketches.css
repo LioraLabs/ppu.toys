@@ -1,11 +1,10 @@
-/* Sketch library panel — plain, token-only chrome (restyle lands in the
-   Workspace shell ticket). position:fixed off the rail so studio.css /
-   Studio.tsx stay untouched. */
+/* Sketch library panel — plain, token-only chrome. position:fixed off the
+   rail so studio.css / Studio.tsx stay untouched. */
 .library {
   position: fixed;
   left: var(--rail-w);
   top: var(--toolbar-h);
-  bottom: var(--statusbar-h);
+  bottom: 0;
   width: 280px;
   z-index: 20;
   display: flex;

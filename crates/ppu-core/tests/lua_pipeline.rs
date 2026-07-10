@@ -183,7 +183,10 @@ fn lua_m7_extbg_sets_setini_bit6_and_surfaces_in_registers() {
     assert!(lt.rows[0].extbg());
     // Inspector surfaces SETINI ($2133) with bit 6 set.
     let regs = derive_registers(&lt.rows[0], &Obsel::default(), &HashMap::new());
-    let setini = regs.iter().find(|r| r.name == "SETINI").expect("SETINI present");
+    let setini = regs
+        .iter()
+        .find(|r| r.name == "SETINI")
+        .expect("SETINI present");
     assert_eq!(setini.addr, 0x2133);
     assert_eq!(setini.value & 0x40, 0x40);
 }

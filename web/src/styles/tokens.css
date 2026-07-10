@@ -2,7 +2,7 @@
    "Design Tokens"). Two final palettes: dark (default, :root) and light
    ([data-theme="light"] set on <html> by the toolbar theme toggle).
    Component CSS should use the handoff names; the legacy alias block keeps
-   pre-M9 panel CSS (inspector.css, assets.css, editor) working in both themes. */
+   pre-M9 panel CSS (inspector.css, editor) working in both themes. */
 
 :root {
   /* Backgrounds */
@@ -74,26 +74,19 @@
 :root {
   /* ── Legacy aliases (pre-M9 names). var() resolves per-theme because the
      primitives above are overridden on the same root element. ── */
-  --bg-card: var(--bg);
   --bg-bar: var(--panel2);
   --bg-tabbar: var(--panel2);
-  --bg-rail: var(--panel2);
   --bg-dock: var(--panel);
   --bg-editor: var(--editor);
-  --bg-pill: var(--raised);
   --bg-grid: var(--sunken);
   --bg-display: #05060a;
   --bg-hover-list: var(--hover);
-  --bg-hover-rail: var(--hover);
-  --bg-rail-active: color-mix(in srgb, var(--orange) 14%, transparent);
 
   --border-primary: var(--line);
   --border-subtle: var(--line2);
   --border-palette: var(--line2);
-  --border-display: var(--line2);
   --border-button: var(--line);
   --border-button-hover: var(--mid);
-  --divider: var(--line);
 
   --text-hi: var(--txt);
   --text-main: var(--txt);
@@ -101,17 +94,12 @@
   --text-mid: var(--mid);
   --text-dim: var(--dim);
   --text-dim2: var(--dim2);
-  --text-dimmer: var(--dim2);
-  --text-dimmer2: var(--faint);
 
   --accent: var(--orange);
   --accent-orange: var(--orange);
-  --accent-orange-hover: color-mix(in srgb, var(--orange) 85%, #ffffff);
   --accent-magenta: var(--magenta);
   --accent-green: var(--green);
-  --accent-green2: var(--green);
   --accent-cyan: var(--cyan);
-  --accent-yellow: var(--yellow);
 
   /* Radii */
   --radius-card: 3px;

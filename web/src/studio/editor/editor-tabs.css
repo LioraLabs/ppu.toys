@@ -1,6 +1,5 @@
 /* File tab bar — handoff "Code editor" spec, token vars only.
-   Own ftab* prefix: the legacy .etab styles in studio.css retire with the
-   Workspace-shell ticket and must not collide. */
+   Own ftab* prefix so these styles don't collide with any other rules. */
 .ftabs { height: 36px; flex: none; display: flex; align-items: stretch; background: var(--bg-tabbar); border-bottom: 1px solid var(--border-subtle); overflow-x: auto; scrollbar-width: none; }
 .ftab { display: flex; align-items: center; gap: 7px; padding: 0 15px; font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); border-bottom: 2px solid transparent; cursor: pointer; user-select: none; white-space: nowrap; }
 .ftab--active { color: var(--text-hi); background: var(--bg-editor); border-bottom-color: var(--accent-orange); }
