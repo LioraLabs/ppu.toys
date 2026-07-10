@@ -46,20 +46,19 @@ impl PpuCore {
 
     #[wasm_bindgen(js_name = setSource)]
     pub fn set_source(&mut self, src: &str) -> Result<JsValue, JsValue> {
-        let res = match self.engine.set_source(src) {
-            Ok(()) => SetSourceResult {
-                ok: true,
-                error: None,
-            },
-            Err(e) => SetSourceResult {
-                ok: false,
-                error: Some(LuaErrorView {
-                    message: e.message,
-                    line: e.line,
-                }),
-            },
-        };
-        serde_wasm_bindgen::to_value(&res).map_err(Into::into)
+        to_set_source_result(self.engine.set_source(src))
+    }
+
+    /// Multi-file sketch: chunks execute in list order into one shared global
+    /// scope; errors carry `{file, line?, message}`.
+    #[wasm_bindgen(js_name = setSources)]
+    pub fn set_sources(&mut self, files: JsValue) -> Result<JsValue, JsValue> {
+        let files: Vec<SourceFileIn> = serde_wasm_bindgen::from_value(files)?;
+        let pairs: Vec<(&str, &str)> = files
+            .iter()
+            .map(|f| (f.name.as_str(), f.source.as_str()))
+            .collect();
+        to_set_source_result(self.engine.set_sources(&pairs))
     }
 
     pub fn frame(&mut self, t: f64, f: u32) -> Result<(), JsValue> {
@@ -70,10 +69,7 @@ impl PpuCore {
         let mut lt = match self.engine.frame(t, f) {
             Ok(lt) => lt,
             Err(e) => {
-                let view = LuaErrorView {
-                    message: e.message,
-                    line: e.line,
-                };
+                let view: LuaErrorView = e.into();
                 return Err(serde_wasm_bindgen::to_value(&view)?);
             }
         };
@@ -179,4 +175,25 @@ impl Default for PpuCore {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// One incoming source file for `setSources`, matching the TS `SourceFile`.
+#[derive(serde::Deserialize)]
+struct SourceFileIn {
+    name: String,
+    source: String,
+}
+
+fn to_set_source_result(res: Result<(), crate::LuaError>) -> Result<JsValue, JsValue> {
+    let view = match res {
+        Ok(()) => SetSourceResult {
+            ok: true,
+            error: None,
+        },
+        Err(e) => SetSourceResult {
+            ok: false,
+            error: Some(e.into()),
+        },
+    };
+    serde_wasm_bindgen::to_value(&view).map_err(Into::into)
 }

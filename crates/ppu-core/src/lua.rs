@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use piccolo::{
-    Callback, CallbackReturn, Closure, Executor, Lua, PrototypeError, StashedFunction, StaticError,
-    Table, Value,
+    Callback, CallbackReturn, Closure, Executor, Function, Lua, PrototypeError, StashedFunction,
+    StaticError, Table, Value,
 };
 
 use crate::import::obj::{apply_obj_import, import_obj_sheet, ObjImport};
@@ -50,6 +50,16 @@ pub enum ImportBudget {
 pub struct LuaError {
     pub message: String,
     pub line: Option<u32>,
+    /// Source file the error is attributed to (multi-file sketches).
+    pub file: Option<String>,
+}
+
+impl LuaError {
+    /// Tag this error with the source file it belongs to.
+    fn in_file(mut self, name: &str) -> LuaError {
+        self.file = Some(name.to_string());
+        self
+    }
 }
 
 /// The embedded Lua VM plus the captured `frame`/`init` entry points and mirrored
@@ -58,6 +68,8 @@ pub struct LuaEngine {
     lua: Rc<RefCell<Lua>>,
     frame_fn: Option<StashedFunction>,
     init_fn: Option<StashedFunction>,
+    /// Defining chunk of `frame_fn`, for runtime error attribution.
+    frame_file: Option<String>,
     memory: Memory,
     /// Uploaded image assets, keyed by slot id. Consumed by the `source =`
     /// importer; NOT PPU memory (survives recompiles).
@@ -90,6 +102,7 @@ impl LuaEngine {
             lua: Rc::new(RefCell::new(lua)),
             frame_fn: None,
             init_fn: None,
+            frame_file: None,
             memory: Memory::new(),
             assets: HashMap::new(),
             import_cache: ImportCache::default(),
@@ -150,34 +163,47 @@ impl LuaEngine {
         &mut self.memory
     }
 
-    /// Compile and load a DSL source: builds a fresh VM, installs bindings, runs
-    /// the chunk (defining `frame`/`init`/helpers as globals), runs `init()` once
-    /// if present. Returns `LuaError{message,line?}` on compile/runtime failure.
+    /// Single-file sugar for [`Self::set_sources`]; the chunk keeps its
+    /// historical name `"source"` so existing diagnostics are unchanged.
     pub fn set_source(&mut self, src: &str) -> Result<(), LuaError> {
+        self.set_sources(&[("source", src)])
+    }
+
+    /// Compile and load a multi-file sketch (PICO-8 scope): builds a fresh VM,
+    /// installs bindings, then executes each `(name, source)` chunk **in list
+    /// order** into ONE shared global environment, each compiled with its file
+    /// name as chunk name. `frame`/`init` are resolved only after every chunk
+    /// has run (`main.lua` is convention, not special-cased); `init()` runs
+    /// once if present. Errors carry `{file, line?, message}`.
+    pub fn set_sources(&mut self, files: &[(&str, &str)]) -> Result<(), LuaError> {
         let mut lua = Lua::core();
         lua.enter(install_bindings);
 
-        let load = lua.try_enter(|ctx| {
-            let closure = Closure::load(ctx, Some("source"), src.as_bytes())?;
-            Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
-        });
-        let ex = load.map_err(static_error_to_lua)?;
-        lua.execute::<()>(&ex).map_err(static_error_to_lua)?;
+        for (name, src) in files {
+            let load = lua.try_enter(|ctx| {
+                let closure = Closure::load(ctx, Some(*name), src.as_bytes())?;
+                Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
+            });
+            if let Err(e) = load.and_then(|ex| lua.execute::<()>(&ex)) {
+                return Err(static_error_to_lua(e).in_file(name));
+            }
+        }
 
-        let (frame_fn, init_fn) = lua.enter(|ctx| {
-            let frame_fn = match ctx.get_global("frame") {
-                Value::Function(f) => Some(ctx.stash(f)),
-                _ => None,
+        let (frame_fn, frame_file, init_fn, init_file) = lua.enter(|ctx| {
+            let (frame_fn, frame_file) = match ctx.get_global("frame") {
+                Value::Function(f) => (Some(ctx.stash(f)), function_chunk_name(&f)),
+                _ => (None, None),
             };
-            let init_fn = match ctx.get_global("init") {
-                Value::Function(f) => Some(ctx.stash(f)),
-                _ => None,
+            let (init_fn, init_file) = match ctx.get_global("init") {
+                Value::Function(f) => (Some(ctx.stash(f)), function_chunk_name(&f)),
+                _ => (None, None),
             };
-            (frame_fn, init_fn)
+            (frame_fn, frame_file, init_fn, init_file)
         });
 
         self.lua = Rc::new(RefCell::new(lua));
         self.frame_fn = frame_fn;
+        self.frame_file = frame_file;
         self.init_fn = init_fn;
         self.memory = Memory::new();
 
@@ -187,7 +213,11 @@ impl LuaEngine {
                 let f = ctx.fetch(&init);
                 ctx.stash(Executor::start(ctx, f, ()))
             });
-            l.execute::<()>(&ex).map_err(static_error_to_lua)?;
+            l.execute::<()>(&ex).map_err(|e| {
+                let mut err = static_error_to_lua(e);
+                err.file = init_file.clone();
+                err
+            })?;
         }
         Ok(())
     }
@@ -207,7 +237,11 @@ impl LuaEngine {
                     let func = ctx.fetch(&frame);
                     ctx.stash(Executor::start(ctx, func, (t, f as i64)))
                 });
-                l.execute::<()>(&ex).map_err(static_error_to_lua)?;
+                l.execute::<()>(&ex).map_err(|e| {
+                    let mut err = static_error_to_lua(e);
+                    err.file = self.frame_file.clone();
+                    err
+                })?;
             }
         }
 
@@ -240,7 +274,7 @@ impl LuaEngine {
         };
 
         // Collect registered hooks (stash each fn with its [y0,y1]).
-        let hooks: Vec<(usize, usize, StashedFunction)> = {
+        let hooks: Vec<(usize, usize, StashedFunction, Option<String>)> = {
             let mut l = self.lua.borrow_mut();
             l.enter(|ctx| {
                 let mut out = Vec::new();
@@ -251,7 +285,8 @@ impl LuaEngine {
                             let y0 = entry.get(ctx, 1).to_integer().unwrap_or(0).max(0) as usize;
                             let y1 = entry.get(ctx, 2).to_integer().unwrap_or(0).max(0) as usize;
                             if let Value::Function(func) = entry.get(ctx, 3) {
-                                out.push((y0, y1, ctx.stash(func)));
+                                let file = function_chunk_name(&func);
+                                out.push((y0, y1, ctx.stash(func), file));
                             }
                         }
                     }
@@ -264,7 +299,7 @@ impl LuaEngine {
         // globals to the working row, runs fn(y), and reads the row back.
         let err_sink: Rc<RefCell<Option<LuaError>>> = Rc::new(RefCell::new(None));
         let mut builder = LineTableBuilder::new(defaults.clone());
-        for (y0, y1, sf) in hooks {
+        for (y0, y1, sf, file) in hooks {
             let lua = self.lua.clone();
             let sink = err_sink.clone();
             builder.hdma(y0, y1, move |y, row| {
@@ -282,7 +317,9 @@ impl LuaEngine {
                         *row = l.enter(read_state);
                     }
                     Err(e) => {
-                        *sink.borrow_mut() = Some(static_error_to_lua(e));
+                        let mut err = static_error_to_lua(e);
+                        err.file = file.clone();
+                        *sink.borrow_mut() = Some(err);
                     }
                 }
             });
@@ -532,6 +569,18 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     ctx.set_global("scanline", hdma).unwrap();
 }
 
+/// Chunk (source file) name a Lua function was compiled from; `None` for
+/// native callbacks. Basis of runtime per-file error attribution (piccolo
+/// 0.3.3 has no tracebacks, so we attribute to the defining chunk).
+fn function_chunk_name(f: &Function<'_>) -> Option<String> {
+    match f {
+        Function::Closure(c) => {
+            Some(String::from_utf8_lossy(c.prototype().chunk_name.as_bytes()).into_owned())
+        }
+        _ => None,
+    }
+}
+
 fn static_error_to_lua(e: StaticError) -> LuaError {
     let line = if let StaticError::Runtime(rt) = &e {
         rt.downcast::<PrototypeError>().and_then(|pe| match pe {
@@ -545,6 +594,7 @@ fn static_error_to_lua(e: StaticError) -> LuaError {
     LuaError {
         message: e.to_string(),
         line,
+        file: None,
     }
 }
 
