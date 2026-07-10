@@ -271,7 +271,6 @@ impl PpuCore {
             None => Ok(JsValue::NULL),
         }
     }
-
 }
 
 impl Default for PpuCore {
