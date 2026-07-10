@@ -677,7 +677,10 @@ fn translucency_demo_blends_panel_half_over_scene() {
     assert_ne!(scene_px[..3], [0, 0, 0], "scene pixel went black");
     // Half-blend pulls the bright cyan panel toward the darker scene: the blended
     // green channel is below the panel's own ~230 full value.
-    assert!(panel_px[1] < 230, "no half-blend darkening applied to the panel");
+    assert!(
+        panel_px[1] < 230,
+        "no half-blend darkening applied to the panel"
+    );
 }
 
 #[test]
@@ -686,7 +689,10 @@ fn translucency_demo_matches_golden_png() {
     let (actual, _) = render_demo(TRANSLUCENCY_SRC);
     let expected = decode_png(TRANSLUCENCY_GOLDEN);
     assert_eq!(actual.len(), expected.len());
-    assert_eq!(actual, expected, "translucency demo differs from golden PNG");
+    assert_eq!(
+        actual, expected,
+        "translucency demo differs from golden PNG"
+    );
 }
 
 #[test]
@@ -732,7 +738,10 @@ fn glow_demo_adds_fixed_color_over_baseline() {
     let (base, _) = render_demo(&baseline_src);
     // The additive red channel must lift the frame overall (sum of R over the frame).
     let sum_r = |fb: &[u8]| fb.chunks_exact(4).map(|p| p[0] as u64).sum::<u64>();
-    assert!(sum_r(&glow) > sum_r(&base), "additive glow did not brighten the frame");
+    assert!(
+        sum_r(&glow) > sum_r(&base),
+        "additive glow did not brighten the frame"
+    );
 }
 
 #[test]
@@ -774,8 +783,15 @@ fn shadow_demo_subtracts_fixed_color_below_baseline() {
         .replace("CGADSUB = 0x81", "CGADSUB = 0x00")
         .replace("COLDATA = rgb(120, 120, 120)", "COLDATA = 0");
     let (base, _) = render_demo(&baseline_src);
-    let sum = |fb: &[u8]| fb.chunks_exact(4).map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64).sum::<u64>();
-    assert!(sum(&shadow) < sum(&base), "subtract did not darken the frame");
+    let sum = |fb: &[u8]| {
+        fb.chunks_exact(4)
+            .map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64)
+            .sum::<u64>()
+    };
+    assert!(
+        sum(&shadow) < sum(&base),
+        "subtract did not darken the frame"
+    );
 }
 
 #[test]
@@ -812,13 +828,24 @@ fn regen_golden_shadow() {
 fn sprite_storm_overflows_both_caps_and_flickers() {
     // Both per-line caps engage on the packed band.
     let (fb, ov) = render_storm(90);
-    assert!(ov.range_over, "sprite-storm must exceed the 32-sprite range cap");
-    assert!(ov.time_over, "sprite-storm must exceed the 34-tile time cap");
+    assert!(
+        ov.range_over,
+        "sprite-storm must exceed the 32-sprite range cap"
+    );
+    assert!(
+        ov.time_over,
+        "sprite-storm must exceed the 34-tile time cap"
+    );
     assert!(ov.max_sprites > 32);
     // Sprites actually draw over the backdrop.
-    assert!(fb.chunks_exact(4).any(|p| p[3] == 255 && p[..3] != [0, 0, 0]));
+    assert!(fb
+        .chunks_exact(4)
+        .any(|p| p[3] == 255 && p[..3] != [0, 0, 0]));
     // Authentic flicker: rotating the OAM start each frame changes the output.
-    assert!(render_storm(90).0 != render_storm(91).0, "OAM rotation must change survivors");
+    assert!(
+        render_storm(90).0 != render_storm(91).0,
+        "OAM rotation must change survivors"
+    );
 }
 
 #[test]
@@ -829,7 +856,10 @@ fn sprite_storm_demo_matches_golden_png() {
     let actual = render_frame(&lt, e.memory());
     let expected = decode_png(SPRITE_STORM_GOLDEN);
     assert_eq!(actual.len(), expected.len());
-    assert_eq!(actual, expected, "sprite-storm demo differs from golden PNG");
+    assert_eq!(
+        actual, expected,
+        "sprite-storm demo differs from golden PNG"
+    );
 }
 
 #[test]
@@ -847,11 +877,19 @@ fn mosaic_demo_pixelates_bg1_into_8px_blocks() {
     let (fb, _) = render_demo(MOSAIC_SRC);
     // f=60 -> mosaic size 7 -> 8px blocks; each block replicates its top-left texel.
     for &(x, y) in &[(1usize, 0usize), (7, 0), (0, 7), (7, 7)] {
-        assert_eq!(px(&fb, x, y), px(&fb, 0, 0), "block(0,0) not flat at ({x},{y})");
+        assert_eq!(
+            px(&fb, x, y),
+            px(&fb, 0, 0),
+            "block(0,0) not flat at ({x},{y})"
+        );
     }
     // adjacent block differs (ramp steps within 8px); period-32 block matches.
     assert_ne!(px(&fb, 8, 0), px(&fb, 0, 0), "block(8,0) should differ");
-    assert_eq!(px(&fb, 32, 0), px(&fb, 0, 0), "ramp period 32 aligns with blocks");
+    assert_eq!(
+        px(&fb, 32, 0),
+        px(&fb, 0, 0),
+        "ramp period 32 aligns with blocks"
+    );
     // vs mosaic OFF: the fine sub-block detail survives -> the frame differs.
     let off = MOSAIC_SRC.replace("bg[1].mosaic = true", "bg[1].mosaic = false");
     let (base, _) = render_demo(&off);
@@ -886,15 +924,24 @@ fn extbg_demo_places_sprite_between_floor_priority_levels() {
     let (fb, _) = render_demo(EXTBG_SRC);
     // Sprite spans x 112..144, y 88..120. Left of the x=128 split -> HIGH floor covers it;
     // right of the split -> LOW floor, the sprite shows through.
-    assert!(is_red(px(&fb, 120, 104)), "high floor must cover the sprite left of split");
-    assert!(is_yellow(px(&fb, 136, 104)), "sprite must ride over the low floor right of split");
+    assert!(
+        is_red(px(&fb, 120, 104)),
+        "high floor must cover the sprite left of split"
+    );
+    assert!(
+        is_yellow(px(&fb, 136, 104)),
+        "sprite must ride over the low floor right of split"
+    );
     // Floor away from the sprite is red on both halves (same colour, different priority).
     assert!(is_red(px(&fb, 40, 104)), "left floor red");
     assert!(is_red(px(&fb, 210, 104)), "right floor red");
     // EXTBG off -> the sprite flat-overlays BOTH halves, so the left pixel is yellow.
     let off = EXTBG_SRC.replace("m7.extbg = true", "m7.extbg = false");
     let (flat, _) = render_demo(&off);
-    assert!(is_yellow(px(&flat, 120, 104)), "EXTBG off should overlay the sprite everywhere");
+    assert!(
+        is_yellow(px(&flat, 120, 104)),
+        "EXTBG off should overlay the sprite everywhere"
+    );
 }
 
 #[test]
@@ -917,18 +964,34 @@ fn regen_golden_extbg() {
 fn direct_color_demo_bypasses_empty_cgram_into_smooth_gradient() {
     let (fb, e) = render_demo(DIRECT_SRC);
     // CGRAM is untouched (all zero) yet the floor is fully coloured -> direct-colour bypass.
-    assert!(e.memory().cgram.iter().all(|&c| c == 0), "CGRAM must stay empty");
+    assert!(
+        e.memory().cgram.iter().all(|&c| c == 0),
+        "CGRAM must stay empty"
+    );
     // Every pixel opaque (idx >= 64, never 0) -> full-screen gradient, no backdrop.
-    assert!(fb.chunks_exact(4).all(|p| p[3] == 255), "gradient must fill the frame");
+    assert!(
+        fb.chunks_exact(4).all(|p| p[3] == 255),
+        "gradient must fill the frame"
+    );
     // Many distinct colours despite an empty palette.
     let colors = fb
         .chunks_exact(4)
         .map(|p| (p[0], p[1], p[2]))
         .collect::<std::collections::HashSet<_>>();
-    assert!(colors.len() > 32, "expected a rich gradient, got {} colours", colors.len());
+    assert!(
+        colors.len() > 32,
+        "expected a rich gradient, got {} colours",
+        colors.len()
+    );
     // Smooth axes: red rises left->right, green rises top->bottom.
-    assert!(px(&fb, 248, 0)[0] > px(&fb, 0, 0)[0], "red should rise with x");
-    assert!(px(&fb, 0, 216)[1] > px(&fb, 0, 0)[1], "green should rise with y");
+    assert!(
+        px(&fb, 248, 0)[0] > px(&fb, 0, 0)[0],
+        "red should rise with x"
+    );
+    assert!(
+        px(&fb, 0, 216)[1] > px(&fb, 0, 0)[1],
+        "green should rise with y"
+    );
 }
 
 #[test]
@@ -937,7 +1000,10 @@ fn direct_color_demo_matches_golden_png() {
     let (actual, _) = render_demo(DIRECT_SRC);
     let expected = decode_png(DIRECT_GOLDEN);
     assert_eq!(actual.len(), expected.len());
-    assert_eq!(actual, expected, "direct-color demo differs from golden PNG");
+    assert_eq!(
+        actual, expected,
+        "direct-color demo differs from golden PNG"
+    );
 }
 
 #[test]
@@ -957,5 +1023,8 @@ fn multi_file_split_renders_identical_to_single_file() {
     let lt = e.frame(1.0, 60).unwrap();
     let multi = render_frame(&lt, e.memory());
 
-    assert!(single == multi, "multi-file split must be framebuffer-identical");
+    assert!(
+        single == multi,
+        "multi-file split must be framebuffer-identical"
+    );
 }
