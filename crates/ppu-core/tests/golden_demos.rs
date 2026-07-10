@@ -17,17 +17,26 @@ const MOSAIC_GOLDEN: &str = "tests/fixtures/golden_mosaic.png";
 const EXTBG_GOLDEN: &str = "tests/fixtures/golden_extbg.png";
 const DIRECT_GOLDEN: &str = "tests/fixtures/golden_direct_color.png";
 
-const DUSK_SRC: &str = r#"-- ppu.toys :: dusk-parallax (Mode 1: parallax BG scroll + CGRAM colour-cycle + sprite)
-local SPEED = 12
+const DUSK_MAIN_SRC: &str = r#"-- ppu.toys :: dusk-parallax (Mode 1: parallax BG scroll + CGRAM colour-cycle + sprite)
+-- Multi-file flagship: SPEED + dusk_palette() live in palette.lua. Chunks run in
+-- tab order into ONE shared global scope; frame() resolves after all chunks, so
+-- main.lua may reference palette.lua globals freely (main.lua is convention, not magic).
 function frame(t, f)
   mode = 1; brightness = 15
   bg[1].source = "sky";   bg[2].source = "hills"
   bg[2].map_base = 0x0800; bg[2].char_base = 0x4000
   bg[1].scroll.x = t * SPEED
   bg[2].scroll.x = t * SPEED * 3
-  for i = 0, 7 do cgram[0x40 + i] = hsl((t*40 + i*12) % 360, 0.6, 0.5) end
+  dusk_palette(t)
   obj[0].tile = 4; obj[0].pal = 0; obj[0].prio = 3; obj[0].x = 120; obj[0].y = 132 + sin(t*3) * 4
   obj.char_base = 0x6000; obj.sheet = "hero"; obj[0].on = true
+end
+"#;
+
+const DUSK_PALETTE_SRC: &str = r#"-- dusk-parallax :: palette.lua — CGRAM colour-cycle ($40-$47), globals shared with main.lua
+SPEED = 12
+function dusk_palette(t)
+  for i = 0, 7 do cgram[0x40 + i] = hsl((t*40 + i*12) % 360, 0.6, 0.5) end
 end
 "#;
 
@@ -465,7 +474,7 @@ fn write_png(path: &str, fb: &[u8]) {
 
 #[test]
 fn dusk_parallax_uses_bg_imports_and_obj_import() {
-    let (fb, e) = render_demo(DUSK_SRC);
+    let (fb, e) = render_demo(&format!("{DUSK_MAIN_SRC}\n{DUSK_PALETTE_SRC}"));
     assert!(e
         .import_reports()
         .iter()
@@ -486,14 +495,14 @@ fn dusk_parallax_uses_bg_imports_and_obj_import() {
 
 #[test]
 fn dusk_parallax_draws_sky_above_horizon() {
-    let (fb, _) = render_demo(DUSK_SRC);
+    let (fb, _) = render_demo(&format!("{DUSK_MAIN_SRC}\n{DUSK_PALETTE_SRC}"));
     let px = &fb[(20 * WIDTH + 20) * 4..][..4];
     assert_ne!(px, &[0, 0, 0, 255], "sky pixel was backdrop black");
 }
 
 #[test]
 fn dusk_parallax_draws_obj_sprite_over_hills() {
-    let (fb, _) = render_demo(DUSK_SRC);
+    let (fb, _) = render_demo(&format!("{DUSK_MAIN_SRC}\n{DUSK_PALETTE_SRC}"));
     let lower_half_has_sprite_yellow = (120..155).any(|y| {
         (0..WIDTH).any(|x| {
             let p = &fb[(y * WIDTH + x) * 4..][..4];
@@ -526,7 +535,7 @@ fn mode7_floor_draws_below_horizon() {
 #[test]
 fn dusk_parallax_demo_matches_golden_png() {
     assert!(Path::new(DUSK_GOLDEN).exists());
-    let (actual, _) = render_demo(DUSK_SRC);
+    let (actual, _) = render_demo(&format!("{DUSK_MAIN_SRC}\n{DUSK_PALETTE_SRC}"));
     let expected = decode_png(DUSK_GOLDEN);
     assert_eq!(actual.len(), expected.len());
     assert!(
@@ -550,7 +559,7 @@ fn mode7_floor_demo_matches_golden_png() {
 #[test]
 #[ignore = "regenerates the committed dusk demo golden PNG"]
 fn regen_golden_dusk_parallax() {
-    let (fb, _) = render_demo(DUSK_SRC);
+    let (fb, _) = render_demo(&format!("{DUSK_MAIN_SRC}\n{DUSK_PALETTE_SRC}"));
     write_png(DUSK_GOLDEN, &fb);
 }
 
@@ -1026,5 +1035,36 @@ fn multi_file_split_renders_identical_to_single_file() {
     assert!(
         single == multi,
         "multi-file split must be framebuffer-identical"
+    );
+}
+
+#[test]
+fn dusk_parallax_multi_file_matches_golden_png() {
+    let mut e = demo_engine_files(&[
+        ("main.lua", DUSK_MAIN_SRC),
+        ("palette.lua", DUSK_PALETTE_SRC),
+    ]);
+    let lt = e.frame(1.0, 60).unwrap();
+    let multi = render_frame(&lt, e.memory());
+    let expected = decode_png(DUSK_GOLDEN);
+    assert_eq!(multi.len(), expected.len());
+    assert!(
+        multi == expected,
+        "multi-file dusk must match the committed golden PNG"
+    );
+}
+
+#[test]
+fn dusk_parallax_multi_file_matches_single_file_concat() {
+    let (single, _) = render_demo(&format!("{DUSK_MAIN_SRC}\n{DUSK_PALETTE_SRC}"));
+    let mut e = demo_engine_files(&[
+        ("main.lua", DUSK_MAIN_SRC),
+        ("palette.lua", DUSK_PALETTE_SRC),
+    ]);
+    let lt = e.frame(1.0, 60).unwrap();
+    let multi = render_frame(&lt, e.memory());
+    assert!(
+        single == multi,
+        "flagship split must be framebuffer-identical to its concatenation"
     );
 }
