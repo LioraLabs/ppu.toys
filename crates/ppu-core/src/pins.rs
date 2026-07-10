@@ -92,7 +92,7 @@ fn apply_one(addr: u16, v: i32, row: &mut LineTableRow) {
             // 13-bit display value (see derive_registers' `scroll`), sign-extended.
             let s = ((((v as u16) & 0x1fff) << 3) as i16 >> 3) as f32;
             let i = ((addr - 0x210d) / 2) as usize;
-            if (addr - 0x210d) % 2 == 0 {
+            if (addr - 0x210d).is_multiple_of(2) {
                 row.bg[i].scroll_x = s;
             } else {
                 row.bg[i].scroll_y = s;
