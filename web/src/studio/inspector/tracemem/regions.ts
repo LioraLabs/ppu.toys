@@ -54,7 +54,7 @@ function maxTileUsed(vram: Uint16Array, mapBase: number, mapWords: number): numb
 export function vramRegions(registers: RegisterView[], vram: Uint16Array, _oam: OamSprite[]): VramRegion[] {
   const bgmode = reg(registers, "BGMODE");
   const mode = bgmode & 7;
-  const bpp = MODE_BPP[mode] ?? MODE_BPP[1];
+  const bpp = MODE_BPP[mode] ?? MODE_BPP[1]; // modes 5/6 unsupported by the core -> mode-1 shape
   const out: VramRegion[] = [];
 
   if (mode === 7) {
@@ -84,12 +84,15 @@ export function vramRegions(registers: RegisterView[], vram: Uint16Array, _oam: 
     }
   }
 
-  // OBJ: two 256-tile name tables from OBSEL (sprite.rs obj_tile_addr).
+  // OBJ: two 256-tile name tables from OBSEL (sprite.rs obj_tile_addr). Clamp
+  // starts too — arbitrary OBSEL values (base bits >= 5) would otherwise yield
+  // inverted regions the bar renderer would draw with negative width.
+  const clampW = (v: number) => Math.min(v, 0x8000);
   const obsel = reg(registers, "OBSEL");
   const objBase = (obsel & 7) << 13;
   const gap = (((obsel >> 3) & 3) + 1) << 12;
-  out.push({ id: "obj-a", label: "OBJ char A", kind: "char", start: objBase, end: Math.min(objBase + 0x1000, 0x8000), color: REGION_COLORS["obj-a"], usage: "tiles 0–255" });
-  out.push({ id: "obj-b", label: "OBJ char B", kind: "char", start: Math.min(objBase + gap, 0x8000), end: Math.min(objBase + gap + 0x1000, 0x8000), color: REGION_COLORS["obj-b"], usage: "tiles 256–511" });
+  out.push({ id: "obj-a", label: "OBJ char A", kind: "char", start: clampW(objBase), end: clampW(objBase + 0x1000), color: REGION_COLORS["obj-a"], usage: "tiles 0–255" });
+  out.push({ id: "obj-b", label: "OBJ char B", kind: "char", start: clampW(objBase + gap), end: clampW(objBase + gap + 0x1000), color: REGION_COLORS["obj-b"], usage: "tiles 256–511" });
 
   return out.sort((a, b) => a.start - b.start || a.end - b.end);
 }
@@ -108,7 +111,7 @@ export function cgramOwners(registers: RegisterView[], vram: Uint16Array, oam: O
   const owners: Set<string>[] = Array.from({ length: 16 }, () => new Set<string>());
   const bgmode = reg(registers, "BGMODE");
   const mode = bgmode & 7;
-  const bpp = MODE_BPP[mode] ?? MODE_BPP[1];
+  const bpp = MODE_BPP[mode] ?? MODE_BPP[1]; // modes 5/6 unsupported by the core -> mode-1 shape
 
   if (bpp[0] === 8) {
     for (let row = 0; row < 16; row++) owners[row].add("BG1");
