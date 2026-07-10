@@ -50,6 +50,16 @@ pub enum ImportBudget {
 pub struct LuaError {
     pub message: String,
     pub line: Option<u32>,
+    /// Source file the error is attributed to (multi-file sketches).
+    pub file: Option<String>,
+}
+
+impl LuaError {
+    /// Tag this error with the source file it belongs to.
+    fn in_file(mut self, name: &str) -> LuaError {
+        self.file = Some(name.to_string());
+        self
+    }
 }
 
 /// The embedded Lua VM plus the captured `frame`/`init` entry points and mirrored
@@ -150,19 +160,31 @@ impl LuaEngine {
         &mut self.memory
     }
 
-    /// Compile and load a DSL source: builds a fresh VM, installs bindings, runs
-    /// the chunk (defining `frame`/`init`/helpers as globals), runs `init()` once
-    /// if present. Returns `LuaError{message,line?}` on compile/runtime failure.
+    /// Single-file sugar for [`Self::set_sources`]; the chunk keeps its
+    /// historical name `"source"` so existing diagnostics are unchanged.
     pub fn set_source(&mut self, src: &str) -> Result<(), LuaError> {
+        self.set_sources(&[("source", src)])
+    }
+
+    /// Compile and load a multi-file sketch (PICO-8 scope): builds a fresh VM,
+    /// installs bindings, then executes each `(name, source)` chunk **in list
+    /// order** into ONE shared global environment, each compiled with its file
+    /// name as chunk name. `frame`/`init` are resolved only after every chunk
+    /// has run (`main.lua` is convention, not special-cased); `init()` runs
+    /// once if present. Errors carry `{file, line?, message}`.
+    pub fn set_sources(&mut self, files: &[(&str, &str)]) -> Result<(), LuaError> {
         let mut lua = Lua::core();
         lua.enter(install_bindings);
 
-        let load = lua.try_enter(|ctx| {
-            let closure = Closure::load(ctx, Some("source"), src.as_bytes())?;
-            Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
-        });
-        let ex = load.map_err(static_error_to_lua)?;
-        lua.execute::<()>(&ex).map_err(static_error_to_lua)?;
+        for (name, src) in files {
+            let load = lua.try_enter(|ctx| {
+                let closure = Closure::load(ctx, Some(*name), src.as_bytes())?;
+                Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
+            });
+            if let Err(e) = load.and_then(|ex| lua.execute::<()>(&ex)) {
+                return Err(static_error_to_lua(e).in_file(name));
+            }
+        }
 
         let (frame_fn, init_fn) = lua.enter(|ctx| {
             let frame_fn = match ctx.get_global("frame") {
@@ -545,6 +567,7 @@ fn static_error_to_lua(e: StaticError) -> LuaError {
     LuaError {
         message: e.to_string(),
         line,
+        file: None,
     }
 }
 
