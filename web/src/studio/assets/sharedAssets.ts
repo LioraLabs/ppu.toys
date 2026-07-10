@@ -1,8 +1,8 @@
 import { useSyncExternalStore } from "react";
 import type { Asset } from "./assetStore";
 
-/** Shared, app-wide list of uploaded assets. AssetsPanel writes it; the VRAM
- *  inspector reads it. Decouples the two so previews/ids stay consistent. */
+/** Shared, app-wide list of uploaded assets. output/DropZone.tsx writes it;
+ *  the VRAM inspector reads it. Decouples the two so previews/ids stay consistent. */
 let assets: Asset[] = [];
 const listeners = new Set<() => void>();
 
