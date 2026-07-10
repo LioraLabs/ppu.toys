@@ -6,6 +6,7 @@ import {
   ObjOverflow,
   AssetInfo,
   ImportReport,
+  SourceFile,
   WIDTH,
   HEIGHT,
 } from "./core";
@@ -24,7 +25,11 @@ export class MockPpuCore implements PpuCore {
     return this.layerVisible.get(id) !== false;
   }
 
-  setSource(_src: string) {
+  setSource(src: string) {
+    return this.setSources([{ name: "main.lua", source: src }]);
+  }
+
+  setSources(_files: SourceFile[]) {
     return { ok: true };
   }
 

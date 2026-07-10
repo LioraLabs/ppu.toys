@@ -22,6 +22,14 @@ describe("MockPpuCore", () => {
     expect(new MockPpuCore().setSource("frame=function() end").ok).toBe(true);
   });
 
+  it("setSources() reports ok", () => {
+    const files = [
+      { name: "util.lua", source: "x = 1" },
+      { name: "main.lua", source: "function frame() end" },
+    ];
+    expect(new MockPpuCore().setSources(files).ok).toBe(true);
+  });
+
   it("framebuffer varies across t/f", () => {
     const core = new MockPpuCore();
     const a = core.frame(0, 0).framebuffer.slice();

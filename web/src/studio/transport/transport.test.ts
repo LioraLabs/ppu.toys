@@ -67,6 +67,7 @@ function fakeFrame(): FrameResult {
 function makeCore(state: { throwing: boolean }): PpuCore {
   return {
     setSource: () => ({ ok: true }),
+    setSources: () => ({ ok: true }),
     frame: () => {
       if (state.throwing) throw { message: "attempt to index a nil value", line: 3 };
       return fakeFrame();
