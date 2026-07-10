@@ -36,3 +36,24 @@ export function luaErrorsToDiagnostics(
   }
   return out;
 }
+
+/** Route errors to their owning file (multi-file sketches): an error whose
+ *  `file` matches a listed file belongs to that file's tab; missing/unknown
+ *  attribution follows the ACTIVE file — better shown where the user is than
+ *  dropped. Consumers: inline diagnostics for the open tab, error dots for
+ *  the rest. */
+export function routeErrorsByFile(
+  fileNames: string[],
+  activeFile: string,
+  errors: (LuaError | undefined)[],
+): Map<string, LuaError[]> {
+  const out = new Map<string, LuaError[]>();
+  for (const e of errors) {
+    if (!e) continue;
+    const owner = e.file && fileNames.includes(e.file) ? e.file : activeFile;
+    const list = out.get(owner);
+    if (list) list.push(e);
+    else out.set(owner, [e]);
+  }
+  return out;
+}
