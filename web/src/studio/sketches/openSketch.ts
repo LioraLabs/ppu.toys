@@ -206,7 +206,8 @@ export const openSketchStore = {
 
   /** Delete a file. Refuses the last one — a sketch always has >= 1 file. */
   deleteFile(name: string): void {
-    if (currentFiles().length <= 1) return;
+    const files = currentFiles();
+    if (files.length <= 1 || !files.some((f) => f.name === name)) return;
     mutateFiles((fs) => fs.filter((f) => f.name !== name));
   },
 

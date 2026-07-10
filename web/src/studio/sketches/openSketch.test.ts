@@ -230,6 +230,15 @@ describe("file operations", () => {
     expect(openSketch().files).toHaveLength(1);
   });
 
+  it("deleteFile of an unknown name is a clean no-op (stays saved)", async () => {
+    await openSketchStore.newSketch();
+    openSketchStore.addFile();
+    await openSketchStore.flush();
+    openSketchStore.deleteFile("nope.lua");
+    expect(openSketch().files).toHaveLength(2);
+    expect(openSketchStore.state().dirty).toBe(false); // no phantom unsaved dot
+  });
+
   it("moveFile reorders (order is execution order) and persists through flush", async () => {
     await openSketchStore.newSketch();
     openSketchStore.addFile(); // file2.lua
