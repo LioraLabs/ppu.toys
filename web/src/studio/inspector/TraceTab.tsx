@@ -1,5 +1,5 @@
 import { useInspectorFrame } from "./useInspectorFrame";
-import { useCopyToast } from "./tracemem/copyToast";
+import { useCopyToast } from "./copyToast";
 import { ModeBadge, PlaneSeg, TraceCaption, TraceChain } from "./tracemem/TraceChain";
 import "./tracemem/tracemem.css";
 

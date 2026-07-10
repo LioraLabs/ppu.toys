@@ -2,7 +2,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { HEIGHT, WIDTH, type FrameResult } from "../../../ppu/core";
 import { ppuCore } from "../../../ppu/instance";
 import { bgMode, formatAddr } from "../format";
-import { PixelCanvas } from "./PixelCanvas";
+import { BlitCanvas } from "../BlitCanvas";
 import {
   TRACE_PLANES,
   bgr555Label,
@@ -14,7 +14,7 @@ import {
   tileWords,
   traceCaption,
 } from "./trace";
-import { Copyable } from "./copyToast";
+import { Copyable } from "../copyToast";
 import { pickPaletteIdx, selectObj, selectPixel, selectPlane, useTraceSelection } from "./stores";
 
 /** Plane segmented control (user-selected; shared store). */
@@ -162,13 +162,13 @@ export function TraceChain({ frame, copy, variant }: { frame: FrameResult; copy:
       <div className="tm-chain">
         <Stage n={1} title={isObj ? "SOURCE (OAM)" : "SOURCE (TILEMAP)"} cls="tm-stage--source" overlay={overlay}>
           <div className="tm-minimap-wrap">
-            <PixelCanvas
+            <BlitCanvas
               pixels={minimap}
               width={WIDTH}
               height={HEIGHT}
               className="tm-minimap"
               title={isObj ? "click a sprite" : "click to trace a pixel"}
-              onPick={(x, y) => {
+              onDown={(x, y) => {
                 if (isObj) {
                   const hit = spriteAt(ppuCore, x, y);
                   if (hit) selectObj(hit.index);
@@ -195,7 +195,7 @@ export function TraceChain({ frame, copy, variant }: { frame: FrameResult; copy:
         <Arrow />
         <Stage n={2} title="CHAR (VRAM)" cls="tm-stage--char" overlay={overlay}>
           <div className="tm-tilewrap">
-            <PixelCanvas pixels={tileRgba} width={tileW} height={tileH} className="tm-tile" />
+            <BlitCanvas pixels={tileRgba} width={tileW} height={tileH} className="tm-tile" />
             {!isObj && bg!.pixel && (
               <div
                 className="tm-pxbox"
@@ -259,7 +259,7 @@ export function TraceChain({ frame, copy, variant }: { frame: FrameResult; copy:
             </Stage>
             <Arrow />
             <Stage n={5} title="OUTPUT" cls="tm-stage--out" overlay>
-              <PixelCanvas pixels={frame.framebuffer} width={WIDTH} height={HEIGHT} className="tm-outcanvas" />
+              <BlitCanvas pixels={frame.framebuffer} width={WIDTH} height={HEIGHT} className="tm-outcanvas" />
               <div className="tm-meta">
                 lands at screen{" "}
                 <span className="tm-strong">

@@ -3,7 +3,6 @@ import {
   bgr555ToHex,
   bgr555Label,
   cgLabel,
-  canvasPos,
   directColor555,
   resolvePaletteEntry,
   spriteAt,
@@ -11,6 +10,7 @@ import {
   tileWords,
   traceCaption,
 } from "./trace";
+import { canvasPos } from "../BlitCanvas";
 import type { ObjTrace, OamSprite } from "../../../ppu/core";
 
 describe("bgr555ToHex", () => {

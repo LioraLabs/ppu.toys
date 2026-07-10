@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { HEIGHT } from "../../../ppu/core";
+import { HEIGHT, WIDTH } from "../../../ppu/core";
 import { formatAddr } from "../format";
 import {
   LOGIC_LABELS,
@@ -20,7 +20,7 @@ import {
 } from "./model";
 import { writePin, writePins } from "./pinStore";
 import { PinDot, RegRow } from "./chrome";
-import { PreviewCanvas } from "./PreviewCanvas";
+import { BlitCanvas } from "../BlitCanvas";
 import type { Compositor } from "./useCompositor";
 
 /** Edge-line colors (canvas fillStyle can't resolve CSS vars; dark accents). */
@@ -35,9 +35,11 @@ export function WindowPreview({ c }: { c: Compositor }) {
   const mask = columnMask(b, combineValue(c.read) ?? 0, areaValue(c.read) === "outside");
   const drag = useRef<number | null>(null);
   return (
-    <PreviewCanvas
+    <BlitCanvas
       className="winp-canvas"
       pixels={dimOutsideMask(c.frame.framebuffer, mask)}
+      width={WIDTH}
+      height={HEIGHT}
       title="click / drag to move the nearest window edge"
       overlay={(ctx) => {
         const edge = (x: number, color: string) => {
@@ -49,14 +51,14 @@ export function WindowPreview({ c }: { c: Compositor }) {
         edge(b.wh2, W2_COLOR);
         edge(b.wh3, W2_COLOR);
       }}
-      onPixelDown={(x) => {
+      onDown={(x) => {
         drag.current = nearestEdgeAddr(x, b);
         writePin(drag.current, x);
       }}
-      onPixelDrag={(x) => {
+      onDrag={(x) => {
         if (drag.current !== null) writePin(drag.current, x);
       }}
-      onPixelUp={() => {
+      onUp={() => {
         drag.current = null;
       }}
     />

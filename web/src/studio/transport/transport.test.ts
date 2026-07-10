@@ -38,13 +38,6 @@ describe("transport store", () => {
     expect(transport.getSnapshot().t).toBeCloseTo(LOOP_SECONDS * 0.5, 5);
   });
 
-  it("setSource forwards to the core and refreshes the snapshot", () => {
-    const before = transport.getSnapshot();
-    const res = transport.setSource("function frame() end");
-    expect(res.ok).toBe(true);
-    expect(transport.getSnapshot()).not.toBe(before);
-  });
-
   it("setSources forwards to the core and refreshes the snapshot", () => {
     const before = transport.getSnapshot();
     const res = transport.setSources([
@@ -144,19 +137,49 @@ describe("transport multi-file recompile", () => {
     expect(after.t).toBe(before.t);
     expect(after.f).toBe(before.f);
   });
+});
 
-  it("setSource sugar wraps the source as a single main.lua", () => {
-    const seen: SourceFile[][] = [];
+describe("transport pin actions", () => {
+  it("write through to the core and re-render at the SAME clock (no step)", () => {
+    const calls: unknown[] = [];
     const core: PpuCore = {
       ...makeCore({ throwing: false }),
-      setSources: (files: SourceFile[]) => {
-        seen.push(files);
-        return { ok: true };
-      },
+      pin: (a, v) => void calls.push(["pin", a, v]),
+      unpin: (a) => void calls.push(["unpin", a]),
+      clearPins: () => void calls.push(["clear"]),
     };
     const tr = new Transport(() => core);
-    tr.setSource("x = 1");
-    expect(seen).toEqual([[{ name: "main.lua", source: "x = 1" }]]);
+    tr.step(100);
+    const before = tr.getSnapshot();
+    tr.pin(0x2100, 7);
+    expect(tr.getSnapshot()).not.toBe(before); // renderOnce notified…
+    expect(tr.getSnapshot().t).toBe(before.t); // …without advancing the clock
+    tr.unpin(0x2100);
+    tr.clearPins();
+    expect(calls).toEqual([["pin", 0x2100, 7], ["unpin", 0x2100], ["clear"]]);
+  });
+
+  it("pinMany applies a batch through the core in one notification", () => {
+    const calls: unknown[] = [];
+    let emits = 0;
+    const core: PpuCore = {
+      ...makeCore({ throwing: false }),
+      pin: (a, v) => void calls.push([a, v]),
+    };
+    const tr = new Transport(() => core);
+    tr.setPlaying(false); // no rAF loop in this env; only the action may notify
+    const unsub = tr.subscribe(() => emits++);
+    emits = 0;
+    tr.pinMany([
+      { addr: 0x2126, value: 0xaa },
+      { addr: 0x2127, value: 0x0a },
+    ]);
+    expect(calls).toEqual([
+      [0x2126, 0xaa],
+      [0x2127, 0x0a],
+    ]);
+    expect(emits).toBe(1);
+    unsub();
   });
 });
 
@@ -171,7 +194,7 @@ describe("transport restart (▶ Run)", () => {
       },
     };
     const tr = new Transport(() => core);
-    tr.setSource("function frame() end");
+    tr.setSources([{ name: "main.lua", source: "function frame() end" }]);
     tr.step(500);
     expect(tr.getSnapshot().t).toBeGreaterThan(0);
     tr.restart();

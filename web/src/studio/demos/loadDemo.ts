@@ -19,7 +19,7 @@ function toImageData(a: DemoAsset): ImageData {
 
 /** Push a demo's bundled sources into the live core and the shared asset store,
  *  using the demo's literal slot ids (not slugified) so the Lua references
- *  resolve. The editor doc swap (which triggers setSource) is the caller's job. */
+ *  resolve. The editor doc swap (which triggers setSources) is the caller's job. */
 export function loadDemo(demo: Demo, upload = transport.uploadTexture): void {
   for (const a of demo.assets) {
     const image = toImageData(a);

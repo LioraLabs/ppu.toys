@@ -80,6 +80,8 @@ async function flush(): Promise<void> {
   emit();
 }
 
+/** Mutate the open SKETCH only — a demo context is a no-op (rename relies
+ *  on this; every other mutation goes through the fork-aware mutateOpen). */
 function mutateSketch(update: (s: Sketch) => Sketch) {
   const ctx = context;
   if (ctx.kind !== "sketch") return;
@@ -90,12 +92,21 @@ function mutateSketch(update: (s: Sketch) => Sketch) {
   emit();
 }
 
-/** Swap the demo context for a brand-new in-memory sketch. Synchronous by
- *  design: no await window in which a second keystroke could double-fork.
- *  Persistence rides the scheduled autosave (saveSketch upserts). */
-function forkFromDemo(demoId: string, files: SketchFile[]) {
-  const label = DEMOS.find((d) => d.id === demoId)?.label ?? demoId;
-  context = { kind: "sketch", sketch: newSketchObject(`${label} (copy)`, files, [], demoId) };
+/** The open context as a mutable Sketch: the live sketch, or — for a demo —
+ *  a brand-new in-memory fork ("<label> (copy)", pristine files, no assets). */
+function sketchToMutate(ctx: OpenContext): Sketch {
+  if (ctx.kind === "sketch") return ctx.sketch;
+  const label = DEMOS.find((d) => d.id === ctx.demoId)?.label ?? ctx.demoId;
+  return newSketchObject(`${label} (copy)`, filesOf(ctx), [], ctx.demoId);
+}
+
+/** Transform the open context's sketch. Any mutation IS an edit, so a demo
+ *  context forks first, with `update` applied to the fresh fork in the SAME
+ *  emit. Synchronous by design: no await window in which a second keystroke
+ *  could double-fork; `session` is untouched, so the editor survives the
+ *  lazy fork. Persistence rides the scheduled autosave (saveSketch upserts). */
+function mutateOpen(update: (s: Sketch) => Sketch) {
+  context = { kind: "sketch", sketch: update(sketchToMutate(context)) };
   dirty = true;
   gen++;
   schedule();
@@ -115,15 +126,9 @@ function currentFiles(): SketchFile[] {
   return filesOf(context);
 }
 
-/** Transform the open context's ordered files. Any file operation IS an edit,
- *  so a demo context forks first, carrying its file list through `update`. */
+/** Transform the open context's ordered files (fork-aware, one emit). */
 function mutateFiles(update: (files: SketchFile[]) => SketchFile[]) {
-  const ctx = context;
-  if (ctx.kind === "demo") {
-    forkFromDemo(ctx.demoId, update(currentFiles()));
-    return;
-  }
-  mutateSketch((s) => ({ ...s, files: update(s.files) }));
+  mutateOpen((s) => ({ ...s, files: update(s.files) }));
 }
 
 function openContext(next: OpenContext) {
@@ -169,27 +174,13 @@ export const openSketchStore = {
   /** The editor doc changed. No-ops when the content is unchanged, so a
    *  pristine write-back can never fork; the first REAL edit of a demo forks it. */
   editFile(name: string, source: string): void {
-    const ctx = context;
-    if (ctx.kind === "demo") {
-      const files = filesOf(ctx);
-      const cur = files.find((f) => f.name === name);
-      if (cur && cur.source === source) return; // pristine content, not an edit
-      forkFromDemo(
-        ctx.demoId,
-        cur
-          ? files.map((f) => (f.name === name ? { name, source } : f))
-          : [...files, { name, source }],
-      );
-      return;
-    }
-    const existing = ctx.sketch.files.find((f) => f.name === name);
-    if (existing && existing.source === source) return;
-    mutateSketch((s) => ({
-      ...s,
-      files: existing
-        ? s.files.map((f) => (f.name === name ? { name, source } : f))
-        : [...s.files, { name, source }],
-    }));
+    const cur = currentFiles().find((f) => f.name === name);
+    if (cur && cur.source === source) return; // pristine content, not an edit
+    mutateFiles((files) =>
+      files.some((f) => f.name === name)
+        ? files.map((f) => (f.name === name ? { name, source } : f))
+        : [...files, { name, source }],
+    );
   },
 
   /** Append a new empty file with a unique fileN.lua name; returns the name.
@@ -236,13 +227,9 @@ export const openSketchStore = {
 
   /** Record an uploaded PNG into the open sketch (an upload IS an edit, so a
    *  demo forks first — with all its pristine files, since any prior edit would
-   *  already have forked it). Same-named uploads replace. */
+   *  already have forked it). Same-named uploads replace. One emit. */
   addAsset(asset: SketchAsset): void {
-    const ctx = context;
-    if (ctx.kind === "demo") {
-      forkFromDemo(ctx.demoId, filesOf(ctx));
-    }
-    mutateSketch((s) => ({
+    mutateOpen((s) => ({
       ...s,
       assets: s.assets.some((a) => a.name === asset.name)
         ? s.assets.map((a) => (a.name === asset.name ? asset : a))

@@ -26,21 +26,6 @@ export function tileWords(bpp: number, w: number, h = w): number {
   return bpp * 4 * (w / 8) * (h / 8);
 }
 
-/** Client coords on a CSS-scaled canvas -> integer source pixels, clamped. */
-export function canvasPos(
-  rect: { left: number; top: number; width: number; height: number },
-  clientX: number,
-  clientY: number,
-  srcW: number,
-  srcH: number,
-): { x: number; y: number } {
-  const clamp = (v: number, hi: number) => Math.min(Math.max(v, 0), hi);
-  return {
-    x: clamp(Math.floor(((clientX - rect.left) / rect.width) * srcW), srcW - 1),
-    y: clamp(Math.floor(((clientY - rect.top) / rect.height) * srcH), srcH - 1),
-  };
-}
-
 /** Direct-color BGR555 from an 8-bit index (BBGGGRRR; palette-word extension bits
  *  ignored — the trace pixel's exact bgr555 comes from the core when available). */
 export function directColor555(index: number): number {

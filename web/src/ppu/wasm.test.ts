@@ -1,19 +1,34 @@
 import { describe, it, expect } from "vitest";
 import { wrapWasmCore, type WasmCoreLike } from "./wasm";
 import type { ImportReport, SourceFile } from "./core";
-import { WIDTH, HEIGHT, type BgTrace } from "./core";
+import type { BgTrace } from "./core";
 
 function fakeCore(over: Partial<WasmCoreLike> = {}): WasmCoreLike {
   return {
     setSource: () => ({ ok: true }),
+    setSources: () => ({ ok: true }),
     frame: () => {},
     framebuffer: () => new Uint8ClampedArray(4),
     registers: () => [],
     cgram: () => new Uint16Array(0),
     vram: () => new Uint16Array(0),
+    oam: () => [],
+    objOverflow: () => ({ rangeOver: false, timeOver: false, maxSprites: 0, maxTiles: 0 }),
+    listAssets: () => [],
     importReports: () => [],
     uploadTexture: () => {},
     setLayerVisible: () => {},
+    mainScreen: () => new Uint8Array(0),
+    subScreen: () => new Uint8Array(0),
+    mathMask: () => new Uint8Array(0),
+    layerView: () => new Uint8Array(0),
+    traceBgPixel: () => null,
+    traceBgTile: () => null,
+    traceObj: () => null,
+    pinRegister: () => {},
+    unpinRegister: () => {},
+    clearPins: () => {},
+    listPins: () => [],
     ...over,
   };
 }
@@ -69,27 +84,12 @@ describe("wrapWasmCore", () => {
     expect(ppu.importReports()).toEqual(reports);
   });
 
-  it("falls back when older wasm glue has no VRAM/report methods", () => {
-    const core = fakeCore();
-    delete core.vram;
-    delete core.importReports;
-    const ppu = wrapWasmCore(core);
-    expect(Array.from(ppu.vram())).toEqual([]);
-    expect(ppu.importReports()).toEqual([]);
-  });
-
-  it("forwards objOverflow and falls back when the getter is absent", () => {
+  it("forwards objOverflow into the FrameResult", () => {
     const ov = { rangeOver: true, timeOver: false, maxSprites: 40, maxTiles: 34 };
     expect(wrapWasmCore(fakeCore({ objOverflow: () => ov })).frame(0, 0).objOverflow).toEqual(ov);
-    expect(wrapWasmCore(fakeCore()).frame(0, 0).objOverflow).toEqual({
-      rangeOver: false,
-      timeOver: false,
-      maxSprites: 0,
-      maxTiles: 0,
-    });
   });
 
-  it("forwards setSources to the core when present", () => {
+  it("forwards setSources to the core", () => {
     const seen: SourceFile[][] = [];
     const ppu = wrapWasmCore(
       fakeCore({
@@ -104,24 +104,6 @@ describe("wrapWasmCore", () => {
     expect(seen).toEqual([files]);
     expect(res.ok).toBe(false);
     expect(res.error?.file).toBe("util.lua");
-  });
-
-  it("setSources falls back to concatenated setSource on an older module", () => {
-    const seen: string[] = [];
-    const ppu = wrapWasmCore(
-      fakeCore({
-        setSource: (src: string) => {
-          seen.push(src);
-          return { ok: true };
-        },
-      }),
-    );
-    const res = ppu.setSources([
-      { name: "a.lua", source: "x = 1" },
-      { name: "b.lua", source: "y = 2" },
-    ]);
-    expect(res.ok).toBe(true);
-    expect(seen).toEqual(["x = 1\ny = 2"]);
   });
 });
 
@@ -140,33 +122,31 @@ describe("wrapWasmCore view seams", () => {
     expect(Array.from(s.mathMask)).toEqual([1]);
   });
 
-  it("falls back to zeroed screen buffers when the glue lacks the getters", () => {
-    const s = wrapWasmCore(fakeCore()).screens();
-    expect(s.main.length).toBe(WIDTH * HEIGHT * 4);
-    expect(s.sub.length).toBe(WIDTH * HEIGHT * 4);
-    expect(s.mathMask.length).toBe(WIDTH * HEIGHT);
-    expect(s.main.every((b) => b === 0)).toBe(true);
-  });
-
-  it("forwards layerView and falls back to a transparent buffer", () => {
+  it("forwards layerView as a clamped copy", () => {
     const buf = new Uint8Array(4).fill(9);
     expect(Array.from(wrapWasmCore(fakeCore({ layerView: () => buf })).layerView("bg1"))).toEqual([
       9, 9, 9, 9,
     ]);
-    expect(wrapWasmCore(fakeCore()).layerView("obj").length).toBe(WIDTH * HEIGHT * 4);
   });
 
-  it("forwards trace queries and maps missing glue to null", () => {
+  it("forwards trace queries and normalizes an undefined result to null", () => {
     const trace = { regs: { mode: 1 } } as unknown as BgTrace;
     const ppu = wrapWasmCore(fakeCore({ traceBgPixel: () => trace }));
     expect(ppu.traceBgPixel(1, 0, 0)).toBe(trace);
-    const bare = wrapWasmCore(fakeCore());
-    expect(bare.traceBgPixel(1, 0, 0)).toBeNull();
-    expect(bare.traceBgTile(1, 0, 0, 0)).toBeNull();
-    expect(bare.traceObj(0)).toBeNull();
+    // wasm-bindgen serializes a Rust `None` as undefined; the seam contract is null
+    const none = wrapWasmCore(
+      fakeCore({
+        traceBgPixel: () => undefined,
+        traceBgTile: () => undefined,
+        traceObj: () => undefined,
+      }),
+    );
+    expect(none.traceBgPixel(1, 0, 0)).toBeNull();
+    expect(none.traceBgTile(1, 0, 0, 0)).toBeNull();
+    expect(none.traceObj(0)).toBeNull();
   });
 
-  it("forwards pin calls and lists pins with an empty fallback", () => {
+  it("forwards pin calls and lists pins", () => {
     const calls: unknown[] = [];
     const ppu = wrapWasmCore(
       fakeCore({
@@ -181,6 +161,5 @@ describe("wrapWasmCore view seams", () => {
     ppu.clearPins();
     expect(calls).toEqual([["pin", 0x2100, 7], ["unpin", 0x2100], ["clear"]]);
     expect(ppu.listPins()).toEqual([{ addr: 0x2100, value: 7 }]);
-    expect(wrapWasmCore(fakeCore()).listPins()).toEqual([]);
   });
 });
