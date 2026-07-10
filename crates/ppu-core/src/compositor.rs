@@ -1411,6 +1411,19 @@ mod tests {
     }
 
     #[test]
+    fn math_mask_reports_clip_region_with_math_disabled() {
+        // clip=always but no CGADSUB layer enabled: the pixel is blackened via
+        // the no-math early return -> bit1 (clip) set, bit0 (applied) clear.
+        let (m, mut src) = two_screen_scene(rgb15(255, 0, 0), rgb15(0, 0, 255));
+        src.cgadsub = 0x00;
+        src.cgwsel = 0b11 << 6;
+        let lt = LineTableBuilder::new(src).build(HEIGHT);
+        let view = render_frame_view(&lt, &m);
+        assert_eq!(view.math_mask[0], 0b010);
+        assert_eq!(&view.framebuffer[0..4], &[0, 0, 0, 255]);
+    }
+
+    #[test]
     fn force_blank_line_blanks_view_buffers() {
         let (m, mut src) = two_screen_scene(rgb15(255, 0, 0), rgb15(0, 0, 255));
         src.force_blank = true;
