@@ -240,6 +240,9 @@ fn trace_mode7(row: &RegRow, mem: &Memory, x: usize, y: usize) -> BgTrace {
 /// the seam's 1-based number. `None` = the layer does not exist in this row's
 /// mode. Works on hidden layers (visibility is reported, not enforced).
 pub fn trace_bg_screen(row: &RegRow, mem: &Memory, layer: usize, x: usize, y: usize) -> Option<BgTrace> {
+    if layer >= 4 {
+        return None; // self-defending seam: never index outside bg[0..3]
+    }
     if row.mode == 7 {
         if layer != 0 {
             return None;
@@ -267,6 +270,9 @@ pub fn trace_bg_screen(row: &RegRow, mem: &Memory, layer: usize, x: usize, y: us
 /// Trace a BG plane at tilemap cell (tx, ty) — the Memory-grid selection.
 /// The caller (wasm shim) picks the register row.
 pub fn trace_bg_tile(row: &RegRow, mem: &Memory, layer: usize, tx: u32, ty: u32) -> Option<BgTrace> {
+    if layer >= 4 {
+        return None; // self-defending seam: never index outside bg[0..3]
+    }
     if row.mode == 7 {
         if layer != 0 {
             return None;
