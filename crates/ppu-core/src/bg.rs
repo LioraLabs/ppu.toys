@@ -149,6 +149,11 @@ pub(crate) struct BgSample {
     pub ty: u32,
     pub map_addr: u16,
     pub entry: u16,
+    /// VRAM word address of the exact (quadrant-adjusted) char row this pixel
+    /// was fetched from. Not currently surfaced through the Trace seam (which
+    /// recomputes the tile's own base char_addr instead — see trace::bg_tile);
+    /// kept on the sample for diagnostic parity with the scanline rasterizer.
+    #[allow(dead_code)]
     pub char_addr: u16,
     pub fx: u32,
     pub fy: u32,
