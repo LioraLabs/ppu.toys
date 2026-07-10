@@ -5,10 +5,10 @@ import { transport } from "../../transport/transport";
 import type { RegWrite } from "./model";
 
 /** The pinned-override glue shared by the Compose/Windows tabs AND the
- *  Compositor overlay. State lives in the core (the pin set) — this module
- *  only reads it store-shaped and nudges the shared transport so a write
- *  re-renders immediately even while paused (transport.step(0) re-runs the
- *  frame at the current clock). ▶ Run clears pins via transport.restart(). */
+ *  Compositor overlay. State lives in the core (the pin set); all WRITES go
+ *  through the transport's pin actions (single-writer invariant) — this module
+ *  only READS the set store-shaped (content-cached listPins snapshot).
+ *  ▶ Run clears pins via transport.restart(). */
 
 let cached: PinnedRegister[] = [];
 
@@ -31,26 +31,22 @@ export function usePins(): PinnedRegister[] {
 
 /** Pin one register override and re-render the frame (paused-safe). */
 export function writePin(addr: number, value: number): void {
-  ppuCore.pin(addr, value);
-  transport.step(0);
+  transport.pin(addr, value);
 }
 
 /** Pin a batch (multi-register encodes like combine/area) in one re-render. */
 export function writePins(writes: RegWrite[]): void {
-  for (const w of writes) ppuCore.pin(w.addr, w.value);
-  transport.step(0);
+  transport.pinMany(writes);
 }
 
 /** Drop one pin — the control falls back to the script-driven value. */
 export function releasePin(addr: number): void {
-  ppuCore.unpin(addr);
-  transport.step(0);
+  transport.unpin(addr);
 }
 
 /** The clear-all affordance. */
 export function releaseAllPins(): void {
-  ppuCore.clearPins();
-  transport.step(0);
+  transport.clearPins();
 }
 
 const screensCache = new WeakMap<FrameResult, CompositorScreens>();
