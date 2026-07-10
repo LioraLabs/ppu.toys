@@ -1,6 +1,7 @@
 import { formatAddr, formatValue } from "../format";
 import { useCopyToast } from "../copyToast";
 import { clearPokes, unpoke } from "../../pokes/pokeStore";
+import { HexPoke } from "../../pokes/HexPoke";
 import { pokeMatchesLive } from "./model";
 import type { Compositor } from "./useCompositor";
 
@@ -108,7 +109,11 @@ export function RegRow({
       <span className="cmp-reg-addr">{formatAddr(addr)}</span>
       <span className="cmp-reg-name">{name}</span>
       {swatch !== undefined && <span className="cmp-reg-swatch" style={{ background: swatch }} />}
-      <span className="cmp-reg-val">{formatValue(value)}</span>
+      <span className="cmp-reg-val">
+        <HexPoke addr={addr} value={value}>
+          {formatValue(value)}
+        </HexPoke>
+      </span>
       <span className="cmp-reg-note">{note ?? ""}</span>
       <PokeDot c={c} addr={addr} />
       {toast}
