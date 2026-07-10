@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { HEIGHT, WIDTH } from "../../../ppu/core";
 import { cgram15ToCss } from "../format";
 import {
   BACKDROP_MATH_BIT,
@@ -16,7 +17,7 @@ import {
 } from "./model";
 import { screensFor, writePin } from "./pinStore";
 import { PinDot, RegRow } from "./chrome";
-import { PreviewCanvas } from "./PreviewCanvas";
+import { BlitCanvas } from "../BlitCanvas";
 import type { Compositor } from "./useCompositor";
 
 /** MAIN / SUB / RESULT previews straight from the core: the two compositor
@@ -34,12 +35,12 @@ export function ScreenPreviews({ c, large }: { c: Compositor; large?: boolean })
     <div className={"cmp-previews" + (large ? " cmp-previews--lg" : "")}>
       <div className="cmp-preview">
         <div className="cmp-preview-label">MAIN · $212C</div>
-        <PreviewCanvas pixels={screens.main} title="main-screen composite (pre-math, pre-brightness)" />
+        <BlitCanvas pixels={screens.main} width={WIDTH} height={HEIGHT} title="main-screen composite (pre-math, pre-brightness)" />
       </div>
       <div className="cmp-opglyph">{op === "sub" ? "−" : "+"}</div>
       <div className="cmp-preview">
         <div className="cmp-preview-label">SUB · $212D</div>
-        <PreviewCanvas pixels={screens.sub} title="sub-screen composite (pre-math, pre-brightness)" />
+        <BlitCanvas pixels={screens.sub} width={WIDTH} height={HEIGHT} title="sub-screen composite (pre-math, pre-brightness)" />
       </div>
       <div className="cmp-opglyph cmp-opglyph--eq">=</div>
       <div className="cmp-preview cmp-preview--result">
@@ -54,7 +55,7 @@ export function ScreenPreviews({ c, large }: { c: Compositor; large?: boolean })
             ▦
           </button>
         </div>
-        <PreviewCanvas pixels={result} title="final framebuffer" />
+        <BlitCanvas pixels={result} width={WIDTH} height={HEIGHT} title="final framebuffer" />
       </div>
     </div>
   );

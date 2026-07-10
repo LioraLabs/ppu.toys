@@ -3,7 +3,7 @@ import { ppuCore } from "../../ppu/instance";
 import { bgMode, formatAddr, formatValue } from "./format";
 import { useInspectorFrame } from "./useInspectorFrame";
 import { Copyable, useCopyToast } from "./copyToast";
-import { PixelCanvas } from "./tracemem/PixelCanvas";
+import { BlitCanvas } from "./BlitCanvas";
 import { ModeBadge, PlaneSeg, TraceCaption, TraceChain } from "./tracemem/TraceChain";
 import { CgramGrid, VramBar, VramLegend } from "./tracemem/MemoryPanels";
 import { MODE_BPP, REGION_COLORS, cgramOwners, vramRegions } from "./tracemem/regions";
@@ -127,7 +127,7 @@ export function MemoryLayersOverlay({ onCollapse }: { onCollapse: () => void }) 
           </main>
           <aside className="tm-ov-right">
             <div className="tm-ov-head">Live output</div>
-            <PixelCanvas pixels={frame.framebuffer} width={WIDTH} height={HEIGHT} className="tm-outcanvas" />
+            <BlitCanvas pixels={frame.framebuffer} width={WIDTH} height={HEIGHT} className="tm-outcanvas" />
             <div className="tm-ov-head">Registers</div>
             <div className="tm-regrows">
               {frame.registers.map((r) => (
