@@ -4,7 +4,17 @@ import type { RegisterView } from "../../../ppu/core";
 import { openSketchStore, openContextFiles } from "../../sketches/openSketch";
 import { POKES_FILE } from "../../pokes/pokes";
 import { currentPokes, poke, pokeMany } from "../../pokes/pokeStore";
-import { REG, liveReg, pokeMatchesLive, fieldPoke, setWindowEdge, toggleDesignation, writesToPokes } from "./model";
+import {
+  REG,
+  liveReg,
+  pokeMatchesLive,
+  fieldPoke,
+  setWindowEdge,
+  toggleDesignation,
+  writesToPokes,
+  regPoke,
+  setMathOp,
+} from "./model";
 
 /** Logic-level wiring tests: the compose/windows control handlers are
  *  (decode via liveReg) -> (encode via the model emitters, returning
@@ -66,6 +76,39 @@ describe("poke wiring", () => {
     expect(s.context.kind).toBe("sketch");
     expect(openContextFiles(s)[0].name).toBe(POKES_FILE);
     expect(currentPokes(s)).toEqual([{ lvalue: "win.w1.lo", expr: "40", note: "$2126" }]);
+  });
+
+  it("a raw write evicts the friendly pokes on the same register, in ONE regeneration", () => {
+    pokeMany(writesToPokes([setMathOp("add", 0x00)], "friendly"));
+    expect(pokesSource()).toContain('  color.op = "add" -- $2131');
+    let emits = 0;
+    const unsub = openSketchStore.subscribe(() => emits++);
+    pokeMany(writesToPokes([setMathOp("sub", 0x00)], "raw"));
+    unsub();
+    expect(emits).toBe(1);
+    expect(pokesSource()).toContain("  CGADSUB = 0x80 -- $2131");
+    expect(pokesSource()).not.toContain("color.op");
+  });
+
+  it("a friendly write evicts the raw poke on the same register; other registers survive", () => {
+    poke(regPoke(REG.CGADSUB, 0x80));
+    poke(regPoke(REG.TM, 0x13));
+    pokeMany(writesToPokes([setMathOp("add", 0x80)], "friendly"));
+    const lvalues = currentPokes(openSketchStore.state()).map((p) => p.lvalue);
+    expect(lvalues).toEqual(["TM", "color.op"]);
+  });
+
+  it("the HexPoke path (poke + regPoke) evicts too — hex-editing a register wins over stale fields", () => {
+    poke(fieldPoke(toggleDesignation("screen.main.bg3", REG.TM, 0x1f, 2)));
+    poke(regPoke(REG.TM, 0x13)); // what HexPoke commits
+    expect(currentPokes(openSketchStore.state())).toEqual([{ lvalue: "TM", expr: "0x13", note: "$212C" }]);
+  });
+
+  it("unmapped lvalues (cgram[...]) survive eviction on any register", () => {
+    poke({ lvalue: "cgram[0x41]", expr: "0x7fff" });
+    poke(regPoke(REG.CGADSUB, 0x80));
+    // parsed back in file order — the codepoint sort puts uppercase mnemonics first
+    expect(currentPokes(openSketchStore.state()).map((p) => p.lvalue)).toEqual(["CGADSUB", "cgram[0x41]"]);
   });
 });
 
