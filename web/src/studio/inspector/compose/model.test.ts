@@ -2,12 +2,20 @@ import { describe, expect, it } from "vitest";
 import type { RegisterView } from "../../../ppu/core";
 import { parsePokes, pokesToLua } from "../../pokes/pokes";
 import {
+  ADDEND_FIELDS,
   BACKDROP_MATH_BIT,
+  COMBINE_FIELDS,
   COMPOSE_LAYERS,
+  AREA_FIELDS,
   FIELD_SPECS,
   FIXED_COLOR_SWATCHES,
+  FIXED_FIELDS,
+  MATH_ENABLE_FIELDS,
+  OPERATION_FIELDS,
   REG,
   REG_LVALUES,
+  SCREEN_MAIN_FIELDS,
+  SCREEN_SUB_FIELDS,
   WINDOW_LAYERS,
   areaValue,
   columnMask,
@@ -30,10 +38,12 @@ import {
   setMathAddend,
   setMathHalf,
   setMathOp,
+  setWindowEdge,
   tintMathRegion,
   toggleDesignation,
   toggleWindowEnable,
   toggleWindowInvert,
+  winRowFields,
   windowBounds,
   windowRow,
   withMathAddend,
@@ -182,35 +192,44 @@ describe("window select rows", () => {
     });
   });
 
-  it("enable toggle writes both window enables + the TMW bit", () => {
+  it("enable toggle emits w1+w2+main bool fields carrying the folded register bytes", () => {
     expect(toggleWindowEnable(bg1, read({}))).toEqual([
-      { addr: REG.W12SEL, value: 0x0a },
-      { addr: REG.TMW, value: 0x01 },
+      { field: "win.bg1.w1", expr: "true", addr: REG.W12SEL, value: 0x0a },
+      { field: "win.bg1.w2", expr: "true", addr: REG.W12SEL, value: 0x0a },
+      { field: "win.bg1.main", expr: "true", addr: REG.TMW, value: 0x01 },
     ]);
     expect(toggleWindowEnable(bg1, read({ [REG.W12SEL]: 0x0a, [REG.TMW]: 0x1f }))).toEqual([
-      { addr: REG.W12SEL, value: 0x00 },
-      { addr: REG.TMW, value: 0x1e },
+      { field: "win.bg1.w1", expr: "false", addr: REG.W12SEL, value: 0x00 },
+      { field: "win.bg1.w2", expr: "false", addr: REG.W12SEL, value: 0x00 },
+      { field: "win.bg1.main", expr: "false", addr: REG.TMW, value: 0x1e },
     ]);
   });
 
-  it("color-row enable drives WOBJSEL high nibble + CGWSEL prevent-math region", () => {
+  it("color-row enable routes CGWSEL through color.region — never a win field", () => {
     expect(toggleWindowEnable(color, read({ [REG.CGWSEL]: 0x02 }))).toEqual([
-      { addr: REG.WOBJSEL, value: 0xa0 },
-      { addr: REG.CGWSEL, value: 0x12 },
+      { field: "win.color.w1", expr: "true", addr: REG.WOBJSEL, value: 0xa0 },
+      { field: "win.color.w2", expr: "true", addr: REG.WOBJSEL, value: 0xa0 },
+      { field: "color.region", expr: '"inside"', addr: REG.CGWSEL, value: 0x12 },
     ]);
-    expect(
-      toggleWindowEnable(color, read({ [REG.WOBJSEL]: 0xa0, [REG.CGWSEL]: 0x12 })),
-    ).toEqual([
-      { addr: REG.WOBJSEL, value: 0x00 },
-      { addr: REG.CGWSEL, value: 0x02 },
+    expect(toggleWindowEnable(color, read({ [REG.WOBJSEL]: 0xa0, [REG.CGWSEL]: 0x12 }))).toEqual([
+      { field: "win.color.w1", expr: "false", addr: REG.WOBJSEL, value: 0x00 },
+      { field: "win.color.w2", expr: "false", addr: REG.WOBJSEL, value: 0x00 },
+      { field: "color.region", expr: '"everywhere"', addr: REG.CGWSEL, value: 0x02 },
     ]);
   });
 
-  it("invert toggle flips both invert bits of the layer nibble only", () => {
-    expect(toggleWindowInvert(bg3, read({}))).toEqual([{ addr: REG.W34SEL, value: 0x05 }]);
-    expect(toggleWindowInvert(bg3, read({ [REG.W34SEL]: 0xf5 }))).toEqual([
-      { addr: REG.W34SEL, value: 0xf0 },
+  it("invert toggle is ONE lossy field per row (both invert bits, the core decode)", () => {
+    expect(toggleWindowInvert(bg3, read({}))).toEqual([
+      { field: "win.bg3.invert", expr: "true", addr: REG.W34SEL, value: 0x05 },
     ]);
+    expect(toggleWindowInvert(bg3, read({ [REG.W34SEL]: 0xf5 }))).toEqual([
+      { field: "win.bg3.invert", expr: "false", addr: REG.W34SEL, value: 0xf0 },
+    ]);
+  });
+
+  it("setWindowEdge names the WH scalar field with a decimal expr", () => {
+    expect(setWindowEdge(REG.WH0, 40)).toEqual({ field: "win.w1.lo", expr: "40", addr: REG.WH0, value: 40 });
+    expect(setWindowEdge(REG.WH3, 200)).toEqual({ field: "win.w2.hi", expr: "200", addr: REG.WH3, value: 200 });
   });
 });
 
@@ -222,15 +241,15 @@ describe("combine + area segmenteds", () => {
     expect(combineValue(read({ [REG.WBGLOG]: 0xaa, [REG.WOBJLOG]: 0x02 }))).toBeNull();
   });
 
-  it("setCombine writes every WBGLOG/WOBJLOG slot", () => {
-    expect(setCombine(3)).toEqual([
-      { addr: REG.WBGLOG, value: 0xff },
-      { addr: REG.WOBJLOG, value: 0x0f },
+  it("setCombine emits all six layers' combine fields (incl. registers-only bg4)", () => {
+    const ws = setCombine(1);
+    expect(ws.map((w) => w.field)).toEqual([
+      "win.bg1.combine", "win.bg2.combine", "win.bg3.combine",
+      "win.bg4.combine", "win.obj.combine", "win.color.combine",
     ]);
-    expect(setCombine(1)).toEqual([
-      { addr: REG.WBGLOG, value: 0x55 },
-      { addr: REG.WOBJLOG, value: 0x05 },
-    ]);
+    expect(ws.every((w) => w.expr === '"AND"')).toBe(true);
+    expect(writesToPokes(ws, "raw")).toEqual([regPoke(REG.WBGLOG, 0x55), regPoke(REG.WOBJLOG, 0x05)]);
+    expect(writesToPokes(setCombine(3), "raw")).toEqual([regPoke(REG.WBGLOG, 0xff), regPoke(REG.WOBJLOG, 0x0f)]);
   });
 
   it("areaValue aggregates the five rows' inverts (mixed = null)", () => {
@@ -241,18 +260,13 @@ describe("combine + area segmenteds", () => {
     expect(areaValue(read({ [REG.W12SEL]: 0x05 }))).toBeNull();
   });
 
-  it("setArea bulk-writes invert bits, preserving W34SEL's BG4 nibble", () => {
-    expect(setArea("outside", read({ [REG.W34SEL]: 0xa0 }))).toEqual([
-      { addr: REG.W12SEL, value: 0x55 },
-      { addr: REG.W34SEL, value: 0xa5 },
-      { addr: REG.WOBJSEL, value: 0x55 },
-    ]);
-    expect(
-      setArea("inside", read({ [REG.W12SEL]: 0xff, [REG.W34SEL]: 0xff, [REG.WOBJSEL]: 0xff })),
-    ).toEqual([
-      { addr: REG.W12SEL, value: 0xaa },
-      { addr: REG.W34SEL, value: 0xfa },
-      { addr: REG.WOBJSEL, value: 0xaa },
+  it("setArea emits the five UI rows' invert fields; same-register writes share the final byte (BG4 nibble preserved)", () => {
+    expect(setArea("outside", read({ [REG.W34SEL]: 0xa0 })).map((w) => [w.field, w.expr, w.addr, w.value])).toEqual([
+      ["win.bg1.invert", "true", REG.W12SEL, 0x55],
+      ["win.bg2.invert", "true", REG.W12SEL, 0x55],
+      ["win.bg3.invert", "true", REG.W34SEL, 0xa5],
+      ["win.obj.invert", "true", REG.WOBJSEL, 0x55],
+      ["win.color.invert", "true", REG.WOBJSEL, 0x55],
     ]);
   });
 });
@@ -402,5 +416,41 @@ describe("preview buffers", () => {
     expect([out[0], out[1], out[2]]).toEqual([40, 170, 40]);
     expect([out[4], out[5], out[6]]).toEqual([100, 100, 100]);
     expect(fb[0]).toBe(100); // input untouched
+  });
+});
+
+describe("emission/decode invariants", () => {
+  const sample = (): FieldWrite[] => [
+    toggleDesignation("screen.main.bg1", REG.TM, 0x1f, 0),
+    toggleDesignation("screen.sub.obj", REG.TS, 0, 4),
+    toggleDesignation("color.on.bg3", REG.CGADSUB, 0, 2),
+    toggleDesignation("color.on.backdrop", REG.CGADSUB, 0, 5),
+    setMathOp("sub", 0), setMathHalf(true, 0), setMathAddend("sub", 0), setFixedColor(1),
+    setWindowEdge(REG.WH0, 1), setWindowEdge(REG.WH1, 1), setWindowEdge(REG.WH2, 1), setWindowEdge(REG.WH3, 1),
+    ...WINDOW_LAYERS.flatMap((l) => [...toggleWindowEnable(l, read({})), ...toggleWindowInvert(l, read({}))]),
+    ...setCombine(2),
+    ...setArea("outside", read({})),
+  ];
+
+  it("every emitted field is decodable: it's in FIELD_SPECS at the same register", () => {
+    for (const w of sample()) {
+      expect(FIELD_SPECS.get(w.field), w.field).toBeDefined();
+      expect(FIELD_SPECS.get(w.field)?.addr, w.field).toBe(w.addr);
+    }
+  });
+
+  it("every emitted write reads back SOLID once the core folds its raw value", () => {
+    for (const w of sample()) {
+      expect(pokeMatchesLive(fieldPoke(w), [rv(w.addr, "", w.value)]), w.field).toBe(true);
+    }
+  });
+
+  it("header/group field lists are all decodable", () => {
+    const groups = [
+      ...SCREEN_MAIN_FIELDS, ...SCREEN_SUB_FIELDS, ...MATH_ENABLE_FIELDS,
+      ...OPERATION_FIELDS, ...ADDEND_FIELDS, ...FIXED_FIELDS,
+      ...COMBINE_FIELDS, ...AREA_FIELDS, ...WINDOW_LAYERS.flatMap(winRowFields),
+    ];
+    for (const f of groups) expect(FIELD_SPECS.has(f), f).toBe(true);
   });
 });

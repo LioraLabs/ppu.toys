@@ -241,6 +241,27 @@ export const WINDOW_LAYERS: WindowLayer[] = [
   { id: "color", label: "Color math", color: "var(--cyan)", selAddr: REG.WOBJSEL, shift: 4 },
 ];
 
+/** WH edge registers -> their friendly scalar fields (whole-value semantics). */
+export const WH_FIELDS: Readonly<Record<number, string>> = {
+  [REG.WH0]: "win.w1.lo",
+  [REG.WH1]: "win.w1.hi",
+  [REG.WH2]: "win.w2.lo",
+  [REG.WH3]: "win.w2.hi",
+};
+
+/** Friendly window-layer geometry — mirrors the Rust core's WIN_LAYERS
+ *  (includes bg4, which has registers but no UI row). */
+const WIN_FIELD_LAYERS: {
+  id: string; selAddr: number; shift: 0 | 4; logAddr: number; logShift: number; tmwBit?: number;
+}[] = [
+  { id: "bg1", selAddr: REG.W12SEL, shift: 0, logAddr: REG.WBGLOG, logShift: 0, tmwBit: 0 },
+  { id: "bg2", selAddr: REG.W12SEL, shift: 4, logAddr: REG.WBGLOG, logShift: 2, tmwBit: 1 },
+  { id: "bg3", selAddr: REG.W34SEL, shift: 0, logAddr: REG.WBGLOG, logShift: 4, tmwBit: 2 },
+  { id: "bg4", selAddr: REG.W34SEL, shift: 4, logAddr: REG.WBGLOG, logShift: 6, tmwBit: 3 },
+  { id: "obj", selAddr: REG.WOBJSEL, shift: 0, logAddr: REG.WOBJLOG, logShift: 0, tmwBit: 4 },
+  { id: "color", selAddr: REG.WOBJSEL, shift: 4, logAddr: REG.WOBJLOG, logShift: 2 },
+];
+
 /** Select-nibble layout, LSB first: W1 invert, W1 enable, W2 invert, W2 enable. */
 const ENABLE_BITS = 0b1010;
 const INVERT_BITS = 0b0101;
@@ -268,30 +289,46 @@ function withNibbleBits(reg: number, shift: number, bits: number, on: boolean): 
  *  against the real core); the color row instead points CGWSEL's prevent-math
  *  region (bits 4-5) at "outside the window" (1) when enabling — color math
  *  only inside — and back to "never" (0) when disabling. */
-export function toggleWindowEnable(layer: WindowLayer, read: ReadReg): RegWrite[] {
+export function toggleWindowEnable(layer: WindowLayer, read: ReadReg): FieldWrite[] {
   const on = !windowRow(layer, read).enabled;
-  const writes: RegWrite[] = [
-    { addr: layer.selAddr, value: withNibbleBits(read(layer.selAddr), layer.shift, ENABLE_BITS, on) },
+  const sel = withNibbleBits(read(layer.selAddr), layer.shift, ENABLE_BITS, on);
+  const writes: FieldWrite[] = [
+    { field: `win.${layer.id}.w1`, expr: bool(on), addr: layer.selAddr, value: sel },
+    { field: `win.${layer.id}.w2`, expr: bool(on), addr: layer.selAddr, value: sel },
   ];
   if (layer.tmwBit !== undefined) {
     const tmw = read(REG.TMW);
     writes.push({
+      field: `win.${layer.id}.main`,
+      expr: bool(on),
       addr: REG.TMW,
       value: on ? tmw | (1 << layer.tmwBit) : tmw & ~(1 << layer.tmwBit),
     });
   }
   if (layer.id === "color") {
-    writes.push({ addr: REG.CGWSEL, value: (read(REG.CGWSEL) & ~0x30) | (on ? 0x10 : 0) });
+    // WHERE math is prevented is color's turf (CGWSEL is co-owned): route
+    // through color.region — `win` never writes CGWSEL.
+    writes.push({
+      field: "color.region",
+      expr: str(on ? "inside" : "everywhere"),
+      addr: REG.CGWSEL,
+      value: (read(REG.CGWSEL) & ~0x30) | (on ? 0x10 : 0),
+    });
   }
   return writes;
 }
 
 /** Toggle a row's invert (both windows' invert bits at once). */
-export function toggleWindowInvert(layer: WindowLayer, read: ReadReg): RegWrite[] {
+export function toggleWindowInvert(layer: WindowLayer, read: ReadReg): FieldWrite[] {
   const on = !windowRow(layer, read).inverted;
-  return [
-    { addr: layer.selAddr, value: withNibbleBits(read(layer.selAddr), layer.shift, INVERT_BITS, on) },
-  ];
+  return [{
+    // lossy on purpose: the friendly field drives BOTH invert bits, exactly
+    // like this control always has; a lone invert bit stays raw-only
+    field: `win.${layer.id}.invert`,
+    expr: bool(on),
+    addr: layer.selAddr,
+    value: withNibbleBits(read(layer.selAddr), layer.shift, INVERT_BITS, on),
+  }];
 }
 
 // ── Combine + area segmenteds ────────────────────────────────────────────────
@@ -314,11 +351,15 @@ export function combineValue(read: ReadReg): WinLogic | null {
 }
 
 /** Write one combine op into every slot of both logic registers. */
-export function setCombine(op: WinLogic): RegWrite[] {
-  return [
-    { addr: REG.WBGLOG, value: op * 0b01010101 },
-    { addr: REG.WOBJLOG, value: op * 0b0101 },
-  ];
+export function setCombine(op: WinLogic): FieldWrite[] {
+  const bgByte = op * 0b01010101;
+  const objByte = op * 0b0101;
+  return WIN_FIELD_LAYERS.map((l) => ({
+    field: `win.${l.id}.combine`,
+    expr: str(LOGIC_LABELS[op]),
+    addr: l.logAddr,
+    value: l.logAddr === REG.WBGLOG ? bgByte : objByte,
+  }));
 }
 
 export type WinArea = "inside" | "outside";
@@ -332,38 +373,41 @@ export function areaValue(read: ReadReg): WinArea | null {
 }
 
 /** Bulk-set the invert bits of every row nibble (W34SEL's BG4 nibble untouched). */
-export function setArea(area: WinArea, read: ReadReg): RegWrite[] {
+export function setArea(area: WinArea, read: ReadReg): FieldWrite[] {
   const on = area === "outside";
   const byAddr = new Map<number, number>();
   for (const l of WINDOW_LAYERS) {
     const cur = byAddr.get(l.selAddr) ?? read(l.selAddr);
     byAddr.set(l.selAddr, withNibbleBits(cur, l.shift, INVERT_BITS, on));
   }
-  return [...byAddr].map(([addr, value]) => ({ addr, value }));
+  return WINDOW_LAYERS.map((l) => ({
+    field: `win.${l.id}.invert`,
+    expr: bool(on),
+    addr: l.selAddr,
+    value: byAddr.get(l.selAddr) ?? 0,
+  }));
+}
+
+export function setWindowEdge(addr: number, x: number): FieldWrite {
+  return { field: WH_FIELDS[addr], expr: String(x), addr, value: x };
+}
+
+/** Field groups the section-header PokeDots key on. */
+export const SCREEN_MAIN_FIELDS = COMPOSE_LAYERS.map((l) => `screen.main.${l.id}`);
+export const SCREEN_SUB_FIELDS = COMPOSE_LAYERS.map((l) => `screen.sub.${l.id}`);
+export const MATH_ENABLE_FIELDS = [...COMPOSE_LAYERS.map((l) => `color.on.${l.id}`), "color.on.backdrop"];
+export const OPERATION_FIELDS = ["color.op", "color.half"];
+export const ADDEND_FIELDS = ["color.addend"];
+export const FIXED_FIELDS = ["color.fixed"];
+export const COMBINE_FIELDS = WIN_FIELD_LAYERS.map((l) => `win.${l.id}.combine`);
+export const AREA_FIELDS = WINDOW_LAYERS.map((l) => `win.${l.id}.invert`);
+
+/** The three fields a Windows layer row's marker covers. */
+export function winRowFields(l: WindowLayer): string[] {
+  return [`win.${l.id}.w1`, `win.${l.id}.w2`, `win.${l.id}.invert`];
 }
 
 // ── Field decode table ───────────────────────────────────────────────────────
-
-/** WH edge registers -> their friendly scalar fields (whole-value semantics). */
-export const WH_FIELDS: Readonly<Record<number, string>> = {
-  [REG.WH0]: "win.w1.lo",
-  [REG.WH1]: "win.w1.hi",
-  [REG.WH2]: "win.w2.lo",
-  [REG.WH3]: "win.w2.hi",
-};
-
-/** Friendly window-layer geometry — mirrors the Rust core's WIN_LAYERS
- *  (includes bg4, which has registers but no UI row). */
-const WIN_FIELD_LAYERS: {
-  id: string; selAddr: number; shift: 0 | 4; logAddr: number; logShift: number; tmwBit?: number;
-}[] = [
-  { id: "bg1", selAddr: REG.W12SEL, shift: 0, logAddr: REG.WBGLOG, logShift: 0, tmwBit: 0 },
-  { id: "bg2", selAddr: REG.W12SEL, shift: 4, logAddr: REG.WBGLOG, logShift: 2, tmwBit: 1 },
-  { id: "bg3", selAddr: REG.W34SEL, shift: 0, logAddr: REG.WBGLOG, logShift: 4, tmwBit: 2 },
-  { id: "bg4", selAddr: REG.W34SEL, shift: 4, logAddr: REG.WBGLOG, logShift: 6, tmwBit: 3 },
-  { id: "obj", selAddr: REG.WOBJSEL, shift: 0, logAddr: REG.WOBJLOG, logShift: 0, tmwBit: 4 },
-  { id: "color", selAddr: REG.WOBJSEL, shift: 4, logAddr: REG.WOBJLOG, logShift: 2 },
-];
 
 /** SEL-nibble enable bits, matching the core: W1 = 0x2, W2 = 0x8. */
 const W1_ENABLE = 0x2;
