@@ -266,7 +266,7 @@ function frame(t, f)
   bg[2].source = "ribbons"; bg[2].char_base = 0x2000  -- scene, on main AND sub
   bg[2].map_base = 0x0800
   screen.main.bg1 = true; screen.main.bg2 = true      -- panel + scene on the main screen
-  screen.main.bg3 = false; screen.main.bg4 = false; screen.main.obj = false
+  screen.main.bg3 = false; screen.main.bg4 = false; screen.main.obj = false  -- power-on defaults ALL layers on: drop the rest
   screen.sub.bg2 = true    -- scene on the sub screen -> the addend under the glass
   color.op = "add"; color.half = true; color.on.bg1 = true  -- ½-add math on BG1 (the glass)
   color.addend = "sub"     -- addend = subscreen (not fixed colour)
@@ -279,7 +279,7 @@ function frame(t, f)
   mode = 1; brightness = 15
   bg[1].source = "ribbons"
   screen.main.bg1 = true    -- BG1 only on the main screen
-  screen.main.bg2 = false; screen.main.bg3 = false
+  screen.main.bg2 = false; screen.main.bg3 = false   -- power-on defaults ALL layers on: drop the rest
   screen.main.bg4 = false; screen.main.obj = false
   win.color.w1 = true       -- COLOR window follows window 1
   win.color.combine = "OR"  -- COLOR window logic = OR
@@ -308,7 +308,7 @@ function frame(t, f)
   mode = 1; brightness = 15
   bg[1].source = "ribbons"
   screen.main.bg1 = true    -- BG1 only on the main screen
-  screen.main.bg2 = false; screen.main.bg3 = false
+  screen.main.bg2 = false; screen.main.bg3 = false   -- power-on defaults ALL layers on: drop the rest
   screen.main.bg4 = false; screen.main.obj = false
   color.op = "add"; color.on.bg1 = true   -- add at full strength (half stays off)
   color.addend = "fixed"    -- addend = the fixed colour, not the sub screen
