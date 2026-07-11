@@ -22,6 +22,7 @@ import {
   combineValue,
   dimOutsideMask,
   equation,
+  evictCrossDialect,
   fieldPoke,
   hexToBgr555,
   liveReg,
@@ -460,5 +461,32 @@ describe("emission/decode invariants", () => {
       ...COMBINE_FIELDS, ...AREA_FIELDS, ...WINDOW_LAYERS.flatMap(winRowFields),
     ];
     for (const f of groups) expect(FIELD_SPECS.has(f), f).toBe(true);
+  });
+});
+
+describe("evictCrossDialect (dialect flip must not leave conflicting lines)", () => {
+  const friendlyOp = fieldPoke({ field: "color.op", expr: '"add"', addr: REG.CGADSUB, value: 0x00 });
+  const friendlyHalf = fieldPoke({ field: "color.half", expr: "true", addr: REG.CGADSUB, value: 0x40 });
+  const friendlyEdge = fieldPoke({ field: "win.w1.lo", expr: "40", addr: REG.WH0, value: 40 });
+  const rawAdsub = regPoke(REG.CGADSUB, 0x80);
+  const rawTm = regPoke(REG.TM, 0x13);
+  const cgram = { lvalue: "cgram[0x41]", expr: "0x7fff" };
+
+  it("a raw write evicts every friendly poke living in the same register — others survive", () => {
+    expect(evictCrossDialect([friendlyOp, friendlyHalf, friendlyEdge], [rawAdsub])).toEqual([friendlyEdge]);
+  });
+
+  it("a friendly write evicts the raw poke on its register — other raw pokes survive", () => {
+    expect(evictCrossDialect([rawAdsub, rawTm], [friendlyOp])).toEqual([rawTm]);
+  });
+
+  it("same-dialect writes evict nothing (upsertPoke replacement handles same-lvalue)", () => {
+    expect(evictCrossDialect([friendlyOp], [friendlyHalf])).toEqual([friendlyOp]);
+    expect(evictCrossDialect([rawAdsub], [regPoke(REG.CGADSUB, 0x41)])).toEqual([rawAdsub]);
+  });
+
+  it("unmapped lvalues (cgram[...]) never evict and are never evicted", () => {
+    expect(evictCrossDialect([cgram, friendlyOp], [rawAdsub])).toEqual([cgram]);
+    expect(evictCrossDialect([rawAdsub], [cgram])).toEqual([rawAdsub]);
   });
 });
