@@ -153,3 +153,41 @@ describe("color namespace", () => {
     expect(complete("mycolor.")!.options.map((o) => o.label)).not.toContain("addend");
   });
 });
+
+describe("screen namespace", () => {
+  it("offers the screen global with its register annotation", () => {
+    const opts = complete("scr")!.options;
+    const screen = opts.find((o) => o.label === "screen");
+    expect(screen).toBeDefined();
+    expect(screen!.detail).toContain("$212C");
+  });
+
+  it("offers screen.* members after `screen.`", () => {
+    const labels = complete("screen.")!.options.map((o) => o.label);
+    expect(labels).toContain("main");
+    expect(labels).toContain("sub");
+    expect(labels).not.toContain("bg1");
+    expect(labels).not.toContain("brightness");
+  });
+
+  it("offers layer enables after `screen.main.` and `screen.sub.`", () => {
+    for (const base of ["screen.main.", "screen.sub."]) {
+      const labels = complete(base)!.options.map((o) => o.label);
+      for (const m of ["bg1", "bg2", "bg3", "bg4", "obj"]) {
+        expect(labels).toContain(m);
+      }
+      expect(labels).not.toContain("main");
+      expect(labels).not.toContain("backdrop");
+    }
+  });
+
+  it("completes the partial word after screen.main.", () => {
+    const res = complete("screen.main.bg")!;
+    expect(res.options.map((o) => o.label)).toContain("bg1");
+    expect(res.from).toBe("screen.main.".length);
+  });
+
+  it("does NOT treat identifiers ending in screen as the namespace", () => {
+    expect(complete("myscreen.")!.options.map((o) => o.label)).not.toContain("main");
+  });
+});
