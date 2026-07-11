@@ -156,11 +156,22 @@ impl<'a> Rd<'a> {
         self.i += n;
         Ok(s)
     }
-    fn palettes(&mut self) -> Result<Vec<Vec<u16>>, PayloadError> {
+    /// Read a palette block, rejecting shapes that would alias CGRAM at
+    /// placement: more than `max_pals` sub-palettes, or any sub-palette
+    /// longer than `max_len`. Both checks happen before the corresponding
+    /// bytes are consumed, so a malformed count/length byte alone is enough
+    /// to trigger the rejection.
+    fn palettes(&mut self, max_pals: usize, max_len: usize) -> Result<Vec<Vec<u16>>, PayloadError> {
         let n = self.u8()? as usize;
+        if n > max_pals {
+            return Err(PayloadError::BadParam("palettes"));
+        }
         (0..n)
             .map(|_| {
                 let len = self.u8()? as usize;
+                if len > max_len {
+                    return Err(PayloadError::BadParam("palettes"));
+                }
                 self.u16s(len)
             })
             .collect()
@@ -187,11 +198,26 @@ impl SourcePayload {
         let mut b = vec![PAYLOAD_VERSION];
         match self {
             SourcePayload::Bg(s) => {
+                debug_assert!(s.palettes.len() <= 8, "bg: more than 8 sub-palettes");
+                let pal_cap = (1usize << s.bit_depth).min(256) - 1;
+                debug_assert!(
+                    s.palettes.iter().all(|p| p.len() <= pal_cap),
+                    "bg: sub-palette longer than bit_depth allows"
+                );
+                let wpt = s.bit_depth as usize * 4;
+                debug_assert!(
+                    s.char_words.len() % wpt == 0,
+                    "bg: char_words not a whole number of tiles"
+                );
+                debug_assert!(s.char_words.len() / wpt <= 1024, "bg: more than 1024 tiles");
+                debug_assert!(
+                    s.tilemap_words.len() == bg_tilemap_len(s.screen_size),
+                    "bg: tilemap_words length doesn't match screen_size"
+                );
                 b.push(0);
                 b.push(s.bit_depth);
                 b.push(s.tile_size);
                 push_palettes(&mut b, &s.palettes);
-                let wpt = s.bit_depth as usize * 4;
                 push_u16(&mut b, (s.char_words.len() / wpt) as u16);
                 for &w in &s.char_words {
                     push_u16(&mut b, w);
@@ -202,6 +228,16 @@ impl SourcePayload {
                 }
             }
             SourcePayload::M7(s) => {
+                debug_assert!(s.palette.len() <= 255, "m7: palette longer than 255");
+                debug_assert!(s.tiles.len() <= 256, "m7: more than 256 tiles");
+                debug_assert!(
+                    s.tiles_w <= 128 && s.tiles_h <= 128,
+                    "m7: map dims larger than 128x128"
+                );
+                debug_assert!(
+                    s.map.len() == s.tiles_w as usize * s.tiles_h as usize,
+                    "m7: map length doesn't match tiles_w*tiles_h"
+                );
                 b.push(1);
                 b.push(0); // opts_len: M7Options is empty in v1 (EXTBG room)
                 b.push(s.palette.len() as u8);
@@ -217,6 +253,16 @@ impl SourcePayload {
                 b.extend_from_slice(&s.map);
             }
             SourcePayload::Obj(s) => {
+                debug_assert!(s.palettes.len() <= 8, "obj: more than 8 sub-palettes");
+                debug_assert!(
+                    s.palettes.iter().all(|p| p.len() <= 15),
+                    "obj: sub-palette longer than 15 (4bpp)"
+                );
+                debug_assert!(
+                    s.char_words.len() % 16 == 0,
+                    "obj: char_words not a whole number of tiles"
+                );
+                debug_assert!(s.char_words.len() / 16 <= 512, "obj: more than 512 tiles");
                 b.push(2);
                 b.push(s.cell_size);
                 push_palettes(&mut b, &s.palettes);
@@ -246,7 +292,13 @@ impl SourcePayload {
                 if tile_size != 8 {
                     return Err(PayloadError::BadParam("tile_size"));
                 }
-                let palettes = r.palettes()?;
+                // 8bpp has no room for sub-palette selection (one CGRAM-wide
+                // palette only); 2/4bpp cap at 8 sub-palettes with a
+                // bit_depth-sized color count each, matching the CGRAM band
+                // stride place_bg writes into.
+                let max_pals = if bit_depth == 8 { 1 } else { 8 };
+                let max_len = (1usize << bit_depth).min(256) - 1;
+                let palettes = r.palettes(max_pals, max_len)?;
                 let tile_count = r.u16()? as usize;
                 let char_words = r.u16s(tile_count * bit_depth as usize * 4)?;
                 let screen_size = r.u8()?;
@@ -303,7 +355,8 @@ impl SourcePayload {
                 if !matches!(cell_size, 8 | 16 | 32 | 64) {
                     return Err(PayloadError::BadParam("cell_size"));
                 }
-                let palettes = r.palettes()?;
+                // OBJ palettes are always 4bpp: 8 sub-palettes, 15 colors each.
+                let palettes = r.palettes(8, 15)?;
                 let tile_count = r.u16()? as usize;
                 let char_words = r.u16s(tile_count * 16)?;
                 SourcePayload::Obj(ObjSource {
@@ -322,6 +375,10 @@ impl SourcePayload {
 /// Write a BG source at bind-time bases. `cgram_base` is the CGRAM index the
 /// palette block starts at (the mode-0 per-layer band, else 0); sub-palette
 /// entry 0 stays unwritten (transparent).
+///
+/// `src` must be decode-valid (`SourcePayload::decode` is the gate that
+/// enforces palette/tile/tilemap shape caps); an out-of-range struct built
+/// by hand may panic or write outside its intended CGRAM/VRAM slice.
 pub fn place_bg(
     src: &BgSource,
     mem: &mut Memory,
@@ -351,6 +408,9 @@ pub fn place_bg(
 /// char bytes in the high lane, the 128-wide map in the low lane, palette at
 /// CGRAM 1.. . Masked-lane writes assume the frame's zeroed-VRAM bootstrap
 /// (frame() zeroes VRAM/CGRAM before imports), composing like the m7 pokes.
+///
+/// `src` must be decode-valid: an out-of-range struct (e.g. `map` shorter
+/// than `tiles_w*tiles_h`) may panic or alias VRAM cells outside its map.
 pub fn place_m7(src: &M7Source, mem: &mut Memory) {
     for (t, tile) in src.tiles.iter().enumerate() {
         for (j, &px) in tile.iter().enumerate() {
@@ -372,6 +432,10 @@ pub fn place_m7(src: &M7Source, mem: &mut Memory) {
 
 /// Write an OBJ source: char words at `char_base` (wrapping VRAM), palettes
 /// into the OBJ CGRAM half (128..).
+///
+/// `src` must be decode-valid; an out-of-range struct (too many palettes, or
+/// a palette longer than 15 colors) may alias CGRAM entries outside its
+/// intended band.
 pub fn place_obj(src: &ObjSource, mem: &mut Memory, char_base: u16) {
     for (i, &w) in src.char_words.iter().enumerate() {
         mem.vram[(char_base as usize + i) & 0x7fff] = w;
@@ -499,6 +563,66 @@ mod tests {
     }
 
     #[test]
+    fn decode_rejects_bg_screen_size_out_of_range() {
+        let s = BgSource {
+            bit_depth: 2,
+            tile_size: 8,
+            palettes: vec![vec![0x001f]],
+            char_words: vec![0u16; 8],
+            screen_size: 0,
+            tilemap_words: vec![0u16; 0x400],
+        };
+        let mut b = SourcePayload::Bg(s).encode();
+        // Same offset the layout test locks: screen_size sits right after
+        // the 8 char words that follow the 10-byte header+palette+tile_count.
+        let screen_size_idx = 10 + 16;
+        assert_eq!(b[screen_size_idx], 0);
+        b[screen_size_idx] = 4;
+        assert_eq!(
+            SourcePayload::decode(&b),
+            Err(PayloadError::BadParam("screen_size"))
+        );
+    }
+
+    #[test]
+    fn decode_rejects_bg_too_many_palettes() {
+        let mut b = SourcePayload::Bg(sample_bg()).encode();
+        // pal_count byte sits right after bit_depth/tile_size in the header.
+        let pal_count_idx = 4;
+        assert_eq!(b[pal_count_idx], 2);
+        b[pal_count_idx] = 9;
+        assert_eq!(
+            SourcePayload::decode(&b),
+            Err(PayloadError::BadParam("palettes"))
+        );
+    }
+
+    #[test]
+    fn decode_rejects_bg_8bpp_with_more_than_one_palette() {
+        let mut b = SourcePayload::Bg(sample_bg()).encode();
+        // sample_bg is 2bpp with 2 sub-palettes; bumping bit_depth to 8
+        // leaves pal_count=2, which exceeds the 8bpp single-palette cap.
+        b[2] = 8;
+        assert_eq!(
+            SourcePayload::decode(&b),
+            Err(PayloadError::BadParam("palettes"))
+        );
+    }
+
+    #[test]
+    fn decode_rejects_obj_palette_longer_than_15() {
+        let mut b = SourcePayload::Obj(sample_obj()).encode();
+        // header(2) + cell_size(1) + pal_count(1) = byte 4 is pal0's len.
+        let pal0_len_idx = 4;
+        assert_eq!(b[pal0_len_idx], 1);
+        b[pal0_len_idx] = 16;
+        assert_eq!(
+            SourcePayload::decode(&b),
+            Err(PayloadError::BadParam("palettes"))
+        );
+    }
+
+    #[test]
     fn place_bg_writes_char_map_and_banded_palette() {
         let s = sample_bg();
         let mut mem = Memory::new();
@@ -526,6 +650,25 @@ mod tests {
         assert_eq!(mem.cgram[1], 0x001f);
         assert_eq!(mem.cgram[2], 0x7fff);
         assert_eq!(mem.cgram[0], 0);
+    }
+
+    #[test]
+    fn place_m7_map_row_stride_is_128() {
+        // 2x2 map: a naive row-major write (stride = tiles_w) would land
+        // row 1 at vram[2]/vram[3] instead of the fixed 128-word HDMA stride.
+        let s = M7Source {
+            options: M7Options::default(),
+            palette: vec![0x001f],
+            tiles: vec![[0u8; 64]; 4],
+            tiles_w: 2,
+            tiles_h: 2,
+            map: vec![0, 1, 1, 0],
+        };
+        let mut mem = Memory::new();
+        place_m7(&s, &mut mem);
+        assert_eq!(mem.vram[128] & 0x00ff, 1); // row 1, col 0 = map[2]
+        assert_eq!(mem.vram[129] & 0x00ff, 0); // row 1, col 1 = map[3]
+        assert_eq!(mem.vram[2] & 0x00ff, 0); // not aliased to a stride-2 write
     }
 
     #[test]
