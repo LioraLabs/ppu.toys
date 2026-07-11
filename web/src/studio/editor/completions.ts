@@ -11,6 +11,7 @@ const GLOBALS: Completion[] = [
   { label: "bg", type: "variable", detail: "bg[1..4] layers — scroll/map/char_base/tile_size/mosaic…" },
   { label: "m7", type: "variable", detail: "Mode 7 .a .b .c .d .cx .cy .extbg · $211A-$2120" },
   { label: "color", type: "variable", detail: "color math .op .half .on .addend .region .fixed · CGWSEL/CGADSUB/COLDATA $2130-$2132" },
+  { label: "screen", type: "variable", detail: "screen designation .main .sub (.bg1..bg4 .obj) · TM/TS $212C-$212D" },
   { label: "cgram", type: "variable", detail: "cgram[0..255] palette, 15-bit BGR · $2121/$2122" },
   { label: "vram", type: "variable", detail: "vram[0..0x7FFF] raw 16-bit words · $2116-$2119" },
   { label: "obj", type: "variable", detail: "obj[0..127] sprites; obj.sheet · OAM, OBSEL $2101" },
@@ -126,6 +127,21 @@ const COLOR_ON_MEMBERS: Completion[] = [
   { label: "backdrop", type: "property", detail: "bool math enable · CGADSUB.5 $2131" },
 ];
 
+/** screen.* members (friendly screen-designation namespace). */
+const SCREEN_MEMBERS: Completion[] = [
+  { label: "main", type: "property", detail: ".bg1..bg4 .obj main-screen enables · TM $212C" },
+  { label: "sub", type: "property", detail: ".bg1..bg4 .obj sub-screen enables · TS $212D" },
+];
+
+/** screen.main.* / screen.sub.* per-layer enables. */
+const SCREEN_LAYER_MEMBERS: Completion[] = [
+  { label: "bg1", type: "property", detail: "bool layer enable · TM/TS.0" },
+  { label: "bg2", type: "property", detail: "bool layer enable · TM/TS.1" },
+  { label: "bg3", type: "property", detail: "bool layer enable · TM/TS.2" },
+  { label: "bg4", type: "property", detail: "bool layer enable · TM/TS.3" },
+  { label: "obj", type: "property", detail: "bool layer enable · TM/TS.4" },
+];
+
 function memberOptions(text: string): Completion[] {
   if (text.startsWith("bg")) return BG_MEMBERS;
   if (/^obj\s*\[/.test(text)) return OBJ_SPRITE_MEMBERS;
@@ -133,6 +149,8 @@ function memberOptions(text: string): Completion[] {
   if (text.startsWith("math")) return MATH_MEMBERS;
   if (/^color\s*\.\s*on/.test(text)) return COLOR_ON_MEMBERS;
   if (text.startsWith("color")) return COLOR_MEMBERS;
+  if (/^screen\s*\.\s*(?:main|sub)/.test(text)) return SCREEN_LAYER_MEMBERS;
+  if (text.startsWith("screen")) return SCREEN_MEMBERS;
   return M7_MEMBERS;
 }
 
@@ -143,7 +161,7 @@ export function ppuCompletions(ctx: CompletionContext): CompletionResult | null 
   // complete as obj/bg (nested-bracket indices like bg[t[1]] degrade to the
   // plain-globals path — acceptable)
   const member = ctx.matchBefore(
-    /(?<![\w.\]])((?:bg|obj)\s*\[[^\]]*\]|math|obj|m7|color\s*\.\s*on|color)\s*\.\w*/,
+    /(?<![\w.\]])((?:bg|obj)\s*\[[^\]]*\]|math|obj|m7|color\s*\.\s*on|color|screen\s*\.\s*(?:main|sub)|screen)\s*\.\w*/,
   );
   if (member) {
     const from = member.from + member.text.lastIndexOf(".") + 1;
