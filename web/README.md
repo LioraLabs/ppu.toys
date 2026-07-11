@@ -94,6 +94,29 @@ shipped as `main.lua` (`frame()`, references `SPEED` and `dusk_palette`) +
 split renders byte-identical to the single-file concatenation
 (`dusk_concat()` = `main.lua` source + `"\n"` + `palette.lua` source).
 
+## The Lua DSL: two tiers
+
+The authoring surface is two-tier by design:
+
+- **Friendly namespaces** — `bg[n]`/`obj`/`m7` plus the compositing trio
+  `screen` (TM/TS main/sub layer designation), `color` (CGWSEL/CGADSUB/COLDATA
+  colour math) and `win` (WH0-3, W12SEL/W34SEL/WOBJSEL, WBGLOG/WOBJLOG,
+  TMW/TSW windowing) — are the **primary** authoring and codegen surface.
+  Fields are per-bit-group (`screen.main.bg1 = true`, `color.op = "add"`,
+  `win.w1.lo = 40`), so a write moves only the bits it names; the core packs
+  them into the real registers (`crates/ppu-core/src/lua.rs`), preserving
+  neighboring bits. The bundled demos author compositing this way.
+- **Raw hardware mnemonics** (`TM = 0x03`, `CGADSUB = 0x41`, `WH0 = 10`, …)
+  are the kept low-level layer: whole-register byte writes, always valid,
+  never going away — they are the pedagogy bridge to real SNES docs and the
+  escape hatch for the few register bits no friendly field owns (e.g. CGWSEL's
+  bits 6-7 clip-to-black, used raw by the spotlight demo). The Registers
+  inspector tab stays raw-truth: hardware names + `$21xx` addresses.
+
+Both tiers write the same registers and can be mixed freely in one script;
+friendly namespaces fold last in `read_state`, and each folds only the bits
+its fields moved.
+
 ## Inspector map
 
 `web/src/studio/inspector/tabs.ts` defines the M9 done-gate tab set — the full
@@ -119,10 +142,18 @@ friendly field assignments (`color.op = "sub"`, `screen.main.bg1 = true`,
 `win.w1.lo = 40`) where the field is the poke's identity, so each touched
 field owns its line and neighboring bits are preserved by the core's namespace
 fold, and raw whole-register writes (`TM = 0x13`) — the register-readout hex
-editor still pokes raw. `parsePokes` is dialect-agnostic. Mixed dialects obey
-the core's fold order: the friendly namespaces fold last in `read_state`, so
-on overlapping bits a friendly poke wins over a raw same-register poke in the
-same frame. The FILE is the source of truth: every poke rewrites the
+editor still pokes raw. Which dialect NEW pokes emit is the **POKE AS
+friendly|raw** toggle (`DialectToggle`, `inspector/compose/chrome.tsx`, shown
+in the Compose/Windows tabs and the Compositor overlay) — default friendly,
+persisted at localStorage `ppu.toys:poke-dialect`
+(`inspector/compose/dialect.ts`). Emission-only: `parsePokes` is
+dialect-agnostic, so a saved `pokes.lua` in either or mixed dialect still
+loads. The two dialects never coexist on one register: writing a poke evicts
+the other dialect's pokes for that same register (`evictCrossDialect`,
+`inspector/compose/model.ts`) — so re-poking a control after flipping the
+toggle migrates its line to the current dialect, and a raw `CGADSUB = 0x80`
+never lingers under a friendly `color.op = "add"` that would silently win at
+fold time. The FILE is the source of truth: every poke rewrites the
 whole generated `apply_pokes()` function body, entries sorted by lvalue for
 byte-stable output. Script wins by convention, not by a separate override
 layer: `apply_pokes()` runs as `frame()`'s first line (every bundled demo and
@@ -150,7 +181,11 @@ first (empty, read-only) then `main.lua` (and, for `dusk-parallax`,
 files joined tab-order with `"\n"`, kept for the single-string call sites.
 Each demo's `main.lua` calls `apply_pokes()` as `frame()`'s first line, same
 as the new-sketch template, so poking a demo behaves exactly like poking a
-sketch (see Pokes above). Each demo's procedural pixel assets (raw RGBA,
+sketch (see Pokes above). Demo sources author compositing in the friendly
+dialect (`screen`/`color`/`win`) with raw mnemonics only where no friendly
+field exists; the Rust golden tests render the identical sources, so the
+committed PNGs prove the friendly form byte-equals the old raw-register form.
+Each demo's procedural pixel assets (raw RGBA,
 generated in TS mirroring the generators in
 `crates/ppu-core/tests/golden_demos.rs` — tuned for how the demos look on
 screen, not byte-identity with the fixtures) are uploaded into the live core
