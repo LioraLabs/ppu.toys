@@ -476,6 +476,58 @@ pub fn place_obj(src: &ObjSource, mem: &mut Memory, char_base: u16) {
     }
 }
 
+/// Client-facing conversion options; per-kind fields, absent = default.
+/// Extensible: fields irrelevant to a kind are ignored.
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[serde(default)]
+pub struct ConvertOptions {
+    pub bit_depth: Option<u8>,
+    pub tile_size: Option<u8>,
+    pub cell_size: Option<u8>,
+}
+
+/// Pure conversion: quantize + pack an RGBA image into (payload, meta). No
+/// engine state involved — this is the core of the `convertSource` wasm entry.
+pub fn convert_source(
+    kind: SourceKind,
+    opts: &ConvertOptions,
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+) -> Result<(SourcePayload, SourceMeta), String> {
+    if width == 0 || height == 0 || rgba.len() != (width as usize) * (height as usize) * 4 {
+        return Err("imageData dimensions/buffer mismatch".into());
+    }
+    match kind {
+        SourceKind::Bg => {
+            let bit_depth = opts.bit_depth.unwrap_or(4);
+            if !matches!(bit_depth, 2 | 4 | 8) {
+                return Err(format!("bg bit_depth must be 2, 4 or 8 (got {bit_depth})"));
+            }
+            let io = crate::import::ImportOptions {
+                bit_depth,
+                tile_size: opts.tile_size.unwrap_or(8),
+            };
+            let (src, meta) = crate::import::import_tile_bg(rgba, width, height, &io);
+            Ok((SourcePayload::Bg(src), meta))
+        }
+        SourceKind::M7 => {
+            let (src, meta) = crate::import_m7::import_mode7(rgba, width as usize, height as usize);
+            Ok((SourcePayload::M7(src), meta))
+        }
+        SourceKind::Obj => {
+            let cell_size = opts.cell_size.unwrap_or(8);
+            if !matches!(cell_size, 8 | 16 | 32 | 64) {
+                return Err(format!(
+                    "obj cell_size must be 8, 16, 32 or 64 (got {cell_size})"
+                ));
+            }
+            let (src, meta) = crate::import::obj::import_obj_sheet(rgba, width, height, cell_size);
+            Ok((SourcePayload::Obj(src), meta))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -708,5 +760,42 @@ mod tests {
         assert_eq!(mem.vram[0x2000], 0x00ff);
         assert_eq!(mem.cgram[129], 0x001f);
         assert_eq!(mem.cgram[1], 0); // BG half untouched
+    }
+
+    #[test]
+    fn convert_source_rejects_bad_dims() {
+        assert!(convert_source(SourceKind::Bg, &ConvertOptions::default(), &[0; 3], 1, 1).is_err());
+        assert!(convert_source(SourceKind::Bg, &ConvertOptions::default(), &[], 0, 0).is_err());
+    }
+
+    #[test]
+    fn convert_source_bg_defaults_to_4bpp() {
+        let rgba = vec![255u8, 0, 0, 255, 0, 0, 255, 255]; // 2x1
+        let (p, _m) =
+            convert_source(SourceKind::Bg, &ConvertOptions::default(), &rgba, 2, 1).unwrap();
+        assert!(matches!(&p, SourcePayload::Bg(s) if s.bit_depth == 4));
+    }
+
+    #[test]
+    fn convert_source_rejects_bad_bit_depth_and_cell_size() {
+        let rgba = vec![0u8; 4];
+        let bad_bd = ConvertOptions {
+            bit_depth: Some(3),
+            ..Default::default()
+        };
+        assert!(convert_source(SourceKind::Bg, &bad_bd, &rgba, 1, 1).is_err());
+        let bad_cs = ConvertOptions {
+            cell_size: Some(24),
+            ..Default::default()
+        };
+        assert!(convert_source(SourceKind::Obj, &bad_cs, &rgba, 1, 1).is_err());
+    }
+
+    #[test]
+    fn convert_source_obj_meta_has_cells() {
+        let rgba = vec![255u8, 0, 0, 255]; // 1x1
+        let (_p, meta) =
+            convert_source(SourceKind::Obj, &ConvertOptions::default(), &rgba, 1, 1).unwrap();
+        assert!(meta.cells.is_some());
     }
 }
