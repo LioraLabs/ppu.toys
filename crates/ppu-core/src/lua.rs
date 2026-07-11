@@ -588,6 +588,24 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     ctx.set_global("screen", screen).unwrap();
     ctx.set_global("__screen_base", Table::new(&ctx)).unwrap();
     sync_screen(ctx, 0x1f, 0x00); // decode of the playground power-on TM/TS
+
+    // Friendly window namespace over WH0-3, W12SEL/W34SEL/WOBJSEL, WBGLOG/
+    // WOBJLOG, TMW/TSW. Same baseline change-detection pattern as `color`/
+    // `screen` above; `__win_base` records the eleven bytes at each
+    // (re-)baseline. Overlap with `color`: win.color.* selects
+    // WHICH pixels form the color window (WOBJSEL high nibble + a WOBJLOG
+    // slot); WHERE color math is prevented (CGWSEL bits 4-5) stays owned by
+    // color.region. `win` never writes CGWSEL, and the color window has no
+    // TMW/TSW bit.
+    let win = Table::new(&ctx);
+    win.set(ctx, "w1", Table::new(&ctx)).unwrap();
+    win.set(ctx, "w2", Table::new(&ctx)).unwrap();
+    for l in &WIN_LAYERS {
+        win.set(ctx, l.name, Table::new(&ctx)).unwrap();
+    }
+    ctx.set_global("win", win).unwrap();
+    ctx.set_global("__win_base", Table::new(&ctx)).unwrap();
+    sync_win(ctx, &[0u8; 11]); // power-on: every window register is zero
 }
 
 /// Chunk (source file) name a Lua function was compiled from; `None` for
@@ -824,6 +842,192 @@ fn sync_screen(ctx: piccolo::Context<'_>, tm: u8, ts: u8) {
     }
 }
 
+/// Friendly `win` byte order (indexes `WinBytes`, `WIN_BASE_KEYS`,
+/// `WIN_MASKS`): WH0-3, W12SEL, W34SEL, WOBJSEL, WBGLOG, WOBJLOG, TMW, TSW.
+type WinBytes = [u8; 11];
+
+const WIN_BASE_KEYS: [&str; 11] = [
+    "wh0", "wh1", "wh2", "wh3", "w12sel", "w34sel", "wobjsel", "wbglog", "wobjlog", "tmw", "tsw",
+];
+
+/// Bits `win` owns per byte. The WH edges, the three SEL bytes and WBGLOG
+/// are fully covered by friendly fields; WOBJLOG's bits 4-7 are unused by
+/// hardware and TMW/TSW's bits 5-7 likewise — those stay raw-only.
+const WIN_MASKS: WinBytes = [
+    0xff,
+    0xff,
+    0xff,
+    0xff,
+    0xff,
+    0xff,
+    0xff,
+    0xff,
+    0x0f,
+    SCREEN_MASK,
+    SCREEN_MASK,
+];
+
+/// SEL-nibble layout, LSB first: W1 invert, W1 enable, W2 invert, W2 enable
+/// (mirrors ENABLE_BITS/INVERT_BITS in web inspector/compose/model.ts).
+const WIN_W1_ENABLE: u8 = 0x2;
+const WIN_W2_ENABLE: u8 = 0x8;
+const WIN_INVERT_BITS: u8 = 0x5;
+
+/// WBGLOG/WOBJLOG 2-bit slot values, in order.
+const WIN_COMBINE: [&str; 4] = ["OR", "AND", "XOR", "XNOR"];
+
+/// One friendly window layer: its SEL nibble, LOG slot and TMW/TSW bit.
+/// `sel`/`log` offset into the WinBytes SEL (4..=6) / LOG (7..=8) bytes.
+struct WinLayer {
+    name: &'static str,
+    sel: usize,
+    sel_shift: u8,
+    log: usize,
+    log_shift: u8,
+    /// TMW/TSW bit; None for the color window (no mask-enable bit in hw).
+    mask_bit: Option<u8>,
+}
+
+#[rustfmt::skip]
+const WIN_LAYERS: [WinLayer; 6] = [
+    WinLayer { name: "bg1",   sel: 0, sel_shift: 0, log: 0, log_shift: 0, mask_bit: Some(0) },
+    WinLayer { name: "bg2",   sel: 0, sel_shift: 4, log: 0, log_shift: 2, mask_bit: Some(1) },
+    WinLayer { name: "bg3",   sel: 1, sel_shift: 0, log: 0, log_shift: 4, mask_bit: Some(2) },
+    WinLayer { name: "bg4",   sel: 1, sel_shift: 4, log: 0, log_shift: 6, mask_bit: Some(3) },
+    WinLayer { name: "obj",   sel: 2, sel_shift: 0, log: 1, log_shift: 0, mask_bit: Some(4) },
+    WinLayer { name: "color", sel: 2, sel_shift: 4, log: 1, log_shift: 2, mask_bit: None },
+];
+
+/// win.w1/.w2 edge fields in WinBytes order (WH0, WH1, WH2, WH3).
+const WIN_EDGES: [(&str, &str); 4] = [("w1", "lo"), ("w1", "hi"), ("w2", "lo"), ("w2", "hi")];
+
+/// The eleven window-register bytes as of the last install_bindings/
+/// write_state — the baseline the friendly `win` fold diffs against.
+fn read_win_base(ctx: piccolo::Context<'_>) -> WinBytes {
+    let mut out = [0u8; 11];
+    if let Value::Table(t) = ctx.get_global("__win_base") {
+        for (i, k) in WIN_BASE_KEYS.iter().enumerate() {
+            out[i] = t.get(ctx, *k).to_integer().unwrap_or(0) as u8;
+        }
+    }
+    out
+}
+
+/// Pack the friendly `win` table into the eleven register bytes. Any field
+/// that is nil/unrecognized takes its bits from `base` (absent friendly ->
+/// the raw register keeps those bits, i.e. "no change"). The shared invert
+/// pair is base-aware: decode is lossy (either bit set reads true), so an
+/// UNCHANGED bool reproduces the base bits verbatim — only a moved bool
+/// expands to both bits / neither.
+fn pack_win(ctx: piccolo::Context<'_>, base: &WinBytes) -> WinBytes {
+    let mut out = *base;
+    let Value::Table(win) = ctx.get_global("win") else {
+        return out;
+    };
+    let bit = |v: Value<'_>, mask: u8, base_bits: u8| -> u8 {
+        match v {
+            Value::Boolean(true) => mask,
+            Value::Boolean(false) => 0,
+            _ => base_bits & mask,
+        }
+    };
+    for (i, (w, edge)) in WIN_EDGES.iter().enumerate() {
+        if let Value::Table(t) = win.get(ctx, *w) {
+            if let Some(v) = t.get(ctx, *edge).to_integer() {
+                out[i] = v as u8;
+            }
+        }
+    }
+    for l in &WIN_LAYERS {
+        let Value::Table(t) = win.get(ctx, l.name) else {
+            continue;
+        };
+        let sel_i = 4 + l.sel;
+        let base_nib = (base[sel_i] >> l.sel_shift) & 0xf;
+        let mut nib = bit(t.get(ctx, "w1"), WIN_W1_ENABLE, base_nib)
+            | bit(t.get(ctx, "w2"), WIN_W2_ENABLE, base_nib);
+        nib |= match t.get(ctx, "invert") {
+            Value::Boolean(b) if b != (base_nib & WIN_INVERT_BITS != 0) => {
+                if b {
+                    WIN_INVERT_BITS
+                } else {
+                    0
+                }
+            }
+            _ => base_nib & WIN_INVERT_BITS,
+        };
+        out[sel_i] = (out[sel_i] & !(0xf << l.sel_shift)) | (nib << l.sel_shift);
+        let log_i = 7 + l.log;
+        let base_slot = (base[log_i] >> l.log_shift) & 0x3;
+        let slot = value_to_string(t.get(ctx, "combine"))
+            .and_then(|s| WIN_COMBINE.iter().position(|c| *c == s))
+            .map_or(base_slot, |p| p as u8);
+        out[log_i] = (out[log_i] & !(0x3 << l.log_shift)) | (slot << l.log_shift);
+        if let Some(b) = l.mask_bit {
+            let m = 1u8 << b;
+            out[9] = (out[9] & !m) | bit(t.get(ctx, "main"), m, base[9]);
+            out[10] = (out[10] & !m) | bit(t.get(ctx, "sub"), m, base[10]);
+        }
+    }
+    out
+}
+
+/// Unpack the window registers into the friendly `win` fields (mirror live
+/// values so hooks can read them — HDMA persistence, matching `color`/
+/// `screen`) and record the bytes in `__win_base` for read_state's change
+/// detection. Shared decode: `invert` reads true if EITHER invert bit is set.
+fn sync_win(ctx: piccolo::Context<'_>, bytes: &WinBytes) {
+    if let Value::Table(win) = ctx.get_global("win") {
+        for (i, (w, edge)) in WIN_EDGES.iter().enumerate() {
+            if let Value::Table(t) = win.get(ctx, *w) {
+                t.set(ctx, *edge, bytes[i] as i64).unwrap();
+            }
+        }
+        for l in &WIN_LAYERS {
+            let Value::Table(t) = win.get(ctx, l.name) else {
+                continue;
+            };
+            let nib = (bytes[4 + l.sel] >> l.sel_shift) & 0xf;
+            t.set(ctx, "w1", nib & WIN_W1_ENABLE != 0).unwrap();
+            t.set(ctx, "w2", nib & WIN_W2_ENABLE != 0).unwrap();
+            t.set(ctx, "invert", nib & WIN_INVERT_BITS != 0).unwrap();
+            let slot = (bytes[7 + l.log] >> l.log_shift) & 0x3;
+            t.set(
+                ctx,
+                "combine",
+                ctx.intern(WIN_COMBINE[slot as usize].as_bytes()),
+            )
+            .unwrap();
+            if let Some(b) = l.mask_bit {
+                t.set(ctx, "main", bytes[9] & (1 << b) != 0).unwrap();
+                t.set(ctx, "sub", bytes[10] & (1 << b) != 0).unwrap();
+            }
+        }
+    }
+    if let Value::Table(base) = ctx.get_global("__win_base") {
+        for (i, k) in WIN_BASE_KEYS.iter().enumerate() {
+            base.set(ctx, *k, bytes[i] as i64).unwrap();
+        }
+    }
+}
+
+/// The eleven `win`-owned bytes of a row, in WinBytes order.
+fn row_win_bytes(row: &LineTableRow) -> WinBytes {
+    [
+        row.wh0,
+        row.wh1,
+        row.wh2,
+        row.wh3,
+        row.w12sel,
+        row.w34sel,
+        row.wobjsel,
+        row.wbglog,
+        row.wobjlog,
+        row.tmw,
+        row.tsw,
+    ]
+}
+
 /// Read the per-scanline register globals into a `LineTableRow`. Missing globals
 /// keep their `LineTableRow::default()` value (sticky semantics).
 fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
@@ -886,6 +1090,30 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
     if let Some(v) = ctx.get_global("TSW").to_integer() {
         row.tsw = v as u8;
     }
+    // Friendly `win.*` fold — same coexistence contract as the `screen`/
+    // `color` folds: XOR the packed friendly bytes against the `__win_base`
+    // baseline recorded by install_bindings/write_state; only bits the user
+    // moved through `win` override the raw mnemonics (set AND clear, and
+    // beat a same-cycle raw write), masked so raw-only bits (WOBJLOG 4-7,
+    // TMW/TSW 5-7) pass through untouched.
+    let wbase = read_win_base(ctx);
+    let fwin = pack_win(ctx, &wbase);
+    let mut wrow = row_win_bytes(&row);
+    for (i, b) in wrow.iter_mut().enumerate() {
+        let changed = (fwin[i] ^ wbase[i]) & WIN_MASKS[i];
+        *b = (*b & !changed) | (fwin[i] & changed);
+    }
+    row.wh0 = wrow[0];
+    row.wh1 = wrow[1];
+    row.wh2 = wrow[2];
+    row.wh3 = wrow[3];
+    row.w12sel = wrow[4];
+    row.w34sel = wrow[5];
+    row.wobjsel = wrow[6];
+    row.wbglog = wrow[7];
+    row.wobjlog = wrow[8];
+    row.tmw = wrow[9];
+    row.tsw = wrow[10];
     if let Some(v) = ctx.get_global("CGWSEL").to_integer() {
         row.cgwsel = v as u8;
     }
@@ -1006,6 +1234,7 @@ fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
     ctx.set_global("WOBJLOG", row.wobjlog as i64).unwrap();
     ctx.set_global("TMW", row.tmw as i64).unwrap();
     ctx.set_global("TSW", row.tsw as i64).unwrap();
+    sync_win(ctx, &row_win_bytes(row));
     ctx.set_global("CGWSEL", row.cgwsel as i64).unwrap();
     ctx.set_global("CGADSUB", row.cgadsub as i64).unwrap();
     ctx.set_global("COLDATA", row.coldata as i64).unwrap();
