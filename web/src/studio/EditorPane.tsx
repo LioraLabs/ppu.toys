@@ -59,9 +59,7 @@ export function EditorPane({ onSources }: EditorPaneProps) {
   // a lazy fork (same session, same live assets) does not reload anything.
   useEffect(() => {
     let cancelled = false;
-    restoreOpenContext(openSketchStore.state().context, () => cancelled).catch((e) =>
-      console.error("asset restore failed", e),
-    );
+    restoreOpenContext(openSketchStore.state().context, () => cancelled);
     return () => {
       cancelled = true;
     };
