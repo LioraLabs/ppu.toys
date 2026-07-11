@@ -13,6 +13,9 @@ import {
   PlaneId,
   BgTrace,
   ObjTrace,
+  SourceKind,
+  ConvertSourceOptions,
+  ConvertSourceResult,
 } from "./core";
 
 /** The slice of the wasm-bindgen core the adapter calls. Extracted so the adapter
@@ -43,6 +46,8 @@ export interface WasmCoreLike {
   traceBgPixel(layer: number, x: number, y: number): unknown;
   traceBgTile(layer: number, tx: number, ty: number, y: number): unknown;
   traceObj(index: number): unknown;
+  convertSource(kind: SourceKind, options: ConvertSourceOptions, imageData: ImageData): unknown;
+  addSource(name: string, payload: Uint8Array): unknown;
 }
 
 /** Adapt a wasm-bindgen core to the PpuCore seam. Pure (no wasm load) so it can be
@@ -101,6 +106,12 @@ export function wrapWasmCore(core: WasmCoreLike): PpuCore {
     },
     traceObj(index: number): ObjTrace | null {
       return (core.traceObj(index) as ObjTrace | null | undefined) ?? null;
+    },
+    convertSource(kind: SourceKind, options: ConvertSourceOptions, imageData: ImageData): ConvertSourceResult {
+      return core.convertSource(kind, options, imageData) as ConvertSourceResult;
+    },
+    addSource(name: string, payload: Uint8Array) {
+      return core.addSource(name, payload) as { ok: boolean; error?: string };
     },
   };
 }

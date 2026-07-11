@@ -76,6 +76,44 @@ export type ImportReport =
   | { mode: "m7"; layer: number; report: Mode7ImportBudget }
   | { mode: "obj"; report: TileImportBudget };
 
+export type SourceKind = "bg" | "m7" | "obj";
+
+/** Format-commit options for convertSource. bg: bit_depth (default 4);
+ *  obj: cell_size — the OBJ size one obj[i].tile addresses (default 8);
+ *  m7: none in v1 (the payload's options block is extensible for a later 7bpp+priority variant). */
+export interface ConvertSourceOptions {
+  bit_depth?: 2 | 4 | 8;
+  tile_size?: 8;
+  cell_size?: 8 | 16 | 32 | 64;
+}
+
+/** One source cell's resolved OBJ attributes (obj sources). */
+export interface ObjCellMeta {
+  tile: number;
+  pal: number;
+  flip_x: boolean;
+  flip_y: boolean;
+}
+
+/** Authoring-time budget snapshot — ImportReport minus the bind-time `layer`. */
+export type SourceReport =
+  | { mode: "tile"; report: TileImportBudget }
+  | { mode: "m7"; report: Mode7ImportBudget }
+  | { mode: "obj"; report: TileImportBudget };
+
+/** Travels alongside a payload, never inside it. */
+export interface SourceMeta {
+  width: number;
+  height: number;
+  report: SourceReport;
+  cells?: ObjCellMeta[];
+}
+
+export interface ConvertSourceResult {
+  payload: Uint8Array;
+  meta: SourceMeta;
+}
+
 export interface FrameResult {
   framebuffer: Uint8ClampedArray; // 256*224*4 RGBA
   registers: RegisterView[];
@@ -185,6 +223,10 @@ export interface PpuCore {
   traceBgTile(layer: number, tx: number, ty: number, y: number): BgTrace | null;
   /** Trace OAM sprite index (0..127). */
   traceObj(index: number): ObjTrace | null;
+  /** Pure quantize+pack: image -> versioned source payload + meta. No engine mutation. */
+  convertSource(kind: SourceKind, options: ConvertSourceOptions, imageData: ImageData): ConvertSourceResult;
+  /** Decode + register a payload for rendering under `name` (source-store stub, M10). */
+  addSource(name: string, payload: Uint8Array): { ok: boolean; error?: string };
 }
 
 export const WIDTH = 256;

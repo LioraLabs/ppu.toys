@@ -13,6 +13,9 @@ import {
   PlaneId,
   BgTrace,
   ObjTrace,
+  SourceKind,
+  ConvertSourceOptions,
+  ConvertSourceResult,
 } from "./core";
 
 /** Animated placeholder PpuCore for the UI track. Runs no Lua — it synthesizes
@@ -274,6 +277,25 @@ export class MockPpuCore implements PpuCore {
       paletteBase: 128 + oam.pal * 16,
       palette: Array.from({ length: 16 }, (_, i) => (i * 0x421) & 0x7fff),
     };
+  }
+
+  /** The mock renders no real sources — a minimal honest stub. */
+  convertSource(_kind: SourceKind, _options: ConvertSourceOptions, _imageData: ImageData): ConvertSourceResult {
+    return {
+      payload: new Uint8Array([1]),
+      meta: {
+        width: 0,
+        height: 0,
+        report: {
+          mode: "tile",
+          report: { colors_used: 0, palettes_used: 0, tile_cells: 0, unique_tiles: 0, vram_words: 0, overflows: [] },
+        },
+      },
+    };
+  }
+
+  addSource(_name: string, _payload: Uint8Array): { ok: boolean; error?: string } {
+    return { ok: true };
   }
 }
 

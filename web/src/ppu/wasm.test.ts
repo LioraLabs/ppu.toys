@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { wrapWasmCore, type WasmCoreLike } from "./wasm";
 import type { ImportReport, SourceFile } from "./core";
 import type { BgTrace } from "./core";
+import type { ConvertSourceResult } from "./core";
 
 function fakeCore(over: Partial<WasmCoreLike> = {}): WasmCoreLike {
   return {
@@ -25,6 +26,18 @@ function fakeCore(over: Partial<WasmCoreLike> = {}): WasmCoreLike {
     traceBgPixel: () => null,
     traceBgTile: () => null,
     traceObj: () => null,
+    convertSource: () => ({
+      payload: new Uint8Array(),
+      meta: {
+        width: 0,
+        height: 0,
+        report: {
+          mode: "tile",
+          report: { colors_used: 0, palettes_used: 0, tile_cells: 0, unique_tiles: 0, vram_words: 0, overflows: [] },
+        },
+      },
+    }),
+    addSource: () => ({ ok: true }),
     ...over,
   };
 }
@@ -140,5 +153,33 @@ describe("wrapWasmCore view seams", () => {
     expect(none.traceBgPixel(1, 0, 0)).toBeNull();
     expect(none.traceBgTile(1, 0, 0, 0)).toBeNull();
     expect(none.traceObj(0)).toBeNull();
+  });
+
+  it("forwards convertSource and addSource through the adapter", () => {
+    const calls: unknown[] = [];
+    const result: ConvertSourceResult = {
+      payload: new Uint8Array([1, 0]),
+      meta: {
+        width: 2,
+        height: 1,
+        report: {
+          mode: "tile",
+          report: { colors_used: 0, palettes_used: 0, tile_cells: 0, unique_tiles: 0, vram_words: 0, overflows: [] },
+        },
+      },
+    };
+    const ppu = wrapWasmCore(
+      fakeCore({
+        convertSource: (k, o, img) => {
+          calls.push([k, o, img]);
+          return result;
+        },
+        addSource: () => ({ ok: false, error: "bad" }),
+      }),
+    );
+    const r = ppu.convertSource("bg", { bit_depth: 4 }, {} as ImageData);
+    expect(r.payload).toEqual(new Uint8Array([1, 0]));
+    expect(calls).toEqual([["bg", { bit_depth: 4 }, {}]]);
+    expect(ppu.addSource("x", new Uint8Array())).toEqual({ ok: false, error: "bad" });
   });
 });
