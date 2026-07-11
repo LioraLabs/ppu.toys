@@ -144,6 +144,41 @@ export function evictCrossDialect(existing: readonly Poke[], incoming: readonly 
   });
 }
 
+/** Rewrite every dual-dialect compositing poke into `dialect`, preserving the
+ *  resulting register bytes (computed over power-on defaults, NOT live state).
+ *  Non-dual pokes (cgram[...], vram[...], m7.*, bg[...], scalars) pass through
+ *  untouched. friendly output emits ALL owned fields per byte (whole-register
+ *  fidelity; sparse output is a deferred refinement). Note win.<id>.invert is
+ *  lossy — both invert bits collapse to one field. */
+export function regeneratePokes(pokes: readonly Poke[], dialect: PokeDialect): Poke[] {
+  const passthrough: Poke[] = [];
+  const bytes = new Map<number, number>();
+  const ensure = (addr: number) =>
+    bytes.get(addr) ?? bytes.set(addr, POWER_ON.get(addr) ?? 0).get(addr)!;
+  for (const p of pokes) {
+    const t = pokeTarget(p);
+    if (!t) { passthrough.push(p); continue; }
+    if (t.raw) bytes.set(t.addr, Number(p.expr));
+    else {
+      const spec = FIELD_SPECS.get(p.lvalue)!;
+      const v = parseFieldExpr(p.expr);
+      if (v !== null) bytes.set(t.addr, spec.encode(ensure(t.addr), v));
+    }
+  }
+  const out: Poke[] = [];
+  for (const [addr, value] of bytes) {
+    if (dialect === "raw") { out.push(regPoke(addr, value)); continue; }
+    const read: ReadReg = (a) => (a === addr ? value : POWER_ON.get(a) ?? 0);
+    for (const [field, spec] of FIELD_SPECS) {
+      if (spec.addr !== addr) continue;
+      const decoded = spec.live(read);
+      const expr = WH_FIELDS[addr] === field ? String(decoded) : formatFieldValue(decoded);
+      out.push({ lvalue: field, expr, note: `$${addr.toString(16).toUpperCase()}` });
+    }
+  }
+  return [...passthrough, ...out];
+}
+
 // Canonical friendly-dialect RHS forms, used by the field-write emitters below.
 const bool = (b: boolean) => (b ? "true" : "false");
 const str = (s: string) => `"${s}"`;

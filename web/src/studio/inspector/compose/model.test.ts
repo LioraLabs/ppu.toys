@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RegisterView } from "../../../ppu/core";
-import { parsePokes, pokesToLua } from "../../pokes/pokes";
+import { parsePokes, pokesToLua, type Poke } from "../../pokes/pokes";
 import {
   ADDEND_FIELDS,
   BACKDROP_MATH_BIT,
@@ -33,6 +33,7 @@ import {
   nearestEdgeAddr,
   pokeMatchesLive,
   pokesAt,
+  regeneratePokes,
   regPoke,
   setArea,
   setCombine,
@@ -519,5 +520,46 @@ describe("FIELD_SPECS encode/live round-trip", () => {
     // "40". Using 5 here (<=9) actually exercises the decimal branch; see the
     // task-completion report for the full discrepancy writeup.
     expect(formatFieldValue(5)).toBe("5");
+  });
+});
+
+describe("regeneratePokes", () => {
+  it("friendly -> raw aggregates fields into one whole-register byte", () => {
+    const src: Poke[] = [
+      { lvalue: "color.op", expr: '"sub"' },
+      { lvalue: "color.half", expr: "true" },
+      { lvalue: "color.on.bg1", expr: "true" },
+    ];
+    expect(regeneratePokes(src, "raw")).toEqual([
+      { lvalue: "CGADSUB", expr: "0xc1", note: "$2131" },
+    ]);
+  });
+
+  it("raw -> friendly decodes the byte into all owned fields", () => {
+    const out = regeneratePokes([{ lvalue: "CGADSUB", expr: "0xc1" }], "friendly");
+    expect(out).toEqual(expect.arrayContaining([
+      { lvalue: "color.op", expr: '"sub"', note: "$2131" },
+      { lvalue: "color.half", expr: "true", note: "$2131" },
+      { lvalue: "color.on.bg1", expr: "true", note: "$2131" },
+    ]));
+  });
+
+  it("passes non-dual pokes through untouched", () => {
+    const keep: Poke[] = [{ lvalue: "cgram[0x41]", expr: "0x1f" }, { lvalue: "m7.a", expr: "1" }];
+    expect(regeneratePokes(keep, "raw")).toEqual(keep);
+  });
+
+  it("is idempotent when already in the target dialect", () => {
+    const raw: Poke[] = [{ lvalue: "TM", expr: "0x03", note: "$212C" }];
+    expect(regeneratePokes(raw, "raw")).toEqual(raw);
+  });
+
+  it("WH-edge fields regenerate decimally in both directions (hex/decimal distinction)", () => {
+    const friendly: Poke[] = [{ lvalue: "win.w1.lo", expr: "40" }];
+    const raw = regeneratePokes(friendly, "raw");
+    expect(raw).toEqual([{ lvalue: "WH0", expr: "0x28", note: "$2126" }]);
+    expect(regeneratePokes(raw, "friendly")).toEqual([
+      { lvalue: "win.w1.lo", expr: "40", note: "$2126" },
+    ]);
   });
 });
