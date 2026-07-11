@@ -1,12 +1,11 @@
 import { useCallback, useRef, useState } from "react";
 import type { ChangeEvent, DragEvent } from "react";
-import { transport } from "../transport/transport";
 import { useAssets } from "../assets/useAssets";
 
 /** LIVE OUTPUT drop zone: PNG → quantized into VRAM tiles + a CGRAM
  *  sub-palette via the existing importer (useAssets → transport.uploadTexture). */
 export function DropZone() {
-  const { error, addFiles } = useAssets(transport.uploadTexture);
+  const { error, addFiles } = useAssets();
   const [over, setOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 

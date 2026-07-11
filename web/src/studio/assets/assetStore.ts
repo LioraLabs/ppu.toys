@@ -29,21 +29,3 @@ export function assetId(filename: string, taken: Iterable<string>): string {
   while (used.has(`${base}_${n}`)) n++;
   return `${base}_${n}`;
 }
-
-/** Register a decoded image: mint an id, push its pixels into VRAM via the
- *  supplied uploader, and return the Asset record for the UI list. */
-export function registerAsset(
-  upload: (slot: string, image: ImageData) => void,
-  existing: Asset[],
-  decoded: DecodedImage,
-): Asset {
-  const id = assetId(decoded.name, existing.map((a) => a.id));
-  upload(id, decoded.imageData);
-  return {
-    id,
-    name: decoded.name,
-    width: decoded.imageData.width,
-    height: decoded.imageData.height,
-    preview: decoded.preview,
-  };
-}
