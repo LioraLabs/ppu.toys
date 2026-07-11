@@ -12,7 +12,7 @@ import {
   mathHalf,
   mathOp,
   tintMathRegion,
-  toggleMaskBit,
+  toggleDesignation,
   withMathAddend,
   withMathHalf,
   withMathOp,
@@ -104,8 +104,8 @@ export function AssignmentMatrix({ c }: { c: Compositor }) {
   const tm = c.read(REG.TM);
   const ts = c.read(REG.TS);
   const adsub = c.read(REG.CGADSUB);
-  const toggle = (addr: number, current: number, bit: number) => {
-    const w = toggleMaskBit(addr, current, bit);
+  const toggle = (field: string, addr: number, current: number, bit: number) => {
+    const w = toggleDesignation(field, addr, current, bit);
     c.write(w.addr, w.value);
   };
   return (
@@ -131,13 +131,13 @@ export function AssignmentMatrix({ c }: { c: Compositor }) {
             <span className="cmp-ldot" style={{ background: l.color }} />
             {l.label}
           </span>
-          <MatrixCell layer={l.label} kind="main" on={(tm & (1 << l.bit)) !== 0} onToggle={() => toggle(REG.TM, tm, l.bit)} />
-          <MatrixCell layer={l.label} kind="sub" on={(ts & (1 << l.bit)) !== 0} onToggle={() => toggle(REG.TS, ts, l.bit)} />
+          <MatrixCell layer={l.label} kind="main" on={(tm & (1 << l.bit)) !== 0} onToggle={() => toggle(`screen.main.${l.id}`, REG.TM, tm, l.bit)} />
+          <MatrixCell layer={l.label} kind="sub" on={(ts & (1 << l.bit)) !== 0} onToggle={() => toggle(`screen.sub.${l.id}`, REG.TS, ts, l.bit)} />
           <MatrixCell
             layer={l.label}
             kind="math"
             on={(adsub & (1 << l.bit)) !== 0}
-            onToggle={() => toggle(REG.CGADSUB, adsub, l.bit)}
+            onToggle={() => toggle(`color.on.${l.id}`, REG.CGADSUB, adsub, l.bit)}
           />
         </div>
       ))}
@@ -152,7 +152,7 @@ export function AssignmentMatrix({ c }: { c: Compositor }) {
           layer="Backdrop"
           kind="math"
           on={(adsub & (1 << BACKDROP_MATH_BIT)) !== 0}
-          onToggle={() => toggle(REG.CGADSUB, adsub, BACKDROP_MATH_BIT)}
+          onToggle={() => toggle("color.on.backdrop", REG.CGADSUB, adsub, BACKDROP_MATH_BIT)}
         />
       </div>
     </div>

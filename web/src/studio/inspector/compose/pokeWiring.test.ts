@@ -4,7 +4,7 @@ import type { RegisterView } from "../../../ppu/core";
 import { openSketchStore, openContextFiles } from "../../sketches/openSketch";
 import { POKES_FILE } from "../../pokes/pokes";
 import { currentPokes, poke, pokeMany } from "../../pokes/pokeStore";
-import { REG, liveReg, pokeMatchesLive, regPoke, toggleMaskBit } from "./model";
+import { REG, liveReg, pokeMatchesLive, regPoke, toggleDesignation } from "./model";
 
 /** Logic-level wiring tests: the compose/windows control handlers are
  *  (decode via liveReg) -> (encode via the model helpers) -> poke(regPoke(...)).
@@ -27,7 +27,7 @@ describe("poke wiring", () => {
   it("a matrix-cell toggle lands the right TM line in pokes.lua", () => {
     // the handler: read live TM (power-on fallback), flip one bit, poke whole reg
     const tm = liveReg([], REG.TM); // mock core omits TM -> 0x1f
-    const w = toggleMaskBit(REG.TM, tm, 2);
+    const w = toggleDesignation("screen.main.bg3", REG.TM, tm, 2);
     poke(regPoke(w.addr, w.value));
     expect(pokesSource()).toContain("  TM = 0x1b -- $212C");
     expect(currentPokes(openSketchStore.state())).toEqual([

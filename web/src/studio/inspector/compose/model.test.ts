@@ -26,8 +26,12 @@ import {
   regPoke,
   setArea,
   setCombine,
+  setFixedColor,
+  setMathAddend,
+  setMathHalf,
+  setMathOp,
   tintMathRegion,
-  toggleMaskBit,
+  toggleDesignation,
   toggleWindowEnable,
   toggleWindowInvert,
   windowBounds,
@@ -100,11 +104,6 @@ describe("compose matrix + color math", () => {
     expect(BACKDROP_MATH_BIT).toBe(5);
   });
 
-  it("toggleMaskBit flips exactly one designation bit", () => {
-    expect(toggleMaskBit(REG.TM, 0x17, 1)).toEqual({ addr: REG.TM, value: 0x15 });
-    expect(toggleMaskBit(REG.CGADSUB, 0x00, 5)).toEqual({ addr: REG.CGADSUB, value: 0x20 });
-  });
-
   it("decodes and re-encodes CGADSUB op/half without touching enable bits", () => {
     expect(mathOp(0x3f)).toBe("add");
     expect(mathOp(0xbf)).toBe("sub");
@@ -136,6 +135,33 @@ describe("compose matrix + color math", () => {
     expect(hexToBgr555("#ffffff")).toBe(0x7fff);
     expect(hexToBgr555("#0d2a3a")).toBe((7 << 10) | (5 << 5) | 1);
     expect(FIXED_COLOR_SWATCHES).toHaveLength(6);
+  });
+});
+
+describe("compose field emitters", () => {
+  it("toggleDesignation flips one bit and states the new value as a bool field", () => {
+    expect(toggleDesignation("screen.main.bg2", REG.TM, 0x17, 1)).toEqual({
+      field: "screen.main.bg2", expr: "false", addr: REG.TM, value: 0x15,
+    });
+    expect(toggleDesignation("color.on.backdrop", REG.CGADSUB, 0x00, 5)).toEqual({
+      field: "color.on.backdrop", expr: "true", addr: REG.CGADSUB, value: 0x20,
+    });
+  });
+
+  it("setMathOp / setMathHalf write CGADSUB preserving the enable bits", () => {
+    expect(setMathOp("sub", 0x3f)).toEqual({ field: "color.op", expr: '"sub"', addr: REG.CGADSUB, value: 0xbf });
+    expect(setMathOp("add", 0xbf)).toEqual({ field: "color.op", expr: '"add"', addr: REG.CGADSUB, value: 0x3f });
+    expect(setMathHalf(true, 0x3f)).toEqual({ field: "color.half", expr: "true", addr: REG.CGADSUB, value: 0x7f });
+  });
+
+  it("setMathAddend writes CGWSEL bit1 only (direct_color + clip + region preserved)", () => {
+    expect(setMathAddend("sub", 0xf1)).toEqual({ field: "color.addend", expr: '"sub"', addr: REG.CGWSEL, value: 0xf3 });
+    expect(setMathAddend("fixed", 0xf3)).toEqual({ field: "color.addend", expr: '"fixed"', addr: REG.CGWSEL, value: 0xf1 });
+  });
+
+  it("setFixedColor emits 15-bit hex COLDATA", () => {
+    expect(setFixedColor(0x7fff)).toEqual({ field: "color.fixed", expr: "0x7fff", addr: REG.COLDATA, value: 0x7fff });
+    expect(setFixedColor(0)).toEqual({ field: "color.fixed", expr: "0x0000", addr: REG.COLDATA, value: 0 });
   });
 });
 

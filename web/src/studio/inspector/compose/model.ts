@@ -114,8 +114,6 @@ export function writesToPokes(writes: readonly FieldWrite[], dialect: PokeDialec
 // by the emitters in a later task).
 const bool = (b: boolean) => (b ? "true" : "false");
 const str = (s: string) => `"${s}"`;
-void bool;
-void str;
 
 // ── Compose: screen assignment + color math ─────────────────────────────────
 
@@ -138,9 +136,10 @@ export const COMPOSE_LAYERS: ComposeLayer[] = [
 /** CGADSUB bit 5 — backdrop math enable (the matrix Backdrop row). */
 export const BACKDROP_MATH_BIT = 5;
 
-/** Flip one designation bit, preserving the rest of the register. */
-export function toggleMaskBit(addr: number, current: number, bit: number): RegWrite {
-  return { addr, value: current ^ (1 << bit) };
+/** Flip one TM/TS/CGADSUB designation bit as a friendly bool field write. */
+export function toggleDesignation(field: string, addr: number, current: number, bit: number): FieldWrite {
+  const on = (current & (1 << bit)) === 0;
+  return { field, expr: bool(on), addr, value: current ^ (1 << bit) };
 }
 
 export type MathOp = "add" | "sub";
@@ -171,6 +170,27 @@ export function mathAddend(cgwsel: number): MathAddend {
 
 export function withMathAddend(cgwsel: number, addend: MathAddend): number {
   return addend === "sub" ? cgwsel | 0x02 : cgwsel & ~0x02;
+}
+
+export function setMathOp(op: MathOp, cgadsub: number): FieldWrite {
+  return { field: "color.op", expr: str(op), addr: REG.CGADSUB, value: withMathOp(cgadsub, op) };
+}
+
+export function setMathHalf(half: boolean, cgadsub: number): FieldWrite {
+  return { field: "color.half", expr: bool(half), addr: REG.CGADSUB, value: withMathHalf(cgadsub, half) };
+}
+
+export function setMathAddend(addend: MathAddend, cgwsel: number): FieldWrite {
+  return { field: "color.addend", expr: str(addend), addr: REG.CGWSEL, value: withMathAddend(cgwsel, addend) };
+}
+
+export function setFixedColor(bgr555: number): FieldWrite {
+  return {
+    field: "color.fixed",
+    expr: `0x${bgr555.toString(16).padStart(4, "0")}`,
+    addr: REG.COLDATA,
+    value: bgr555,
+  };
 }
 
 /** The equation chip, exactly as the handoff renders it. */
