@@ -9,8 +9,9 @@ import type { Poke } from "../../pokes/pokes";
  *  The field IS the poke's identity: each field owns its
  *  line, and the core's namespace fold overrides only that field's own bits,
  *  preserving neighbor bits in the register. The raw whole-register dialect
- *  (`TM = 0x13`) stays available via `writesToPokes(_, "raw")`; a user-facing
- *  dialect toggle is a follow-up. The script wins: apply_pokes() runs at the
+ *  (`TM = 0x13`) stays available via `writesToPokes(_, "raw")`; the POKE AS
+ *  toggle (persisted pokeDialect setting) picks which one new pokes use.
+ *  The script wins: apply_pokes() runs at the
  *  top of frame(), so a later script write shows its own value with the poke
  *  marker hollow. Encodings mirror the core's derive_registers round-trip.
  *  Two ownership subtleties: CGWSEL is co-owned — win never writes it, the

@@ -6,7 +6,8 @@
 .cmp-dialect { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
 .cmp-dialect-label { font-family: var(--font-mono); font-size: 9px; color: var(--dim); }
 .cmp-dialect-seg { flex: none; }
-.cmp-dialect-seg button { padding: 3px 10px; }
+/* double class: outranks the later .cmp-seg button padding regardless of order */
+.cmp-seg.cmp-dialect-seg button { padding: 3px 10px; }
 
 /* ── poke affordances ────────────────────────────────────────────────────── */
 .cmp-pokebar {
