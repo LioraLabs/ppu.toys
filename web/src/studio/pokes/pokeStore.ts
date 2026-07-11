@@ -22,6 +22,18 @@ export function usePokes(): Poke[] {
   return useMemo(() => parsePokes(src), [src]);
 }
 
+/** Verbatim pokes.lua source of the open context — the PokeBar copy-function
+ *  chip's store-sourced replacement for `Compositor.pokesSource`. */
+export function usePokesSource(): string {
+  return pokesSource(openContextFiles(useOpenSketch()));
+}
+
+/** Whether something outside pokes.lua calls apply_pokes() — store-sourced
+ *  replacement for `Compositor.pokesApplied`. */
+export function usePokesApplied(): boolean {
+  return hasApplyCall(openContextFiles(useOpenSketch()));
+}
+
 function write(next: readonly Poke[]): void {
   openSketchStore.editFile(POKES_FILE, pokesToLua(next));
 }

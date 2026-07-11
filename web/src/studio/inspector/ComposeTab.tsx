@@ -16,7 +16,7 @@ export function ComposeTab() {
   const c = useCompositor();
   return (
     <div className="insp-scroll">
-      <PokeBar c={c} />
+      <PokeBar />
       <DialectToggle />
       <ScreenPreviews c={c} />
       <EquationChip c={c} />

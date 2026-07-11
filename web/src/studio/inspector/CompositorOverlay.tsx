@@ -36,7 +36,7 @@ export function CompositorOverlay({ onCollapse }: { onCollapse: () => void }) {
       </div>
       <div className="insp-overlay-body cmpo-body">
         <div className="cmpo-left">
-          <PokeBar c={c} />
+          <PokeBar />
           <DialectToggle />
           <div className="cmpo-h">SCREEN ASSIGNMENT</div>
           <AssignmentMatrix c={c} />

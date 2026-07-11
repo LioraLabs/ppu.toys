@@ -15,7 +15,7 @@ export function WindowsTab() {
   const c = useCompositor();
   return (
     <div className="insp-scroll">
-      <PokeBar c={c} />
+      <PokeBar />
       <DialectToggle />
       <WindowPreview c={c} />
       <div className="winp-caption">
