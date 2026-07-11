@@ -24,6 +24,7 @@ import {
   equation,
   evictCrossDialect,
   fieldPoke,
+  formatFieldValue,
   hexToBgr555,
   liveReg,
   mathAddend,
@@ -492,5 +493,31 @@ describe("evictCrossDialect (dialect flip must not leave conflicting lines)", ()
 
   it("cross-dialect eviction and same-dialect survival compose on ONE register", () => {
     expect(evictCrossDialect([rawAdsub, friendlyHalf], [friendlyOp])).toEqual([friendlyHalf]);
+  });
+});
+
+describe("FIELD_SPECS encode/live round-trip", () => {
+  const read = (byte: number) => () => byte; // single-register ReadReg stub
+  it("encode then live returns the value, for representative fields", () => {
+    for (const [field, val] of [
+      ["screen.main.bg1", true], ["color.op", "sub"], ["color.half", true],
+      ["color.on.bg1", true], ["color.addend", "fixed"], ["color.region", "outside"],
+      ["win.bg1.w1", true], ["win.bg1.combine", "AND"], ["color.fixed", 0x1234],
+      ["win.w1.lo", 40],
+    ] as const) {
+      const spec = FIELD_SPECS.get(field)!;
+      const byte = spec.encode(0, val);
+      expect(spec.live(read(byte))).toBe(val);
+    }
+  });
+  it("formatFieldValue emits canonical Lua RHS", () => {
+    expect(formatFieldValue(true)).toBe("true");
+    expect(formatFieldValue("sub")).toBe('"sub"');
+    expect(formatFieldValue(0x41)).toBe("0x41");
+    // NOTE: deviates from the plan's literal "40" example — 40 > 9, so under
+    // the specified `v > 9 ? hex : decimal` rule it hexes to "0x28", not
+    // "40". Using 5 here (<=9) actually exercises the decimal branch; see the
+    // task-completion report for the full discrepancy writeup.
+    expect(formatFieldValue(5)).toBe("5");
   });
 });
