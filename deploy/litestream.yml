@@ -1,0 +1,14 @@
+# Litestream — continuously replicate the SQLite DB to Cloudflare R2.
+# R2 credentials come from /etc/ppu/litestream.env (LITESTREAM_ACCESS_KEY_ID /
+# LITESTREAM_SECRET_ACCESS_KEY), injected by litestream.service — NOT here.
+# Replace <ACCOUNT_ID> and the bucket name with your R2 values (see RUNBOOK).
+
+dbs:
+  - path: /var/lib/ppu/ppu.db
+    replicas:
+      - type: s3
+        bucket: ppu-toys-backup
+        path: ppu.db
+        endpoint: https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+        region: auto
+        force-path-style: true
