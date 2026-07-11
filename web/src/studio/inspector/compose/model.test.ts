@@ -13,6 +13,7 @@ import {
   combineValue,
   dimOutsideMask,
   equation,
+  fieldPoke,
   hexToBgr555,
   liveReg,
   mathAddend,
@@ -31,6 +32,8 @@ import {
   withMathAddend,
   withMathHalf,
   withMathOp,
+  writesToPokes,
+  type FieldWrite,
   type ReadReg,
 } from "./model";
 
@@ -255,6 +258,37 @@ describe("window preview geometry", () => {
     expect(nearestEdgeAddr(0, bounds)).toBe(REG.WH0);
     expect(nearestEdgeAddr(255, bounds)).toBe(REG.WH3);
     expect(nearestEdgeAddr(110, { wh0: 100, wh1: 120, wh2: 0, wh3: 0 })).toBe(REG.WH0);
+  });
+});
+
+describe("fieldPoke + writesToPokes (dual-dialect projection)", () => {
+  const op: FieldWrite = { field: "color.op", expr: '"sub"', addr: REG.CGADSUB, value: 0x80 };
+  const w1: FieldWrite = { field: "win.bg1.w1", expr: "true", addr: REG.W12SEL, value: 0x0a };
+  const w2: FieldWrite = { field: "win.bg1.w2", expr: "true", addr: REG.W12SEL, value: 0x0a };
+
+  it("fieldPoke emits the friendly assignment with a $-address note", () => {
+    expect(fieldPoke(op)).toEqual({ lvalue: "color.op", expr: '"sub"', note: "$2131" });
+  });
+
+  it("friendly projection is one poke per field write", () => {
+    expect(writesToPokes([w1, w2], "friendly")).toEqual([fieldPoke(w1), fieldPoke(w2)]);
+  });
+
+  it("raw projection dedupes per register (last wins) and byte-matches regPoke", () => {
+    expect(writesToPokes([w1, w2, op], "raw")).toEqual([
+      regPoke(REG.W12SEL, 0x0a),
+      regPoke(REG.CGADSUB, 0x80),
+    ]);
+  });
+
+  it("friendly pokes round-trip through pokesToLua/parsePokes (dialect-agnostic loader)", () => {
+    const ps = writesToPokes([op, w1], "friendly");
+    expect(parsePokes(pokesToLua(ps))).toEqual([...ps].sort((a, b) => (a.lvalue < b.lvalue ? -1 : 1)));
+  });
+
+  it("mixed-dialect output stays codepoint-sorted (raw mnemonics before lowercase fields)", () => {
+    const lua = pokesToLua([fieldPoke(op), regPoke(REG.TM, 0x13)]);
+    expect(lua.indexOf("TM = 0x13")).toBeLessThan(lua.indexOf('color.op = "sub"'));
   });
 });
 

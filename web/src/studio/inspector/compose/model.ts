@@ -80,6 +80,42 @@ export function regPoke(addr: number, value: number): Poke {
 
 const ADDR_BY_LVALUE = new Map(Object.entries(REG_LVALUES).map(([a, l]) => [l, Number(a)]));
 
+/** One friendly-field write a control produces. Carries BOTH poke identities:
+ *  the friendly field (field = lvalue, expr = canonical RHS) and the raw
+ *  register (addr + whole-register value after the control action). Dialect
+ *  selection (the upcoming raw/friendly toggle) is a pure projection — see
+ *  writesToPokes. */
+export interface FieldWrite {
+  field: string;
+  expr: string;
+  addr: number;
+  value: number;
+}
+
+/** A field write as a friendly-dialect poke: `color.op = "sub" -- $2131`. */
+export function fieldPoke(w: FieldWrite): Poke {
+  return { lvalue: w.field, expr: w.expr, note: `$${w.addr.toString(16).toUpperCase()}` };
+}
+
+export type PokeDialect = "friendly" | "raw";
+
+/** Project one control action's field writes into pokes. friendly = one poke
+ *  per field (neighbor bits preserved by the core's fold); raw = one
+ *  whole-register poke per touched register, last write wins. */
+export function writesToPokes(writes: readonly FieldWrite[], dialect: PokeDialect): Poke[] {
+  if (dialect === "friendly") return writes.map(fieldPoke);
+  const last = new Map<number, number>();
+  for (const w of writes) last.set(w.addr, w.value);
+  return [...last].map(([addr, value]) => regPoke(addr, value));
+}
+
+// Canonical-expr helpers for the friendly dialect (module-private; wired up
+// by the emitters in a later task).
+const bool = (b: boolean) => (b ? "true" : "false");
+const str = (s: string) => `"${s}"`;
+void bool;
+void str;
+
 /** Solid/hollow decision for the poke marker: true = the live register equals
  *  the poked value (solid), false = a later script write overrode it (hollow),
  *  null = non-comparable (non-numeric expr or an lvalue this map doesn't know). */
