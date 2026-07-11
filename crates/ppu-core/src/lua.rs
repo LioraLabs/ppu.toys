@@ -1355,55 +1355,42 @@ fn apply_imports(
             if !matches!(bpp, 2 | 4 | 8) {
                 continue;
             }
-            // Placement bases: honor user-set map_base/char_base, else the
-            // importer defaults (map_base 0, char_base 0x1000).
-            let char_base = layer.get(ctx, "char_base").to_integer().unwrap_or(0) as u32;
             let opts = ImportOptions {
                 bit_depth: bpp,
                 tile_size: layer.get(ctx, "tile_size").to_integer().unwrap_or(8) as u8,
-                map_base: crate::quantize::bg_map_base(
-                    layer.get(ctx, "map_base").to_integer().unwrap_or(0) as u32,
-                ),
-                char_base: if char_base == 0 {
-                    0x1000
-                } else {
-                    crate::quantize::bg_char_base(char_base)
-                },
             };
             let key = ImportKey {
                 asset: slot.clone(),
                 generation: asset.generation,
                 options: opts,
             };
-            let imp = import_cache.get_or_import(key, &asset.rgba, asset.width, asset.height);
-            let cb = imp.registers.char_base as usize;
-            for (o, &w) in imp.char_words.iter().enumerate() {
-                mem.vram[(cb + o) & 0x7fff] = w;
+            let (src, meta) =
+                import_cache.get_or_import(key, &asset.rgba, asset.width, asset.height);
+            // Placement: honor user-set bases, else the historical defaults
+            // (map_base 0, char_base 0x1000). Bases are bind-time, not format.
+            let raw_char = layer.get(ctx, "char_base").to_integer().unwrap_or(0) as u32;
+            let char_base = if raw_char == 0 {
+                0x1000
+            } else {
+                crate::quantize::bg_char_base(raw_char)
+            };
+            let map_base = crate::quantize::bg_map_base(
+                layer.get(ctx, "map_base").to_integer().unwrap_or(0) as u32,
+            );
+            let cgram_base = if mode == 0 && bpp == 2 { i * 8 * 4 } else { 0 };
+            crate::source::place_bg(src, mem, map_base as u16, char_base as u16, cgram_base);
+            layer.set(ctx, "map_base", map_base as i64).unwrap();
+            layer.set(ctx, "char_base", char_base as i64).unwrap();
+            layer
+                .set(ctx, "screen_size", src.screen_size as i64)
+                .unwrap();
+            layer.set(ctx, "tile_size", src.tile_size as i64).unwrap();
+            if let crate::source::SourceReport::Tile { report } = &meta.report {
+                reports.push(ImportBudget::Tile {
+                    layer: i,
+                    report: report.clone(),
+                });
             }
-            let mb = imp.registers.map_base as usize;
-            for (o, &w) in imp.tilemap_words.iter().enumerate() {
-                mem.vram[(mb + o) & 0x7fff] = w;
-            }
-            let mode0_band = if mode == 0 && bpp == 2 { i * 8 * 4 } else { 0 };
-            for &(idx, c) in &imp.cgram {
-                mem.cgram[mode0_band + idx as usize] = c;
-            }
-            layer
-                .set(ctx, "map_base", imp.registers.map_base as i64)
-                .unwrap();
-            layer
-                .set(ctx, "char_base", imp.registers.char_base as i64)
-                .unwrap();
-            layer
-                .set(ctx, "screen_size", imp.registers.screen_size as i64)
-                .unwrap();
-            layer
-                .set(ctx, "tile_size", imp.registers.tile_size as i64)
-                .unwrap();
-            reports.push(ImportBudget::Tile {
-                layer: i,
-                report: imp.report.clone(),
-            });
         }
     }
 }

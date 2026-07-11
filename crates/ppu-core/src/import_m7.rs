@@ -152,7 +152,7 @@ fn dedup_tiles(
 }
 
 /// Budget report for a Mode 7 import — honest numbers, including overflow.
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, PartialEq)]
 pub struct Mode7ImportReport {
     /// Opaque palette entries used (`cgram[1..=colors]`; index 0 is reserved
     /// transparent, so the ceiling is 255).
