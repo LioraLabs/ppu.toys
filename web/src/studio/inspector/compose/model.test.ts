@@ -562,4 +562,29 @@ describe("regeneratePokes", () => {
       { lvalue: "win.w1.lo", expr: "40", note: "$2126" },
     ]);
   });
+
+  it("raw->friendly is lossy for CGWSEL bits no friendly field owns (direct_color, clip) — documented, not recoverable", () => {
+    const friendly = regeneratePokes([{ lvalue: "CGWSEL", expr: "0xff" }], "friendly");
+    const roundTripped = regeneratePokes(friendly, "raw");
+    // Only bit1 (color.addend) and bits4-5 (color.region) are owned; bit0
+    // (direct_color) and bits2-3/6-7 (clip-to-black, unused) are dropped.
+    expect(roundTripped).toEqual([{ lvalue: "CGWSEL", expr: "0x32", note: "$2130" }]);
+    expect(roundTripped).not.toEqual([{ lvalue: "CGWSEL", expr: "0xff", note: "$2130" }]);
+  });
+
+  it("friendly->raw folds over TM's non-zero power-on default", () => {
+    expect(regeneratePokes([{ lvalue: "screen.main.bg1", expr: "false" }], "raw")).toEqual([
+      { lvalue: "TM", expr: "0x1e", note: "$212C" },
+    ]);
+  });
+
+  it("drops a malformed raw expr instead of emitting 0xNaN", () => {
+    expect(regeneratePokes([{ lvalue: "TM", expr: "garbage" }], "raw")).toEqual([]);
+  });
+
+  it("color.fixed regenerates 4-hex-digit padded, matching setFixedColor's canonical form", () => {
+    expect(regeneratePokes([{ lvalue: "COLDATA", expr: "0xabc" }], "friendly")).toEqual([
+      { lvalue: "color.fixed", expr: "0x0abc", note: "$2132" },
+    ]);
+  });
 });

@@ -149,7 +149,12 @@ export function evictCrossDialect(existing: readonly Poke[], incoming: readonly 
  *  Non-dual pokes (cgram[...], vram[...], m7.*, bg[...], scalars) pass through
  *  untouched. friendly output emits ALL owned fields per byte (whole-register
  *  fidelity; sparse output is a deferred refinement). Note win.<id>.invert is
- *  lossy — both invert bits collapse to one field. */
+ *  lossy — both invert bits collapse to one field.
+ *  friendly output emits only owned fields, so raw→friendly does NOT preserve
+ *  bits no friendly field owns — notably CGWSEL bit 0 (direct_color, authored
+ *  separately as the `direct_color` global) and bits 6-7 (clip-to-black,
+ *  raw-only by design). A raw poke carrying those bits loses them when
+ *  regenerated to friendly. */
 export function regeneratePokes(pokes: readonly Poke[], dialect: PokeDialect): Poke[] {
   const passthrough: Poke[] = [];
   const bytes = new Map<number, number>();
@@ -158,8 +163,10 @@ export function regeneratePokes(pokes: readonly Poke[], dialect: PokeDialect): P
   for (const p of pokes) {
     const t = pokeTarget(p);
     if (!t) { passthrough.push(p); continue; }
-    if (t.raw) bytes.set(t.addr, Number(p.expr));
-    else {
+    if (t.raw) {
+      const v = Number(p.expr);
+      if (!Number.isNaN(v)) bytes.set(t.addr, v);
+    } else {
       const spec = FIELD_SPECS.get(p.lvalue)!;
       const v = parseFieldExpr(p.expr);
       if (v !== null) bytes.set(t.addr, spec.encode(ensure(t.addr), v));
@@ -172,7 +179,14 @@ export function regeneratePokes(pokes: readonly Poke[], dialect: PokeDialect): P
     for (const [field, spec] of FIELD_SPECS) {
       if (spec.addr !== addr) continue;
       const decoded = spec.live(read);
-      const expr = WH_FIELDS[addr] === field ? String(decoded) : formatFieldValue(decoded);
+      const expr =
+        WH_FIELDS[addr] === field
+          ? String(decoded)
+          // match setFixedColor's 4-hex-digit pad so a raw->friendly->raw
+          // round-trip via a control re-poke doesn't churn the RHS
+          : field === "color.fixed"
+            ? `0x${(decoded as number).toString(16).padStart(4, "0")}`
+            : formatFieldValue(decoded);
       out.push({ lvalue: field, expr, note: `$${addr.toString(16).toUpperCase()}` });
     }
   }
@@ -557,7 +571,11 @@ function buildFieldSpecs() {
   m.set("color.region", {
     addr: REG.CGWSEL,
     live: (r) => REGION_NAMES[(r(REG.CGWSEL) >> 4) & 3],
-    encode: (cur, v) => (cur & ~0x30) | (REGION_NAMES.indexOf(v as (typeof REGION_NAMES)[number]) << 4),
+    encode: (cur, v) => {
+      // unknown region name -> index 0 (never a negative byte from indexOf's -1)
+      const idx = Math.max(REGION_NAMES.indexOf(v as (typeof REGION_NAMES)[number]), 0);
+      return (cur & ~0x30) | (idx << 4);
+    },
   });
   m.set("color.fixed", {
     addr: REG.COLDATA,
@@ -573,24 +591,27 @@ function buildFieldSpecs() {
     m.set(`win.${l.id}.w1`, {
       addr: l.selAddr,
       live: (r) => (nib(r) & W1_ENABLE) !== 0,
-      encode: (cur, v) => (cur & ~(W1_ENABLE << l.shift)) | (v ? W1_ENABLE << l.shift : 0),
+      encode: (cur, v) => (cur & ~(W1_ENABLE << l.shift)) | ((v as boolean) ? W1_ENABLE << l.shift : 0),
     });
     m.set(`win.${l.id}.w2`, {
       addr: l.selAddr,
       live: (r) => (nib(r) & W2_ENABLE) !== 0,
-      encode: (cur, v) => (cur & ~(W2_ENABLE << l.shift)) | (v ? W2_ENABLE << l.shift : 0),
+      encode: (cur, v) => (cur & ~(W2_ENABLE << l.shift)) | ((v as boolean) ? W2_ENABLE << l.shift : 0),
     });
     // lossy shared decode, mirrors the core: true if EITHER invert bit is set
     m.set(`win.${l.id}.invert`, {
       addr: l.selAddr,
       live: (r) => (nib(r) & INVERT_BITS) !== 0,
-      encode: (cur, v) => (cur & ~(INVERT_BITS << l.shift)) | (v ? INVERT_BITS << l.shift : 0),
+      encode: (cur, v) => (cur & ~(INVERT_BITS << l.shift)) | ((v as boolean) ? INVERT_BITS << l.shift : 0),
     });
     m.set(`win.${l.id}.combine`, {
       addr: l.logAddr,
       live: (r) => LOGIC_LABELS[(r(l.logAddr) >> l.logShift) & 3],
-      encode: (cur, v) =>
-        (cur & ~(3 << l.logShift)) | (LOGIC_LABELS.indexOf(v as (typeof LOGIC_LABELS)[number]) << l.logShift),
+      encode: (cur, v) => {
+        // unknown logic label -> index 0 (never a negative byte from indexOf's -1)
+        const idx = Math.max(LOGIC_LABELS.indexOf(v as (typeof LOGIC_LABELS)[number]), 0);
+        return (cur & ~(3 << l.logShift)) | (idx << l.logShift);
+      },
     });
     const bit = l.tmwBit;
     if (bit !== undefined) {
