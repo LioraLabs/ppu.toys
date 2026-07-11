@@ -8,6 +8,7 @@ import { transport, useTransportRuntimeError } from "./transport/transport";
 import { openSketchStore, useOpenSketch, openContextFiles } from "./sketches/openSketch";
 import { restoreOpenContext } from "./sketches/restore";
 import { POKES_FILE } from "./pokes/pokes";
+import { DialectToggle, PokeBar } from "./inspector/compose/chrome";
 
 /** The only machine-generated file — read-only tab, CRUD-guarded (see
  *  openSketchStore), never a default active-tab target. */
@@ -28,6 +29,19 @@ export interface EditorPaneProps {
 
 /** Stable empty-errors identity so a clean doc never re-dispatches diagnostics. */
 const NO_ERRORS: LuaError[] = [];
+
+/** Poke menu bar shown above the editor body, only while the generated
+ *  pokes.lua tab is active — the dialect choice and poke summary are
+ *  meaningless context for any other file. */
+export function PokeFileBar({ active }: { active: string }) {
+  if (active !== POKES_FILE) return null;
+  return (
+    <div className="poke-filebar">
+      <DialectToggle />
+      <PokeBar />
+    </div>
+  );
+}
 
 export function EditorPane({ onSources }: EditorPaneProps) {
   const state = useOpenSketch();
@@ -149,6 +163,7 @@ export function EditorPane({ onSources }: EditorPaneProps) {
         onDelete={remove}
         onReorder={(from, to) => openSketchStore.moveFile(from, to)}
       />
+      <PokeFileBar active={active} />
       <div className="editor-body" data-editor-slot>
         <CodeEditor
           key={session}
