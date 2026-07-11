@@ -9,8 +9,9 @@ import type { Poke } from "../../pokes/pokes";
  *  The field IS the poke's identity: each field owns its
  *  line, and the core's namespace fold overrides only that field's own bits,
  *  preserving neighbor bits in the register. The raw whole-register dialect
- *  (`TM = 0x13`) stays available via `writesToPokes(_, "raw")`; a user-facing
- *  dialect toggle is a follow-up. The script wins: apply_pokes() runs at the
+ *  (`TM = 0x13`) stays available via `writesToPokes(_, "raw")`; the POKE AS
+ *  toggle (persisted pokeDialect setting) picks which one new pokes use.
+ *  The script wins: apply_pokes() runs at the
  *  top of frame(), so a later script write shows its own value with the poke
  *  marker hollow. Encodings mirror the core's derive_registers round-trip.
  *  Two ownership subtleties: CGWSEL is co-owned — win never writes it, the
@@ -111,6 +112,36 @@ export function writesToPokes(writes: readonly FieldWrite[], dialect: PokeDialec
   const last = new Map<number, number>();
   for (const w of writes) last.set(w.addr, w.value);
   return [...last].map(([addr, value]) => regPoke(addr, value));
+}
+
+/** The register a poke targets, either dialect, plus which dialect it is:
+ *  friendly field lvalues resolve through FIELD_SPECS, raw whole-register
+ *  mnemonics through REG_LVALUES. undefined = unmapped (e.g. cgram[...]). */
+function pokeTarget(p: Poke): { addr: number; raw: boolean } | undefined {
+  const spec = FIELD_SPECS.get(p.lvalue);
+  if (spec) return { addr: spec.addr, raw: false };
+  const addr = ADDR_BY_LVALUE.get(p.lvalue);
+  return addr === undefined ? undefined : { addr, raw: true };
+}
+
+/** Cross-dialect eviction: writing pokes for a register drops the OTHER
+ *  dialect's pokes on that same register from `existing`, so a raw
+ *  `CGADSUB = 0x80` and a friendly `color.op = "add"` never coexist with the
+ *  friendly line silently winning at fold time (the upsert keys on lvalue
+ *  only). Same-dialect lines and unmapped lvalues (cgram[...]) are kept.
+ *  Precondition: `incoming` is single-dialect per register (writesToPokes
+ *  emits one dialect; HexPoke/CgramPoke send single pokes) — a mixed batch
+ *  would keep only the last dialect's eviction for that register. */
+export function evictCrossDialect(existing: readonly Poke[], incoming: readonly Poke[]): Poke[] {
+  const touched = new Map<number, boolean>(); // addr -> incoming dialect is raw
+  for (const p of incoming) {
+    const t = pokeTarget(p);
+    if (t) touched.set(t.addr, t.raw);
+  }
+  return existing.filter((p) => {
+    const t = pokeTarget(p);
+    return !t || !touched.has(t.addr) || touched.get(t.addr) === t.raw;
+  });
 }
 
 // Canonical friendly-dialect RHS forms, used by the field-write emitters below.

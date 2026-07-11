@@ -1,4 +1,4 @@
-import { PokeBar } from "./compose/chrome";
+import { DialectToggle, PokeBar } from "./compose/chrome";
 import {
   AssignmentMatrix,
   ComposeReadout,
@@ -37,6 +37,7 @@ export function CompositorOverlay({ onCollapse }: { onCollapse: () => void }) {
       <div className="insp-overlay-body cmpo-body">
         <div className="cmpo-left">
           <PokeBar c={c} />
+          <DialectToggle />
           <div className="cmpo-h">SCREEN ASSIGNMENT</div>
           <AssignmentMatrix c={c} />
           <div className="cmpo-h cmpo-h--gap">COLOR MATH</div>

@@ -1,4 +1,4 @@
-import { PokeBar } from "./compose/chrome";
+import { DialectToggle, PokeBar } from "./compose/chrome";
 import { useCompositor } from "./compose/useCompositor";
 import {
   BoundCards,
@@ -16,6 +16,7 @@ export function WindowsTab() {
   return (
     <div className="insp-scroll">
       <PokeBar c={c} />
+      <DialectToggle />
       <WindowPreview c={c} />
       <div className="winp-caption">
         orange = W1 edges · cyan = W2 edges · click preview to drag nearest edge
