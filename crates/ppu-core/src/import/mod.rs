@@ -255,52 +255,6 @@ pub fn import_tile_bg(
     )
 }
 
-/// Memoization key: `(asset slot, upload generation, options)`. The caller
-/// (the `source =` wiring) bumps `generation` when a slot is re-uploaded;
-/// options carry bit-depth/tile-size/bases (see `ImportOptions` for why the
-/// BGMODE value itself is not in the key).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ImportKey {
-    pub asset: String,
-    pub generation: u64,
-    pub options: ImportOptions,
-}
-
-/// Import memo: `source =` calls `get_or_import` per frame; the pipeline runs
-/// only on a cold key, so re-quantization never happens at 60fps.
-#[derive(Default)]
-pub struct ImportCache {
-    map: std::collections::HashMap<ImportKey, (crate::source::BgSource, crate::source::SourceMeta)>,
-}
-
-impl ImportCache {
-    /// Return the cached import for `key`, running the pipeline on a miss.
-    pub fn get_or_import(
-        &mut self,
-        key: ImportKey,
-        rgba: &[u8],
-        width: u32,
-        height: u32,
-    ) -> &(crate::source::BgSource, crate::source::SourceMeta) {
-        self.map
-            .entry(key)
-            .or_insert_with_key(|k| import_tile_bg(rgba, width, height, &k.options))
-    }
-
-    /// Drop every cached import of one asset slot (re-upload / slot delete).
-    pub fn invalidate_asset(&mut self, asset: &str) {
-        self.map.retain(|k, _| k.asset != asset);
-    }
-
-    pub fn len(&self) -> usize {
-        self.map.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,34 +393,5 @@ mod tests {
             .overflows
             .iter()
             .any(|o| matches!(o, Overflow::Colors { budget: 120, .. })));
-    }
-
-    #[test]
-    fn cache_memoizes_by_key_and_invalidates_per_asset() {
-        let rgba = two_tile_rgba();
-        let mut cache = ImportCache::default();
-        let key = ImportKey {
-            asset: "sky".into(),
-            generation: 1,
-            options: ImportOptions::default(),
-        };
-        let a = cache.get_or_import(key.clone(), &rgba, 16, 8).clone();
-        assert_eq!(cache.len(), 1);
-        let b = cache.get_or_import(key.clone(), &rgba, 16, 8).clone();
-        assert_eq!(cache.len(), 1); // hit, no re-quantize entry
-        assert_eq!(a, b);
-        // different bit-depth = different key
-        let key2 = ImportKey {
-            options: ImportOptions {
-                bit_depth: 2,
-                ..Default::default()
-            },
-            ..key.clone()
-        };
-        cache.get_or_import(key2, &rgba, 16, 8);
-        assert_eq!(cache.len(), 2);
-        // re-upload bumps generation; invalidate drops all entries for the slot
-        cache.invalidate_asset("sky");
-        assert_eq!(cache.len(), 0);
     }
 }

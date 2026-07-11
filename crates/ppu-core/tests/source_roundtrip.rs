@@ -152,6 +152,70 @@ fn obj_cell16_payload_renders_the_whole_cell_from_one_tile() {
 }
 
 #[test]
+fn source_mismatch_renders_blank_and_reports_diagnostic() {
+    use ppu_core::ImportBudget;
+
+    let rgba = two_tile_rgba();
+
+    let mut blank = LuaEngine::new();
+    let blank_render = fb(&mut blank, "function frame(t, f) end");
+
+    // Kind mismatch: an OBJ payload bound to bg[1] (a tile-BG slot) must render
+    // blank AND surface exactly one obj->bg mismatch diagnostic.
+    let (obj_payload, _m) =
+        convert_source(SourceKind::Obj, &ConvertOptions::default(), &rgba, 16, 8).unwrap();
+    let mut kind = LuaEngine::new();
+    kind.add_source("art", &obj_payload.encode()).unwrap();
+    let render = fb(
+        &mut kind,
+        r#"function frame(t, f) bg[1].source = "art" end"#,
+    );
+    assert_eq!(render, blank_render, "kind mismatch must render blank");
+    let reports = kind.import_reports();
+    assert_eq!(reports.len(), 1);
+    assert!(
+        matches!(
+            &reports[0],
+            ImportBudget::Mismatch { layer: Some(0), found, .. } if found.as_str() == "obj"
+        ),
+        "expected an obj->bg kind-mismatch diagnostic, got {:?}",
+        reports[0]
+    );
+
+    // Depth mismatch: a 2bpp BG payload bound to Mode-1 BG1 (4bpp) must render
+    // blank AND surface a 2bpp->4bpp depth mismatch (NO down/up conversion).
+    let (bg2_payload, _m) = convert_source(
+        SourceKind::Bg,
+        &ConvertOptions {
+            bit_depth: Some(2),
+            ..Default::default()
+        },
+        &rgba,
+        16,
+        8,
+    )
+    .unwrap();
+    let mut depth = LuaEngine::new();
+    depth.add_source("art", &bg2_payload.encode()).unwrap();
+    let render2 = fb(
+        &mut depth,
+        r#"function frame(t, f) mode = 1 bg[1].source = "art" end"#,
+    );
+    assert_eq!(render2, blank_render, "depth mismatch must render blank");
+    let reports2 = depth.import_reports();
+    assert_eq!(reports2.len(), 1);
+    assert!(
+        matches!(
+            &reports2[0],
+            ImportBudget::Mismatch { layer: Some(0), expected, found, .. }
+                if expected.as_str() == "bg 4bpp" && found.as_str() == "bg 2bpp"
+        ),
+        "expected a 2bpp->4bpp depth-mismatch diagnostic, got {:?}",
+        reports2[0]
+    );
+}
+
+#[test]
 fn add_source_rejects_garbage() {
     assert!(LuaEngine::new().add_source("x", &[9, 9, 9]).is_err()); // bad version
 
