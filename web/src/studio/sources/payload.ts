@@ -1,4 +1,3 @@
-import { cgram15ToCss } from "../inspector/format";
 
 export interface DecodedBg {
   kind: "bg";
@@ -105,8 +104,8 @@ export function decodeSourcePayload(bytes: Uint8Array): Decoded | null {
 }
 
 function rgbaFrom555(c: number): [number, number, number] {
-  const css = cgram15ToCss(c); // "#rrggbb"
-  return [parseInt(css.slice(1, 3), 16), parseInt(css.slice(3, 5), 16), parseInt(css.slice(5, 7), 16)];
+  const x = (v: number) => (v << 3) | (v >> 2); // 5-bit -> 8-bit, matches cgram15ToCss
+  return [x(c & 0x1f), x((c >> 5) & 0x1f), x((c >> 10) & 0x1f)];
 }
 
 /** Screen-order tilemap read for a bg source cell. */

@@ -89,5 +89,8 @@ describe("decodeSourcePayload", () => {
     expect(pixels.length).toBe(width * height * 4);
     // cell(0,0) tile0 -> row0 index1 -> opaque
     expect(pixels[3]).toBe(255); // first pixel opaque (index 1)
+    // palette color 0x7c00 is pure blue in BGR555 -> r=0, b=255
+    expect(pixels[0]).toBe(0);
+    expect(pixels[2]).toBe(255);
   });
 });
