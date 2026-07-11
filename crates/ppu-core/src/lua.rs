@@ -11,21 +11,9 @@ use piccolo::{
     StaticError, Table, Value,
 };
 
-use crate::import::obj::import_obj_sheet;
-use crate::import::{import_tile_bg, BudgetReport, ImportOptions};
-use crate::import_m7::{import_mode7, Mode7ImportReport};
+use crate::import::BudgetReport;
+use crate::import_m7::Mode7ImportReport;
 use crate::{rgb15, LineTable, LineTableBuilder, LineTableRow, Memory, HEIGHT};
-
-/// TEMPORARY BRIDGE: raw RGBA staged for the fallback importer, keyed by slot id.
-/// App-level (survives recompiles), unlike `Memory` which `set_source` resets.
-/// The placement pass imports it inline (uncached) when a layer binds a slot id
-/// that is NOT in the source store. Removed once demos bind `addSource` payloads.
-#[derive(Clone)]
-pub struct ImportAsset {
-    pub width: u32,
-    pub height: u32,
-    pub rgba: Vec<u8>,
-}
 
 /// One BG layer's import budget from the most recent `frame()`, surfaced to the
 /// UI (m4/inspector). Tagged by importer flavor.
@@ -80,9 +68,6 @@ pub struct LuaEngine {
     /// Defining chunk of `frame_fn`, for runtime error attribution.
     frame_file: Option<String>,
     memory: Memory,
-    /// TEMPORARY BRIDGE: raw RGBA assets for the fallback importer, keyed by slot
-    /// id. App-level (survives recompiles). Removed when demos bind `addSource`.
-    assets: HashMap<String, ImportAsset>,
     /// The source store: decoded `addSource` payloads keyed by name — the
     /// graphics-data home (kind + depth + palettes + tiles + tilemap all
     /// self-described by the payload). App-level; survives recompiles (NOT
@@ -108,7 +93,6 @@ impl LuaEngine {
             init_fn: None,
             frame_file: None,
             memory: Memory::new(),
-            assets: HashMap::new(),
             source_store: HashMap::new(),
             reports: Vec::new(),
         }
@@ -117,22 +101,6 @@ impl LuaEngine {
     /// Mirrored PPU memory after the most recent `frame()`.
     pub fn memory(&self) -> &Memory {
         &self.memory
-    }
-
-    /// TEMPORARY BRIDGE: stage a decoded RGBA asset for the fallback importer.
-    /// Malformed ImageData (zero dims or wrong buffer length) is ignored.
-    pub fn upload_asset(&mut self, slot: String, width: u32, height: u32, rgba: Vec<u8>) {
-        if width == 0 || height == 0 || rgba.len() != (width * height * 4) as usize {
-            return;
-        }
-        self.assets.insert(
-            slot,
-            ImportAsset {
-                width,
-                height,
-                rgba,
-            },
-        );
     }
 
     /// Decode + register a source payload under `name` (the `addSource` core).
@@ -146,17 +114,6 @@ impl LuaEngine {
         let p = crate::source::SourcePayload::decode(payload)?;
         self.source_store.insert(name.to_string(), p);
         Ok(())
-    }
-
-    /// Asset ids + dimensions, sorted by id (stable order for the inspector).
-    pub fn assets(&self) -> Vec<(String, u32, u32)> {
-        let mut v: Vec<_> = self
-            .assets
-            .iter()
-            .map(|(id, a)| (id.clone(), a.width, a.height))
-            .collect();
-        v.sort_by(|a, b| a.0.cmp(&b.0));
-        v
     }
 
     /// Per-layer import budgets from the most recent `frame()` (m4/inspector).
@@ -262,14 +219,12 @@ impl LuaEngine {
                 self.memory.cgram = [0u16; 256];
                 place_bg_sources(
                     ctx,
-                    &self.assets,
                     &self.source_store,
                     &mut self.reports,
                     &mut self.memory,
                 );
                 place_obj_source(
                     ctx,
-                    &self.assets,
                     &self.source_store,
                     &mut self.reports,
                     &mut self.memory,
@@ -1353,16 +1308,15 @@ fn echo_bg_registers<'gc>(
 /// placement registers back into the layer globals. Strict bind validation: a
 /// store source whose kind or depth mismatches the slot renders blank (payload
 /// not placed) and pushes an `ImportBudget::Mismatch`. A slot id absent from the
-/// store falls back to the legacy RGBA bridge (uncached import — TEMPORARY BRIDGE).
-/// Refreshes `reports` for the UI; assumes VRAM/CGRAM were zeroed by the caller.
+/// store simply renders nothing. Refreshes `reports` for the UI; assumes
+/// VRAM/CGRAM were zeroed by the caller.
 fn place_bg_sources(
     ctx: piccolo::Context<'_>,
-    assets: &HashMap<String, ImportAsset>,
     store: &HashMap<String, crate::source::SourcePayload>,
     reports: &mut Vec<ImportBudget>,
     mem: &mut Memory,
 ) {
-    use crate::source::{SourcePayload, SourceReport};
+    use crate::source::SourcePayload;
     reports.clear();
     let mode = crate::quantize::mode(ctx.get_global("mode").to_integer().unwrap_or(1) as u8);
     let Value::Table(bg) = ctx.get_global("bg") else {
@@ -1389,17 +1343,6 @@ fn place_bg_sources(
                         expected: "m7".into(),
                         found: kind_label(other).into(),
                     }),
-                }
-            } else if let Some(asset) = assets.get(&slot) {
-                // TEMPORARY BRIDGE: remove when demos bind addSource instead of upload_asset.
-                let (src, meta) =
-                    import_mode7(&asset.rgba, asset.width as usize, asset.height as usize);
-                crate::source::place_m7(&src, mem);
-                if let SourceReport::Mode7 { report } = &meta.report {
-                    reports.push(ImportBudget::Mode7 {
-                        layer: i,
-                        report: report.clone(),
-                    });
                 }
             }
         } else {
@@ -1428,22 +1371,6 @@ fn place_bg_sources(
                         found: kind_label(other).into(),
                     }),
                 }
-            } else if let Some(asset) = assets.get(&slot) {
-                // TEMPORARY BRIDGE: remove when demos bind addSource instead of upload_asset.
-                let opts = ImportOptions {
-                    bit_depth: bpp,
-                    tile_size: layer.get(ctx, "tile_size").to_integer().unwrap_or(8) as u8,
-                };
-                let (src, meta) = import_tile_bg(&asset.rgba, asset.width, asset.height, &opts);
-                let (map_base, char_base) = bg_bases(ctx, layer);
-                crate::source::place_bg(&src, mem, map_base, char_base, cgram_base);
-                echo_bg_registers(ctx, layer, &src, map_base, char_base);
-                if let SourceReport::Tile { report } = &meta.report {
-                    reports.push(ImportBudget::Tile {
-                        layer: i,
-                        report: report.clone(),
-                    });
-                }
             }
         }
     }
@@ -1453,18 +1380,17 @@ fn place_bg_sources(
 /// `obj.char_base`, OBJ palettes into the CGRAM OBJ half. Reads `obj.sheet` /
 /// `obj.char_base` straight from the Lua ctx (NOT `memory.obsel`, which
 /// `read_memory` fills LATER). A non-OBJ store source renders nothing and pushes
-/// an `ImportBudget::Mismatch`. An id absent from the store falls back to the
-/// legacy RGBA bridge (uncached import — TEMPORARY BRIDGE). Runs in the same
-/// bootstrap slot as the BG placement; appends to the shared `reports` vec
-/// (`place_bg_sources` already `clear()`ed it and pushed the BG entries).
+/// an `ImportBudget::Mismatch`. An id absent from the store simply renders
+/// nothing. Runs in the same bootstrap slot as the BG placement; appends to the
+/// shared `reports` vec (`place_bg_sources` already `clear()`ed it and pushed
+/// the BG entries).
 fn place_obj_source(
     ctx: piccolo::Context<'_>,
-    assets: &HashMap<String, ImportAsset>,
     store: &HashMap<String, crate::source::SourcePayload>,
     reports: &mut Vec<ImportBudget>,
     mem: &mut Memory,
 ) {
-    use crate::source::{SourcePayload, SourceReport};
+    use crate::source::SourcePayload;
     let Value::Table(obj) = ctx.get_global("obj") else {
         return;
     };
@@ -1483,15 +1409,6 @@ fn place_obj_source(
                 expected: "obj".into(),
                 found: kind_label(other).into(),
             }),
-        }
-    } else if let Some(asset) = assets.get(&slot) {
-        // TEMPORARY BRIDGE: remove when demos bind addSource instead of upload_asset.
-        let (src, meta) = import_obj_sheet(&asset.rgba, asset.width, asset.height, 8);
-        crate::source::place_obj(&src, mem, char_base as u16);
-        if let SourceReport::Obj { report } = &meta.report {
-            reports.push(ImportBudget::Obj {
-                report: report.clone(),
-            });
         }
     }
 }

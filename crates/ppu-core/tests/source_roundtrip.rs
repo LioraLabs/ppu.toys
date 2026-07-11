@@ -1,9 +1,9 @@
-//! Acceptance gate: a `convert_source` payload -> `.encode()` -> `add_source`
-//! render is byte-identical to the direct-import (`upload_asset`) render of
-//! the same image + options, for all three source kinds. Two `LuaEngine`s run
-//! the SAME script; one uploads the raw asset (classic import path), the
-//! other registers the pre-converted payload (source-store path); both are
-//! compared framebuffer-for-framebuffer.
+//! Acceptance gate for the format-committed source path: a `convert_source`
+//! payload -> `.encode()` -> `add_source` -> `frame` render is well-formed for
+//! all three source kinds, and strict bind validation rejects kind/depth
+//! mismatches. (The historical direct-import bridge these once mirrored has
+//! been removed; the golden-demo suite now anchors the source path's exact
+//! pixels.)
 
 use ppu_core::{
     convert_source, render_frame_view, rgb15, unpack_rgb15, ConvertOptions, LuaEngine, SourceKind,
@@ -50,31 +50,22 @@ fn quadrant_rgba() -> Vec<u8> {
 }
 
 #[test]
-fn bg_payload_roundtrips_to_identical_render() {
+fn bg_payload_renders_from_the_source_store() {
     let rgba = two_tile_rgba();
     let script = r#"function frame(t, f) bg[1].source = "art" end"#;
-
-    let mut a = LuaEngine::new();
-    a.upload_asset("art".into(), 16, 8, rgba.clone());
-    let fb_a = fb(&mut a, script);
 
     let mut b = LuaEngine::new();
     let (p, _m) = convert_source(SourceKind::Bg, &ConvertOptions::default(), &rgba, 16, 8).unwrap();
     b.add_source("art", &p.encode()).unwrap();
     let fb_b = fb(&mut b, script);
 
-    assert_eq!(fb_a, fb_b);
-    assert!(fb_a.chunks(4).any(|px| px[0] > 0 || px[2] > 0));
+    assert!(fb_b.chunks(4).any(|px| px[0] > 0 || px[2] > 0));
 }
 
 #[test]
-fn m7_payload_roundtrips_to_identical_render() {
+fn m7_payload_renders_from_the_source_store() {
     let rgba = quadrant_rgba();
     let script = r#"function frame(t, f) mode = 7 bg[1].source = "floor" end"#;
-
-    let mut a = LuaEngine::new();
-    a.upload_asset("floor".into(), 16, 16, rgba.clone());
-    let fb_a = fb(&mut a, script);
 
     let mut b = LuaEngine::new();
     let (p, _m) =
@@ -82,15 +73,12 @@ fn m7_payload_roundtrips_to_identical_render() {
     b.add_source("floor", &p.encode()).unwrap();
     let fb_b = fb(&mut b, script);
 
-    assert_eq!(fb_a, fb_b);
-    assert!(fb_a.chunks(4).any(|px| px[0] > 0 || px[2] > 0));
+    assert!(fb_b.chunks(4).any(|px| px[0] > 0 || px[2] > 0));
 }
 
 #[test]
-fn obj_payload_roundtrips_to_identical_render() {
+fn obj_payload_renders_from_the_source_store() {
     let rgba = two_tile_rgba();
-    // Convert once so both engines address the SAME tile numbers (the direct
-    // path runs the identical importer under the hood).
     let (p, meta) =
         convert_source(SourceKind::Obj, &ConvertOptions::default(), &rgba, 16, 8).unwrap();
     let cells = meta.cells.as_ref().unwrap();
@@ -99,23 +87,18 @@ fn obj_payload_roundtrips_to_identical_render() {
         cells[0].tile, cells[0].pal, cells[1].tile, cells[1].pal
     );
 
-    let mut a = LuaEngine::new();
-    a.upload_asset("sheet".into(), 16, 8, rgba.clone());
-    let fb_a = fb(&mut a, &script);
-
     let mut b = LuaEngine::new();
     b.add_source("sheet", &p.encode()).unwrap();
     let fb_b = fb(&mut b, &script);
 
-    assert_eq!(fb_a, fb_b);
-    assert!(fb_a.chunks(4).any(|px| px[0] > 0 || px[2] > 0));
+    assert!(fb_b.chunks(4).any(|px| px[0] > 0 || px[2] > 0));
 }
 
 #[test]
 fn obj_cell16_payload_renders_the_whole_cell_from_one_tile() {
-    // cell_size=16 has no direct-import twin (upload_asset's OBJ path is
-    // hardcoded to cell_size 8); this proves ONE obj[i].tile addresses the
-    // whole 2x2 block via the renderer's name-table stride (+1 right, +16 down).
+    // cell_size=16 packs a 2x2 tile block per cell; this proves ONE obj[i].tile
+    // addresses the whole block via the renderer's name-table stride (+1 right,
+    // +16 down).
     let rgba = quadrant_rgba();
     let opts = ConvertOptions {
         cell_size: Some(16),

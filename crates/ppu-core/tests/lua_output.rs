@@ -1,11 +1,37 @@
 //! frame() -> LineTable + CGRAM/OAM assertions for small DSL snippets and the
 //! two worked-example acceptance sources.
-use ppu_core::{rgb15, LuaEngine};
+use ppu_core::{convert_source, rgb15, ConvertOptions, LuaEngine, SourceKind};
 
 fn engine(src: &str) -> LuaEngine {
     let mut e = LuaEngine::new();
     e.set_source(src).expect("source should compile");
     e
+}
+
+/// Register an RGBA image through the format-committed source path (mirrors the
+/// web `convertSource` + `addSource` flow). `bit_depth` must match the depth of
+/// the slot the demo script binds, or the strict bind validation renders blank.
+fn add_bg(e: &mut LuaEngine, name: &str, rgba: Vec<u8>, w: u32, h: u32, bit_depth: u8) {
+    let opts = ConvertOptions {
+        bit_depth: Some(bit_depth),
+        ..Default::default()
+    };
+    let (p, _) = convert_source(SourceKind::Bg, &opts, &rgba, w, h).unwrap();
+    e.add_source(name, &p.encode()).unwrap();
+}
+
+fn add_m7(e: &mut LuaEngine, name: &str, rgba: Vec<u8>, w: u32, h: u32) {
+    let (p, _) = convert_source(SourceKind::M7, &ConvertOptions::default(), &rgba, w, h).unwrap();
+    e.add_source(name, &p.encode()).unwrap();
+}
+
+fn add_obj(e: &mut LuaEngine, name: &str, rgba: Vec<u8>, w: u32, h: u32) {
+    let opts = ConvertOptions {
+        cell_size: Some(8),
+        ..Default::default()
+    };
+    let (p, _) = convert_source(SourceKind::Obj, &opts, &rgba, w, h).unwrap();
+    e.add_source(name, &p.encode()).unwrap();
 }
 
 #[test]
@@ -183,7 +209,7 @@ fn source_triggers_tile_bg_import_into_vram_cgram() {
             });
         }
     }
-    e.upload_asset("sky".into(), 16, 8, rgba);
+    add_bg(&mut e, "sky", rgba, 16, 8, 4);
     e.set_source("function frame(t,f) mode=1; bg[1].source='sky' end")
         .unwrap();
     let lt = e.frame(0.0, 0).unwrap();
@@ -195,14 +221,14 @@ fn source_triggers_tile_bg_import_into_vram_cgram() {
     assert_eq!(m.vram[0x1000 + 16], 0x00ff); // char base 0x1000, tile 1 row0 plane0
     assert_eq!(lt.rows[0].bg[0].char_base, 0x1000); // echoed binding register
     assert_eq!(lt.rows[0].bg[0].map_base, 0x0000);
-    assert_eq!(e.import_reports().len(), 1); // budget surfaced
+    assert!(e.import_reports().is_empty()); // clean bind: no mismatch
 }
 
 #[test]
 fn mode0_source_import_writes_layer_cgram_band() {
     let mut e = LuaEngine::new();
     let rgba = [0u8, 255, 0, 255].repeat(64);
-    e.upload_asset("sky".into(), 8, 8, rgba);
+    add_bg(&mut e, "sky", rgba, 8, 8, 2);
     e.set_source("function frame(t,f) mode=0; bg[2].source='sky' end")
         .unwrap();
     e.frame(0.0, 0).unwrap();
@@ -216,7 +242,7 @@ fn mode0_source_import_writes_layer_cgram_band() {
 fn source_triggers_mode7_import_interleaved() {
     let mut e = LuaEngine::new();
     let rgba = [255u8, 0, 0, 255].repeat(64); // 8x8 solid red = 256 bytes
-    e.upload_asset("track".into(), 8, 8, rgba);
+    add_m7(&mut e, "track", rgba, 8, 8);
     e.set_source("function frame(t,f) mode=7; bg[1].source='track' end")
         .unwrap();
     e.frame(0.0, 0).unwrap();
@@ -233,7 +259,7 @@ fn manual_pokes_override_source_import() {
     for _ in 0..64 {
         rgba.extend_from_slice(&[255, 0, 0, 255]);
     }
-    e.upload_asset("sky".into(), 8, 8, rgba);
+    add_bg(&mut e, "sky", rgba, 8, 8, 4);
     e.set_source(
         "function frame(t,f) mode=1; bg[1].source='sky'; vram[0]=0xabcd; cgram[1]=rgb(0,255,0) end",
     )
@@ -257,7 +283,7 @@ fn obj_sheet_triggers_obj_import_into_vram_and_obj_cgram() {
             });
         }
     }
-    e.upload_asset("hero".into(), 16, 8, rgba);
+    add_obj(&mut e, "hero", rgba, 16, 8);
     e.set_source("function frame(t,f) mode=1; obj.sheet='hero'; obj.char_base=0x2000 end")
         .unwrap();
     e.frame(0.0, 0).unwrap();
@@ -270,15 +296,14 @@ fn obj_sheet_triggers_obj_import_into_vram_and_obj_cgram() {
     assert_eq!(m.vram[0x2000], 0); // reserved blank tile 0
     assert_eq!(m.vram[0x2000 + 16], 0x00ff);
     assert_eq!(m.obsel.char_base, 0x2000); // obsel echoes the same snapped base
-                                           // Budget report surfaced through the shared import_reports() path.
-    assert_eq!(e.import_reports().len(), 1);
+    assert!(e.import_reports().is_empty()); // clean bind: no mismatch
 }
 
 #[test]
 fn mode3_source_imports_bg1_as_8bpp_and_bg2_as_4bpp() {
     let mut e = LuaEngine::new();
     let red = [255u8, 0, 0, 255].repeat(64);
-    e.upload_asset("fg".into(), 8, 8, red.clone());
+    add_bg(&mut e, "fg", red.clone(), 8, 8, 8);
     // BG2's asset stacks a red tile (top) over a blue tile (bottom): the red
     // tile shares BG1's exact color so both layers agree on CGRAM index 1
     // (an idempotent overwrite), and blue lands at index 2. Two independent
@@ -288,7 +313,7 @@ fn mode3_source_imports_bg1_as_8bpp_and_bg2_as_4bpp() {
     // Mode 3 bpp wiring under test here.
     let mut bg_rgba = red;
     bg_rgba.extend([0u8, 0, 255, 255].repeat(64));
-    e.upload_asset("bg".into(), 8, 16, bg_rgba);
+    add_bg(&mut e, "bg", bg_rgba, 8, 16, 4);
     e.set_source(
         "function frame(t,f) mode=3; bg[1].source='fg'; bg[1].char_base=0x1000; bg[2].source='bg'; bg[2].map_base=0x0400; bg[2].char_base=0x2000 end",
     )
@@ -303,7 +328,7 @@ fn mode3_source_imports_bg1_as_8bpp_and_bg2_as_4bpp() {
     assert_eq!(m.vram[0x0400], 0x0001);
     assert_eq!(m.vram[0x1000 + 32], 0x00ff);
     assert_eq!(m.vram[0x2000 + 16], 0x00ff);
-    assert_eq!(e.import_reports().len(), 2);
+    assert!(e.import_reports().is_empty()); // clean binds: no mismatch
 }
 
 #[test]

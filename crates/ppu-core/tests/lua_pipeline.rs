@@ -58,18 +58,6 @@ fn setsource_reports_compile_error() {
 }
 
 #[test]
-fn upload_asset_lists_and_dedups_generation() {
-    let mut e = LuaEngine::new();
-    e.upload_asset("sky".into(), 2, 1, vec![255, 0, 0, 255, 0, 0, 255, 255]);
-    e.upload_asset("hills".into(), 1, 1, vec![0, 255, 0, 255]);
-    let a = e.assets();
-    assert_eq!(a.len(), 2);
-    assert_eq!(a[0], ("hills".into(), 1, 1)); // sorted by id
-    e.upload_asset("bad".into(), 4, 4, vec![0; 3]); // malformed -> ignored
-    assert_eq!(e.assets().len(), 2);
-}
-
-#[test]
 fn frame_reports_runtime_error() {
     let mut engine = LuaEngine::new();
     // index a nil global at frame() time -> Lua runtime error
