@@ -127,7 +127,10 @@ function pokeTarget(p: Poke): { addr: number; raw: boolean } | undefined {
  *  dialect's pokes on that same register from `existing`, so a raw
  *  `CGADSUB = 0x80` and a friendly `color.op = "add"` never coexist with the
  *  friendly line silently winning at fold time (the upsert keys on lvalue
- *  only). Same-dialect lines and unmapped lvalues (cgram[...]) are kept. */
+ *  only). Same-dialect lines and unmapped lvalues (cgram[...]) are kept.
+ *  Precondition: `incoming` is single-dialect per register (writesToPokes
+ *  emits one dialect; HexPoke/CgramPoke send single pokes) — a mixed batch
+ *  would keep only the last dialect's eviction for that register. */
 export function evictCrossDialect(existing: readonly Poke[], incoming: readonly Poke[]): Poke[] {
   const touched = new Map<number, boolean>(); // addr -> incoming dialect is raw
   for (const p of incoming) {

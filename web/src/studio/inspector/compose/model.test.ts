@@ -489,4 +489,8 @@ describe("evictCrossDialect (dialect flip must not leave conflicting lines)", ()
     expect(evictCrossDialect([cgram, friendlyOp], [rawAdsub])).toEqual([cgram]);
     expect(evictCrossDialect([rawAdsub], [cgram])).toEqual([rawAdsub]);
   });
+
+  it("cross-dialect eviction and same-dialect survival compose on ONE register", () => {
+    expect(evictCrossDialect([rawAdsub, friendlyHalf], [friendlyOp])).toEqual([friendlyHalf]);
+  });
 });
