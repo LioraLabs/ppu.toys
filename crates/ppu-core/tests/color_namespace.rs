@@ -130,3 +130,26 @@ fn unrecognized_enum_values_fall_back_to_raw() {
         .unwrap();
     assert_eq!(e.frame(0.0, 0).unwrap().rows[0].cgadsub, 0x80);
 }
+
+#[test]
+fn cgwsel_non_owned_bits_survive_friendly_moves_in_both_directions() {
+    // Mask discipline: friendly owns CGWSEL 0x32 only. Bit 0 (direct_color)
+    // and bits 6-7 (clip-to-black) must survive a friendly MOVE — both when
+    // friendly SETS its bits and when it CLEARS them. (Bit 0 persists via the
+    // direct_color OR-fold precedent: write_state mirrors it back into the
+    // global, which keeps it set.)
+    let mut e = LuaEngine::new();
+    e.set_source(
+        "function frame(t,f) \
+           if f == 0 then CGWSEL = 0xC3 end \
+           if f == 1 then color.region = 'never' end \
+           if f == 2 then color.region = 'everywhere'; color.addend = 'fixed' end \
+         end",
+    )
+    .unwrap();
+    assert_eq!(e.frame(0.0, 0).unwrap().rows[0].cgwsel, 0xC3);
+    // Set direction: region bits 4-5 set, bits 0/6/7 untouched.
+    assert_eq!(e.frame(0.0, 1).unwrap().rows[0].cgwsel, 0xF3);
+    // Clear direction: region + addend cleared, bits 0/6/7 still intact.
+    assert_eq!(e.frame(0.0, 2).unwrap().rows[0].cgwsel, 0xC1);
+}
