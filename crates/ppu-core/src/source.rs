@@ -25,6 +25,8 @@
 //! palettes are color lists (sub-palette entry 0 transparent, implicit).
 //! Decode is strict: unknown version/kind/params reject, trailing bytes reject.
 
+use crate::memory::Memory;
+
 pub const PAYLOAD_VERSION: u8 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -317,6 +319,70 @@ impl SourcePayload {
     }
 }
 
+/// Write a BG source at bind-time bases. `cgram_base` is the CGRAM index the
+/// palette block starts at (the mode-0 per-layer band, else 0); sub-palette
+/// entry 0 stays unwritten (transparent).
+pub fn place_bg(
+    src: &BgSource,
+    mem: &mut Memory,
+    map_base: u16,
+    char_base: u16,
+    cgram_base: usize,
+) {
+    for (o, &w) in src.char_words.iter().enumerate() {
+        mem.vram[(char_base as usize + o) & 0x7fff] = w;
+    }
+    for (o, &w) in src.tilemap_words.iter().enumerate() {
+        mem.vram[(map_base as usize + o) & 0x7fff] = w;
+    }
+    let stride = match src.bit_depth {
+        2 => 4,
+        8 => 256,
+        _ => 16,
+    };
+    for (pi, p) in src.palettes.iter().enumerate() {
+        for (ci, &c) in p.iter().enumerate() {
+            mem.cgram[(cgram_base + pi * stride + ci + 1) & 0xff] = c;
+        }
+    }
+}
+
+/// Write a Mode 7 source into the byte-interleaved region (words 0..0x4000):
+/// char bytes in the high lane, the 128-wide map in the low lane, palette at
+/// CGRAM 1.. . Masked-lane writes assume the frame's zeroed-VRAM bootstrap
+/// (frame() zeroes VRAM/CGRAM before imports), composing like the m7 pokes.
+pub fn place_m7(src: &M7Source, mem: &mut Memory) {
+    for (t, tile) in src.tiles.iter().enumerate() {
+        for (j, &px) in tile.iter().enumerate() {
+            let i = t * 64 + j;
+            mem.vram[i] = (mem.vram[i] & 0x00ff) | ((px as u16) << 8);
+        }
+    }
+    let tw = src.tiles_w as usize;
+    for ty in 0..src.tiles_h as usize {
+        for tx in 0..tw {
+            let i = ty * 128 + tx;
+            mem.vram[i] = (mem.vram[i] & 0xff00) | src.map[ty * tw + tx] as u16;
+        }
+    }
+    for (i, &c) in src.palette.iter().enumerate() {
+        mem.cgram[(i + 1) & 0xff] = c;
+    }
+}
+
+/// Write an OBJ source: char words at `char_base` (wrapping VRAM), palettes
+/// into the OBJ CGRAM half (128..).
+pub fn place_obj(src: &ObjSource, mem: &mut Memory, char_base: u16) {
+    for (i, &w) in src.char_words.iter().enumerate() {
+        mem.vram[(char_base as usize + i) & 0x7fff] = w;
+    }
+    for (pi, p) in src.palettes.iter().enumerate() {
+        for (ci, &c) in p.iter().enumerate() {
+            mem.cgram[(128 + pi * 16 + ci + 1) & 0xff] = c;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -430,5 +496,45 @@ mod tests {
             SourcePayload::decode(&[1, 2, 9]),
             Err(PayloadError::BadParam("cell_size"))
         );
+    }
+
+    #[test]
+    fn place_bg_writes_char_map_and_banded_palette() {
+        let s = sample_bg();
+        let mut mem = Memory::new();
+        place_bg(&s, &mut mem, 0x0000, 0x1000, 0);
+        assert_eq!(mem.vram[0x1000], 0xbeef);
+        assert_eq!(mem.vram[0x0000], 0x0001);
+        assert_eq!(mem.cgram[1], 0x001f); // pal 0 entry 1 (stride 4 at 2bpp)
+        assert_eq!(mem.cgram[2], 0x7c00);
+        assert_eq!(mem.cgram[5], 0x03e0); // pal 1 entry 1 = 1*4+0+1
+        assert_eq!(mem.cgram[0], 0); // transparent slot untouched
+                                     // mode-0 band shifts the whole block
+        let mut mem2 = Memory::new();
+        place_bg(&s, &mut mem2, 0x0000, 0x1000, 32);
+        assert_eq!(mem2.cgram[33], 0x001f);
+    }
+
+    #[test]
+    fn place_m7_interleaves_lanes_and_flat_palette() {
+        let s = sample_m7();
+        let mut mem = Memory::new();
+        place_m7(&s, &mut mem);
+        assert_eq!(mem.vram[0], (7 << 8) | 0); // char high lane | map cell (0,0)=tile 0
+        assert_eq!(mem.vram[1], (7 << 8) | 1); // map cell (1,0)=tile 1
+        assert_eq!(mem.vram[64], 3 << 8); // tile 1 char bytes
+        assert_eq!(mem.cgram[1], 0x001f);
+        assert_eq!(mem.cgram[2], 0x7fff);
+        assert_eq!(mem.cgram[0], 0);
+    }
+
+    #[test]
+    fn place_obj_writes_char_at_base_and_obj_palettes() {
+        let s = sample_obj();
+        let mut mem = Memory::new();
+        place_obj(&s, &mut mem, 0x2000);
+        assert_eq!(mem.vram[0x2000], 0x00ff);
+        assert_eq!(mem.cgram[129], 0x001f);
+        assert_eq!(mem.cgram[1], 0); // BG half untouched
     }
 }
