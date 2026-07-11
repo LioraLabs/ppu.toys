@@ -1,5 +1,6 @@
 import { transport } from "./transport/transport";
 import { useTheme } from "./theme";
+import { AddSourceButton } from "./sources/AddSourceButton";
 
 export interface ToolbarProps {
   /** Open-sketch name. Placeholder default until the sketch store wires
@@ -26,6 +27,7 @@ export function Toolbar({ sketchName = "dusk-parallax", dirty = false }: Toolbar
       <button type="button" className="btn-solid" onClick={() => transport.restart()}>
         ▶ Run
       </button>
+      <AddSourceButton />
       <button type="button" className="btn-ghost" onClick={toggleTheme} aria-label="Toggle color theme">
         {theme === "dark" ? "Light" : "Dark"}
       </button>
