@@ -108,6 +108,8 @@ describe("DEMOS", () => {
     const s = DEMOS.find((d) => d.id === "spotlight")!;
     expect(s.source).toContain("CGWSEL = 0x40");
     expect(s.source).toContain("hdma(0, 223");
+    expect(s.source).toContain("win.color.w1 = true");
+    expect(s.source).toContain("win.w1.lo = cx - hw");
     const g = DEMOS.find((d) => d.id === "glow")!;
     expect(g.source).toContain('color.op = "add"; color.on.bg1 = true');
     expect(g.source).toContain('color.addend = "fixed"');

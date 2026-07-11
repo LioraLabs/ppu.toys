@@ -120,21 +120,25 @@ function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15
   bg[1].source = "ribbons"
-  TM = 0x01                 -- BG1 only on the main screen
-  WOBJSEL = 0x20            -- COLOR window: window-1 enable (high nibble bit1)
-  WOBJLOG = 0x00            -- COLOR window logic = OR
-  CGWSEL = 0x40             -- clip-to-black region = 01 (outside the window -> black)
+  screen.main.bg1 = true    -- BG1 only on the main screen
+  screen.main.bg2 = false; screen.main.bg3 = false
+  screen.main.bg4 = false; screen.main.obj = false
+  win.color.w1 = true       -- COLOR window follows window 1
+  win.color.combine = "OR"  -- COLOR window logic = OR
+  -- clip-to-black = 01 (outside the window -> black); raw on purpose: CGWSEL
+  -- bits 6-7 have no friendly field (color owns only addend/region)
+  CGWSEL = 0x40
   -- iris: per scanline, window 1 spans [cx-hw, cx+hw] where hw traces a circle.
   local cx, cy, r = 128, 112, 70
   hdma(0, 223, function(y)
     local dy = y - cy
     local inside = r*r - dy*dy
     if inside < 0 then
-      WH0 = 1; WH1 = 0        -- empty span (left > right) -> nothing inside
+      win.w1.lo = 1; win.w1.hi = 0   -- empty span (left > right) -> nothing inside
     else
       local hw = floor(sqrt(inside))
-      WH0 = cx - hw
-      WH1 = cx + hw
+      win.w1.lo = cx - hw
+      win.w1.hi = cx + hw
     end
   end)
 end
