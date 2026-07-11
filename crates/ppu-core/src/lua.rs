@@ -1095,13 +1095,25 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
     // baseline recorded by install_bindings/write_state; only bits the user
     // moved through `win` override the raw mnemonics (set AND clear, and
     // beat a same-cycle raw write), masked so raw-only bits (WOBJLOG 4-7,
-    // TMW/TSW 5-7) pass through untouched.
+    // TMW/TSW 5-7) pass through untouched. Exception: the WH edges (indices
+    // 0..3) are scalar coordinates, not bitfields — a moved friendly edge
+    // replaces the byte whole (the COLDATA precedent), never a bitwise blend.
     let wbase = read_win_base(ctx);
     let fwin = pack_win(ctx, &wbase);
     let mut wrow = row_win_bytes(&row);
     for (i, b) in wrow.iter_mut().enumerate() {
         let changed = (fwin[i] ^ wbase[i]) & WIN_MASKS[i];
-        *b = (*b & !changed) | (fwin[i] & changed);
+        if i < 4 {
+            // WH edges are scalar coordinates, not bitfields: whole-value
+            // change detection (the COLDATA precedent) — a moved friendly
+            // edge replaces the byte outright, never bit-blends with a
+            // same-frame raw write.
+            if changed != 0 {
+                *b = fwin[i];
+            }
+        } else {
+            *b = (*b & !changed) | (fwin[i] & changed);
+        }
     }
     row.wh0 = wrow[0];
     row.wh1 = wrow[1];
