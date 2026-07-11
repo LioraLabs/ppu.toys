@@ -117,3 +117,39 @@ describe("M8 DSL audit", () => {
     expect(complete("obj.")!.options.map((o) => o.label)).toContain("first");
   });
 });
+
+describe("color namespace", () => {
+  it("offers the color global with its register annotation", () => {
+    const opts = complete("col")!.options;
+    const color = opts.find((o) => o.label === "color");
+    expect(color).toBeDefined();
+    expect(color!.detail).toContain("$2130");
+  });
+
+  it("offers color.* members after `color.`", () => {
+    const labels = complete("color.")!.options.map((o) => o.label);
+    for (const m of ["op", "half", "on", "addend", "region", "fixed"]) {
+      expect(labels).toContain(m);
+    }
+    expect(labels).not.toContain("brightness");
+    expect(labels).not.toContain("bg1");
+  });
+
+  it("offers color.on.* layer enables after `color.on.`", () => {
+    const labels = complete("color.on.")!.options.map((o) => o.label);
+    for (const m of ["bg1", "bg2", "bg3", "bg4", "obj", "backdrop"]) {
+      expect(labels).toContain(m);
+    }
+    expect(labels).not.toContain("op");
+  });
+
+  it("completes the partial word after color.on.", () => {
+    const res = complete("color.on.bg")!;
+    expect(res.options.map((o) => o.label)).toContain("bg1");
+    expect(res.from).toBe("color.on.".length);
+  });
+
+  it("does NOT treat identifiers ending in color as the namespace", () => {
+    expect(complete("mycolor.")!.options.map((o) => o.label)).not.toContain("addend");
+  });
+});

@@ -568,6 +568,16 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     });
     ctx.set_global("hdma", hdma).unwrap();
     ctx.set_global("scanline", hdma).unwrap();
+
+    // Friendly color-math namespace over CGWSEL/CGADSUB/COLDATA.
+    // `__color_base` records the packed bytes at each (re-)baseline so
+    // read_state can tell WHICH side (friendly field vs raw mnemonic) the
+    // user moved — see the fold in read_state.
+    let color = Table::new(&ctx);
+    color.set(ctx, "on", Table::new(&ctx)).unwrap();
+    ctx.set_global("color", color).unwrap();
+    ctx.set_global("__color_base", Table::new(&ctx)).unwrap();
+    sync_color(ctx, 0, 0, 0); // power-on defaults = decode of zeroed registers
 }
 
 /// Chunk (source file) name a Lua function was compiled from; `None` for
@@ -603,6 +613,127 @@ fn value_to_string(v: Value<'_>) -> Option<String> {
     match v {
         Value::String(s) => Some(String::from_utf8_lossy(s.as_bytes()).into_owned()),
         _ => None,
+    }
+}
+
+/// CGWSEL bits owned by the friendly `color` namespace: bit1 addend,
+/// bits 4-5 prevent-math region. Bit 0 (direct_color) and bits 6-7
+/// (clip-to-black) are NOT color's — leave them to the raw byte.
+const COLOR_CGWSEL_MASK: u8 = 0x32;
+
+/// The CGWSEL/CGADSUB/COLDATA bytes as of the last install_bindings/
+/// write_state — the baseline the friendly `color` fold diffs against.
+fn read_color_base(ctx: piccolo::Context<'_>) -> (u8, u8, u16) {
+    match ctx.get_global("__color_base") {
+        Value::Table(t) => (
+            t.get(ctx, "cgwsel").to_integer().unwrap_or(0) as u8,
+            t.get(ctx, "cgadsub").to_integer().unwrap_or(0) as u8,
+            t.get(ctx, "coldata").to_integer().unwrap_or(0) as u16,
+        ),
+        _ => (0, 0, 0),
+    }
+}
+
+/// Pack the friendly `color` table into (cgwsel-bits, cgadsub, coldata).
+/// Any field that is nil/unrecognized takes its bits from `base` (absent
+/// friendly -> the raw register keeps those bits, i.e. "no change").
+fn pack_color(ctx: piccolo::Context<'_>, base: (u8, u8, u16)) -> (u8, u8, u16) {
+    let (base_w, base_a, base_c) = base;
+    let Value::Table(color) = ctx.get_global("color") else {
+        return base;
+    };
+    let bit = |v: Value<'_>, mask: u8, base_byte: u8| -> u8 {
+        match v {
+            Value::Boolean(true) => mask,
+            Value::Boolean(false) => 0,
+            _ => base_byte & mask,
+        }
+    };
+    let mut a = match value_to_string(color.get(ctx, "op")).as_deref() {
+        Some("add") => 0,
+        Some("sub") => 0x80,
+        _ => base_a & 0x80,
+    };
+    a |= bit(color.get(ctx, "half"), 0x40, base_a);
+    if let Value::Table(on) = color.get(ctx, "on") {
+        for (name, mask) in [
+            ("bg1", 0x01),
+            ("bg2", 0x02),
+            ("bg3", 0x04),
+            ("bg4", 0x08),
+            ("obj", 0x10),
+            ("backdrop", 0x20),
+        ] {
+            a |= bit(on.get(ctx, name), mask, base_a);
+        }
+    } else {
+        a |= base_a & 0x3f;
+    }
+    let mut w = match value_to_string(color.get(ctx, "addend")).as_deref() {
+        Some("sub") => 0x02,
+        Some("fixed") => 0,
+        _ => base_w & 0x02,
+    };
+    w |= match value_to_string(color.get(ctx, "region")).as_deref() {
+        Some("everywhere") => 0x00,
+        Some("inside") => 0x10,  // prevent-math OUTSIDE the window
+        Some("outside") => 0x20, // prevent-math INSIDE the window
+        Some("never") => 0x30,   // always prevent
+        _ => base_w & 0x30,
+    };
+    let c = match color.get(ctx, "fixed").to_integer() {
+        Some(v) => (v as u16) & 0x7fff,
+        None => base_c,
+    };
+    (w, a, c)
+}
+
+/// Unpack CGWSEL/CGADSUB/COLDATA into the friendly `color` fields (mirror
+/// live values so hooks can read them — HDMA persistence, matching m7) and
+/// record the bytes in `__color_base` for read_state's change detection.
+fn sync_color(ctx: piccolo::Context<'_>, cgwsel: u8, cgadsub: u8, coldata: u16) {
+    if let Value::Table(color) = ctx.get_global("color") {
+        let s = |v: &str| ctx.intern(v.as_bytes());
+        color
+            .set(
+                ctx,
+                "op",
+                s(if cgadsub & 0x80 != 0 { "sub" } else { "add" }),
+            )
+            .unwrap();
+        color.set(ctx, "half", cgadsub & 0x40 != 0).unwrap();
+        if let Value::Table(on) = color.get(ctx, "on") {
+            for (name, mask) in [
+                ("bg1", 0x01u8),
+                ("bg2", 0x02),
+                ("bg3", 0x04),
+                ("bg4", 0x08),
+                ("obj", 0x10),
+                ("backdrop", 0x20),
+            ] {
+                on.set(ctx, name, cgadsub & mask != 0).unwrap();
+            }
+        }
+        color
+            .set(
+                ctx,
+                "addend",
+                s(if cgwsel & 0x02 != 0 { "sub" } else { "fixed" }),
+            )
+            .unwrap();
+        let region = match (cgwsel >> 4) & 0x03 {
+            0 => "everywhere",
+            1 => "inside",
+            2 => "outside",
+            _ => "never",
+        };
+        color.set(ctx, "region", s(region)).unwrap();
+        color.set(ctx, "fixed", (coldata & 0x7fff) as i64).unwrap();
+    }
+    if let Value::Table(b) = ctx.get_global("__color_base") {
+        b.set(ctx, "cgwsel", cgwsel as i64).unwrap();
+        b.set(ctx, "cgadsub", cgadsub as i64).unwrap();
+        b.set(ctx, "coldata", (coldata & 0x7fff) as i64).unwrap();
     }
 }
 
@@ -669,6 +800,24 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
     }
     if let Some(v) = ctx.get_global("COLDATA").to_integer() {
         row.coldata = v as u16;
+    }
+    // Friendly `color.*` fold — the coexistence contract, generalizing the
+    // direct_color precedent above to sets-AND-clears: XOR the packed friendly
+    // fields against the `__color_base` baseline recorded by install_bindings/
+    // write_state. Bits the user moved via the friendly fields this cycle are
+    // authoritative (set AND clear, and beat a same-cycle raw write); bits the
+    // friendly side did not move keep the raw CGWSEL/CGADSUB/COLDATA byte, so
+    // raw-only scripts (incl. inside hooks) and the both-off power-on state
+    // stay byte-identical. Known limit: re-assigning a friendly field its
+    // current value is indistinguishable from not touching it.
+    let base = read_color_base(ctx);
+    let (f_w, f_a, f_c) = pack_color(ctx, base);
+    let changed_w = (f_w ^ base.0) & COLOR_CGWSEL_MASK;
+    row.cgwsel = (row.cgwsel & !changed_w) | (f_w & changed_w);
+    let changed_a = f_a ^ base.1;
+    row.cgadsub = (row.cgadsub & !changed_a) | (f_a & changed_a);
+    if f_c != base.2 {
+        row.coldata = f_c;
     }
     if let Some(v) = ctx.get_global("mosaic").to_integer() {
         row.mosaic_size = v as u8; // wrap; quantize::mosaic_size masks to 4 bits at build
@@ -762,6 +911,7 @@ fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
     ctx.set_global("mosaic", row.mosaic_size as i64).unwrap();
     ctx.set_global("direct_color", (row.cgwsel & 0x01) != 0)
         .unwrap();
+    sync_color(ctx, row.cgwsel, row.cgadsub, row.coldata);
     ctx.set_global("force_blank", row.force_blank).unwrap();
     if let Value::Table(bg) = ctx.get_global("bg") {
         for i in 0..4 {
