@@ -265,10 +265,11 @@ function frame(t, f)
   bg[1].source = "panel"                       -- the glass panel (main only)
   bg[2].source = "ribbons"; bg[2].char_base = 0x2000  -- scene, on main AND sub
   bg[2].map_base = 0x0800
-  TM = 0x03        -- BG1 (panel) + BG2 (scene) on the main screen
-  TS = 0x02        -- BG2 (scene) on the sub screen -> the addend under the glass
-  CGADSUB = 0x41   -- add + half + BG1 math-enable
-  CGWSEL = 0x02    -- addend = subscreen (not fixed colour)
+  screen.main.bg1 = true; screen.main.bg2 = true      -- panel + scene on the main screen
+  screen.main.bg3 = false; screen.main.bg4 = false; screen.main.obj = false
+  screen.sub.bg2 = true    -- scene on the sub screen -> the addend under the glass
+  color.op = "add"; color.half = true; color.on.bg1 = true  -- ½-add math on BG1 (the glass)
+  color.addend = "sub"     -- addend = subscreen (not fixed colour)
 end
 `;
 

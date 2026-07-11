@@ -102,8 +102,9 @@ describe("DEMOS", () => {
   it("m6 demos carry their colour-math lua and assets", () => {
     const t = DEMOS.find((d) => d.id === "translucency")!;
     expect(t.assets.map((a) => a.id)).toEqual(["panel", "ribbons"]);
-    expect(t.source).toContain("CGADSUB = 0x41");
-    expect(t.source).toContain("TS = 0x02");
+    expect(t.source).toContain('color.op = "add"; color.half = true; color.on.bg1 = true');
+    expect(t.source).toContain("screen.sub.bg2 = true");
+    expect(t.source).toContain('color.addend = "sub"');
     const s = DEMOS.find((d) => d.id === "spotlight")!;
     expect(s.source).toContain("CGWSEL = 0x40");
     expect(s.source).toContain("hdma(0, 223");
