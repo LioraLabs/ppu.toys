@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { openSketchStore, openContextFiles, useOpenSketch, type OpenSketchState } from "../sketches/openSketch";
 import type { SketchFile } from "../sketches/sketchStore";
 import { POKES_FILE, parsePokes, pokesToLua, upsertPoke, type Poke } from "./pokes";
+import { evictCrossDialect } from "../inspector/compose/model";
 
 /** The pokes.lua FILE is the source of truth — these helpers parse it out of the
  *  open context and write it back through editFile (autosave/fork/persist ride along). */
@@ -25,15 +26,24 @@ function write(next: readonly Poke[]): void {
 }
 
 export function poke(p: Poke): void {
-  write(upsertPoke(currentPokes(openSketchStore.state()), p));
+  pokeMany([p]);
 }
 
+/** Upsert a batch in ONE regeneration, first evicting the OTHER dialect's
+ *  pokes on every register the batch touches (a raw CGADSUB = 0x80 must not
+ *  coexist with a friendly color.op = "add" — the friendly fold would
+ *  silently win). Covers every write path, including HexPoke's raw edits. */
 export function pokeMany(ps: readonly Poke[]): void {
-  write(ps.reduce((acc, p) => upsertPoke(acc, p), currentPokes(openSketchStore.state())));
+  const kept = evictCrossDialect(currentPokes(openSketchStore.state()), ps);
+  write(ps.reduce((acc, p) => upsertPoke(acc, p), kept));
 }
 
 export function unpoke(lvalue: string): void {
   write(currentPokes(openSketchStore.state()).filter((p) => p.lvalue !== lvalue));
+}
+
+export function unpokeMany(lvalues: readonly string[]): void {
+  write(currentPokes(openSketchStore.state()).filter((p) => !lvalues.includes(p.lvalue)));
 }
 
 export function clearPokes(): void {

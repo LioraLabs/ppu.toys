@@ -2,35 +2,56 @@ import { describe, expect, it } from "vitest";
 import type { RegisterView } from "../../../ppu/core";
 import { parsePokes, pokesToLua } from "../../pokes/pokes";
 import {
+  ADDEND_FIELDS,
   BACKDROP_MATH_BIT,
+  COMBINE_FIELDS,
   COMPOSE_LAYERS,
+  AREA_FIELDS,
+  FIELD_SPECS,
   FIXED_COLOR_SWATCHES,
+  FIXED_FIELDS,
+  MATH_ENABLE_FIELDS,
+  OPERATION_FIELDS,
   REG,
   REG_LVALUES,
+  SCREEN_MAIN_FIELDS,
+  SCREEN_SUB_FIELDS,
   WINDOW_LAYERS,
   areaValue,
   columnMask,
   combineValue,
   dimOutsideMask,
   equation,
+  evictCrossDialect,
+  fieldPoke,
   hexToBgr555,
   liveReg,
   mathAddend,
   mathHalf,
   mathOp,
   nearestEdgeAddr,
+  pokeMatchesLive,
+  pokesAt,
   regPoke,
   setArea,
   setCombine,
+  setFixedColor,
+  setMathAddend,
+  setMathHalf,
+  setMathOp,
+  setWindowEdge,
   tintMathRegion,
-  toggleMaskBit,
+  toggleDesignation,
   toggleWindowEnable,
   toggleWindowInvert,
+  winRowFields,
   windowBounds,
   windowRow,
   withMathAddend,
   withMathHalf,
   withMathOp,
+  writesToPokes,
+  type FieldWrite,
   type ReadReg,
 } from "./model";
 
@@ -94,11 +115,6 @@ describe("compose matrix + color math", () => {
     expect(BACKDROP_MATH_BIT).toBe(5);
   });
 
-  it("toggleMaskBit flips exactly one designation bit", () => {
-    expect(toggleMaskBit(REG.TM, 0x17, 1)).toEqual({ addr: REG.TM, value: 0x15 });
-    expect(toggleMaskBit(REG.CGADSUB, 0x00, 5)).toEqual({ addr: REG.CGADSUB, value: 0x20 });
-  });
-
   it("decodes and re-encodes CGADSUB op/half without touching enable bits", () => {
     expect(mathOp(0x3f)).toBe("add");
     expect(mathOp(0xbf)).toBe("sub");
@@ -133,6 +149,33 @@ describe("compose matrix + color math", () => {
   });
 });
 
+describe("compose field emitters", () => {
+  it("toggleDesignation flips one bit and states the new value as a bool field", () => {
+    expect(toggleDesignation("screen.main.bg2", REG.TM, 0x17, 1)).toEqual({
+      field: "screen.main.bg2", expr: "false", addr: REG.TM, value: 0x15,
+    });
+    expect(toggleDesignation("color.on.backdrop", REG.CGADSUB, 0x00, 5)).toEqual({
+      field: "color.on.backdrop", expr: "true", addr: REG.CGADSUB, value: 0x20,
+    });
+  });
+
+  it("setMathOp / setMathHalf write CGADSUB preserving the enable bits", () => {
+    expect(setMathOp("sub", 0x3f)).toEqual({ field: "color.op", expr: '"sub"', addr: REG.CGADSUB, value: 0xbf });
+    expect(setMathOp("add", 0xbf)).toEqual({ field: "color.op", expr: '"add"', addr: REG.CGADSUB, value: 0x3f });
+    expect(setMathHalf(true, 0x3f)).toEqual({ field: "color.half", expr: "true", addr: REG.CGADSUB, value: 0x7f });
+  });
+
+  it("setMathAddend writes CGWSEL bit1 only (direct_color + clip + region preserved)", () => {
+    expect(setMathAddend("sub", 0xf1)).toEqual({ field: "color.addend", expr: '"sub"', addr: REG.CGWSEL, value: 0xf3 });
+    expect(setMathAddend("fixed", 0xf3)).toEqual({ field: "color.addend", expr: '"fixed"', addr: REG.CGWSEL, value: 0xf1 });
+  });
+
+  it("setFixedColor emits 15-bit hex COLDATA", () => {
+    expect(setFixedColor(0x7fff)).toEqual({ field: "color.fixed", expr: "0x7fff", addr: REG.COLDATA, value: 0x7fff });
+    expect(setFixedColor(0)).toEqual({ field: "color.fixed", expr: "0x0000", addr: REG.COLDATA, value: 0 });
+  });
+});
+
 describe("window select rows", () => {
   const bg1 = WINDOW_LAYERS[0];
   const bg2 = WINDOW_LAYERS[1];
@@ -150,35 +193,44 @@ describe("window select rows", () => {
     });
   });
 
-  it("enable toggle writes both window enables + the TMW bit", () => {
+  it("enable toggle emits w1+w2+main bool fields carrying the folded register bytes", () => {
     expect(toggleWindowEnable(bg1, read({}))).toEqual([
-      { addr: REG.W12SEL, value: 0x0a },
-      { addr: REG.TMW, value: 0x01 },
+      { field: "win.bg1.w1", expr: "true", addr: REG.W12SEL, value: 0x0a },
+      { field: "win.bg1.w2", expr: "true", addr: REG.W12SEL, value: 0x0a },
+      { field: "win.bg1.main", expr: "true", addr: REG.TMW, value: 0x01 },
     ]);
     expect(toggleWindowEnable(bg1, read({ [REG.W12SEL]: 0x0a, [REG.TMW]: 0x1f }))).toEqual([
-      { addr: REG.W12SEL, value: 0x00 },
-      { addr: REG.TMW, value: 0x1e },
+      { field: "win.bg1.w1", expr: "false", addr: REG.W12SEL, value: 0x00 },
+      { field: "win.bg1.w2", expr: "false", addr: REG.W12SEL, value: 0x00 },
+      { field: "win.bg1.main", expr: "false", addr: REG.TMW, value: 0x1e },
     ]);
   });
 
-  it("color-row enable drives WOBJSEL high nibble + CGWSEL prevent-math region", () => {
+  it("color-row enable routes CGWSEL through color.region — never a win field", () => {
     expect(toggleWindowEnable(color, read({ [REG.CGWSEL]: 0x02 }))).toEqual([
-      { addr: REG.WOBJSEL, value: 0xa0 },
-      { addr: REG.CGWSEL, value: 0x12 },
+      { field: "win.color.w1", expr: "true", addr: REG.WOBJSEL, value: 0xa0 },
+      { field: "win.color.w2", expr: "true", addr: REG.WOBJSEL, value: 0xa0 },
+      { field: "color.region", expr: '"inside"', addr: REG.CGWSEL, value: 0x12 },
     ]);
-    expect(
-      toggleWindowEnable(color, read({ [REG.WOBJSEL]: 0xa0, [REG.CGWSEL]: 0x12 })),
-    ).toEqual([
-      { addr: REG.WOBJSEL, value: 0x00 },
-      { addr: REG.CGWSEL, value: 0x02 },
+    expect(toggleWindowEnable(color, read({ [REG.WOBJSEL]: 0xa0, [REG.CGWSEL]: 0x12 }))).toEqual([
+      { field: "win.color.w1", expr: "false", addr: REG.WOBJSEL, value: 0x00 },
+      { field: "win.color.w2", expr: "false", addr: REG.WOBJSEL, value: 0x00 },
+      { field: "color.region", expr: '"everywhere"', addr: REG.CGWSEL, value: 0x02 },
     ]);
   });
 
-  it("invert toggle flips both invert bits of the layer nibble only", () => {
-    expect(toggleWindowInvert(bg3, read({}))).toEqual([{ addr: REG.W34SEL, value: 0x05 }]);
-    expect(toggleWindowInvert(bg3, read({ [REG.W34SEL]: 0xf5 }))).toEqual([
-      { addr: REG.W34SEL, value: 0xf0 },
+  it("invert toggle is ONE lossy field per row (both invert bits, the core decode)", () => {
+    expect(toggleWindowInvert(bg3, read({}))).toEqual([
+      { field: "win.bg3.invert", expr: "true", addr: REG.W34SEL, value: 0x05 },
     ]);
+    expect(toggleWindowInvert(bg3, read({ [REG.W34SEL]: 0xf5 }))).toEqual([
+      { field: "win.bg3.invert", expr: "false", addr: REG.W34SEL, value: 0xf0 },
+    ]);
+  });
+
+  it("setWindowEdge names the WH scalar field with a decimal expr", () => {
+    expect(setWindowEdge(REG.WH0, 40)).toEqual({ field: "win.w1.lo", expr: "40", addr: REG.WH0, value: 40 });
+    expect(setWindowEdge(REG.WH3, 200)).toEqual({ field: "win.w2.hi", expr: "200", addr: REG.WH3, value: 200 });
   });
 });
 
@@ -190,15 +242,15 @@ describe("combine + area segmenteds", () => {
     expect(combineValue(read({ [REG.WBGLOG]: 0xaa, [REG.WOBJLOG]: 0x02 }))).toBeNull();
   });
 
-  it("setCombine writes every WBGLOG/WOBJLOG slot", () => {
-    expect(setCombine(3)).toEqual([
-      { addr: REG.WBGLOG, value: 0xff },
-      { addr: REG.WOBJLOG, value: 0x0f },
+  it("setCombine emits all six layers' combine fields (incl. registers-only bg4)", () => {
+    const ws = setCombine(1);
+    expect(ws.map((w) => w.field)).toEqual([
+      "win.bg1.combine", "win.bg2.combine", "win.bg3.combine",
+      "win.bg4.combine", "win.obj.combine", "win.color.combine",
     ]);
-    expect(setCombine(1)).toEqual([
-      { addr: REG.WBGLOG, value: 0x55 },
-      { addr: REG.WOBJLOG, value: 0x05 },
-    ]);
+    expect(ws.every((w) => w.expr === '"AND"')).toBe(true);
+    expect(writesToPokes(ws, "raw")).toEqual([regPoke(REG.WBGLOG, 0x55), regPoke(REG.WOBJLOG, 0x05)]);
+    expect(writesToPokes(setCombine(3), "raw")).toEqual([regPoke(REG.WBGLOG, 0xff), regPoke(REG.WOBJLOG, 0x0f)]);
   });
 
   it("areaValue aggregates the five rows' inverts (mixed = null)", () => {
@@ -209,18 +261,13 @@ describe("combine + area segmenteds", () => {
     expect(areaValue(read({ [REG.W12SEL]: 0x05 }))).toBeNull();
   });
 
-  it("setArea bulk-writes invert bits, preserving W34SEL's BG4 nibble", () => {
-    expect(setArea("outside", read({ [REG.W34SEL]: 0xa0 }))).toEqual([
-      { addr: REG.W12SEL, value: 0x55 },
-      { addr: REG.W34SEL, value: 0xa5 },
-      { addr: REG.WOBJSEL, value: 0x55 },
-    ]);
-    expect(
-      setArea("inside", read({ [REG.W12SEL]: 0xff, [REG.W34SEL]: 0xff, [REG.WOBJSEL]: 0xff })),
-    ).toEqual([
-      { addr: REG.W12SEL, value: 0xaa },
-      { addr: REG.W34SEL, value: 0xfa },
-      { addr: REG.WOBJSEL, value: 0xaa },
+  it("setArea emits the five UI rows' invert fields; same-register writes share the final byte (BG4 nibble preserved)", () => {
+    expect(setArea("outside", read({ [REG.W34SEL]: 0xa0 })).map((w) => [w.field, w.expr, w.addr, w.value])).toEqual([
+      ["win.bg1.invert", "true", REG.W12SEL, 0x55],
+      ["win.bg2.invert", "true", REG.W12SEL, 0x55],
+      ["win.bg3.invert", "true", REG.W34SEL, 0xa5],
+      ["win.obj.invert", "true", REG.WOBJSEL, 0x55],
+      ["win.color.invert", "true", REG.WOBJSEL, 0x55],
     ]);
   });
 });
@@ -258,6 +305,98 @@ describe("window preview geometry", () => {
   });
 });
 
+describe("fieldPoke + writesToPokes (dual-dialect projection)", () => {
+  const op: FieldWrite = { field: "color.op", expr: '"sub"', addr: REG.CGADSUB, value: 0x80 };
+  const w1: FieldWrite = { field: "win.bg1.w1", expr: "true", addr: REG.W12SEL, value: 0x0a };
+  const w2: FieldWrite = { field: "win.bg1.w2", expr: "true", addr: REG.W12SEL, value: 0x0a };
+
+  it("fieldPoke emits the friendly assignment with a $-address note", () => {
+    expect(fieldPoke(op)).toEqual({ lvalue: "color.op", expr: '"sub"', note: "$2131" });
+  });
+
+  it("friendly projection is one poke per field write", () => {
+    expect(writesToPokes([w1, w2], "friendly")).toEqual([fieldPoke(w1), fieldPoke(w2)]);
+  });
+
+  it("raw projection dedupes per register (last wins) and byte-matches regPoke", () => {
+    expect(writesToPokes([w1, w2, op], "raw")).toEqual([
+      regPoke(REG.W12SEL, 0x0a),
+      regPoke(REG.CGADSUB, 0x80),
+    ]);
+  });
+
+  it("friendly pokes round-trip through pokesToLua/parsePokes (dialect-agnostic loader)", () => {
+    const ps = writesToPokes([op, w1], "friendly");
+    expect(parsePokes(pokesToLua(ps))).toEqual([...ps].sort((a, b) => (a.lvalue < b.lvalue ? -1 : 1)));
+  });
+
+  it("mixed-dialect output stays codepoint-sorted (raw mnemonics before lowercase fields)", () => {
+    const lua = pokesToLua([fieldPoke(op), regPoke(REG.TM, 0x13)]);
+    expect(lua.indexOf("TM = 0x13")).toBeLessThan(lua.indexOf('color.op = "sub"'));
+  });
+});
+
+describe("FIELD_SPECS + friendly pokeMatchesLive", () => {
+  it("maps every field to the register the Rust fold owns", () => {
+    expect(FIELD_SPECS.get("color.op")?.addr).toBe(REG.CGADSUB);
+    expect(FIELD_SPECS.get("color.region")?.addr).toBe(REG.CGWSEL);
+    expect(FIELD_SPECS.get("screen.main.obj")?.addr).toBe(REG.TM);
+    expect(FIELD_SPECS.get("screen.sub.bg4")?.addr).toBe(REG.TS);
+    expect(FIELD_SPECS.get("win.w2.hi")?.addr).toBe(REG.WH3);
+    expect(FIELD_SPECS.get("win.bg4.combine")?.addr).toBe(REG.WBGLOG);
+    expect(FIELD_SPECS.get("win.obj.sub")?.addr).toBe(REG.TSW);
+    expect(FIELD_SPECS.get("win.color.main")).toBeUndefined(); // color window has no TMW bit
+    for (const [f, s] of FIELD_SPECS) {
+      if (f.startsWith("win.")) expect(s.addr, `${f} must not own CGWSEL`).not.toBe(REG.CGWSEL);
+    }
+  });
+
+  it("solid when the live register bits decode to the poked field value", () => {
+    expect(pokeMatchesLive({ lvalue: "color.op", expr: '"sub"' }, [rv(REG.CGADSUB, "CGADSUB", 0x80)])).toBe(true);
+    expect(pokeMatchesLive({ lvalue: "screen.main.bg2", expr: "true" }, [])).toBe(true); // power-on TM=0x1f
+    expect(pokeMatchesLive({ lvalue: "color.region", expr: '"inside"' }, [rv(REG.CGWSEL, "CGWSEL", 0x12)])).toBe(true);
+    expect(pokeMatchesLive({ lvalue: "win.color.combine", expr: '"AND"' }, [rv(REG.WOBJLOG, "WOBJLOG", 0x04)])).toBe(true);
+    expect(pokeMatchesLive({ lvalue: "color.fixed", expr: "0x7fff" }, [rv(REG.COLDATA, "COLDATA", 0x7fff)])).toBe(true);
+  });
+
+  it("hollow when a later script write moved the field's bits", () => {
+    expect(pokeMatchesLive({ lvalue: "color.op", expr: '"sub"' }, [rv(REG.CGADSUB, "CGADSUB", 0x00)])).toBe(false);
+    expect(pokeMatchesLive({ lvalue: "screen.main.bg1", expr: "false" }, [])).toBe(false); // TM=0x1f has bg1 on
+  });
+
+  it("numeric fields compare by value across hex/decimal spellings", () => {
+    expect(pokeMatchesLive({ lvalue: "win.w1.lo", expr: "40" }, [rv(REG.WH0, "WH0", 40)])).toBe(true);
+    expect(pokeMatchesLive({ lvalue: "win.w1.lo", expr: "0x28" }, [rv(REG.WH0, "WH0", 40)])).toBe(true);
+    expect(pokeMatchesLive({ lvalue: "win.w1.lo", expr: "40" }, [rv(REG.WH0, "WH0", 41)])).toBe(false);
+  });
+
+  it("invert decode is lossy like the core: EITHER invert bit reads true", () => {
+    expect(pokeMatchesLive({ lvalue: "win.bg1.invert", expr: "true" }, [rv(REG.W12SEL, "W12SEL", 0x01)])).toBe(true);
+    expect(pokeMatchesLive({ lvalue: "win.bg1.invert", expr: "false" }, [rv(REG.W12SEL, "W12SEL", 0x00)])).toBe(true);
+  });
+
+  it("null for an unknown field or an unparseable expr", () => {
+    expect(pokeMatchesLive({ lvalue: "win.nope.w1", expr: "true" }, [])).toBeNull();
+    expect(pokeMatchesLive({ lvalue: "color.op", expr: "sub" }, [])).toBeNull(); // unquoted
+  });
+});
+
+describe("pokesAt (field-keyed marker lookup)", () => {
+  const ps = [
+    { lvalue: "W12SEL", expr: "0x03" },
+    { lvalue: "win.bg1.w1", expr: "true" },
+    { lvalue: "win.bg2.invert", expr: "true" },
+  ];
+  it("addr-wide (no fields): raw poke + every friendly field living in the register", () => {
+    expect(pokesAt(ps, REG.W12SEL).map((p) => p.lvalue)).toEqual(["W12SEL", "win.bg1.w1", "win.bg2.invert"]);
+    expect(pokesAt(ps, REG.TM)).toEqual([]);
+  });
+  it("field-scoped: raw poke + only the listed fields (bg1/bg2 share W12SEL)", () => {
+    expect(pokesAt(ps, REG.W12SEL, ["win.bg1.w1", "win.bg1.w2", "win.bg1.invert"]).map((p) => p.lvalue))
+      .toEqual(["W12SEL", "win.bg1.w1"]);
+  });
+});
+
 describe("preview buffers", () => {
   it("dimOutsideMask keeps in-mask pixels and dims the rest (x0.3 R/G, x0.42 B)", () => {
     const fb = new Uint8ClampedArray(256 * 224 * 4).fill(100);
@@ -278,5 +417,80 @@ describe("preview buffers", () => {
     expect([out[0], out[1], out[2]]).toEqual([40, 170, 40]);
     expect([out[4], out[5], out[6]]).toEqual([100, 100, 100]);
     expect(fb[0]).toBe(100); // input untouched
+  });
+});
+
+describe("emission/decode invariants", () => {
+  const sample = (): FieldWrite[] => [
+    toggleDesignation("screen.main.bg1", REG.TM, 0x1f, 0),
+    toggleDesignation("screen.sub.obj", REG.TS, 0, 4),
+    toggleDesignation("color.on.bg3", REG.CGADSUB, 0, 2),
+    toggleDesignation("color.on.backdrop", REG.CGADSUB, 0, 5),
+    setMathOp("sub", 0), setMathHalf(true, 0), setMathAddend("sub", 0), setFixedColor(1),
+    setWindowEdge(REG.WH0, 1), setWindowEdge(REG.WH1, 1), setWindowEdge(REG.WH2, 1), setWindowEdge(REG.WH3, 1),
+    ...WINDOW_LAYERS.flatMap((l) => [...toggleWindowEnable(l, read({})), ...toggleWindowInvert(l, read({}))]),
+    ...setCombine(2),
+    ...setArea("outside", read({})),
+  ];
+
+  it("every emitted field is decodable: it's in FIELD_SPECS at the same register", () => {
+    for (const w of sample()) {
+      expect(FIELD_SPECS.get(w.field), w.field).toBeDefined();
+      expect(FIELD_SPECS.get(w.field)?.addr, w.field).toBe(w.addr);
+    }
+  });
+
+  it("every emitted write reads back SOLID once the core folds its raw value", () => {
+    for (const w of sample()) {
+      expect(pokeMatchesLive(fieldPoke(w), [rv(w.addr, "", w.value)]), w.field).toBe(true);
+    }
+  });
+
+  it("a layer row's marker covers EVERY field its controls emit (enable's TMW / region too)", () => {
+    for (const l of WINDOW_LAYERS) {
+      const covered = winRowFields(l);
+      const emitted = [...toggleWindowEnable(l, read({})), ...toggleWindowInvert(l, read({}))];
+      for (const w of emitted) expect(covered, `${l.id} row must cover ${w.field}`).toContain(w.field);
+    }
+  });
+
+  it("header/group field lists are all decodable", () => {
+    const groups = [
+      ...SCREEN_MAIN_FIELDS, ...SCREEN_SUB_FIELDS, ...MATH_ENABLE_FIELDS,
+      ...OPERATION_FIELDS, ...ADDEND_FIELDS, ...FIXED_FIELDS,
+      ...COMBINE_FIELDS, ...AREA_FIELDS, ...WINDOW_LAYERS.flatMap(winRowFields),
+    ];
+    for (const f of groups) expect(FIELD_SPECS.has(f), f).toBe(true);
+  });
+});
+
+describe("evictCrossDialect (dialect flip must not leave conflicting lines)", () => {
+  const friendlyOp = fieldPoke({ field: "color.op", expr: '"add"', addr: REG.CGADSUB, value: 0x00 });
+  const friendlyHalf = fieldPoke({ field: "color.half", expr: "true", addr: REG.CGADSUB, value: 0x40 });
+  const friendlyEdge = fieldPoke({ field: "win.w1.lo", expr: "40", addr: REG.WH0, value: 40 });
+  const rawAdsub = regPoke(REG.CGADSUB, 0x80);
+  const rawTm = regPoke(REG.TM, 0x13);
+  const cgram = { lvalue: "cgram[0x41]", expr: "0x7fff" };
+
+  it("a raw write evicts every friendly poke living in the same register — others survive", () => {
+    expect(evictCrossDialect([friendlyOp, friendlyHalf, friendlyEdge], [rawAdsub])).toEqual([friendlyEdge]);
+  });
+
+  it("a friendly write evicts the raw poke on its register — other raw pokes survive", () => {
+    expect(evictCrossDialect([rawAdsub, rawTm], [friendlyOp])).toEqual([rawTm]);
+  });
+
+  it("same-dialect writes evict nothing (upsertPoke replacement handles same-lvalue)", () => {
+    expect(evictCrossDialect([friendlyOp], [friendlyHalf])).toEqual([friendlyOp]);
+    expect(evictCrossDialect([rawAdsub], [regPoke(REG.CGADSUB, 0x41)])).toEqual([rawAdsub]);
+  });
+
+  it("unmapped lvalues (cgram[...]) never evict and are never evicted", () => {
+    expect(evictCrossDialect([cgram, friendlyOp], [rawAdsub])).toEqual([cgram]);
+    expect(evictCrossDialect([rawAdsub], [cgram])).toEqual([rawAdsub]);
+  });
+
+  it("cross-dialect eviction and same-dialect survival compose on ONE register", () => {
+    expect(evictCrossDialect([rawAdsub, friendlyHalf], [friendlyOp])).toEqual([friendlyHalf]);
   });
 });
