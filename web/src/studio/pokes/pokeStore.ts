@@ -2,7 +2,8 @@ import { useMemo } from "react";
 import { openSketchStore, openContextFiles, useOpenSketch, type OpenSketchState } from "../sketches/openSketch";
 import type { SketchFile } from "../sketches/sketchStore";
 import { POKES_FILE, parsePokes, pokesToLua, upsertPoke, type Poke } from "./pokes";
-import { evictCrossDialect } from "../inspector/compose/model";
+import { evictCrossDialect, regeneratePokes, type PokeDialect } from "../inspector/compose/model";
+import { pokeDialect } from "../inspector/compose/dialect";
 
 /** The pokes.lua FILE is the source of truth — these helpers parse it out of the
  *  open context and write it back through editFile (autosave/fork/persist ride along). */
@@ -48,6 +49,14 @@ export function unpokeMany(lvalues: readonly string[]): void {
 
 export function clearPokes(): void {
   write([]);
+}
+
+/** Flip the emission dialect AND rewrite every existing poke into it, in one
+ *  regeneration. No-op when already in `d`. */
+export function setDialect(d: PokeDialect): void {
+  if (pokeDialect.get() === d) return;
+  write(regeneratePokes(currentPokes(openSketchStore.state()), d));
+  pokeDialect.set(d);
 }
 
 /** Token search outside pokes.lua. A commented-out call false-positives; accepted. */

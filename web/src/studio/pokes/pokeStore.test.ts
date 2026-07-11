@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import "fake-indexeddb/auto";
 import { openSketchStore, openContextFiles } from "../sketches/openSketch";
 import { POKES_FILE } from "./pokes";
-import { currentPokes, poke, pokeMany, unpoke, unpokeMany, clearPokes, hasApplyCall } from "./pokeStore";
+import { currentPokes, poke, pokeMany, unpoke, unpokeMany, clearPokes, hasApplyCall, setDialect } from "./pokeStore";
+import { pokeDialect } from "../inspector/compose/dialect";
 
 describe("pokeStore", () => {
   beforeEach(() => openSketchStore.newSketch());
@@ -56,5 +57,21 @@ describe("pokeStore", () => {
     expect(hasApplyCall(openContextFiles(openSketchStore.state()))).toBe(true); // template calls it
     openSketchStore.editFile("main.lua", "function frame() end");
     expect(hasApplyCall(openContextFiles(openSketchStore.state()))).toBe(false);
+  });
+
+  describe("setDialect", () => {
+    afterEach(() => pokeDialect.set("friendly"));
+
+    it("setDialect('raw') rewrites existing pokes and persists the setting", () => {
+      pokeMany([
+        { lvalue: "color.op", expr: '"sub"' },
+        { lvalue: "color.half", expr: "true" },
+        { lvalue: "color.on.bg1", expr: "true" },
+      ]);
+      setDialect("raw");
+      const after = currentPokes(openSketchStore.state()).map((p) => p.lvalue);
+      expect(after).toEqual(["CGADSUB"]);
+      expect(pokeDialect.get()).toBe("raw");
+    });
   });
 });

@@ -1,10 +1,10 @@
 import { formatAddr, formatValue } from "../format";
 import { useCopyToast } from "../copyToast";
-import { clearPokes, unpoke, unpokeMany } from "../../pokes/pokeStore";
+import { clearPokes, setDialect, unpoke, unpokeMany } from "../../pokes/pokeStore";
 import { HexPoke } from "../../pokes/HexPoke";
 import { pokeMatchesLive } from "./model";
 import type { Compositor } from "./useCompositor";
-import { pokeDialect, usePokeDialect } from "./dialect";
+import { usePokeDialect } from "./dialect";
 
 /** Marker a poked control wears; click = unpoke everything it covers. SOLID
  *  while every covered poke still matches the live registers; HOLLOW when a
@@ -53,7 +53,7 @@ export function DialectToggle() {
           className={d === "friendly" ? "cmp-seg--on" : ""}
           aria-pressed={d === "friendly"}
           title={'new pokes emit friendly fields — color.op = "sub"'}
-          onClick={() => pokeDialect.set("friendly")}
+          onClick={() => setDialect("friendly")}
         >
           friendly
         </button>
@@ -62,7 +62,7 @@ export function DialectToggle() {
           className={d === "raw" ? "cmp-seg--on" : ""}
           aria-pressed={d === "raw"}
           title="new pokes emit whole-register mnemonics — CGADSUB = 0x41"
-          onClick={() => pokeDialect.set("raw")}
+          onClick={() => setDialect("raw")}
         >
           raw
         </button>
