@@ -4,7 +4,6 @@ import {
   RegisterView,
   OamSprite,
   ObjOverflow,
-  AssetInfo,
   ImportReport,
   SourceFile,
   WIDTH,
@@ -46,18 +45,6 @@ export class MockPpuCore implements PpuCore {
 
   setLayerVisible(id: string, visible: boolean) {
     this.layerVisible.set(id, visible);
-  }
-
-  uploadTexture(slot: string, imageData: ImageData) {
-    this.assets.set(slot, imageData);
-  }
-
-  listAssets(): AssetInfo[] {
-    return Array.from(this.assets, ([id, img]) => ({
-      id,
-      width: img.width,
-      height: img.height,
-    }));
   }
 
   vram(): Uint16Array {

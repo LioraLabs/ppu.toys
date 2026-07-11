@@ -178,11 +178,6 @@ export class Transport {
     this.renderOnce();
   };
 
-  uploadTexture = (slot: string, image: ImageData) => {
-    this.coreRef().uploadTexture(slot, image);
-    this.renderOnce();
-  };
-
   /** Pure quantize+pack (no engine mutation) — the Add Source dialog and
    *  the drop path use this to produce a payload. */
   convertSource = (kind: SourceKind, options: ConvertSourceOptions, image: ImageData): ConvertSourceResult => {
