@@ -36,6 +36,8 @@ function pokesSource(): string {
 
 describe("poke wiring", () => {
   beforeEach(() => openSketchStore.newSketch());
+  // reset both sides of each test: order-independent even under test shuffle
+  beforeEach(() => pokeDialect.set("friendly"));
   afterEach(() => pokeDialect.set("friendly"));
 
   it("a matrix-cell toggle lands the friendly field line in pokes.lua", () => {

@@ -30,6 +30,7 @@ let current: PokeDialect = loadDialect();
 export const pokeDialect = {
   get: (): PokeDialect => current,
   set(next: PokeDialect): void {
+    if (next === current) return;
     current = next;
     try {
       localStorage.setItem(DIALECT_STORAGE_KEY, next);
