@@ -52,6 +52,11 @@ pub mod import;
 mod import_m7;
 pub use import_m7::*;
 
+// M10 · Sources: versioned, position-independent source payload format +
+// placement. Importers convert INTO this; binding places FROM it.
+mod source;
+pub use source::*;
+
 /// Native SNES PPU output dimensions (the only resolution v1 targets).
 pub const WIDTH: usize = 256;
 pub const HEIGHT: usize = 224;
@@ -140,14 +145,6 @@ pub struct ObjOverflow {
     pub max_sprites: u16,
     #[serde(rename = "maxTiles")]
     pub max_tiles: u16,
-}
-
-/// An uploaded image source, mapped to the JS `AssetInfo` shape.
-#[derive(Serialize)]
-pub struct AssetInfo {
-    pub id: String,
-    pub width: u32,
-    pub height: u32,
 }
 
 /// Derive the inspector register list from the resolved absolute row. Values are

@@ -11,23 +11,9 @@ use piccolo::{
     StaticError, Table, Value,
 };
 
-use crate::import::obj::{apply_obj_import, import_obj_sheet, ObjImport};
-use crate::import::{BudgetReport, ImportCache, ImportKey, ImportOptions};
-use crate::import_m7::{import_mode7, Mode7Import, Mode7ImportReport};
+use crate::import::BudgetReport;
+use crate::import_m7::Mode7ImportReport;
 use crate::{rgb15, LineTable, LineTableBuilder, LineTableRow, Memory, HEIGHT};
-
-/// Decoded RGBA staged for the importer, keyed by slot id. App-level (survives
-/// recompiles), unlike `Memory` which `set_source` resets. The importer
-/// (m4/importer) quantizes it into real VRAM/CGRAM words when a layer binds it.
-#[derive(Clone)]
-pub struct ImportAsset {
-    pub width: u32,
-    pub height: u32,
-    pub rgba: Vec<u8>,
-    /// Bumped on every re-upload; part of the import cache key so a re-upload
-    /// re-quantizes.
-    pub generation: u64,
-}
 
 /// One BG layer's import budget from the most recent `frame()`, surfaced to the
 /// UI (m4/inspector). Tagged by importer flavor.
@@ -43,6 +29,17 @@ pub enum ImportBudget {
     },
     #[serde(rename = "obj")]
     Obj { report: BudgetReport },
+    /// A bound source's kind/depth did not match the target slot: the layer
+    /// renders blank and this diagnostic is surfaced (NO conversion). `expected`
+    /// describes the slot's requirement, `found` the source that was bound.
+    #[serde(rename = "mismatch")]
+    Mismatch {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        layer: Option<usize>,
+        slot: String,
+        expected: String,
+        found: String,
+    },
 }
 
 /// Compile/runtime error surfaced to the editor, matching the TS `LuaError` shape.
@@ -71,20 +68,12 @@ pub struct LuaEngine {
     /// Defining chunk of `frame_fn`, for runtime error attribution.
     frame_file: Option<String>,
     memory: Memory,
-    /// Uploaded image assets, keyed by slot id. Consumed by the `source =`
-    /// importer; NOT PPU memory (survives recompiles).
-    assets: HashMap<String, ImportAsset>,
-    /// Memoized tile-BG imports (m4/importer); keyed by asset+generation+options.
-    import_cache: ImportCache,
-    /// Memoized Mode 7 imports, keyed by (asset, generation).
-    m7_cache: HashMap<(String, u64), Mode7Import>,
-    /// Memoized OBJ-sheet imports (m4/importer), keyed by
-    /// (asset, generation, snapped char_base) so re-upload / a char-base move
-    /// re-quantizes but a hot 60fps key only re-copies words.
-    obj_imports: HashMap<(String, u64, u16), ObjImport>,
-    /// Monotonic upload counter feeding `ImportAsset::generation`.
-    next_generation: u64,
-    /// Per-layer import budgets produced by the most recent `frame()`.
+    /// The source store: decoded `addSource` payloads keyed by name — the
+    /// graphics-data home (kind + depth + palettes + tiles + tilemap all
+    /// self-described by the payload). App-level; survives recompiles (NOT
+    /// cleared by set_sources, which owns Lua files).
+    source_store: HashMap<String, crate::source::SourcePayload>,
+    /// Per-layer import/diagnostic reports produced by the most recent `frame()`.
     reports: Vec<ImportBudget>,
 }
 
@@ -104,11 +93,7 @@ impl LuaEngine {
             init_fn: None,
             frame_file: None,
             memory: Memory::new(),
-            assets: HashMap::new(),
-            import_cache: ImportCache::default(),
-            m7_cache: HashMap::new(),
-            obj_imports: HashMap::new(),
-            next_generation: 0,
+            source_store: HashMap::new(),
             reports: Vec::new(),
         }
     }
@@ -118,38 +103,17 @@ impl LuaEngine {
         &self.memory
     }
 
-    /// Stage a decoded RGBA asset for the importer. Bumps the upload generation
-    /// and drops stale cached imports so a re-upload re-quantizes. Malformed
-    /// ImageData (zero dims or wrong buffer length) is ignored.
-    pub fn upload_asset(&mut self, slot: String, width: u32, height: u32, rgba: Vec<u8>) {
-        if width == 0 || height == 0 || rgba.len() != (width * height * 4) as usize {
-            return;
-        }
-        self.next_generation += 1;
-        let generation = self.next_generation;
-        self.import_cache.invalidate_asset(&slot);
-        self.m7_cache.retain(|(s, _), _| s != &slot);
-        self.obj_imports.retain(|(s, _, _), _| s != &slot);
-        self.assets.insert(
-            slot,
-            ImportAsset {
-                width,
-                height,
-                rgba,
-                generation,
-            },
-        );
-    }
-
-    /// Asset ids + dimensions, sorted by id (stable order for the inspector).
-    pub fn assets(&self) -> Vec<(String, u32, u32)> {
-        let mut v: Vec<_> = self
-            .assets
-            .iter()
-            .map(|(id, a)| (id.clone(), a.width, a.height))
-            .collect();
-        v.sort_by(|a, b| a.0.cmp(&b.0));
-        v
+    /// Decode + register a source payload under `name` (the `addSource` core).
+    /// The store is the graphics-data home; the bind-time placement pass looks
+    /// up + validates + places from it (no importer on the store path).
+    pub fn add_source(
+        &mut self,
+        name: &str,
+        payload: &[u8],
+    ) -> Result<(), crate::source::PayloadError> {
+        let p = crate::source::SourcePayload::decode(payload)?;
+        self.source_store.insert(name.to_string(), p);
+        Ok(())
     }
 
     /// Per-layer import budgets from the most recent `frame()` (m4/inspector).
@@ -253,18 +217,15 @@ impl LuaEngine {
             l.enter(|ctx| {
                 self.memory.vram = [0u16; 0x8000];
                 self.memory.cgram = [0u16; 256];
-                apply_imports(
+                place_bg_sources(
                     ctx,
-                    &self.assets,
-                    &mut self.import_cache,
-                    &mut self.m7_cache,
+                    &self.source_store,
                     &mut self.reports,
                     &mut self.memory,
                 );
-                apply_obj_sheet(
+                place_obj_source(
                     ctx,
-                    &self.assets,
-                    &mut self.obj_imports,
+                    &self.source_store,
                     &mut self.reports,
                     &mut self.memory,
                 );
@@ -1302,22 +1263,60 @@ fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
     }
 }
 
-/// Run the `bg[n].source =` importer for every layer that binds an uploaded
-/// asset, honoring the frame-wide `mode`. Writes real VRAM char + tilemap +
-/// CGRAM (the bootstrap the poke flush then composes on top of) and echoes the
-/// resulting binding registers back into the layer globals so `read_state`, the
-/// rasterizer, and the inspector all agree. Cached (m4/importer): a hot key
-/// re-copies words, never re-quantizes. Assumes VRAM/CGRAM were zeroed by the
-/// caller; refreshes `reports` for the UI.
-#[allow(clippy::too_many_arguments)]
-fn apply_imports(
+/// A source payload's kind, as a short human label for diagnostics.
+fn kind_label(p: &crate::source::SourcePayload) -> &'static str {
+    match p {
+        crate::source::SourcePayload::Bg(_) => "bg",
+        crate::source::SourcePayload::M7(_) => "m7",
+        crate::source::SourcePayload::Obj(_) => "obj",
+    }
+}
+
+/// A BG layer's placement bases from its Lua globals: char_base defaults to
+/// 0x1000 when unset (the historical default), both snapped to legal alignment.
+fn bg_bases<'gc>(ctx: piccolo::Context<'gc>, layer: Table<'gc>) -> (u16, u16) {
+    let raw_char = layer.get(ctx, "char_base").to_integer().unwrap_or(0) as u32;
+    let char_base = if raw_char == 0 {
+        0x1000
+    } else {
+        crate::quantize::bg_char_base(raw_char)
+    };
+    let map_base =
+        crate::quantize::bg_map_base(layer.get(ctx, "map_base").to_integer().unwrap_or(0) as u32);
+    (map_base as u16, char_base as u16)
+}
+
+/// Echo the placement/format registers back into the Lua layer table so
+/// `read_state`, the rasterizer and the inspector all agree (as before).
+fn echo_bg_registers<'gc>(
+    ctx: piccolo::Context<'gc>,
+    layer: Table<'gc>,
+    src: &crate::source::BgSource,
+    map_base: u16,
+    char_base: u16,
+) {
+    layer.set(ctx, "map_base", map_base as i64).unwrap();
+    layer.set(ctx, "char_base", char_base as i64).unwrap();
+    layer
+        .set(ctx, "screen_size", src.screen_size as i64)
+        .unwrap();
+    layer.set(ctx, "tile_size", src.tile_size as i64).unwrap();
+}
+
+/// Place each bound `bg[n].source` from the source store into VRAM/CGRAM in the
+/// frame's zeroed-bootstrap slot, honoring the frame-wide `mode`, and echo the
+/// placement registers back into the layer globals. Strict bind validation: a
+/// store source whose kind or depth mismatches the slot renders blank (payload
+/// not placed) and pushes an `ImportBudget::Mismatch`. A slot id absent from the
+/// store simply renders nothing. Refreshes `reports` for the UI; assumes
+/// VRAM/CGRAM were zeroed by the caller.
+fn place_bg_sources(
     ctx: piccolo::Context<'_>,
-    assets: &HashMap<String, ImportAsset>,
-    import_cache: &mut ImportCache,
-    m7_cache: &mut HashMap<(String, u64), Mode7Import>,
+    store: &HashMap<String, crate::source::SourcePayload>,
     reports: &mut Vec<ImportBudget>,
     mem: &mut Memory,
 ) {
+    use crate::source::SourcePayload;
     reports.clear();
     let mode = crate::quantize::mode(ctx.get_global("mode").to_integer().unwrap_or(1) as u8);
     let Value::Table(bg) = ctx.get_global("bg") else {
@@ -1330,121 +1329,88 @@ fn apply_imports(
         let Some(slot) = value_to_string(layer.get(ctx, "source")) else {
             continue;
         };
-        let Some(asset) = assets.get(&slot) else {
-            continue;
-        };
         if mode == 7 {
             // Mode 7 is a single 8bpp BG1 plane over the interleaved region.
             if i != 0 {
                 continue;
             }
-            let imp = m7_cache
-                .entry((slot.clone(), asset.generation))
-                .or_insert_with(|| {
-                    import_mode7(&asset.rgba, asset.width as usize, asset.height as usize)
-                });
-            imp.apply(mem);
-            reports.push(ImportBudget::Mode7 {
-                layer: i,
-                report: imp.report.clone(),
-            });
+            if let Some(payload) = store.get(&slot) {
+                match payload {
+                    SourcePayload::M7(src) => crate::source::place_m7(src, mem),
+                    other => reports.push(ImportBudget::Mismatch {
+                        layer: Some(i),
+                        slot: slot.clone(),
+                        expected: "m7".into(),
+                        found: kind_label(other).into(),
+                    }),
+                }
+            }
         } else {
-            // Tile BG (Mode 1): bit-depth from the mode table; only 2/4/8bpp
-            // tile layers import.
             let bpp = crate::modes::mode_info(mode).map_or(0, |m| m.bpp[i]);
             if !matches!(bpp, 2 | 4 | 8) {
                 continue;
             }
-            // Placement bases: honor user-set map_base/char_base, else the
-            // importer defaults (map_base 0, char_base 0x1000).
-            let char_base = layer.get(ctx, "char_base").to_integer().unwrap_or(0) as u32;
-            let opts = ImportOptions {
-                bit_depth: bpp,
-                tile_size: layer.get(ctx, "tile_size").to_integer().unwrap_or(8) as u8,
-                map_base: crate::quantize::bg_map_base(
-                    layer.get(ctx, "map_base").to_integer().unwrap_or(0) as u32,
-                ),
-                char_base: if char_base == 0 {
-                    0x1000
-                } else {
-                    crate::quantize::bg_char_base(char_base)
-                },
-            };
-            let key = ImportKey {
-                asset: slot.clone(),
-                generation: asset.generation,
-                options: opts,
-            };
-            let imp = import_cache.get_or_import(key, &asset.rgba, asset.width, asset.height);
-            let cb = imp.registers.char_base as usize;
-            for (o, &w) in imp.char_words.iter().enumerate() {
-                mem.vram[(cb + o) & 0x7fff] = w;
+            let cgram_base = if mode == 0 && bpp == 2 { i * 8 * 4 } else { 0 };
+            if let Some(payload) = store.get(&slot) {
+                match payload {
+                    SourcePayload::Bg(src) if src.bit_depth == bpp => {
+                        let (map_base, char_base) = bg_bases(ctx, layer);
+                        crate::source::place_bg(src, mem, map_base, char_base, cgram_base);
+                        echo_bg_registers(ctx, layer, src, map_base, char_base);
+                    }
+                    SourcePayload::Bg(src) => reports.push(ImportBudget::Mismatch {
+                        layer: Some(i),
+                        slot: slot.clone(),
+                        expected: format!("bg {bpp}bpp"),
+                        found: format!("bg {}bpp", src.bit_depth),
+                    }),
+                    other => reports.push(ImportBudget::Mismatch {
+                        layer: Some(i),
+                        slot: slot.clone(),
+                        expected: format!("bg {bpp}bpp"),
+                        found: kind_label(other).into(),
+                    }),
+                }
             }
-            let mb = imp.registers.map_base as usize;
-            for (o, &w) in imp.tilemap_words.iter().enumerate() {
-                mem.vram[(mb + o) & 0x7fff] = w;
-            }
-            let mode0_band = if mode == 0 && bpp == 2 { i * 8 * 4 } else { 0 };
-            for &(idx, c) in &imp.cgram {
-                mem.cgram[mode0_band + idx as usize] = c;
-            }
-            layer
-                .set(ctx, "map_base", imp.registers.map_base as i64)
-                .unwrap();
-            layer
-                .set(ctx, "char_base", imp.registers.char_base as i64)
-                .unwrap();
-            layer
-                .set(ctx, "screen_size", imp.registers.screen_size as i64)
-                .unwrap();
-            layer
-                .set(ctx, "tile_size", imp.registers.tile_size as i64)
-                .unwrap();
-            reports.push(ImportBudget::Tile {
-                layer: i,
-                report: imp.report.clone(),
-            });
         }
     }
 }
 
-/// Run the `obj.sheet =` OBJ-sheet importer if the frame binds an uploaded
-/// sheet. The OBJ analog of `apply_imports`: reads `obj.sheet` (asset id) +
+/// Place a bound `obj.sheet` from the source store: OBJ char at the snapped
+/// `obj.char_base`, OBJ palettes into the CGRAM OBJ half. Reads `obj.sheet` /
 /// `obj.char_base` straight from the Lua ctx (NOT `memory.obsel`, which
-/// `read_memory` only fills LATER), snaps char_base with `quantize::obj_char_base`
-/// to match, memoizes `import_obj_sheet` keyed by asset+generation+char_base
-/// (never re-quantizes at 60fps; re-quantizes on re-upload or a char-base move),
-/// and lays OBJ char words at char_base + OBJ palettes (CGRAM 128..) into `mem`.
-/// Runs in the same bootstrap slot as the BG imports, so the poke flush's
-/// structured pokes and raw `vram[]` stay the final authority. Appends its
-/// budget to the same `reports` vec (surfaced via `import_reports()`); assumes
-/// `apply_imports` already `clear()`ed and pushed the BG reports first.
-fn apply_obj_sheet(
+/// `read_memory` fills LATER). A non-OBJ store source renders nothing and pushes
+/// an `ImportBudget::Mismatch`. An id absent from the store simply renders
+/// nothing. Runs in the same bootstrap slot as the BG placement; appends to the
+/// shared `reports` vec (`place_bg_sources` already `clear()`ed it and pushed
+/// the BG entries).
+fn place_obj_source(
     ctx: piccolo::Context<'_>,
-    assets: &HashMap<String, ImportAsset>,
-    cache: &mut HashMap<(String, u64, u16), ObjImport>,
+    store: &HashMap<String, crate::source::SourcePayload>,
     reports: &mut Vec<ImportBudget>,
     mem: &mut Memory,
 ) {
+    use crate::source::SourcePayload;
     let Value::Table(obj) = ctx.get_global("obj") else {
         return;
     };
     let Some(slot) = value_to_string(obj.get(ctx, "sheet")) else {
         return;
     };
-    let Some(asset) = assets.get(&slot) else {
-        return;
-    };
     let char_base = crate::quantize::obj_char_base(
         obj.get(ctx, "char_base").to_integer().unwrap_or(0).max(0) as u32,
     );
-    let imp = cache
-        .entry((slot.clone(), asset.generation, char_base))
-        .or_insert_with(|| import_obj_sheet(&asset.rgba, asset.width, asset.height));
-    apply_obj_import(mem, imp, char_base);
-    reports.push(ImportBudget::Obj {
-        report: imp.report.clone(),
-    });
+    if let Some(payload) = store.get(&slot) {
+        match payload {
+            SourcePayload::Obj(src) => crate::source::place_obj(src, mem, char_base as u16),
+            other => reports.push(ImportBudget::Mismatch {
+                layer: None,
+                slot: slot.clone(),
+                expected: "obj".into(),
+                found: kind_label(other).into(),
+            }),
+        }
+    }
 }
 
 /// VRAM word address of the tilemap entry for tile column `tx`, row `ty` at a
@@ -1461,12 +1427,13 @@ fn tilemap_addr(map_base: u16, screen_size: u8, tx: u32, ty: u32) -> usize {
     ((map_base as u32 + screen * 0x400 + (ty % 32) * 32 + (tx % 32)) & 0x7fff) as usize
 }
 
-/// Flush the DSL memory-poke surfaces into `Memory`. Runs AFTER `apply_imports`
-/// has laid down any `source =` bootstrap, so manual pokes compose on top under
-/// last-write-wins. Order: structured tilemap/char pokes, then the raw `vram[]`
-/// table as the FINAL authority (a raw word write always wins). `cgram[]` is
-/// applied as an override on top of the import palette (only set entries).
-/// VRAM is NOT zeroed here — `frame()` zeroes it before imports.
+/// Flush the DSL memory-poke surfaces into `Memory`. Runs AFTER the placement
+/// pass (`place_bg_sources`/`place_obj_source`) has laid down any `source =`
+/// bootstrap, so manual pokes compose on top under last-write-wins. Order:
+/// structured tilemap/char pokes, then the raw `vram[]` table as the FINAL
+/// authority (a raw word write always wins). `cgram[]` is applied as an override
+/// on top of the placed palette (only set entries). VRAM is NOT zeroed here —
+/// `frame()` zeroes it before placement.
 fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
     // cgram[] overrides the import palette: apply only the entries the user
     // actually set, so a `source =` import's colors survive where unpoked.
