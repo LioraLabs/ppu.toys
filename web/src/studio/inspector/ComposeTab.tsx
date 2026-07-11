@@ -1,4 +1,4 @@
-import { PokeBar } from "./compose/chrome";
+import { DialectToggle, PokeBar } from "./compose/chrome";
 import {
   AssignmentMatrix,
   ComposeReadout,
@@ -17,6 +17,7 @@ export function ComposeTab() {
   return (
     <div className="insp-scroll">
       <PokeBar c={c} />
+      <DialectToggle />
       <ScreenPreviews c={c} />
       <EquationChip c={c} />
       <div className="cmp-cols">

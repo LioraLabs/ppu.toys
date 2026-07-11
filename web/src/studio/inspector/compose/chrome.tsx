@@ -4,6 +4,7 @@ import { clearPokes, unpoke, unpokeMany } from "../../pokes/pokeStore";
 import { HexPoke } from "../../pokes/HexPoke";
 import { pokeMatchesLive } from "./model";
 import type { Compositor } from "./useCompositor";
+import { pokeDialect, usePokeDialect } from "./dialect";
 
 /** Marker a poked control wears; click = unpoke everything it covers. SOLID
  *  while every covered poke still matches the live registers; HOLLOW when a
@@ -33,6 +34,40 @@ export function PokeDot({ c, addr, fields }: { c: Compositor; addr: number; fiel
         unpokeMany(ps.map((p) => p.lvalue));
       }}
     />
+  );
+}
+
+/** Segmented selector for the dialect NEW pokes emit: friendly field lines or
+ *  raw whole-register mnemonics. Persisted studio preference; existing pokes
+ *  are untouched (a re-poke of the same control migrates its line — the write
+ *  evicts the other dialect's poke on that register). Always visible, unlike
+ *  PokeBar: the choice matters before the first poke exists. */
+export function DialectToggle() {
+  const d = usePokeDialect();
+  return (
+    <div className="cmp-dialect">
+      <span className="cmp-dialect-label">POKE AS</span>
+      <div className="cmp-seg cmp-dialect-seg" role="group" aria-label="poke dialect">
+        <button
+          type="button"
+          className={d === "friendly" ? "cmp-seg--on" : ""}
+          aria-pressed={d === "friendly"}
+          title={'new pokes emit friendly fields — color.op = "sub"'}
+          onClick={() => pokeDialect.set("friendly")}
+        >
+          friendly
+        </button>
+        <button
+          type="button"
+          className={d === "raw" ? "cmp-seg--on" : ""}
+          aria-pressed={d === "raw"}
+          title="new pokes emit whole-register mnemonics — CGADSUB = 0x41"
+          onClick={() => pokeDialect.set("raw")}
+        >
+          raw
+        </button>
+      </div>
+    </div>
   );
 }
 

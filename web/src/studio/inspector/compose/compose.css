@@ -2,6 +2,12 @@
    parallel inspector tickets don't collide in inspector.css. Prefixes:
    cmp- (compose / shared), winp- (windows tab), cmpo- (overlay layout). */
 
+/* ── dialect toggle ──────────────────────────────────────────────────────── */
+.cmp-dialect { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.cmp-dialect-label { font-family: var(--font-mono); font-size: 9px; color: var(--dim); }
+.cmp-dialect-seg { flex: none; }
+.cmp-dialect-seg button { padding: 3px 10px; }
+
 /* ── poke affordances ────────────────────────────────────────────────────── */
 .cmp-pokebar {
   display: flex; align-items: center; flex-wrap: wrap; gap: 5px;
