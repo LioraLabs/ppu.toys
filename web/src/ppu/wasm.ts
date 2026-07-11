@@ -6,7 +6,6 @@ import {
   LuaError,
   OamSprite,
   ObjOverflow,
-  AssetInfo,
   ImportReport,
   SourceFile,
   CompositorScreens,
@@ -35,9 +34,7 @@ export interface WasmCoreLike {
   vram(): Uint16Array;
   oam(): OamSprite[];
   objOverflow(): ObjOverflow;
-  listAssets(): AssetInfo[];
   importReports(): ImportReport[];
-  uploadTexture(slot: string, imageData: ImageData): void;
   setLayerVisible(id: string, visible: boolean): void;
   mainScreen(): ArrayLike<number>;
   subScreen(): ArrayLike<number>;
@@ -71,14 +68,8 @@ export function wrapWasmCore(core: WasmCoreLike): PpuCore {
         objOverflow: core.objOverflow(),
       };
     },
-    uploadTexture(slot: string, imageData: ImageData) {
-      core.uploadTexture(slot, imageData);
-    },
     setLayerVisible(id: string, visible: boolean) {
       core.setLayerVisible(id, visible);
-    },
-    listAssets(): AssetInfo[] {
-      return core.listAssets();
     },
     vram(): Uint16Array {
       return core.vram();

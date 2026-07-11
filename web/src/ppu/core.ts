@@ -40,12 +40,6 @@ export interface ObjOverflow {
   maxTiles: number;
 }
 
-export interface AssetInfo {
-  id: string;
-  width: number;
-  height: number;
-}
-
 export type ImportOverflow =
   | { kind: "Cropped"; max_px: number }
   | { kind: "Colors"; unique: number; budget: number }
@@ -203,10 +197,7 @@ export interface PpuCore {
    *  semantics); frame()/init() resolve after all chunks. Errors carry `file`. */
   setSources(files: SourceFile[]): { ok: boolean; error?: LuaError };
   frame(t: number, f: number): FrameResult;
-  uploadTexture(slot: string, imageData: ImageData): void;
   setLayerVisible(id: string, visible: boolean): void;
-  /** Enumerate uploaded sources resident in VRAM -> VRAM inspector. */
-  listAssets(): AssetInfo[];
   /** Mirrored PPU VRAM words from the most recent frame. */
   vram(): Uint16Array;
   /** Per-import budget/overflow reports from the most recent frame. */

@@ -1,5 +1,8 @@
 //! Flagship demo golden tests through the real Lua/importer/render pipeline.
-use ppu_core::{render_frame, ImportBudget, LuaEngine, HEIGHT, WIDTH};
+use ppu_core::{
+    convert_source, render_frame, ConvertOptions, ImportBudget, LuaEngine, SourceKind, HEIGHT,
+    WIDTH,
+};
 use std::path::Path;
 
 const DUSK_GOLDEN: &str = "tests/fixtures/golden_dusk_parallax.png";
@@ -449,18 +452,46 @@ function apply_pokes()
 end
 "#;
 
+/// Convert an RGBA generator through the format-committed source path and
+/// register it under `name` (mirrors the web `convertSource` + `addSource`
+/// flow). The committed format MUST match the mode's bind depth for the demo
+/// that uses it, or the strict bind validation renders the layer blank.
+fn add_bg(e: &mut LuaEngine, name: &str, rgba: Vec<u8>, w: u32, h: u32, bit_depth: u8) {
+    let opts = ConvertOptions {
+        bit_depth: Some(bit_depth),
+        ..Default::default()
+    };
+    let (payload, _) = convert_source(SourceKind::Bg, &opts, &rgba, w, h).unwrap();
+    e.add_source(name, &payload.encode()).unwrap();
+}
+
+fn add_m7(e: &mut LuaEngine, name: &str, rgba: Vec<u8>, w: u32, h: u32) {
+    let (payload, _) =
+        convert_source(SourceKind::M7, &ConvertOptions::default(), &rgba, w, h).unwrap();
+    e.add_source(name, &payload.encode()).unwrap();
+}
+
+fn add_obj(e: &mut LuaEngine, name: &str, rgba: Vec<u8>, w: u32, h: u32) {
+    let opts = ConvertOptions {
+        cell_size: Some(8),
+        ..Default::default()
+    };
+    let (payload, _) = convert_source(SourceKind::Obj, &opts, &rgba, w, h).unwrap();
+    e.add_source(name, &payload.encode()).unwrap();
+}
+
 fn demo_engine_files(files: &[(&str, &str)]) -> LuaEngine {
     let mut e = LuaEngine::new();
-    e.upload_asset("sky".into(), WIDTH as u32, HEIGHT as u32, sky());
-    e.upload_asset("hills".into(), WIDTH as u32, HEIGHT as u32, hills());
-    e.upload_asset("hero".into(), 64, 8, hero());
-    e.upload_asset("track".into(), 1024, 1024, track());
-    e.upload_asset("ribbons".into(), WIDTH as u32, HEIGHT as u32, ribbons());
-    e.upload_asset("gradient".into(), WIDTH as u32, HEIGHT as u32, gradient());
-    e.upload_asset("mode0_bg1".into(), WIDTH as u32, HEIGHT as u32, mode0_bg1());
-    e.upload_asset("mode0_bg2".into(), WIDTH as u32, HEIGHT as u32, mode0_bg2());
-    e.upload_asset("panel".into(), WIDTH as u32, HEIGHT as u32, panel());
-    e.upload_asset("ramp".into(), WIDTH as u32, HEIGHT as u32, ramp());
+    add_bg(&mut e, "sky", sky(), WIDTH as u32, HEIGHT as u32, 4);
+    add_bg(&mut e, "hills", hills(), WIDTH as u32, HEIGHT as u32, 4);
+    add_obj(&mut e, "hero", hero(), 64, 8);
+    add_m7(&mut e, "track", track(), 1024, 1024);
+    add_bg(&mut e, "ribbons", ribbons(), WIDTH as u32, HEIGHT as u32, 4);
+    add_bg(&mut e, "gradient", gradient(), WIDTH as u32, HEIGHT as u32, 8);
+    add_bg(&mut e, "mode0_bg1", mode0_bg1(), WIDTH as u32, HEIGHT as u32, 2);
+    add_bg(&mut e, "mode0_bg2", mode0_bg2(), WIDTH as u32, HEIGHT as u32, 2);
+    add_bg(&mut e, "panel", panel(), WIDTH as u32, HEIGHT as u32, 4);
+    add_bg(&mut e, "ramp", ramp(), WIDTH as u32, HEIGHT as u32, 8);
     let mut chunks = Vec::with_capacity(files.len() + 1);
     chunks.push(("pokes.lua", EMPTY_POKES_SRC));
     chunks.extend_from_slice(files);
@@ -515,18 +546,14 @@ fn write_png(path: &str, fb: &[u8]) {
 #[test]
 fn dusk_parallax_uses_bg_imports_and_obj_import() {
     let (fb, e) = render_demo(&dusk_concat());
-    assert!(e
-        .import_reports()
-        .iter()
-        .any(|r| matches!(r, ImportBudget::Tile { layer: 0, .. })));
-    assert!(e
-        .import_reports()
-        .iter()
-        .any(|r| matches!(r, ImportBudget::Tile { layer: 1, .. })));
-    assert!(e
-        .import_reports()
-        .iter()
-        .any(|r| matches!(r, ImportBudget::Obj { .. })));
+    // Store-bound sources (sky/hills 4bpp BG, hero OBJ) place cleanly: the strict
+    // bind validation reports no mismatch (a wrong committed format would).
+    assert!(
+        !e.import_reports()
+            .iter()
+            .any(|r| matches!(r, ImportBudget::Mismatch { .. })),
+        "a bound source mismatched its target slot"
+    );
     assert!(e.memory().oam[0].on);
     assert!(fb
         .chunks_exact(4)
@@ -558,10 +585,14 @@ fn dusk_parallax_draws_obj_sprite_over_hills() {
 #[test]
 fn mode7_floor_uses_interleaved_mode7_import() {
     let (_fb, e) = render_demo(MODE7_SRC);
-    assert!(e
-        .import_reports()
-        .iter()
-        .any(|r| matches!(r, ImportBudget::Mode7 { layer: 0, .. })));
+    // The Mode 7 `track` source binds without mismatch and lays interleaved char
+    // data into the high VRAM byte lane.
+    assert!(
+        !e.import_reports()
+            .iter()
+            .any(|r| matches!(r, ImportBudget::Mismatch { .. })),
+        "the m7 track source mismatched the Mode 7 slot"
+    );
     assert!(e.memory().vram[..64].iter().any(|w| (w >> 8) != 0));
 }
 
@@ -642,15 +673,14 @@ fn regen_golden_offset_per_tile() {
 #[test]
 fn mode3_gradient_demo_imports_bg1_8bpp_and_draws() {
     let (fb, e) = render_demo(MODE3_SRC);
-    // 8bpp path: the gradient needs >16 colours, so it cannot be a 4bpp import.
-    let colors = e.import_reports().iter().find_map(|r| match r {
-        ImportBudget::Tile { layer: 0, report } => Some(report.colors_used),
-        _ => None,
-    });
-    assert!(colors.is_some(), "BG1 tile import missing");
+    // The gradient exceeds the 4bpp colour count, so it is committed at 8bpp;
+    // binding it into Mode 3's 8bpp BG1 slot must not mismatch (a 4bpp commit
+    // would), and the layer must draw.
     assert!(
-        colors.unwrap() > 16,
-        "gradient must exceed the 4bpp colour count"
+        !e.import_reports()
+            .iter()
+            .any(|r| matches!(r, ImportBudget::Mismatch { .. })),
+        "the gradient source mismatched the 8bpp BG1 slot"
     );
     assert!(fb
         .chunks_exact(4)
@@ -679,14 +709,13 @@ fn regen_golden_mode3_gradient() {
 #[test]
 fn mode0_bands_demo_writes_per_layer_cgram_bands_and_draws() {
     let (fb, e) = render_demo(MODE0_SRC);
-    assert!(e
-        .import_reports()
-        .iter()
-        .any(|r| matches!(r, ImportBudget::Tile { layer: 0, .. })));
-    assert!(e
-        .import_reports()
-        .iter()
-        .any(|r| matches!(r, ImportBudget::Tile { layer: 1, .. })));
+    // Both 2bpp layer sources bind into their Mode 0 slots without mismatch.
+    assert!(
+        !e.import_reports()
+            .iter()
+            .any(|r| matches!(r, ImportBudget::Mismatch { .. })),
+        "a Mode 0 layer source mismatched its 2bpp slot"
+    );
     let cg = &e.memory().cgram;
     assert_ne!(cg[1], 0, "BG1 colour missing from band 0");
     assert_ne!(cg[33], 0, "BG2 colour missing from band 1 (offset 32)");

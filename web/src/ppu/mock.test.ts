@@ -76,15 +76,6 @@ describe("MockPpuCore", () => {
     expect(c0[0]).toBe(c1[0]); // the static base gradient did not
   });
 
-  it("uploadTexture stores assets and they nudge the output", () => {
-    const core = new MockPpuCore();
-    const before = core.frame(0.5, 30).framebuffer.slice();
-    const img = { width: 1, height: 1, data: new Uint8ClampedArray(4), colorSpace: "srgb" } as ImageData;
-    core.uploadTexture("sky", img);
-    const after = core.frame(0.5, 30).framebuffer.slice();
-    expect(differs(before, after)).toBe(true);
-  });
-
   it("frame() exposes 128 OAM sprites that animate over t", () => {
     const core = new MockPpuCore();
     const a = core.frame(0, 0).oam;
@@ -102,14 +93,6 @@ describe("MockPpuCore", () => {
     expect(core.frame(0.5, 30).oam.some((s) => s.on)).toBe(true);
     core.setLayerVisible("obj", false);
     expect(core.frame(0.5, 30).oam.every((s) => s.on === false)).toBe(true);
-  });
-
-  it("listAssets() reflects uploaded textures", () => {
-    const core = new MockPpuCore();
-    expect(core.listAssets()).toEqual([]);
-    const img = { width: 16, height: 8, data: new Uint8ClampedArray(16 * 8 * 4), colorSpace: "srgb" } as ImageData;
-    core.uploadTexture("hero", img);
-    expect(core.listAssets()).toEqual([{ id: "hero", width: 16, height: 8 }]);
   });
 
   it("frame() exposes an objOverflow diagnostic", () => {

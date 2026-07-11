@@ -4,6 +4,7 @@
  *  Pixel generators mirror crates/ppu-core/tests/golden_demos.rs (the Lua sources
  *  ARE verbatim; some assets are retuned for on-screen looks — see below). */
 import { EMPTY_POKES } from "../pokes/pokes";
+import type { SourceKind, ConvertSourceOptions } from "../../ppu/core";
 
 export interface DemoAsset {
   /** Literal slot id referenced from Lua (bg[n].source / obj.sheet). */
@@ -11,6 +12,9 @@ export interface DemoAsset {
   width: number;
   height: number;
   data: Uint8ClampedArray; // width*height*4 RGBA
+  /** Format the generator commits to at bind time (matches the demo's mode). */
+  kind: SourceKind;
+  options: ConvertSourceOptions;
 }
 
 export interface DemoFile {
@@ -67,7 +71,7 @@ function sky(): DemoAsset {
       data[i + 3] = 255;
     }
   }
-  return { id: "sky", width: w, height: h, data };
+  return { id: "sky", width: w, height: h, data, kind: "bg", options: { bit_depth: 4 } };
 }
 
 function hills(): DemoAsset {
@@ -89,7 +93,7 @@ function hills(): DemoAsset {
       data[i + 3] = 255;
     }
   }
-  return { id: "hills", width: w, height: h, data };
+  return { id: "hills", width: w, height: h, data, kind: "bg", options: { bit_depth: 4 } };
 }
 
 function hero(): DemoAsset {
@@ -105,7 +109,7 @@ function hero(): DemoAsset {
       data[i + 3] = 255;
     }
   }
-  return { id: "hero", width: w, height: h, data };
+  return { id: "hero", width: w, height: h, data, kind: "obj", options: { cell_size: 8 } };
 }
 
 function track(): DemoAsset {
@@ -122,7 +126,7 @@ function track(): DemoAsset {
       data[i + 3] = 255;
     }
   }
-  return { id: "track", width: w, height: h, data };
+  return { id: "track", width: w, height: h, data, kind: "m7", options: {} };
 }
 
 function ribbons(): DemoAsset {
@@ -138,7 +142,7 @@ function ribbons(): DemoAsset {
       data[i + 3] = 255;
     }
   }
-  return { id: "ribbons", width: w, height: h, data };
+  return { id: "ribbons", width: w, height: h, data, kind: "bg", options: { bit_depth: 4 } };
 }
 
 function panel(): DemoAsset {
@@ -151,7 +155,7 @@ function panel(): DemoAsset {
       if (opaque) { data[i] = 80; data[i + 1] = 230; data[i + 2] = 255; data[i + 3] = 255; }
     }
   }
-  return { id: "panel", width: w, height: h, data };
+  return { id: "panel", width: w, height: h, data, kind: "bg", options: { bit_depth: 4 } };
 }
 
 function gradient(): DemoAsset {
@@ -169,7 +173,7 @@ function gradient(): DemoAsset {
       data[i + 3] = 255;
     }
   }
-  return { id: "gradient", width: w, height: h, data };
+  return { id: "gradient", width: w, height: h, data, kind: "bg", options: { bit_depth: 8 } };
 }
 
 function ramp(): DemoAsset {
@@ -186,7 +190,7 @@ function ramp(): DemoAsset {
       data[i + 3] = 255;
     }
   }
-  return { id: "ramp", width: w, height: h, data };
+  return { id: "ramp", width: w, height: h, data, kind: "bg", options: { bit_depth: 8 } };
 }
 
 // ── Lua sources (verbatim from golden_demos.rs DUSK_MAIN_SRC / DUSK_PALETTE_SRC / MODE7_SRC) ──

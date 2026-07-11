@@ -75,9 +75,7 @@ function makeCore(state: { throwing: boolean }): PpuCore {
       if (state.throwing) throw { message: "attempt to index a nil value", line: 3, file: "fx.lua" };
       return fakeFrame();
     },
-    uploadTexture: () => {},
     setLayerVisible: () => {},
-    listAssets: () => [],
     vram: () => new Uint16Array(0),
     importReports: () => [],
     screens: () => ({
