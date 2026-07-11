@@ -107,10 +107,11 @@ function frame(t, f)
   bg[1].source = "panel"                       -- the glass panel (main only)
   bg[2].source = "ribbons"; bg[2].char_base = 0x2000  -- scene, on main AND sub
   bg[2].map_base = 0x0800
-  TM = 0x03        -- BG1 (panel) + BG2 (scene) on the main screen
-  TS = 0x02        -- BG2 (scene) on the sub screen -> the addend under the glass
-  CGADSUB = 0x41   -- add + half + BG1 math-enable
-  CGWSEL = 0x02    -- addend = subscreen (not fixed colour)
+  screen.main.bg1 = true; screen.main.bg2 = true      -- panel + scene on the main screen
+  screen.main.bg3 = false; screen.main.bg4 = false; screen.main.obj = false  -- power-on defaults ALL layers on: drop the rest
+  screen.sub.bg2 = true    -- scene on the sub screen -> the addend under the glass
+  color.op = "add"; color.half = true; color.on.bg1 = true  -- ½-add math on BG1 (the glass)
+  color.addend = "sub"     -- addend = subscreen (not fixed colour)
 end
 "#;
 
@@ -119,21 +120,25 @@ function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15
   bg[1].source = "ribbons"
-  TM = 0x01                 -- BG1 only on the main screen
-  WOBJSEL = 0x20            -- COLOR window: window-1 enable (high nibble bit1)
-  WOBJLOG = 0x00            -- COLOR window logic = OR
-  CGWSEL = 0x40             -- clip-to-black region = 01 (outside the window -> black)
+  screen.main.bg1 = true    -- BG1 only on the main screen
+  screen.main.bg2 = false; screen.main.bg3 = false   -- power-on defaults ALL layers on: drop the rest
+  screen.main.bg4 = false; screen.main.obj = false
+  win.color.w1 = true       -- COLOR window follows window 1
+  win.color.combine = "OR"  -- COLOR window logic = OR
+  -- clip-to-black = 01 (outside the window -> black); raw on purpose: CGWSEL
+  -- bits 6-7 have no friendly field (color owns only addend/region)
+  CGWSEL = 0x40
   -- iris: per scanline, window 1 spans [cx-hw, cx+hw] where hw traces a circle.
   local cx, cy, r = 128, 112, 70
   hdma(0, 223, function(y)
     local dy = y - cy
     local inside = r*r - dy*dy
     if inside < 0 then
-      WH0 = 1; WH1 = 0        -- empty span (left > right) -> nothing inside
+      win.w1.lo = 1; win.w1.hi = 0   -- empty span (left > right) -> nothing inside
     else
       local hw = floor(sqrt(inside))
-      WH0 = cx - hw
-      WH1 = cx + hw
+      win.w1.lo = cx - hw
+      win.w1.hi = cx + hw
     end
   end)
 end
@@ -144,10 +149,12 @@ function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15
   bg[1].source = "ribbons"
-  TM = 0x01               -- BG1 on the main screen
-  CGADSUB = 0x01          -- add (bit7 clear) + BG1 math-enable, no half
-  CGWSEL = 0x00           -- addend = COLDATA fixed colour
-  COLDATA = rgb(120, 60, 0)  -- warm glow added to every BG1 pixel
+  screen.main.bg1 = true    -- BG1 only on the main screen
+  screen.main.bg2 = false; screen.main.bg3 = false   -- power-on defaults ALL layers on: drop the rest
+  screen.main.bg4 = false; screen.main.obj = false
+  color.op = "add"; color.on.bg1 = true   -- add at full strength (half stays off)
+  color.addend = "fixed"    -- addend = the fixed colour, not the sub screen
+  color.fixed = rgb(120, 60, 0)  -- warm glow added to every BG1 pixel
 end
 "#;
 
@@ -775,8 +782,8 @@ fn glow_demo_adds_fixed_color_over_baseline() {
     let (glow, _) = render_demo(GLOW_SRC);
     // Baseline: identical scene with no colour math.
     let baseline_src = GLOW_SRC
-        .replace("CGADSUB = 0x01", "CGADSUB = 0x00")
-        .replace("COLDATA = rgb(120, 60, 0)", "COLDATA = 0");
+        .replace("color.on.bg1 = true", "color.on.bg1 = false")
+        .replace("color.fixed = rgb(120, 60, 0)", "color.fixed = 0");
     let (base, _) = render_demo(&baseline_src);
     // The additive red channel must lift the frame overall (sum of R over the frame).
     let sum_r = |fb: &[u8]| fb.chunks_exact(4).map(|p| p[0] as u64).sum::<u64>();
