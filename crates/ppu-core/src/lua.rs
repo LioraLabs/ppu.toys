@@ -74,6 +74,10 @@ pub struct LuaEngine {
     /// Uploaded image assets, keyed by slot id. Consumed by the `source =`
     /// importer; NOT PPU memory (survives recompiles).
     assets: HashMap<String, ImportAsset>,
+    /// Registered source payloads, keyed by Lua-side name (stub store — the
+    /// full source store + bind-time placement/diagnostics is a later ticket).
+    /// App-level like `assets`: survives recompiles (NOT cleared by set_sources).
+    sources: HashMap<String, crate::source::SourcePayload>,
     /// Memoized tile-BG imports (m4/importer); keyed by asset+generation+options.
     import_cache: ImportCache,
     /// Memoized Mode 7 imports, keyed by (asset, generation).
@@ -105,6 +109,7 @@ impl LuaEngine {
             frame_file: None,
             memory: Memory::new(),
             assets: HashMap::new(),
+            sources: HashMap::new(),
             import_cache: ImportCache::default(),
             m7_cache: HashMap::new(),
             obj_imports: HashMap::new(),
@@ -139,6 +144,18 @@ impl LuaEngine {
                 generation,
             },
         );
+    }
+
+    /// Decode + register a source payload under `name` (the `addSource` core).
+    /// Stub store; a later ticket owns the full lifecycle.
+    pub fn add_source(
+        &mut self,
+        name: &str,
+        payload: &[u8],
+    ) -> Result<(), crate::source::PayloadError> {
+        let p = crate::source::SourcePayload::decode(payload)?;
+        self.sources.insert(name.to_string(), p);
+        Ok(())
     }
 
     /// Asset ids + dimensions, sorted by id (stable order for the inspector).
@@ -256,6 +273,7 @@ impl LuaEngine {
                 apply_imports(
                     ctx,
                     &self.assets,
+                    &self.sources,
                     &mut self.import_cache,
                     &mut self.m7_cache,
                     &mut self.reports,
@@ -264,6 +282,7 @@ impl LuaEngine {
                 apply_obj_sheet(
                     ctx,
                     &self.assets,
+                    &self.sources,
                     &mut self.obj_imports,
                     &mut self.reports,
                     &mut self.memory,
@@ -1313,6 +1332,7 @@ fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
 fn apply_imports(
     ctx: piccolo::Context<'_>,
     assets: &HashMap<String, ImportAsset>,
+    sources: &HashMap<String, crate::source::SourcePayload>,
     import_cache: &mut ImportCache,
     m7_cache: &mut HashMap<(String, u64), (crate::source::M7Source, crate::source::SourceMeta)>,
     reports: &mut Vec<ImportBudget>,
@@ -1330,25 +1350,30 @@ fn apply_imports(
         let Some(slot) = value_to_string(layer.get(ctx, "source")) else {
             continue;
         };
-        let Some(asset) = assets.get(&slot) else {
-            continue;
-        };
+        let asset = assets.get(&slot);
         if mode == 7 {
             // Mode 7 is a single 8bpp BG1 plane over the interleaved region.
             if i != 0 {
                 continue;
             }
-            let (src, meta) = m7_cache
-                .entry((slot.clone(), asset.generation))
-                .or_insert_with(|| {
-                    import_mode7(&asset.rgba, asset.width as usize, asset.height as usize)
-                });
-            crate::source::place_m7(src, mem);
-            if let crate::source::SourceReport::Mode7 { report } = &meta.report {
-                reports.push(ImportBudget::Mode7 {
-                    layer: i,
-                    report: report.clone(),
-                });
+            if let Some(asset) = asset {
+                let (src, meta) = m7_cache
+                    .entry((slot.clone(), asset.generation))
+                    .or_insert_with(|| {
+                        import_mode7(&asset.rgba, asset.width as usize, asset.height as usize)
+                    });
+                crate::source::place_m7(src, mem);
+                if let crate::source::SourceReport::Mode7 { report } = &meta.report {
+                    reports.push(ImportBudget::Mode7 {
+                        layer: i,
+                        report: report.clone(),
+                    });
+                }
+            } else if let Some(crate::source::SourcePayload::M7(src)) = sources.get(&slot) {
+                // Store-bound source (stub path): place only. Budget reports
+                // and kind-mismatch diagnostics are a later ticket's bind-time
+                // story.
+                crate::source::place_m7(src, mem);
             }
         } else {
             // Tile BG (Mode 1): bit-depth from the mode table; only 2/4/8bpp
@@ -1357,41 +1382,71 @@ fn apply_imports(
             if !matches!(bpp, 2 | 4 | 8) {
                 continue;
             }
-            let opts = ImportOptions {
-                bit_depth: bpp,
-                tile_size: layer.get(ctx, "tile_size").to_integer().unwrap_or(8) as u8,
-            };
-            let key = ImportKey {
-                asset: slot.clone(),
-                generation: asset.generation,
-                options: opts,
-            };
-            let (src, meta) =
-                import_cache.get_or_import(key, &asset.rgba, asset.width, asset.height);
-            // Placement: honor user-set bases, else the historical defaults
-            // (map_base 0, char_base 0x1000). Bases are bind-time, not format.
-            let raw_char = layer.get(ctx, "char_base").to_integer().unwrap_or(0) as u32;
-            let char_base = if raw_char == 0 {
-                0x1000
-            } else {
-                crate::quantize::bg_char_base(raw_char)
-            };
-            let map_base = crate::quantize::bg_map_base(
-                layer.get(ctx, "map_base").to_integer().unwrap_or(0) as u32,
-            );
-            let cgram_base = if mode == 0 && bpp == 2 { i * 8 * 4 } else { 0 };
-            crate::source::place_bg(src, mem, map_base as u16, char_base as u16, cgram_base);
-            layer.set(ctx, "map_base", map_base as i64).unwrap();
-            layer.set(ctx, "char_base", char_base as i64).unwrap();
-            layer
-                .set(ctx, "screen_size", src.screen_size as i64)
-                .unwrap();
-            layer.set(ctx, "tile_size", src.tile_size as i64).unwrap();
-            if let crate::source::SourceReport::Tile { report } = &meta.report {
-                reports.push(ImportBudget::Tile {
-                    layer: i,
-                    report: report.clone(),
-                });
+            if let Some(asset) = asset {
+                let opts = ImportOptions {
+                    bit_depth: bpp,
+                    tile_size: layer.get(ctx, "tile_size").to_integer().unwrap_or(8) as u8,
+                };
+                let key = ImportKey {
+                    asset: slot.clone(),
+                    generation: asset.generation,
+                    options: opts,
+                };
+                let (src, meta) =
+                    import_cache.get_or_import(key, &asset.rgba, asset.width, asset.height);
+                // Placement: honor user-set bases, else the historical defaults
+                // (map_base 0, char_base 0x1000). Bases are bind-time, not format.
+                let raw_char = layer.get(ctx, "char_base").to_integer().unwrap_or(0) as u32;
+                let char_base = if raw_char == 0 {
+                    0x1000
+                } else {
+                    crate::quantize::bg_char_base(raw_char)
+                };
+                let map_base = crate::quantize::bg_map_base(
+                    layer.get(ctx, "map_base").to_integer().unwrap_or(0) as u32,
+                );
+                let cgram_base = if mode == 0 && bpp == 2 { i * 8 * 4 } else { 0 };
+                crate::source::place_bg(src, mem, map_base as u16, char_base as u16, cgram_base);
+                layer.set(ctx, "map_base", map_base as i64).unwrap();
+                layer.set(ctx, "char_base", char_base as i64).unwrap();
+                layer
+                    .set(ctx, "screen_size", src.screen_size as i64)
+                    .unwrap();
+                layer.set(ctx, "tile_size", src.tile_size as i64).unwrap();
+                if let crate::source::SourceReport::Tile { report } = &meta.report {
+                    reports.push(ImportBudget::Tile {
+                        layer: i,
+                        report: report.clone(),
+                    });
+                }
+            } else if let Some(crate::source::SourcePayload::Bg(src)) = sources.get(&slot) {
+                if src.bit_depth == bpp {
+                    // Depth match -> place; a mismatch stays blank (a later
+                    // ticket emits the diagnostic).
+                    let raw_char = layer.get(ctx, "char_base").to_integer().unwrap_or(0) as u32;
+                    let char_base = if raw_char == 0 {
+                        0x1000
+                    } else {
+                        crate::quantize::bg_char_base(raw_char)
+                    };
+                    let map_base = crate::quantize::bg_map_base(
+                        layer.get(ctx, "map_base").to_integer().unwrap_or(0) as u32,
+                    );
+                    let cgram_base = if mode == 0 && bpp == 2 { i * 8 * 4 } else { 0 };
+                    crate::source::place_bg(
+                        src,
+                        mem,
+                        map_base as u16,
+                        char_base as u16,
+                        cgram_base,
+                    );
+                    layer.set(ctx, "map_base", map_base as i64).unwrap();
+                    layer.set(ctx, "char_base", char_base as i64).unwrap();
+                    layer
+                        .set(ctx, "screen_size", src.screen_size as i64)
+                        .unwrap();
+                    layer.set(ctx, "tile_size", src.tile_size as i64).unwrap();
+                }
             }
         }
     }
@@ -1412,6 +1467,7 @@ fn apply_imports(
 fn apply_obj_sheet(
     ctx: piccolo::Context<'_>,
     assets: &HashMap<String, ImportAsset>,
+    sources: &HashMap<String, crate::source::SourcePayload>,
     cache: &mut HashMap<(String, u64), (crate::source::ObjSource, crate::source::SourceMeta)>,
     reports: &mut Vec<ImportBudget>,
     mem: &mut Memory,
@@ -1422,20 +1478,21 @@ fn apply_obj_sheet(
     let Some(slot) = value_to_string(obj.get(ctx, "sheet")) else {
         return;
     };
-    let Some(asset) = assets.get(&slot) else {
-        return;
-    };
     let char_base = crate::quantize::obj_char_base(
         obj.get(ctx, "char_base").to_integer().unwrap_or(0).max(0) as u32,
     );
-    let (src, meta) = cache
-        .entry((slot.clone(), asset.generation))
-        .or_insert_with(|| import_obj_sheet(&asset.rgba, asset.width, asset.height, 8));
-    crate::source::place_obj(src, mem, char_base as u16);
-    if let crate::source::SourceReport::Obj { report } = &meta.report {
-        reports.push(ImportBudget::Obj {
-            report: report.clone(),
-        });
+    if let Some(asset) = assets.get(&slot) {
+        let (src, meta) = cache
+            .entry((slot.clone(), asset.generation))
+            .or_insert_with(|| import_obj_sheet(&asset.rgba, asset.width, asset.height, 8));
+        crate::source::place_obj(src, mem, char_base as u16);
+        if let crate::source::SourceReport::Obj { report } = &meta.report {
+            reports.push(ImportBudget::Obj {
+                report: report.clone(),
+            });
+        }
+    } else if let Some(crate::source::SourcePayload::Obj(src)) = sources.get(&slot) {
+        crate::source::place_obj(src, mem, char_base as u16);
     }
 }
 
