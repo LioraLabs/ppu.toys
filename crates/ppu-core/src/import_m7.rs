@@ -1,16 +1,17 @@
 //! Mode 7 importer (m4/importer): converts a decoded RGBA image (a
-//! `PpuCore.assets` entry) into the byte-interleaved Mode 7 VRAM region +
-//! a single flat 256-color CGRAM palette.
+//! `PpuCore.assets` entry) into an `M7Source` payload (flat palette + chunky
+//! 8bpp tiles + tilemap) plus its `SourceMeta`. Bind-time placement into the
+//! byte-interleaved Mode 7 VRAM region and CGRAM is `source::place_m7`'s job.
 //!
 //! Pipeline: median-cut quantize whole image (<=255 opaque colors; CGRAM 0 is
 //! reserved transparent) -> 8x8 split + exact dedup to <=256 unique tiles
-//! (honest overflow report) -> interleave `vram[i] = (char<<8) | map`.
+//! (honest overflow report) -> package as `M7Source`.
 //!
 //! `median_cut` / `nearest_color` / `dedup_tiles` are PRIVATE local helpers
-//! that duplicate the shared importer core being built in parallel; at
-//! integration these three get repointed at the shared module.
+//! that intentionally fork the shared importer core (`import::quantize`) —
+//! goldens depend on this module's exact numerics, so they stay unmerged.
 
-use crate::memory::{rgb15, Memory};
+use crate::memory::rgb15;
 use std::collections::HashMap;
 
 /// Mode 7 tilemap is 128x128 tile-number bytes (the low lane of words 0..0x4000).
@@ -168,34 +169,18 @@ pub struct Mode7ImportReport {
     pub map_tiles_h: u16,
 }
 
-/// Result of a Mode 7 import: the interleaved VRAM region, the flat CGRAM
-/// palette, and the budget report.
-#[derive(Clone)]
-pub struct Mode7Import {
-    /// The full interleaved region, words 0..0x4000:
-    /// `vram[i] = (char_byte[i] << 8) | map_byte[i]`.
-    pub vram: Vec<u16>,
-    /// Flat 256-color palette; entry 0 stays 0 (reserved transparent/backdrop).
-    pub cgram: [u16; 256],
-    pub report: Mode7ImportReport,
-}
-
-impl Mode7Import {
-    /// Write the import into PPU memory: the interleaved VRAM region at word 0
-    /// (where the Mode 7 rasterizer samples) and the whole CGRAM.
-    pub fn apply(&self, mem: &mut Memory) {
-        mem.vram[..M7_VRAM_WORDS].copy_from_slice(&self.vram);
-        mem.cgram.copy_from_slice(&self.cgram);
-    }
-}
-
 /// Import a decoded RGBA image (a `PpuCore.assets` entry) as Mode 7 data:
 /// median-cut quantize to a single <=255-color palette (CGRAM 1..; 0 reserved
 /// transparent), split into 8x8 tiles, exact-dedup to <=256 tiles (overflow
-/// reported, overflowing cells fall back to tile 0), and emit the
-/// byte-interleaved VRAM region. The image map is placed at the tilemap's
-/// top-left; uncovered cells stay tile 0.
-pub fn import_mode7(rgba: &[u8], width: usize, height: usize) -> Mode7Import {
+/// reported, overflowing cells fall back to tile 0), and emit the payload +
+/// dims/report as `(M7Source, SourceMeta)`. Bind-time placement into VRAM/CGRAM
+/// is `place_m7`'s job. The image map is placed at the tilemap's top-left;
+/// uncovered cells stay tile 0.
+pub fn import_mode7(
+    rgba: &[u8],
+    width: usize,
+    height: usize,
+) -> (crate::source::M7Source, crate::source::SourceMeta) {
     assert_eq!(
         rgba.len(),
         width * height * 4,
@@ -214,44 +199,39 @@ pub fn import_mode7(rgba: &[u8], width: usize, height: usize) -> Mode7Import {
     let (tiles, map, tiles_w, tiles_h, unique_total) =
         dedup_tiles(&indexed, width, height, M7_MAX_TILES);
 
-    let mut cgram = [0u16; 256];
-    for (i, c) in palette.iter().enumerate() {
-        cgram[i + 1] = rgb15(c[0], c[1], c[2]);
-    }
-
-    // Interleave. Char lane: tile t's 64 pixels at byte offsets t*64.. (high).
-    // Map lane: 128x128 row-major tile numbers (low), image map top-left.
-    let mut vram = vec![0u16; M7_VRAM_WORDS];
-    for (t, tile) in tiles.iter().enumerate() {
-        for (j, &px) in tile.iter().enumerate() {
-            vram[t * M7_TILE_BYTES + j] |= (px as u16) << 8;
-        }
-    }
-    for ty in 0..tiles_h {
-        for tx in 0..tiles_w {
-            vram[ty * M7_MAP_DIM + tx] |= map[ty * tiles_w + tx] as u16;
-        }
-    }
-
-    Mode7Import {
-        vram,
-        cgram,
-        report: Mode7ImportReport {
-            colors: palette.len() as u16,
-            unique_tiles: unique_total.min(u16::MAX as usize) as u16,
-            tile_capacity: M7_MAX_TILES as u16,
-            overflow_tiles: unique_total
-                .saturating_sub(M7_MAX_TILES)
-                .min(u16::MAX as usize) as u16,
-            map_tiles_w: tiles_w as u16,
-            map_tiles_h: tiles_h as u16,
+    let palette_bgr: Vec<u16> = palette.iter().map(|c| rgb15(c[0], c[1], c[2])).collect();
+    let report = Mode7ImportReport {
+        colors: palette.len() as u16,
+        unique_tiles: unique_total.min(u16::MAX as usize) as u16,
+        tile_capacity: M7_MAX_TILES as u16,
+        overflow_tiles: unique_total
+            .saturating_sub(M7_MAX_TILES)
+            .min(u16::MAX as usize) as u16,
+        map_tiles_w: tiles_w as u16,
+        map_tiles_h: tiles_h as u16,
+    };
+    (
+        crate::source::M7Source {
+            options: crate::source::M7Options::default(),
+            palette: palette_bgr,
+            tiles,
+            tiles_w: tiles_w as u8,
+            tiles_h: tiles_h as u8,
+            map,
         },
-    }
+        crate::source::SourceMeta {
+            width: width as u32,
+            height: height as u32,
+            report: crate::source::SourceReport::Mode7 { report },
+            cells: None,
+        },
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::Memory;
 
     /// Build an RGBA buffer from a list of (r,g,b) pixels (all opaque).
     fn rgba_of(pixels: &[[u8; 3]]) -> Vec<u8> {
@@ -372,13 +352,18 @@ mod tests {
     fn import_reserves_cgram_zero_and_packs_bgr555() {
         // 8x8 solid red -> 1 color at cgram[1], cgram[0] untouched.
         let rgba = rgba_of(&[[255, 0, 0]; 64]);
-        let out = import_mode7(&rgba, 8, 8);
-        assert_eq!(out.cgram[0], 0);
-        assert_eq!(out.cgram[1], rgb15(255, 0, 0)); // 0x001f
-        assert_eq!(out.report.colors, 1);
+        let (src, meta) = import_mode7(&rgba, 8, 8);
+        let mut mem = Memory::new();
+        crate::source::place_m7(&src, &mut mem);
+        assert_eq!(mem.cgram[0], 0);
+        assert_eq!(mem.cgram[1], rgb15(255, 0, 0)); // 0x001f
+        let crate::source::SourceReport::Mode7 { report } = &meta.report else {
+            panic!("expected Mode7 report");
+        };
+        assert_eq!(report.colors, 1);
         // The single tile's char bytes are all index 1 (high lane).
-        assert_eq!(out.vram[0], 1 << 8); // char=1, map cell (0,0) = tile 0
-        assert_eq!(out.vram[63], 1 << 8);
+        assert_eq!(mem.vram[0], 1 << 8); // char=1, map cell (0,0) = tile 0
+        assert_eq!(mem.vram[63], 1 << 8);
     }
 
     #[test]
@@ -394,21 +379,27 @@ mod tests {
                 });
             }
         }
-        let out = import_mode7(&rgba, 8, 8);
-        assert_eq!(out.report.colors, 1);
-        assert_eq!(out.vram[0] >> 8, 1); // opaque -> palette index 1
-        assert_eq!(out.vram[4] >> 8, 0); // transparent -> index 0
+        let (src, meta) = import_mode7(&rgba, 8, 8);
+        let mut mem = Memory::new();
+        crate::source::place_m7(&src, &mut mem);
+        let crate::source::SourceReport::Mode7 { report } = &meta.report else {
+            panic!("expected Mode7 report");
+        };
+        assert_eq!(report.colors, 1);
+        assert_eq!(mem.vram[0] >> 8, 1); // opaque -> palette index 1
+        assert_eq!(mem.vram[4] >> 8, 0); // transparent -> index 0
     }
 
     #[test]
-    fn apply_writes_interleaved_region_and_cgram() {
+    fn place_m7_writes_interleaved_region_and_cgram() {
         let rgba = rgba_of(&[[0, 255, 0]; 64]);
-        let out = import_mode7(&rgba, 8, 8);
+        let (src, _meta) = import_mode7(&rgba, 8, 8);
         let mut mem = Memory::new();
-        mem.vram[M7_VRAM_WORDS] = 0xbeef; // outside the interleaved region
-        out.apply(&mut mem);
-        assert_eq!(mem.vram[..M7_VRAM_WORDS], out.vram[..]);
-        assert_eq!(mem.vram[M7_VRAM_WORDS], 0xbeef); // untouched
+        crate::source::place_m7(&src, &mut mem);
+        // Single 8x8 tile: char high lane holds palette index 1 (green) at
+        // every byte, map low lane cell (0,0) is tile 0.
+        assert_eq!(mem.vram[0], 1 << 8);
+        assert_eq!(mem.vram[63], 1 << 8);
         assert_eq!(mem.cgram[1], rgb15(0, 255, 0));
     }
 }
