@@ -1,4 +1,4 @@
-import { PinBar } from "./compose/chrome";
+import { PokeBar } from "./compose/chrome";
 import { useCompositor } from "./compose/useCompositor";
 import {
   BoundCards,
@@ -10,12 +10,12 @@ import {
 import "./compose/compose.css";
 
 /** WINDOWS — the two hardware window masks (W1/W2) and their combine logic.
- *  Every control writes a pinned override through the shared pin store. */
+ *  Every control writes a whole-register poke into the generated pokes.lua. */
 export function WindowsTab() {
   const c = useCompositor();
   return (
     <div className="insp-scroll">
-      <PinBar c={c} />
+      <PokeBar c={c} />
       <WindowPreview c={c} />
       <div className="winp-caption">
         orange = W1 edges · cyan = W2 edges · click preview to drag nearest edge

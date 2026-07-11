@@ -19,7 +19,7 @@ export function MemoryTab() {
       <VramBar regions={regions} onCopy={copy} />
       <VramLegend regions={regions} onCopy={copy} />
       <div className="insp-subhead">CGRAM OWNERSHIP · 16 × 16</div>
-      <CgramGrid cgram={frame.cgram} owners={owners} onCopy={copy} />
+      <CgramGrid cgram={frame.cgram} owners={owners} />
       {toast}
     </div>
   );

@@ -9,7 +9,6 @@ import {
   SourceFile,
   WIDTH,
   HEIGHT,
-  PinnedRegister,
   CompositorScreens,
   PlaneId,
   BgTrace,
@@ -25,7 +24,6 @@ export class MockPpuCore implements PpuCore {
   private layerVisible = new Map<string, boolean>();
   /** Last frame's register values by addr, for change detection. */
   private prevReg = new Map<number, number>();
-  private pinned = new Map<number, number>();
   private lastT = 0;
   private lastF = 0;
   /** frame() output cached for the side queries (screens/traceObj). */
@@ -146,10 +144,6 @@ export class MockPpuCore implements PpuCore {
       { addr: 0x210e, name: "BG1VOFS", value: Math.floor(t * 16) & 0xff },
       { addr: 0x2132, name: "COLDATA", value: f & 0xff },
     ];
-    for (const r of raw) {
-      const p = this.pinned.get(r.addr);
-      if (p !== undefined) r.value = p;
-    }
     const registers: RegisterView[] = raw.map((r) => {
       const prev = this.prevReg.get(r.addr);
       this.prevReg.set(r.addr, r.value);
@@ -190,24 +184,6 @@ export class MockPpuCore implements PpuCore {
     const result: FrameResult = { framebuffer, registers, cgram, oam, objOverflow };
     this.lastFrame = result;
     return result;
-  }
-
-  pin(addr: number, value: number) {
-    this.pinned.set(addr, value);
-  }
-
-  unpin(addr: number) {
-    this.pinned.delete(addr);
-  }
-
-  clearPins() {
-    this.pinned.clear();
-  }
-
-  listPins(): PinnedRegister[] {
-    return [...this.pinned]
-      .sort((a, b) => a[0] - b[0])
-      .map(([addr, value]) => ({ addr, value }));
   }
 
   /** Mock intermediates: main = the last synthesized frame, sub = a dimmed

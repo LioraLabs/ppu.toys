@@ -89,10 +89,6 @@ function makeCore(state: { throwing: boolean }): PpuCore {
     traceBgPixel: () => null,
     traceBgTile: () => null,
     traceObj: () => null,
-    pin: () => {},
-    unpin: () => {},
-    clearPins: () => {},
-    listPins: () => [],
   };
 }
 
@@ -136,50 +132,6 @@ describe("transport multi-file recompile", () => {
     const after = tr.getSnapshot();
     expect(after.t).toBe(before.t);
     expect(after.f).toBe(before.f);
-  });
-});
-
-describe("transport pin actions", () => {
-  it("write through to the core and re-render at the SAME clock (no step)", () => {
-    const calls: unknown[] = [];
-    const core: PpuCore = {
-      ...makeCore({ throwing: false }),
-      pin: (a, v) => void calls.push(["pin", a, v]),
-      unpin: (a) => void calls.push(["unpin", a]),
-      clearPins: () => void calls.push(["clear"]),
-    };
-    const tr = new Transport(() => core);
-    tr.step(100);
-    const before = tr.getSnapshot();
-    tr.pin(0x2100, 7);
-    expect(tr.getSnapshot()).not.toBe(before); // renderOnce notified…
-    expect(tr.getSnapshot().t).toBe(before.t); // …without advancing the clock
-    tr.unpin(0x2100);
-    tr.clearPins();
-    expect(calls).toEqual([["pin", 0x2100, 7], ["unpin", 0x2100], ["clear"]]);
-  });
-
-  it("pinMany applies a batch through the core in one notification", () => {
-    const calls: unknown[] = [];
-    let emits = 0;
-    const core: PpuCore = {
-      ...makeCore({ throwing: false }),
-      pin: (a, v) => void calls.push([a, v]),
-    };
-    const tr = new Transport(() => core);
-    tr.setPlaying(false); // no rAF loop in this env; only the action may notify
-    const unsub = tr.subscribe(() => emits++);
-    emits = 0;
-    tr.pinMany([
-      { addr: 0x2126, value: 0xaa },
-      { addr: 0x2127, value: 0x0a },
-    ]);
-    expect(calls).toEqual([
-      [0x2126, 0xaa],
-      [0x2127, 0x0a],
-    ]);
-    expect(emits).toBe(1);
-    unsub();
   });
 });
 
@@ -227,20 +179,5 @@ describe("transport restart (▶ Run)", () => {
     tr.setPlaying(false);
     tr.restart();
     expect(tr.getSnapshot().playing).toBe(true);
-  });
-
-  it("clears pinned overrides (M9 contract: recompile keeps pins, Run drops them)", () => {
-    let cleared = 0;
-    const core: PpuCore = {
-      ...makeCore({ throwing: false }),
-      clearPins: () => {
-        cleared += 1;
-      },
-    };
-    const tr = new Transport(() => core);
-    tr.setSources([{ name: "main.lua", source: "function frame() end" }]);
-    expect(cleared).toBe(0); // recompile must NOT clear pins
-    tr.restart();
-    expect(cleared).toBe(1);
   });
 });

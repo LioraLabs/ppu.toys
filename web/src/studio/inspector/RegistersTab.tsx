@@ -11,6 +11,7 @@ import {
   displayFlags,
   mosaic,
 } from "./format";
+import { HexPoke } from "../pokes/HexPoke";
 
 export function RegistersTab({ frame }: { frame: FrameResult | null }) {
   if (!frame) return <div className="insp-empty">waiting for frame…</div>;
@@ -87,7 +88,11 @@ export function RegistersTab({ frame }: { frame: FrameResult | null }) {
         <div className="reg-row" key={r.addr}>
           <span className="reg-addr">{formatAddr(r.addr)}</span>
           <span className="reg-name">{r.name}</span>
-          <span className="reg-value">{formatValue(r.value)}</span>
+          <span className="reg-value">
+            <HexPoke addr={r.addr} value={r.value}>
+              {formatValue(r.value)}
+            </HexPoke>
+          </span>
         </div>
       ))}
       <div className="cgram-section">

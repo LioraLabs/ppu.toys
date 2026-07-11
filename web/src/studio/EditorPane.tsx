@@ -7,6 +7,17 @@ import { createSourcePusher } from "./editor/sourcePush";
 import { transport, useTransportRuntimeError } from "./transport/transport";
 import { openSketchStore, useOpenSketch, openContextFiles } from "./sketches/openSketch";
 import { restoreOpenContext } from "./sketches/restore";
+import { POKES_FILE } from "./pokes/pokes";
+
+/** The only machine-generated file — read-only tab, CRUD-guarded (see
+ *  openSketchStore), never a default active-tab target. */
+const GENERATED = new Set([POKES_FILE]);
+
+/** First non-generated file, falling back to files[0] when every file is
+ *  generated (should not happen — a sketch always keeps >= 1 real file). */
+function defaultActive(files: SourceFile[]): string {
+  return (files.find((f) => !GENERATED.has(f.name)) ?? files[0])?.name ?? "main.lua";
+}
 
 export interface EditorPaneProps {
   /** PpuCore.setSources-shaped sink for the whole multi-file program in
@@ -37,13 +48,15 @@ export function EditorPane({ onSources }: EditorPaneProps) {
     };
   }, [session]);
 
-  // ── active tab: by name, clamped to the live list (deletes/renames)
-  const [activeName, setActiveName] = useState(() => files[0]?.name ?? "main.lua");
+  // ── active tab: by name, clamped to the live list (deletes/renames).
+  // Defaults to the first NON-generated file — pokes.lua is always index 0,
+  // so without this every sketch would open staring at the generated tab.
+  const [activeName, setActiveName] = useState(() => defaultActive(files));
   const active = files.some((f) => f.name === activeName)
     ? activeName
-    : (files[0]?.name ?? "main.lua");
+    : defaultActive(files);
   useEffect(() => {
-    setActiveName(openContextFiles(openSketchStore.state())[0]?.name ?? "main.lua");
+    setActiveName(defaultActive(openContextFiles(openSketchStore.state())));
   }, [session]);
 
   // ── stable doc identities: survive renames (undo history follows the file),
@@ -99,6 +112,9 @@ export function EditorPane({ onSources }: EditorPaneProps) {
   const errorFiles = useMemo(() => new Set(routed.keys()), [routed]);
 
   const rename = (from: string, to: string): boolean => {
+    // belt-and-braces: the store already rejects touching the reserved
+    // generated file, and FileTabs never wires up its dblclick for it.
+    if (GENERATED.has(from) || GENERATED.has(to)) return false;
     if (!openSketchStore.renameFile(from, to)) return false;
     const k = docKeys.get(from);
     if (k !== undefined) {
@@ -109,12 +125,13 @@ export function EditorPane({ onSources }: EditorPaneProps) {
     return true;
   };
   const remove = (name: string) => {
+    if (GENERATED.has(name)) return; // belt-and-braces, see rename above
     openSketchStore.deleteFile(name);
     docKeys.delete(name); // key is never reused: a re-added name gets a fresh doc
     // re-anchor the NAMED active state too — a later rename to the deleted
     // name must not silently steal activation
     if (activeName === name)
-      setActiveName(openContextFiles(openSketchStore.state())[0]?.name ?? "main.lua");
+      setActiveName(defaultActive(openContextFiles(openSketchStore.state())));
   };
 
   const activeFile = files.find((f) => f.name === active);
@@ -125,6 +142,7 @@ export function EditorPane({ onSources }: EditorPaneProps) {
         files={files.map((f) => f.name)}
         active={active}
         errorFiles={errorFiles}
+        generated={GENERATED}
         onSelect={setActiveName}
         onAdd={() => setActiveName(openSketchStore.addFile())}
         onRename={rename}
@@ -136,6 +154,7 @@ export function EditorPane({ onSources }: EditorPaneProps) {
           key={session}
           docKey={keyFor(active)}
           doc={activeFile?.source ?? ""}
+          generated={GENERATED.has(active)}
           onChange={(src) => openSketchStore.editFile(active, src)}
           errors={routed.get(active) ?? NO_ERRORS}
         />

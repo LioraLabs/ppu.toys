@@ -41,12 +41,14 @@ Editing is live with error grace, not edit-then-recompile:
   (fresh globals each time — `Lua::core()` is rebuilt on every `set_sources`
   call), but the clock is untouched: `Transport.setSources` re-renders at the
   *current* `t`/`f` (`web/src/studio/transport/transport.ts`: "recompile never
-  resets t/f"). Pinned overrides also survive a recompile — `set_sources` does
-  not clear them.
+  resets t/f"). Pokes (see below) live in the ordinary `pokes.lua` file, so a
+  recompile carries them along like any other edit — there is no separate
+  override layer to invalidate.
 - ▶ Run (`Toolbar.tsx` → `transport.restart()`) is the deterministic reset: it
-  clears all pinned overrides (`ppuCore.clearPins()`), re-pushes the last
-  sources into a fresh program, and rewinds the clock to `t=0, f=0` before
-  resuming playback.
+  re-pushes the last sources into a fresh program and rewinds the clock to
+  `t=0, f=0` before resuming playback. It does **not** touch `pokes.lua` —
+  pokes are a file, not session state, so Run and a page reload both leave
+  them in place; only poking/un-poking/clear-all edit the file.
 
 ## Sketch model
 
@@ -108,24 +110,43 @@ seven are permanent:
   register truth. Aux tabs have no overlay and no distinct styling today —
   the marker is informational.
 
-Pinned overrides (`web/src/studio/inspector/compose/pinStore.ts`): Compose/
-Windows control pokes call `ppuCore.pin(addr, value)`, writing into a pinned
-register set applied as the final `LineTable` hook in the Rust engine's
-`frame()` — after all script `hdma` hooks — so pins win over whatever the Lua
-program set. Pins are visually marked, individually releasable
-(`releasePin`), have a clear-all affordance (`releaseAllPins`), and are wiped
-by ▶ Run (`transport.restart()` → `clearPins()`), never by a recompile.
+Pokes (`web/src/studio/pokes/`): Compose/Windows controls, CGRAM cell colors,
+and register readout rows all poke through one path — `poke()`/`unpoke()`/
+`clearPokes()` (`pokeStore.ts`) parse and regenerate the reserved, read-only
+`pokes.lua` file (`POKES_FILE`, always tab 0) from a `{lvalue, expr, note?}`
+list (`pokes.ts`). The FILE is the source of truth: every poke rewrites the
+whole generated `apply_pokes()` function body, entries sorted by lvalue for
+byte-stable output. Script wins by convention, not by a separate override
+layer: `apply_pokes()` runs as `frame()`'s first line (every bundled demo and
+the new-sketch template call it there — see Demos below), so a later
+assignment in the script to the same lvalue overrides the poke for that
+frame. A poked control carries a dot marker (`PokeDot`,
+`inspector/compose/chrome.tsx`) — solid while the live register still reads
+the poked value, hollow ("poked · live value differs (script write or
+quantization)") once a later script write has moved it — or when the engine
+masked an out-of-range poked value down to the register's real width. To save
+a configuration beyond the session, copy
+the generated `apply_pokes()` source (`PokeBar`'s "copy fn") into a file of
+your own under a new name — hand-edits to `pokes.lua` itself are overwritten
+by the next poke. Poking a bundled demo forks it like any other edit. Pokes
+are a file, not session state: ▶ Run and a reload both leave `pokes.lua`
+untouched; a warning chip appears if pokes exist but no file calls
+`apply_pokes()`.
 
 ## Demos + assets
 
 Bundled demos live in `web/src/studio/demos/demos.ts` as `{id, label, source,
-files?, assets}` — `files` is present only for multi-file demos (currently
-just `dusk-parallax`); single-file demos present as one `main.lua` via
-`demoFiles()`. Each demo's procedural pixel assets (raw RGBA, generated in TS
-mirroring the generators in `crates/ppu-core/tests/golden_demos.rs` — tuned
-for how the demos look on screen, not byte-identity with the fixtures) are
-uploaded into the live core by `web/src/studio/demos/loadDemo.ts` when a demo
-is opened.
+files, assets}`. Every demo ships `files` explicitly, generated `pokes.lua`
+first (empty, read-only) then `main.lua` (and, for `dusk-parallax`,
+`palette.lua`) — `demoFiles()` returns that ordered list; `source` is the same
+files joined tab-order with `"\n"`, kept for the single-string call sites.
+Each demo's `main.lua` calls `apply_pokes()` as `frame()`'s first line, same
+as the new-sketch template, so poking a demo behaves exactly like poking a
+sketch (see Pokes above). Each demo's procedural pixel assets (raw RGBA,
+generated in TS mirroring the generators in
+`crates/ppu-core/tests/golden_demos.rs` — tuned for how the demos look on
+screen, not byte-identity with the fixtures) are uploaded into the live core
+by `web/src/studio/demos/loadDemo.ts` when a demo is opened.
 
 Users can also drop a PNG onto the output canvas
 (`web/src/studio/output/DropZone.tsx`): it is quantized into VRAM tiles + a

@@ -120,26 +120,6 @@ describe("MockPpuCore", () => {
 });
 
 describe("MockPpuCore view seams", () => {
-  it("pinned registers override the reported register values", () => {
-    const core = new MockPpuCore();
-    core.pin(0x2100, 0x03);
-    const inidisp = core.frame(0, 0).registers.find((r) => r.addr === 0x2100)!;
-    expect(inidisp.value).toBe(0x03);
-    expect(core.listPins()).toEqual([{ addr: 0x2100, value: 0x03 }]);
-    core.clearPins();
-    expect(core.listPins()).toEqual([]);
-    expect(core.frame(0, 0).registers.find((r) => r.addr === 0x2100)!.value).toBe(0x0f);
-  });
-
-  it("unpin removes a single override and list stays addr-ordered", () => {
-    const core = new MockPpuCore();
-    core.pin(0x2132, 1);
-    core.pin(0x2100, 2);
-    expect(core.listPins().map((p) => p.addr)).toEqual([0x2100, 0x2132]);
-    core.unpin(0x2100);
-    expect(core.listPins().map((p) => p.addr)).toEqual([0x2132]);
-  });
-
   it("screens() returns full-size intermediates after a frame", () => {
     const core = new MockPpuCore();
     core.frame(0.5, 30);

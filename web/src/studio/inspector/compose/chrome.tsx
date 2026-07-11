@@ -1,55 +1,90 @@
 import { formatAddr, formatValue } from "../format";
 import { useCopyToast } from "../copyToast";
-import { releaseAllPins, releasePin } from "./pinStore";
+import { clearPokes, unpoke } from "../../pokes/pokeStore";
+import { HexPoke } from "../../pokes/HexPoke";
+import { pokeMatchesLive } from "./model";
 import type { Compositor } from "./useCompositor";
 
-/** Marker a pinned control wears; click = unpin that register. Renders
- *  nothing while the register is script-driven. */
-export function PinDot({ c, addr }: { c: Compositor; addr: number }) {
-  if (!c.isPinned(addr)) return null;
+/** Marker a poked control wears; click = unpoke that register. SOLID while
+ *  the live register still shows the poked value; HOLLOW when a later script
+ *  write overrode it (apply_pokes() runs first in frame(), so the script
+ *  wins). Renders nothing while the register is unpoked. */
+export function PokeDot({ c, addr }: { c: Compositor; addr: number }) {
+  const p = c.pokedAt(addr);
+  if (!p) return null;
+  const match = pokeMatchesLive(p, c.frame.registers);
+  const state =
+    match === null
+      ? "poked"
+      : match
+        ? "poked · live matches"
+        : "poked · live value differs (script write or quantization)";
   return (
     <button
       type="button"
-      className="cmp-pin"
-      title={`${formatAddr(addr)} pinned — script value overridden. Click to unpin.`}
+      className={"cmp-poke" + (match === false ? " cmp-poke--overridden" : "")}
+      title={`${formatAddr(addr)} ${p.lvalue} = ${p.expr} — ${state}. Click to unpoke.`}
       onClick={(e) => {
         e.stopPropagation();
-        releasePin(addr);
+        unpoke(p.lvalue);
       }}
-    >
-      ◉
-    </button>
+    />
   );
 }
 
-/** Pinned-override summary: one chip per pin (click = unpin) + clear-all.
- *  Rendered by both docked tabs and the overlay; hidden while nothing is
- *  pinned. ▶ Run also clears every pin (transport.restart). */
-export function PinBar({ c }: { c: Compositor }) {
-  if (c.pins.length === 0) return null;
+/** Poke summary bar: one chip per poke (click = unpoke), copy the generated
+ *  apply_pokes() source, clear-all, and a warning chip when pokes exist but
+ *  nothing calls apply_pokes(). Rendered by both docked tabs and the overlay;
+ *  hidden while nothing is poked. ▶ Run does NOT clear pokes. */
+export function PokeBar({ c }: { c: Compositor }) {
+  if (c.pokes.length === 0) return null;
+  const copyFn = () => {
+    try {
+      // the FILE is the source of truth — copy its bytes, never a re-generation
+      void navigator.clipboard?.writeText(c.pokesSource).catch(() => {});
+    } catch {
+      /* clipboard unavailable (permissions/tests) */
+    }
+  };
   return (
-    <div className="cmp-pinbar">
-      <span className="cmp-pinbar-label">◉ {c.pins.length} pinned</span>
-      {c.pins.map((p) => (
+    <div className="cmp-pokebar">
+      <span className="cmp-pokebar-label">◉ {c.pokes.length} poked</span>
+      {c.pokes.map((p) => (
         <button
-          key={p.addr}
+          key={p.lvalue}
           type="button"
-          className="cmp-pinchip"
-          title="pinned override — click to unpin"
-          onClick={() => releasePin(p.addr)}
+          className="cmp-pokechip"
+          title={`${p.lvalue} = ${p.expr} — click to unpoke`}
+          onClick={() => unpoke(p.lvalue)}
         >
-          {formatAddr(p.addr)}={formatValue(p.value)} ✕
+          {p.lvalue}={p.expr} ✕
         </button>
       ))}
-      <button type="button" className="cmp-pinchip cmp-clearpins" onClick={releaseAllPins}>
+      {!c.pokesApplied && (
+        <span
+          className="cmp-pokewarn"
+          title="pokes.lua is generated, but no file calls apply_pokes() — the pokes never run"
+        >
+          ⚠ pokes not applied — call apply_pokes() in frame()
+        </span>
+      )}
+      <button
+        type="button"
+        className="cmp-pokechip cmp-copypokes"
+        title="copy the generated pokes.lua source"
+        onClick={copyFn}
+      >
+        copy fn
+      </button>
+      <button type="button" className="cmp-pokechip cmp-clearpokes" onClick={clearPokes}>
         clear all
       </button>
     </div>
   );
 }
 
-/** One copyable register readout row: effective (live-or-pinned) value, note,
- *  optional color swatch, pin marker with individual unpin. */
+/** One copyable register readout row: live value, note, optional color
+ *  swatch, poke marker with individual unpoke. */
 export function RegRow({
   c,
   addr,
@@ -78,9 +113,13 @@ export function RegRow({
       <span className="cmp-reg-addr">{formatAddr(addr)}</span>
       <span className="cmp-reg-name">{name}</span>
       {swatch !== undefined && <span className="cmp-reg-swatch" style={{ background: swatch }} />}
-      <span className="cmp-reg-val">{formatValue(value)}</span>
+      <span className="cmp-reg-val">
+        <HexPoke addr={addr} value={value}>
+          {formatValue(value)}
+        </HexPoke>
+      </span>
       <span className="cmp-reg-note">{note ?? ""}</span>
-      <PinDot c={c} addr={addr} />
+      <PokeDot c={c} addr={addr} />
       {toast}
     </div>
   );

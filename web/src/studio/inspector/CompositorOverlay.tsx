@@ -1,4 +1,4 @@
-import { PinBar } from "./compose/chrome";
+import { PokeBar } from "./compose/chrome";
 import {
   AssignmentMatrix,
   ComposeReadout,
@@ -17,10 +17,11 @@ import {
 import "./compose/compose.css";
 
 /** Full-screen "Compositor" overlay (⤢ Expand from Compose/Windows). Renders
- *  the SAME section components as the docked tabs over the same pin store +
- *  frame registers — state lives in the core, so edits made here and in the
- *  tabs mirror each other by construction. Layout per the handoff: controls
- *  left (296px), composite + window mask center, register lists right (300px). */
+ *  the SAME section components as the docked tabs over the same pokes.lua +
+ *  frame registers — state lives in the sketch files and the core, so edits
+ *  made here and in the tabs mirror each other by construction. Layout per the
+ *  handoff: controls left (296px), composite + window mask center, register
+ *  lists right (300px). */
 export function CompositorOverlay({ onCollapse }: { onCollapse: () => void }) {
   const c = useCompositor();
   return (
@@ -35,7 +36,7 @@ export function CompositorOverlay({ onCollapse }: { onCollapse: () => void }) {
       </div>
       <div className="insp-overlay-body cmpo-body">
         <div className="cmpo-left">
-          <PinBar c={c} />
+          <PokeBar c={c} />
           <div className="cmpo-h">SCREEN ASSIGNMENT</div>
           <AssignmentMatrix c={c} />
           <div className="cmpo-h cmpo-h--gap">COLOR MATH</div>

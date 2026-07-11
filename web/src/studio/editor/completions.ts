@@ -37,6 +37,7 @@ const GLOBALS: Completion[] = [
   { label: "hsl", type: "function", detail: "hsl(h,s,l) -> 15-bit" },
   { label: "frame", type: "function", detail: "frame(t,f) — required entry point" },
   { label: "init", type: "function", detail: "init() — optional one-time setup" },
+  { label: "apply_pokes", type: "function", detail: "apply_pokes() — inspector pokes (generated pokes.lua)" },
   { label: "t", type: "variable", detail: "seconds (float)" },
   { label: "f", type: "variable", detail: "frame index (int)" },
   { label: "math", type: "namespace", detail: "math.* library" },

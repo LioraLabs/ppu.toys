@@ -25,10 +25,6 @@ function fakeCore(over: Partial<WasmCoreLike> = {}): WasmCoreLike {
     traceBgPixel: () => null,
     traceBgTile: () => null,
     traceObj: () => null,
-    pinRegister: () => {},
-    unpinRegister: () => {},
-    clearPins: () => {},
-    listPins: () => [],
     ...over,
   };
 }
@@ -144,22 +140,5 @@ describe("wrapWasmCore view seams", () => {
     expect(none.traceBgPixel(1, 0, 0)).toBeNull();
     expect(none.traceBgTile(1, 0, 0, 0)).toBeNull();
     expect(none.traceObj(0)).toBeNull();
-  });
-
-  it("forwards pin calls and lists pins", () => {
-    const calls: unknown[] = [];
-    const ppu = wrapWasmCore(
-      fakeCore({
-        pinRegister: (a: number, v: number) => calls.push(["pin", a, v]),
-        unpinRegister: (a: number) => calls.push(["unpin", a]),
-        clearPins: () => calls.push(["clear"]),
-        listPins: () => [{ addr: 0x2100, value: 7 }],
-      }),
-    );
-    ppu.pin(0x2100, 7);
-    ppu.unpin(0x2100);
-    ppu.clearPins();
-    expect(calls).toEqual([["pin", 0x2100, 7], ["unpin", 0x2100], ["clear"]]);
-    expect(ppu.listPins()).toEqual([{ addr: 0x2100, value: 7 }]);
   });
 });

@@ -154,40 +154,12 @@ export class Transport {
     this.renderOnce();
   }
 
-  /** ▶ Run: deterministic restart — drop pinned overrides (recompile keeps them;
-   *  only Run clears), re-push the last sources so the core builds a fresh
-   *  program, rewind the clock to t=0/f=0, resume playback. */
+  /** ▶ Run: deterministic restart — re-push the last sources so the core
+   *  builds a fresh program, rewind the clock to t=0/f=0, resume playback. */
   restart = () => {
-    this.clearPins(); // through the pin action, so the pin-set change notifies
     if (this.lastSources !== null) this.coreRef().setSources(this.lastSources);
     this.clock = { t: 0, f: 0 };
     this.setPlaying(true);
-    this.renderOnce();
-  };
-
-  /** Pinned register overrides (M9). The pin SET lives in the core; these
-   *  actions are its only write path (single-writer invariant). Each renders
-   *  once at the current clock — renderOnce, not step(0), so a paused write
-   *  shows immediately without feeding the FPS accumulator. */
-  pin = (addr: number, value: number) => {
-    this.coreRef().pin(addr, value);
-    this.renderOnce();
-  };
-
-  /** Batch pin (multi-register encodes like combine/area) in ONE re-render. */
-  pinMany = (writes: readonly { addr: number; value: number }[]) => {
-    for (const w of writes) this.coreRef().pin(w.addr, w.value);
-    this.renderOnce();
-  };
-
-  /** Drop one pin — the register falls back to the script-driven value. */
-  unpin = (addr: number) => {
-    this.coreRef().unpin(addr);
-    this.renderOnce();
-  };
-
-  clearPins = () => {
-    this.coreRef().clearPins();
     this.renderOnce();
   };
 

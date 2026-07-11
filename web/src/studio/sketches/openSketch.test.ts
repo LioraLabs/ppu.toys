@@ -8,10 +8,12 @@ import {
   openContextLabel,
   openContextFiles,
 } from "./openSketch";
-import { listSketches, loadSketch, _resetSketchStoreForTests } from "./sketchStore";
+import { listSketches, loadSketch, saveSketch, _resetSketchStoreForTests } from "./sketchStore";
+import { POKES_FILE, EMPTY_POKES } from "../pokes/pokes";
 
 const demo = DEMOS[0];
-const demoMain = demoFiles(demo)[0].source;
+const demoMain = demoFiles(demo).find((f) => f.name === "main.lua")!.source;
+const demoPalette = demoFiles(demo).find((f) => f.name === "palette.lua")!;
 
 /** The open sketch, or throw — keeps assertions terse. */
 function openSketch() {
@@ -58,10 +60,12 @@ describe("lazy demo fork", () => {
     const sk = openSketch();
     expect(sk.name).toBe(`${demo.label} (copy)`);
     expect(sk.forkedFrom).toBe(demo.id);
-    // fork carries ALL demo files, only the edited one changes
+    // fork carries ALL demo files, only the edited one changes; pokes.lua
+    // is injected first
     expect(sk.files).toEqual([
+      { name: POKES_FILE, source: EMPTY_POKES },
       { name: "main.lua", source: demoMain + "\n-- edit" },
-      demoFiles(demo)[1],
+      demoPalette,
     ]);
   });
 
@@ -72,14 +76,14 @@ describe("lazy demo fork", () => {
     const list = await listSketches();
     expect(list).toHaveLength(1);
     const loaded = await loadSketch(list[0].id);
-    expect(loaded!.files[0].source).toBe("-- b");
+    expect(loaded!.files[1].source).toBe("-- b");
   });
 
   it("forks with the pristine demo source when an asset upload is the first change", () => {
     openSketchStore.addAsset({ name: "sky.png", png: new Uint8Array([1, 2, 3]) });
     const sk = openSketch();
     expect(sk.forkedFrom).toBe(demo.id);
-    expect(sk.files).toEqual(demoFiles(demo));
+    expect(sk.files).toEqual(demoFiles(demo)); // pokes.lua already ships first
     expect(sk.assets.map((a) => a.name)).toEqual(["sky.png"]);
   });
 
@@ -133,7 +137,10 @@ describe("open / new / switch", () => {
     const s = openSketchStore.state();
     expect(s.session).toBe(before + 1);
     expect(s.dirty).toBe(false);
-    expect(openSketch().files).toEqual([{ name: "main.lua", source: NEW_SKETCH_SOURCE }]);
+    expect(openSketch().files).toEqual([
+      { name: POKES_FILE, source: EMPTY_POKES },
+      { name: "main.lua", source: NEW_SKETCH_SOURCE },
+    ]);
     expect(await listSketches()).toHaveLength(1);
   });
 
@@ -147,7 +154,7 @@ describe("open / new / switch", () => {
     const s = openSketchStore.state();
     expect(s.session).toBe(before + 1);
     expect(s.dirty).toBe(false);
-    expect(openSketch().files[0].source).toBe("-- mine");
+    expect(openSketch().files[1].source).toBe("-- mine");
     expect(openContextLabel(s)).toBe(`${demo.label} (copy)`);
     // the editor's mount push of the identical source must not dirty it
     openSketchStore.editFile("main.lua", "-- mine");
@@ -161,7 +168,7 @@ describe("open / new / switch", () => {
     expect(openSketchStore.state().context).toEqual({ kind: "demo", demoId: DEMOS[1].id });
     expect(openSketchStore.state().dirty).toBe(false);
     const loaded = await loadSketch(id);
-    expect(loaded!.files[0].source).toBe("-- keep me");
+    expect(loaded!.files[1].source).toBe("-- keep me");
   });
 
   it("renaming the open sketch survives subsequent edits and the flush", async () => {
@@ -174,36 +181,36 @@ describe("open / new / switch", () => {
     expect(list).toHaveLength(1);
     expect(list[0].name).toBe("my toy");
     const loaded = await loadSketch(list[0].id);
-    expect(loaded!.files[0].source).toBe("-- b");
+    expect(loaded!.files[1].source).toBe("-- b");
   });
 });
 
 describe("openContextFiles", () => {
-  it("presents a multi-file demo as its ordered files", () => {
+  it("presents a multi-file demo as its ordered files, pokes.lua first", () => {
     expect(openContextFiles(openSketchStore.state())).toEqual(demoFiles(demo));
   });
 
   it("presents the dusk-parallax demo as ordered multi-file tabs", () => {
     const files = openContextFiles(openSketchStore.state());
-    expect(files.map((f) => f.name)).toEqual(["main.lua", "palette.lua"]);
+    expect(files.map((f) => f.name)).toEqual([POKES_FILE, "main.lua", "palette.lua"]);
   });
 
   it("pristine write-back of a demo file does not fork", () => {
     const files = openContextFiles(openSketchStore.state());
-    openSketchStore.editFile("palette.lua", files[1].source);
+    openSketchStore.editFile("palette.lua", files[2].source);
     expect(openSketchStore.state().context.kind).toBe("demo");
   });
 
   it("editing one demo file forks carrying ALL files", () => {
     const files = openContextFiles(openSketchStore.state());
-    openSketchStore.editFile("palette.lua", files[1].source + "\n-- tweak");
+    openSketchStore.editFile("palette.lua", files[2].source + "\n-- tweak");
     const ctx = openSketchStore.state().context;
     expect(ctx.kind).toBe("sketch");
     if (ctx.kind !== "sketch") return;
     expect(ctx.sketch.forkedFrom).toBe("dusk-parallax");
-    expect(ctx.sketch.files.map((f) => f.name)).toEqual(["main.lua", "palette.lua"]);
-    expect(ctx.sketch.files[0].source).toBe(files[0].source);
-    expect(ctx.sketch.files[1].source).toContain("-- tweak");
+    expect(ctx.sketch.files.map((f) => f.name)).toEqual([POKES_FILE, "main.lua", "palette.lua"]);
+    expect(ctx.sketch.files[1].source).toBe(files[1].source);
+    expect(ctx.sketch.files[2].source).toContain("-- tweak");
   });
 });
 
@@ -212,8 +219,8 @@ describe("file operations", () => {
     await openSketchStore.newSketch();
     const name = openSketchStore.addFile();
     expect(name).toBe("file2.lua");
-    expect(openSketch().files.map((f) => f.name)).toEqual(["main.lua", "file2.lua"]);
-    expect(openSketch().files[1].source).toBe("");
+    expect(openSketch().files.map((f) => f.name)).toEqual([POKES_FILE, "main.lua", "file2.lua"]);
+    expect(openSketch().files[2].source).toBe("");
     expect(openSketchStore.state().dirty).toBe(true);
   });
 
@@ -231,17 +238,14 @@ describe("file operations", () => {
     expect(name).toBe("file3.lua");
     const sk = openSketch();
     expect(sk.forkedFrom).toBe(demo.id);
-    expect(sk.files).toEqual([
-      ...demoFiles(demo),
-      { name: "file3.lua", source: "" },
-    ]);
+    expect(sk.files).toEqual([...demoFiles(demo), { name: "file3.lua", source: "" }]);
     expect(openSketchStore.state().session).toBe(before);
   });
 
   it("renameFile renames and reports success", async () => {
     await openSketchStore.newSketch();
     expect(openSketchStore.renameFile("main.lua", "palette.lua")).toBe(true);
-    expect(openSketch().files.map((f) => f.name)).toEqual(["palette.lua"]);
+    expect(openSketch().files.map((f) => f.name)).toEqual([POKES_FILE, "palette.lua"]);
   });
 
   it("renameFile rejects empty, unknown, and duplicate targets", async () => {
@@ -250,24 +254,25 @@ describe("file operations", () => {
     expect(openSketchStore.renameFile("main.lua", "  ")).toBe(false);
     expect(openSketchStore.renameFile("nope.lua", "x.lua")).toBe(false);
     expect(openSketchStore.renameFile("main.lua", "file2.lua")).toBe(false);
-    expect(openSketch().files.map((f) => f.name)).toEqual(["main.lua", "file2.lua"]);
+    expect(openSketch().files.map((f) => f.name)).toEqual([POKES_FILE, "main.lua", "file2.lua"]);
   });
 
   it("renameFile on a demo forks with the renamed file, keeping the rest", () => {
     expect(openSketchStore.renameFile("main.lua", "scene.lua")).toBe(true);
     expect(openSketch().files).toEqual([
+      { name: POKES_FILE, source: EMPTY_POKES },
       { name: "scene.lua", source: demoMain },
-      demoFiles(demo)[1],
+      demoPalette,
     ]);
   });
 
-  it("deleteFile removes a file but refuses the last one", async () => {
+  it("deleteFile removes a file but refuses the last real one", async () => {
     await openSketchStore.newSketch();
     openSketchStore.addFile();
     openSketchStore.deleteFile("file2.lua");
-    expect(openSketch().files.map((f) => f.name)).toEqual(["main.lua"]);
-    openSketchStore.deleteFile("main.lua"); // last file: no-op
-    expect(openSketch().files).toHaveLength(1);
+    expect(openSketch().files.map((f) => f.name)).toEqual([POKES_FILE, "main.lua"]);
+    openSketchStore.deleteFile("main.lua"); // last real file: no-op
+    expect(openSketch().files).toHaveLength(2);
   });
 
   it("deleteFile of an unknown name is a clean no-op (stays saved)", async () => {
@@ -275,7 +280,7 @@ describe("file operations", () => {
     openSketchStore.addFile();
     await openSketchStore.flush();
     openSketchStore.deleteFile("nope.lua");
-    expect(openSketch().files).toHaveLength(2);
+    expect(openSketch().files).toHaveLength(3);
     expect(openSketchStore.state().dirty).toBe(false); // no phantom unsaved dot
   });
 
@@ -283,22 +288,64 @@ describe("file operations", () => {
     await openSketchStore.newSketch();
     openSketchStore.addFile(); // file2.lua
     openSketchStore.addFile(); // file3.lua
-    openSketchStore.moveFile(2, 0);
+    openSketchStore.moveFile(3, 1); // pokes.lua stays pinned at 0
     expect(openSketch().files.map((f) => f.name)).toEqual([
-      "file3.lua", "main.lua", "file2.lua",
+      POKES_FILE, "file3.lua", "main.lua", "file2.lua",
     ]);
     await openSketchStore.flush();
     const list = await listSketches();
     const loaded = await loadSketch(list[0].id);
-    expect(loaded!.files.map((f) => f.name)).toEqual(["file3.lua", "main.lua", "file2.lua"]);
+    expect(loaded!.files.map((f) => f.name)).toEqual([
+      POKES_FILE, "file3.lua", "main.lua", "file2.lua",
+    ]);
   });
 
-  it("moveFile ignores out-of-range and identity moves", async () => {
+  it("moveFile ignores out-of-range, identity, and pokes.lua-pinning moves", async () => {
     await openSketchStore.newSketch();
     openSketchStore.addFile();
-    openSketchStore.moveFile(0, 0);
+    openSketchStore.moveFile(1, 1);
     openSketchStore.moveFile(0, 5);
     openSketchStore.moveFile(-1, 0);
-    expect(openSketch().files.map((f) => f.name)).toEqual(["main.lua", "file2.lua"]);
+    openSketchStore.moveFile(0, 1); // pokes.lua can't move off index 0
+    openSketchStore.moveFile(1, 0); // nothing can bump pokes.lua out of index 0
+    expect(openSketch().files.map((f) => f.name)).toEqual([POKES_FILE, "main.lua", "file2.lua"]);
+  });
+});
+
+describe("pokes.lua reservation + normalization", () => {
+  it("new sketches ship [pokes.lua, main.lua] with apply_pokes() called first", async () => {
+    await openSketchStore.newSketch();
+    const files = openContextFiles(openSketchStore.state());
+    expect(files.map((f) => f.name)).toEqual([POKES_FILE, "main.lua"]);
+    expect(files[0].source).toBe(EMPTY_POKES);
+    expect(files[1].source).toMatch(/function frame\(t, f\)\n  apply_pokes\(\)/);
+  });
+
+  it("opening a sketch without pokes.lua injects it first (empty)", async () => {
+    // Build a legacy sketch record lacking pokes.lua, persist it directly, then
+    // open it through the real API — mirroring the "openSketch restores a
+    // stored sketch" test's mechanics (create, flush, switch away, reopen).
+    await openSketchStore.newSketch();
+    const id = openSketch().id;
+    const stored = await loadSketch(id);
+    await saveSketch({
+      ...stored!,
+      files: stored!.files.filter((f) => f.name !== POKES_FILE),
+    });
+    await openSketchStore.openDemo(DEMOS[1].id); // switch away first
+    await openSketchStore.openSketch(id);
+    const files = openContextFiles(openSketchStore.state());
+    expect(files[0]).toEqual({ name: POKES_FILE, source: EMPTY_POKES });
+  });
+
+  it("rejects rename/delete/reorder touching pokes.lua", async () => {
+    await openSketchStore.newSketch();
+    expect(openSketchStore.renameFile(POKES_FILE, "x.lua")).toBe(false);
+    expect(openSketchStore.renameFile("main.lua", POKES_FILE)).toBe(false);
+    openSketchStore.deleteFile(POKES_FILE); // must be a no-op
+    openSketchStore.moveFile(0, 1); // must be a no-op (pokes stays first)
+    const names = openContextFiles(openSketchStore.state()).map((f) => f.name);
+    expect(names[0]).toBe(POKES_FILE);
+    expect(names).toContain("main.lua");
   });
 });

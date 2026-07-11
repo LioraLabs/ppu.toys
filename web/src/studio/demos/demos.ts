@@ -3,6 +3,8 @@
  *  node-safe (no DOM): assets are raw RGBA, wrapped into ImageData by loadDemo.
  *  Pixel generators mirror crates/ppu-core/tests/golden_demos.rs (the Lua sources
  *  ARE verbatim; some assets are retuned for on-screen looks — see below). */
+import { EMPTY_POKES } from "../pokes/pokes";
+
 export interface DemoAsset {
   /** Literal slot id referenced from Lua (bg[n].source / obj.sheet). */
   id: string;
@@ -193,6 +195,7 @@ const DUSK_MAIN_SRC = `-- ppu.toys :: dusk-parallax (Mode 1: parallax BG scroll 
 -- tab order into ONE shared global scope; frame() resolves after all chunks, so
 -- main.lua may reference palette.lua globals freely (main.lua is convention, not magic).
 function frame(t, f)
+  apply_pokes()
   mode = 1; brightness = 15
   bg[1].source = "sky";   bg[2].source = "hills"
   bg[2].map_base = 0x0800; bg[2].char_base = 0x4000
@@ -213,6 +216,7 @@ end
 
 const MODE7_SRC = `-- ppu.toys :: mode7-floor (the namesake; per-scanline affine floor)
 function frame(t, f)
+  apply_pokes()
   mode = 7; brightness = 15; bg[1].source = "track"
   hdma(96, 223, function(y)
     local d = 64 / (y - 95)
@@ -233,6 +237,7 @@ function column_offset(col, dh, dv)
 end
 
 function frame(t, f)
+  apply_pokes()
   mode = 2; brightness = 15
   bg[1].source = "ribbons"
   bg[1].char_base = 0x1000
@@ -246,6 +251,7 @@ end
 
 const MODE3_SRC = `-- ppu.toys :: mode3-gradient (Mode 3: 8bpp 256-colour BG1 gradient)
 function frame(t, f)
+  apply_pokes()
   mode = 3; brightness = 15
   bg[1].source = "gradient"
   bg[1].char_base = 0x1000
@@ -254,6 +260,7 @@ end
 
 const TRANSLUCENCY_SRC = `-- ppu.toys :: translucency (½-add glass panel over a scrolling BG)
 function frame(t, f)
+  apply_pokes()
   mode = 1; brightness = 15
   bg[1].source = "panel"                       -- the glass panel (main only)
   bg[2].source = "ribbons"; bg[2].char_base = 0x2000  -- scene, on main AND sub
@@ -267,6 +274,7 @@ end
 
 const SPOTLIGHT_SRC = `-- ppu.toys :: spotlight (per-scanline circular iris via the colour window)
 function frame(t, f)
+  apply_pokes()
   mode = 1; brightness = 15
   bg[1].source = "ribbons"
   TM = 0x01                 -- BG1 only on the main screen
@@ -291,6 +299,7 @@ end
 
 const GLOW_SRC = `-- ppu.toys :: additive-glow (fixed-colour add brightens BG1 toward warm)
 function frame(t, f)
+  apply_pokes()
   mode = 1; brightness = 15
   bg[1].source = "ribbons"
   TM = 0x01               -- BG1 on the main screen
@@ -302,6 +311,7 @@ end
 
 const SPRITE_STORM_SRC = `-- ppu.toys :: sprite-storm (authentic OBJ flicker: >32 sprites on one band, OAM start rotates each frame)
 function frame(t, f)
+  apply_pokes()
   mode = 1; brightness = 15
   obj.char_base = 0x4000
   obj.size_sel = 7           -- small 16x32 (non-square), large 32x32
@@ -325,6 +335,7 @@ end
 
 const MOSAIC_SRC = `-- ppu.toys :: mosaic (BG1 pixelation; block size steps every 8 frames)
 function frame(t, f)
+  apply_pokes()
   mode = 3; brightness = 15
   bg[1].source = "ramp"
   bg[1].mosaic = true
@@ -334,6 +345,7 @@ end
 
 const EXTBG_SRC = `-- ppu.toys :: mode7-extbg (per-pixel floor priority; sprite between the two levels)
 function frame(t, f)
+  apply_pokes()
   mode = 7; brightness = 15
   m7.a, m7.d = 1, 1
   m7.extbg = true
@@ -365,6 +377,7 @@ end
 
 const DIRECT_SRC = `-- ppu.toys :: direct-color (8bpp Mode 7, CGRAM bypass, smooth colour field)
 function frame(t, f)
+  apply_pokes()
   mode = 7; brightness = 15
   m7.a, m7.d = 1, 1
   direct_color = true
@@ -386,25 +399,45 @@ function frame(t, f)
 end
 `;
 
+// ── demo assembly: every demo ships a generated, read-only pokes.lua first ──
+// (main.lua's frame() calls apply_pokes() as its first line, matching what
+// openSketch/newSketch already do for user sketches — see pokes/pokes.ts).
+
+/** Files joined in tab order with "\n" — the Demo.source doc contract above. */
+function demoSource(files: DemoFile[]): string {
+  return files.map((f) => f.source).join("\n");
+}
+
+/** Build a Demo from its non-pokes files: prepends the generated pokes.lua
+ *  and derives `source` from the full (pokes-included) file list. */
+function demo(id: string, label: string, files: DemoFile[], assets: DemoAsset[]): Demo {
+  const withPokes = [{ name: "pokes.lua", source: EMPTY_POKES }, ...files];
+  return { id, label, source: demoSource(withPokes), files: withPokes, assets };
+}
+
 export const DEMOS: Demo[] = [
-  {
-    id: "dusk-parallax",
-    label: "dusk-parallax",
-    source: `${DUSK_MAIN_SRC}\n${DUSK_PALETTE_SRC}`,
-    files: [
+  demo(
+    "dusk-parallax",
+    "dusk-parallax",
+    [
       { name: "main.lua", source: DUSK_MAIN_SRC },
       { name: "palette.lua", source: DUSK_PALETTE_SRC },
     ],
-    assets: [sky(), hills(), hero()],
-  },
-  { id: "mode7-floor", label: "mode7-floor", source: MODE7_SRC, assets: [track()] },
-  { id: "offset-per-tile", label: "offset-per-tile", source: OFFSET_SRC, assets: [ribbons()] },
-  { id: "mode3-gradient", label: "mode3-gradient", source: MODE3_SRC, assets: [gradient()] },
-  { id: "translucency", label: "translucency", source: TRANSLUCENCY_SRC, assets: [panel(), ribbons()] },
-  { id: "spotlight", label: "spotlight", source: SPOTLIGHT_SRC, assets: [ribbons()] },
-  { id: "glow", label: "glow", source: GLOW_SRC, assets: [ribbons()] },
-  { id: "sprite-storm", label: "sprite-storm", source: SPRITE_STORM_SRC, assets: [] },
-  { id: "mosaic", label: "mosaic", source: MOSAIC_SRC, assets: [ramp()] },
-  { id: "mode7-extbg", label: "mode7-extbg", source: EXTBG_SRC, assets: [] },
-  { id: "direct-color", label: "direct-color", source: DIRECT_SRC, assets: [] },
+    [sky(), hills(), hero()],
+  ),
+  demo("mode7-floor", "mode7-floor", [{ name: "main.lua", source: MODE7_SRC }], [track()]),
+  demo("offset-per-tile", "offset-per-tile", [{ name: "main.lua", source: OFFSET_SRC }], [ribbons()]),
+  demo("mode3-gradient", "mode3-gradient", [{ name: "main.lua", source: MODE3_SRC }], [gradient()]),
+  demo(
+    "translucency",
+    "translucency",
+    [{ name: "main.lua", source: TRANSLUCENCY_SRC }],
+    [panel(), ribbons()],
+  ),
+  demo("spotlight", "spotlight", [{ name: "main.lua", source: SPOTLIGHT_SRC }], [ribbons()]),
+  demo("glow", "glow", [{ name: "main.lua", source: GLOW_SRC }], [ribbons()]),
+  demo("sprite-storm", "sprite-storm", [{ name: "main.lua", source: SPRITE_STORM_SRC }], []),
+  demo("mosaic", "mosaic", [{ name: "main.lua", source: MOSAIC_SRC }], [ramp()]),
+  demo("mode7-extbg", "mode7-extbg", [{ name: "main.lua", source: EXTBG_SRC }], []),
+  demo("direct-color", "direct-color", [{ name: "main.lua", source: DIRECT_SRC }], []),
 ];

@@ -18,8 +18,7 @@ import {
   windowRow,
   type WinLogic,
 } from "./model";
-import { writePin, writePins } from "./pinStore";
-import { PinDot, RegRow } from "./chrome";
+import { PokeDot, RegRow } from "./chrome";
 import { BlitCanvas } from "../BlitCanvas";
 import type { Compositor } from "./useCompositor";
 
@@ -29,7 +28,7 @@ const W2_COLOR = "#5fc9e8";
 
 /** The live scene with columns outside the combined W1/W2 mask dimmed
  *  (handoff: x0.3 R/G, x0.42 B) and the four edge lines on top. Click grabs
- *  the nearest edge; dragging keeps writing that WH pin. */
+ *  the nearest edge; dragging keeps re-poking that WH register. */
 export function WindowPreview({ c }: { c: Compositor }) {
   const b = windowBounds(c.read);
   const mask = columnMask(b, combineValue(c.read) ?? 0, areaValue(c.read) === "outside");
@@ -53,10 +52,10 @@ export function WindowPreview({ c }: { c: Compositor }) {
       }}
       onDown={(x) => {
         drag.current = nearestEdgeAddr(x, b);
-        writePin(drag.current, x);
+        c.write(drag.current, x);
       }}
       onDrag={(x) => {
-        if (drag.current !== null) writePin(drag.current, x);
+        if (drag.current !== null) c.write(drag.current, x);
       }}
       onUp={() => {
         drag.current = null;
@@ -75,7 +74,7 @@ export function WindowControls({ c }: { c: Compositor }) {
       <div className="winp-combine">
         <div className="cmp-ctl-label">
           W1 · W2 COMBINE · $212A
-          <PinDot c={c} addr={REG.WBGLOG} />
+          <PokeDot c={c} addr={REG.WBGLOG} />
         </div>
         <div className="cmp-seg">
           {LOGIC_LABELS.map((label, i) => (
@@ -84,7 +83,7 @@ export function WindowControls({ c }: { c: Compositor }) {
               type="button"
               className={logic === i ? "cmp-seg--on" : ""}
               title="write this combine op into every WBGLOG / WOBJLOG slot"
-              onClick={() => writePins(setCombine(i as WinLogic))}
+              onClick={() => c.writeMany(setCombine(i as WinLogic))}
             >
               {label}
             </button>
@@ -94,7 +93,7 @@ export function WindowControls({ c }: { c: Compositor }) {
       <div className="winp-area">
         <div className="cmp-ctl-label">
           MASK AREA
-          <PinDot c={c} addr={REG.W12SEL} />
+          <PokeDot c={c} addr={REG.W12SEL} />
         </div>
         <div className="cmp-seg">
           {(["inside", "outside"] as const).map((a) => (
@@ -103,7 +102,7 @@ export function WindowControls({ c }: { c: Compositor }) {
               type="button"
               className={area === a ? "cmp-seg--on" : ""}
               title="set / clear the invert bits of every layer's window select"
-              onClick={() => writePins(setArea(a, c.read))}
+              onClick={() => c.writeMany(setArea(a, c.read))}
             >
               {a}
             </button>
@@ -129,7 +128,7 @@ export function BoundCards({ c }: { c: Compositor }) {
         <div key={card.name} className={`winp-bound winp-bound--w${card.w}`}>
           <div className="winp-bound-name">
             {card.name} · {formatAddr(card.addr)}
-            <PinDot c={c} addr={card.addr} />
+            <PokeDot c={c} addr={card.addr} />
           </div>
           <div className="winp-bound-val">{card.val}</div>
         </div>
@@ -150,12 +149,12 @@ export function LayerMaskRows({ c }: { c: Compositor }) {
           <div key={l.id} className="winp-layer">
             <span className="cmp-ldot" style={{ background: l.color }} />
             <span className="winp-lname">{l.label}</span>
-            <PinDot c={c} addr={l.selAddr} />
+            <PokeDot c={c} addr={l.selAddr} />
             <button
               type="button"
               className={"winp-chip" + (row.inverted ? " winp-chip--inv-on" : "")}
               title="invert this layer's window (both W1 and W2 invert bits)"
-              onClick={() => writePins(toggleWindowInvert(l, c.read))}
+              onClick={() => c.writeMany(toggleWindowInvert(l, c.read))}
             >
               {row.inverted ? "outside" : "inside"}
             </button>
@@ -167,7 +166,7 @@ export function LayerMaskRows({ c }: { c: Compositor }) {
                   ? "enable the color window (WOBJSEL high nibble + CGWSEL prevent-math outside it)"
                   : "enable this layer's window (select nibble + TMW clip bit)"
               }
-              onClick={() => writePins(toggleWindowEnable(l, c.read))}
+              onClick={() => c.writeMany(toggleWindowEnable(l, c.read))}
             >
               {row.enabled ? "on" : "off"}
             </button>
