@@ -120,7 +120,11 @@ install_env_templates() {
 	else
 		log "Writing R2 credentials template ${ls_env}"
 		cat >"${ls_env}" <<'EOF'
-# Cloudflare R2 credentials for Litestream (see RUNBOOK: R2 bucket + token).
+# Cloudflare R2 config for Litestream (see RUNBOOK: R2 bucket + token).
+# ACCOUNT_ID is your Cloudflare account id; the two keys are the R2 API token.
+# All three are expanded into /etc/litestream.yml at runtime — that file stays
+# static, so this env file is the ONLY place these values live.
+LITESTREAM_R2_ACCOUNT_ID=
 LITESTREAM_ACCESS_KEY_ID=
 LITESTREAM_SECRET_ACCESS_KEY=
 EOF
