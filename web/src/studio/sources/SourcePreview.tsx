@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import type { SourceKind, SourceMeta } from "../../ppu/core";
 import { BlitCanvas } from "../inspector/BlitCanvas";
 import { buildPreviewModel } from "./preview";
+import "./sources.css";
 
 export function SourcePreview({ kind, meta, payload, cellSize, sourceImage }: {
   kind: SourceKind;
