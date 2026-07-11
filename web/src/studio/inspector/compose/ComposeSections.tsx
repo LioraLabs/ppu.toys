@@ -105,8 +105,8 @@ function MatrixCell({
 }
 
 /** Per-layer MAIN/SUB/MATH toggle cells + the Backdrop row. Every click
- *  pokes the whole register (TM / TS / CGADSUB) — the column headers wear
- *  the poke marker. */
+ *  pokes that cell's friendly field (screen.main.* / screen.sub.* /
+ *  color.on.*) — the column headers wear the poke marker. */
 export function AssignmentMatrix({ c }: { c: Compositor }) {
   const tm = c.read(REG.TM);
   const ts = c.read(REG.TS);

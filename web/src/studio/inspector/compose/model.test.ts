@@ -445,6 +445,14 @@ describe("emission/decode invariants", () => {
     }
   });
 
+  it("a layer row's marker covers EVERY field its controls emit (enable's TMW / region too)", () => {
+    for (const l of WINDOW_LAYERS) {
+      const covered = winRowFields(l);
+      const emitted = [...toggleWindowEnable(l, read({})), ...toggleWindowInvert(l, read({}))];
+      for (const w of emitted) expect(covered, `${l.id} row must cover ${w.field}`).toContain(w.field);
+    }
+  });
+
   it("header/group field lists are all decodable", () => {
     const groups = [
       ...SCREEN_MAIN_FIELDS, ...SCREEN_SUB_FIELDS, ...MATH_ENABLE_FIELDS,

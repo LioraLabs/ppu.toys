@@ -116,8 +116,8 @@ and register readout rows all poke through one path — `poke()`/`unpoke()`/
 `pokes.lua` file (`POKES_FILE`, always tab 0) from a `{lvalue, expr, note?}`
 list (`pokes.ts`). Pokes come in two dialects sharing that one file format:
 friendly field assignments (`color.op = "sub"`, `screen.main.bg1 = true`,
-`win.w1.lo = 40`) where the field is the poke's identity, so each control
-owns its line and neighboring bits are preserved by the core's namespace
+`win.w1.lo = 40`) where the field is the poke's identity, so each touched
+field owns its line and neighboring bits are preserved by the core's namespace
 fold, and raw whole-register writes (`TM = 0x13`) — the register-readout hex
 editor still pokes raw. `parsePokes` is dialect-agnostic. Mixed dialects obey
 the core's fold order: the friendly namespaces fold last in `read_state`, so

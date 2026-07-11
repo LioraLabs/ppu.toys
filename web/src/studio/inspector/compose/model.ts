@@ -5,7 +5,8 @@ import type { Poke } from "../../pokes/pokes";
  *  The UI reads LIVE register values (power-on default when the core omits
  *  the register) and turns every click into a friendly FIELD poke —
  *  `color.op = "sub"`, `win.w1.lo = 40` — one generated DSL assignment per
- *  touched control. The field IS the poke's identity: each control owns its
+ *  touched field (a control may cover several, e.g. the window-enable chip).
+ *  The field IS the poke's identity: each field owns its
  *  line, and the core's namespace fold overrides only that field's own bits,
  *  preserving neighbor bits in the register. The raw whole-register dialect
  *  (`TM = 0x13`) stays available via `writesToPokes(_, "raw")`; a user-facing
@@ -243,7 +244,7 @@ export const WINDOW_LAYERS: WindowLayer[] = [
 ];
 
 /** WH edge registers -> their friendly scalar fields (whole-value semantics). */
-export const WH_FIELDS: Readonly<Record<number, string>> = {
+const WH_FIELDS: Readonly<Record<number, string>> = {
   [REG.WH0]: "win.w1.lo",
   [REG.WH1]: "win.w1.hi",
   [REG.WH2]: "win.w2.lo",
@@ -403,9 +404,13 @@ export const FIXED_FIELDS = ["color.fixed"];
 export const COMBINE_FIELDS = WIN_FIELD_LAYERS.map((l) => `win.${l.id}.combine`);
 export const AREA_FIELDS = WINDOW_LAYERS.map((l) => `win.${l.id}.invert`);
 
-/** The three fields a Windows layer row's marker covers. */
+/** Every field a Windows layer row's controls can emit — the row's marker
+ *  must cover them all so one click on the dot unpokes the WHOLE row: the
+ *  enable toggle also writes `win.<id>.main` (TMW clip), and the color row
+ *  writes `color.region` instead (win never touches CGWSEL). */
 export function winRowFields(l: WindowLayer): string[] {
-  return [`win.${l.id}.w1`, `win.${l.id}.w2`, `win.${l.id}.invert`];
+  const sel = [`win.${l.id}.w1`, `win.${l.id}.w2`, `win.${l.id}.invert`];
+  return l.id === "color" ? [...sel, "color.region"] : [...sel, `win.${l.id}.main`];
 }
 
 // ── Field decode table ───────────────────────────────────────────────────────
