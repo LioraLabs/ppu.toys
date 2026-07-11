@@ -22,6 +22,7 @@ export const REG = {
   TM: 0x212c,
   TS: 0x212d,
   TMW: 0x212e,
+  TSW: 0x212f,
   CGWSEL: 0x2130,
   CGADSUB: 0x2131,
   COLDATA: 0x2132,
@@ -115,16 +116,6 @@ const bool = (b: boolean) => (b ? "true" : "false");
 const str = (s: string) => `"${s}"`;
 void bool;
 void str;
-
-/** Solid/hollow decision for the poke marker: true = the live register equals
- *  the poked value (solid), false = a later script write overrode it (hollow),
- *  null = non-comparable (non-numeric expr or an lvalue this map doesn't know). */
-export function pokeMatchesLive(p: Poke, registers: RegisterView[]): boolean | null {
-  const want = Number(p.expr);
-  const addr = ADDR_BY_LVALUE.get(p.lvalue);
-  if (Number.isNaN(want) || addr === undefined) return null;
-  return liveReg(registers, addr) === want;
-}
 
 // ── Compose: screen assignment + color math ─────────────────────────────────
 
@@ -329,6 +320,117 @@ export function setArea(area: WinArea, read: ReadReg): RegWrite[] {
     byAddr.set(l.selAddr, withNibbleBits(cur, l.shift, INVERT_BITS, on));
   }
   return [...byAddr].map(([addr, value]) => ({ addr, value }));
+}
+
+// ── Field decode table ───────────────────────────────────────────────────────
+
+/** WH edge registers -> their friendly scalar fields (whole-value semantics). */
+export const WH_FIELDS: Readonly<Record<number, string>> = {
+  [REG.WH0]: "win.w1.lo",
+  [REG.WH1]: "win.w1.hi",
+  [REG.WH2]: "win.w2.lo",
+  [REG.WH3]: "win.w2.hi",
+};
+
+/** Friendly window-layer geometry — mirrors the Rust core's WIN_LAYERS
+ *  (includes bg4, which has registers but no UI row). */
+const WIN_FIELD_LAYERS: {
+  id: string; selAddr: number; shift: 0 | 4; logAddr: number; logShift: number; tmwBit?: number;
+}[] = [
+  { id: "bg1", selAddr: REG.W12SEL, shift: 0, logAddr: REG.WBGLOG, logShift: 0, tmwBit: 0 },
+  { id: "bg2", selAddr: REG.W12SEL, shift: 4, logAddr: REG.WBGLOG, logShift: 2, tmwBit: 1 },
+  { id: "bg3", selAddr: REG.W34SEL, shift: 0, logAddr: REG.WBGLOG, logShift: 4, tmwBit: 2 },
+  { id: "bg4", selAddr: REG.W34SEL, shift: 4, logAddr: REG.WBGLOG, logShift: 6, tmwBit: 3 },
+  { id: "obj", selAddr: REG.WOBJSEL, shift: 0, logAddr: REG.WOBJLOG, logShift: 0, tmwBit: 4 },
+  { id: "color", selAddr: REG.WOBJSEL, shift: 4, logAddr: REG.WOBJLOG, logShift: 2 },
+];
+
+/** SEL-nibble enable bits, matching the core: W1 = 0x2, W2 = 0x8. */
+const W1_ENABLE = 0x2;
+const W2_ENABLE = 0x8;
+
+/** CGWSEL bits 4-5 decode, matching the core's color.region. */
+const REGION_NAMES = ["everywhere", "inside", "outside", "never"] as const;
+
+type FieldValue = string | number | boolean;
+
+/** THE dual-dialect round-trip table: friendly field lvalue -> the register
+ *  it lives in + a live-decode returning the field's current value. Emission
+ *  and pokeMatchesLive both key on it; ownership mirrors the Rust folds
+ *  (win never owns CGWSEL; the color window has no TMW/TSW bit). */
+export const FIELD_SPECS: ReadonlyMap<string, { addr: number; live: (read: ReadReg) => FieldValue }> =
+  buildFieldSpecs();
+
+function buildFieldSpecs() {
+  const m = new Map<string, { addr: number; live: (read: ReadReg) => FieldValue }>();
+  const layerBits: [string, number][] = [["bg1", 0], ["bg2", 1], ["bg3", 2], ["bg4", 3], ["obj", 4]];
+  for (const [id, bit] of layerBits) {
+    m.set(`screen.main.${id}`, { addr: REG.TM, live: (r) => (r(REG.TM) & (1 << bit)) !== 0 });
+    m.set(`screen.sub.${id}`, { addr: REG.TS, live: (r) => (r(REG.TS) & (1 << bit)) !== 0 });
+    m.set(`color.on.${id}`, { addr: REG.CGADSUB, live: (r) => (r(REG.CGADSUB) & (1 << bit)) !== 0 });
+  }
+  m.set("color.on.backdrop", { addr: REG.CGADSUB, live: (r) => (r(REG.CGADSUB) & 0x20) !== 0 });
+  m.set("color.op", { addr: REG.CGADSUB, live: (r) => mathOp(r(REG.CGADSUB)) });
+  m.set("color.half", { addr: REG.CGADSUB, live: (r) => mathHalf(r(REG.CGADSUB)) });
+  m.set("color.addend", { addr: REG.CGWSEL, live: (r) => mathAddend(r(REG.CGWSEL)) });
+  m.set("color.region", { addr: REG.CGWSEL, live: (r) => REGION_NAMES[(r(REG.CGWSEL) >> 4) & 3] });
+  m.set("color.fixed", { addr: REG.COLDATA, live: (r) => r(REG.COLDATA) & 0x7fff });
+  for (const [addr, field] of Object.entries(WH_FIELDS)) {
+    const a = Number(addr);
+    m.set(field, { addr: a, live: (r) => r(a) });
+  }
+  for (const l of WIN_FIELD_LAYERS) {
+    const nib = (r: ReadReg) => (r(l.selAddr) >> l.shift) & 0xf;
+    m.set(`win.${l.id}.w1`, { addr: l.selAddr, live: (r) => (nib(r) & W1_ENABLE) !== 0 });
+    m.set(`win.${l.id}.w2`, { addr: l.selAddr, live: (r) => (nib(r) & W2_ENABLE) !== 0 });
+    // lossy shared decode, mirrors the core: true if EITHER invert bit is set
+    m.set(`win.${l.id}.invert`, { addr: l.selAddr, live: (r) => (nib(r) & INVERT_BITS) !== 0 });
+    m.set(`win.${l.id}.combine`, { addr: l.logAddr, live: (r) => LOGIC_LABELS[(r(l.logAddr) >> l.logShift) & 3] });
+    const bit = l.tmwBit;
+    if (bit !== undefined) {
+      m.set(`win.${l.id}.main`, { addr: REG.TMW, live: (r) => (r(REG.TMW) & (1 << bit)) !== 0 });
+      m.set(`win.${l.id}.sub`, { addr: REG.TSW, live: (r) => (r(REG.TSW) & (1 << bit)) !== 0 });
+    }
+  }
+  return m;
+}
+
+/** Parse a friendly poke's RHS: true/false, a "quoted string", or a Lua
+ *  number (decimal or 0x hex). null = non-comparable. */
+function parseFieldExpr(expr: string): FieldValue | null {
+  if (expr === "true") return true;
+  if (expr === "false") return false;
+  const s = /^"([^"]*)"$/.exec(expr);
+  if (s) return s[1];
+  const n = Number(expr);
+  return Number.isNaN(n) ? null : n;
+}
+
+/** Solid/hollow decision for the poke marker, both dialects: friendly field
+ *  pokes decode the live register through FIELD_SPECS; raw register pokes
+ *  compare the whole byte. null = non-comparable. */
+export function pokeMatchesLive(p: Poke, registers: RegisterView[]): boolean | null {
+  const read: ReadReg = (addr) => liveReg(registers, addr);
+  const spec = FIELD_SPECS.get(p.lvalue);
+  if (spec) {
+    const want = parseFieldExpr(p.expr);
+    return want === null ? null : spec.live(read) === want;
+  }
+  const want = Number(p.expr);
+  const addr = ADDR_BY_LVALUE.get(p.lvalue);
+  if (Number.isNaN(want) || addr === undefined) return null;
+  return read(addr) === want;
+}
+
+/** Pokes targeting a control: its raw whole-register poke plus, with a
+ *  `fields` list, exactly those friendly pokes (control labels), or, without
+ *  one, ANY friendly field living in the register (register-centric rows). */
+export function pokesAt(pokes: readonly Poke[], addr: number, fields?: readonly string[]): Poke[] {
+  return pokes.filter(
+    (p) =>
+      p.lvalue === REG_LVALUES[addr] ||
+      (fields ? fields.includes(p.lvalue) : FIELD_SPECS.get(p.lvalue)?.addr === addr),
+  );
 }
 
 // ── Window preview geometry + buffers ────────────────────────────────────────

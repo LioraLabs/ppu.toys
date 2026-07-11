@@ -4,6 +4,7 @@ import { parsePokes, pokesToLua } from "../../pokes/pokes";
 import {
   BACKDROP_MATH_BIT,
   COMPOSE_LAYERS,
+  FIELD_SPECS,
   FIXED_COLOR_SWATCHES,
   REG,
   REG_LVALUES,
@@ -20,6 +21,8 @@ import {
   mathHalf,
   mathOp,
   nearestEdgeAddr,
+  pokeMatchesLive,
+  pokesAt,
   regPoke,
   setArea,
   setCombine,
@@ -289,6 +292,67 @@ describe("fieldPoke + writesToPokes (dual-dialect projection)", () => {
   it("mixed-dialect output stays codepoint-sorted (raw mnemonics before lowercase fields)", () => {
     const lua = pokesToLua([fieldPoke(op), regPoke(REG.TM, 0x13)]);
     expect(lua.indexOf("TM = 0x13")).toBeLessThan(lua.indexOf('color.op = "sub"'));
+  });
+});
+
+describe("FIELD_SPECS + friendly pokeMatchesLive", () => {
+  it("maps every field to the register the Rust fold owns", () => {
+    expect(FIELD_SPECS.get("color.op")?.addr).toBe(REG.CGADSUB);
+    expect(FIELD_SPECS.get("color.region")?.addr).toBe(REG.CGWSEL);
+    expect(FIELD_SPECS.get("screen.main.obj")?.addr).toBe(REG.TM);
+    expect(FIELD_SPECS.get("screen.sub.bg4")?.addr).toBe(REG.TS);
+    expect(FIELD_SPECS.get("win.w2.hi")?.addr).toBe(REG.WH3);
+    expect(FIELD_SPECS.get("win.bg4.combine")?.addr).toBe(REG.WBGLOG);
+    expect(FIELD_SPECS.get("win.obj.sub")?.addr).toBe(REG.TSW);
+    expect(FIELD_SPECS.get("win.color.main")).toBeUndefined(); // color window has no TMW bit
+    for (const [f, s] of FIELD_SPECS) {
+      if (f.startsWith("win.")) expect(s.addr, `${f} must not own CGWSEL`).not.toBe(REG.CGWSEL);
+    }
+  });
+
+  it("solid when the live register bits decode to the poked field value", () => {
+    expect(pokeMatchesLive({ lvalue: "color.op", expr: '"sub"' }, [rv(REG.CGADSUB, "CGADSUB", 0x80)])).toBe(true);
+    expect(pokeMatchesLive({ lvalue: "screen.main.bg2", expr: "true" }, [])).toBe(true); // power-on TM=0x1f
+    expect(pokeMatchesLive({ lvalue: "color.region", expr: '"inside"' }, [rv(REG.CGWSEL, "CGWSEL", 0x12)])).toBe(true);
+    expect(pokeMatchesLive({ lvalue: "win.color.combine", expr: '"AND"' }, [rv(REG.WOBJLOG, "WOBJLOG", 0x04)])).toBe(true);
+    expect(pokeMatchesLive({ lvalue: "color.fixed", expr: "0x7fff" }, [rv(REG.COLDATA, "COLDATA", 0x7fff)])).toBe(true);
+  });
+
+  it("hollow when a later script write moved the field's bits", () => {
+    expect(pokeMatchesLive({ lvalue: "color.op", expr: '"sub"' }, [rv(REG.CGADSUB, "CGADSUB", 0x00)])).toBe(false);
+    expect(pokeMatchesLive({ lvalue: "screen.main.bg1", expr: "false" }, [])).toBe(false); // TM=0x1f has bg1 on
+  });
+
+  it("numeric fields compare by value across hex/decimal spellings", () => {
+    expect(pokeMatchesLive({ lvalue: "win.w1.lo", expr: "40" }, [rv(REG.WH0, "WH0", 40)])).toBe(true);
+    expect(pokeMatchesLive({ lvalue: "win.w1.lo", expr: "0x28" }, [rv(REG.WH0, "WH0", 40)])).toBe(true);
+    expect(pokeMatchesLive({ lvalue: "win.w1.lo", expr: "40" }, [rv(REG.WH0, "WH0", 41)])).toBe(false);
+  });
+
+  it("invert decode is lossy like the core: EITHER invert bit reads true", () => {
+    expect(pokeMatchesLive({ lvalue: "win.bg1.invert", expr: "true" }, [rv(REG.W12SEL, "W12SEL", 0x01)])).toBe(true);
+    expect(pokeMatchesLive({ lvalue: "win.bg1.invert", expr: "false" }, [rv(REG.W12SEL, "W12SEL", 0x00)])).toBe(true);
+  });
+
+  it("null for an unknown field or an unparseable expr", () => {
+    expect(pokeMatchesLive({ lvalue: "win.nope.w1", expr: "true" }, [])).toBeNull();
+    expect(pokeMatchesLive({ lvalue: "color.op", expr: "sub" }, [])).toBeNull(); // unquoted
+  });
+});
+
+describe("pokesAt (field-keyed marker lookup)", () => {
+  const ps = [
+    { lvalue: "W12SEL", expr: "0x03" },
+    { lvalue: "win.bg1.w1", expr: "true" },
+    { lvalue: "win.bg2.invert", expr: "true" },
+  ];
+  it("addr-wide (no fields): raw poke + every friendly field living in the register", () => {
+    expect(pokesAt(ps, REG.W12SEL).map((p) => p.lvalue)).toEqual(["W12SEL", "win.bg1.w1", "win.bg2.invert"]);
+    expect(pokesAt(ps, REG.TM)).toEqual([]);
+  });
+  it("field-scoped: raw poke + only the listed fields (bg1/bg2 share W12SEL)", () => {
+    expect(pokesAt(ps, REG.W12SEL, ["win.bg1.w1", "win.bg1.w2", "win.bg1.invert"]).map((p) => p.lvalue))
+      .toEqual(["W12SEL", "win.bg1.w1"]);
   });
 });
 
