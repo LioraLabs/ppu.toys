@@ -13,7 +13,7 @@ use piccolo::{
 
 use crate::import::obj::{apply_obj_import, import_obj_sheet, ObjImport};
 use crate::import::{BudgetReport, ImportCache, ImportKey, ImportOptions};
-use crate::import_m7::{import_mode7, Mode7Import, Mode7ImportReport};
+use crate::import_m7::{import_mode7, Mode7ImportReport};
 use crate::{rgb15, LineTable, LineTableBuilder, LineTableRow, Memory, HEIGHT};
 
 /// Decoded RGBA staged for the importer, keyed by slot id. App-level (survives
@@ -77,7 +77,7 @@ pub struct LuaEngine {
     /// Memoized tile-BG imports (m4/importer); keyed by asset+generation+options.
     import_cache: ImportCache,
     /// Memoized Mode 7 imports, keyed by (asset, generation).
-    m7_cache: HashMap<(String, u64), Mode7Import>,
+    m7_cache: HashMap<(String, u64), (crate::source::M7Source, crate::source::SourceMeta)>,
     /// Memoized OBJ-sheet imports (m4/importer), keyed by
     /// (asset, generation, snapped char_base) so re-upload / a char-base move
     /// re-quantizes but a hot 60fps key only re-copies words.
@@ -1314,7 +1314,7 @@ fn apply_imports(
     ctx: piccolo::Context<'_>,
     assets: &HashMap<String, ImportAsset>,
     import_cache: &mut ImportCache,
-    m7_cache: &mut HashMap<(String, u64), Mode7Import>,
+    m7_cache: &mut HashMap<(String, u64), (crate::source::M7Source, crate::source::SourceMeta)>,
     reports: &mut Vec<ImportBudget>,
     mem: &mut Memory,
 ) {
@@ -1338,16 +1338,18 @@ fn apply_imports(
             if i != 0 {
                 continue;
             }
-            let imp = m7_cache
+            let (src, meta) = m7_cache
                 .entry((slot.clone(), asset.generation))
                 .or_insert_with(|| {
                     import_mode7(&asset.rgba, asset.width as usize, asset.height as usize)
                 });
-            imp.apply(mem);
-            reports.push(ImportBudget::Mode7 {
-                layer: i,
-                report: imp.report.clone(),
-            });
+            crate::source::place_m7(src, mem);
+            if let crate::source::SourceReport::Mode7 { report } = &meta.report {
+                reports.push(ImportBudget::Mode7 {
+                    layer: i,
+                    report: report.clone(),
+                });
+            }
         } else {
             // Tile BG (Mode 1): bit-depth from the mode table; only 2/4/8bpp
             // tile layers import.
