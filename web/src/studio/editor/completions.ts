@@ -10,6 +10,7 @@ const GLOBALS: Completion[] = [
   { label: "force_blank", type: "variable", detail: "bool · INIDISP.7 $2100" },
   { label: "bg", type: "variable", detail: "bg[1..4] layers — scroll/map/char_base/tile_size/mosaic…" },
   { label: "m7", type: "variable", detail: "Mode 7 .a .b .c .d .cx .cy .extbg · $211A-$2120" },
+  { label: "color", type: "variable", detail: "color math .op .half .on .addend .region .fixed · CGWSEL/CGADSUB/COLDATA $2130-$2132" },
   { label: "cgram", type: "variable", detail: "cgram[0..255] palette, 15-bit BGR · $2121/$2122" },
   { label: "vram", type: "variable", detail: "vram[0..0x7FFF] raw 16-bit words · $2116-$2119" },
   { label: "obj", type: "variable", detail: "obj[0..127] sprites; obj.sheet · OAM, OBSEL $2101" },
@@ -105,11 +106,33 @@ const M7_MEMBERS: Completion[] = [
   { label: "map", type: "property", detail: "m7.map[ty][tx] = tile#" },
 ];
 
+/** color.* members (friendly color-math namespace). */
+const COLOR_MEMBERS: Completion[] = [
+  { label: "op", type: "property", detail: '"add"|"sub" · CGADSUB.7 $2131' },
+  { label: "half", type: "property", detail: "bool half result · CGADSUB.6 $2131" },
+  { label: "on", type: "property", detail: ".bg1..bg4 .obj .backdrop math enables · CGADSUB.0-5 $2131" },
+  { label: "addend", type: "property", detail: '"sub"|"fixed" math addend · CGWSEL.1 $2130' },
+  { label: "region", type: "property", detail: '"everywhere"|"inside"|"outside"|"never" · CGWSEL.4-5 $2130' },
+  { label: "fixed", type: "property", detail: "fixed color, 15-bit (rgb(...)) · COLDATA $2132" },
+];
+
+/** color.on.* per-layer math enables. */
+const COLOR_ON_MEMBERS: Completion[] = [
+  { label: "bg1", type: "property", detail: "bool math enable · CGADSUB.0 $2131" },
+  { label: "bg2", type: "property", detail: "bool math enable · CGADSUB.1 $2131" },
+  { label: "bg3", type: "property", detail: "bool math enable · CGADSUB.2 $2131" },
+  { label: "bg4", type: "property", detail: "bool math enable · CGADSUB.3 $2131" },
+  { label: "obj", type: "property", detail: "bool math enable · CGADSUB.4 $2131" },
+  { label: "backdrop", type: "property", detail: "bool math enable · CGADSUB.5 $2131" },
+];
+
 function memberOptions(text: string): Completion[] {
   if (text.startsWith("bg")) return BG_MEMBERS;
   if (/^obj\s*\[/.test(text)) return OBJ_SPRITE_MEMBERS;
   if (text.startsWith("obj")) return OBJ_MEMBERS;
   if (text.startsWith("math")) return MATH_MEMBERS;
+  if (/^color\s*\.\s*on/.test(text)) return COLOR_ON_MEMBERS;
+  if (text.startsWith("color")) return COLOR_MEMBERS;
   return M7_MEMBERS;
 }
 
@@ -119,7 +142,9 @@ export function ppuCompletions(ctx: CompletionContext): CompletionResult | null 
   // the lookbehind anchors the base name: `myobj.` / `subbg[1].` must NOT
   // complete as obj/bg (nested-bracket indices like bg[t[1]] degrade to the
   // plain-globals path — acceptable)
-  const member = ctx.matchBefore(/(?<![\w.\]])((?:bg|obj)\s*\[[^\]]*\]|math|obj|m7)\s*\.\w*/);
+  const member = ctx.matchBefore(
+    /(?<![\w.\]])((?:bg|obj)\s*\[[^\]]*\]|math|obj|m7|color\s*\.\s*on|color)\s*\.\w*/,
+  );
   if (member) {
     const from = member.from + member.text.lastIndexOf(".") + 1;
     return { from, options: memberOptions(member.text) };
