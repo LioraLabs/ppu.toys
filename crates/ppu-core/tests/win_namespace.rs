@@ -99,6 +99,17 @@ fn same_frame_raw_write_plus_friendly_change_composes() {
 }
 
 #[test]
+fn wh_edges_fold_as_whole_scalars_not_bit_blends() {
+    // Same-frame conflict on an edge: the friendly value replaces the byte
+    // outright (the COLDATA scalar precedent) — a naive bitwise fold would
+    // blend 10 and 40 into 42, a value neither side wrote.
+    let mut e = LuaEngine::new();
+    e.set_source("function frame(t,f) WH0 = 10; win.w1.lo = 40 end")
+        .unwrap();
+    assert_eq!(e.frame(0.0, 0).unwrap().rows[0].wh0, 40);
+}
+
+#[test]
 fn write_state_round_trip_exposes_friendly_fields_to_hooks() {
     // frame() authors via friendly fields; the hook re-baseline (write_state)
     // must decode the registers back into `win` so the hook can READ them.
