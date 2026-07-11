@@ -179,6 +179,12 @@ export class Transport {
     this.coreRef().uploadTexture(slot, image);
     this.renderOnce();
   };
+
+  addSource = (name: string, payload: Uint8Array): { ok: boolean; error?: string } => {
+    const res = this.coreRef().addSource(name, payload);
+    this.renderOnce(); // registered source shows on the next rendered frame
+    return res;
+  };
 }
 
 export const transport = new Transport();
