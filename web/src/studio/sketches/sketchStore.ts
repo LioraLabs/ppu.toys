@@ -1,18 +1,23 @@
 /** IndexedDB-backed sketch persistence. A Sketch is the unit of user work:
- *  ordered Lua files plus uploaded PNG assets (raw bytes — IndexedDB's
- *  structured clone stores Uint8Array natively). All mutators fire
+ *  ordered Lua files plus format-committed graphics sources (raw bytes —
+ *  IndexedDB's structured clone stores Uint8Array natively). All mutators fire
  *  onSketchesChanged so the library panel can refresh its list. */
+
+import type { SourceKind, ConvertSourceOptions, SourceMeta } from "../../ppu/core";
 
 export interface SketchFile {
   name: string;
   source: string;
 }
 
-/** An uploaded PNG, stored as the original file bytes. The runtime asset id is
- *  re-minted deterministically on restore (see restore.ts). */
-export interface SketchAsset {
+/** A format-committed graphics source: the versioned payload from convertSource
+ *  plus its authoring metadata. This — not raw RGBA — is what saves/forks/syncs. */
+export interface SketchSource {
   name: string;
-  png: Uint8Array;
+  kind: SourceKind;
+  options: ConvertSourceOptions;
+  payload: Uint8Array;
+  meta: SourceMeta;
 }
 
 export interface Sketch {
@@ -22,14 +27,14 @@ export interface Sketch {
   updatedAt: number;
   /** Ordered: becomes chunk execution order when multi-file lands (M9). */
   files: SketchFile[];
-  assets: SketchAsset[];
+  sources: SketchSource[];
   /** Demo id this sketch was lazily forked from, if any. Restoring a forked
    *  sketch re-runs that demo's procedural assets instead of storing copies. */
   forkedFrom?: string;
 }
 
 /** What the library list shows — everything but the payloads. */
-export type SketchMeta = Omit<Sketch, "files" | "assets">;
+export type SketchMeta = Omit<Sketch, "files" | "sources">;
 
 const DB_NAME = "ppu-toys";
 const STORE = "sketches";
@@ -84,7 +89,7 @@ export function onSketchesChanged(cb: () => void): () => void {
 export function newSketchObject(
   name: string,
   files: SketchFile[],
-  assets: SketchAsset[] = [],
+  sources: SketchSource[] = [],
   forkedFrom?: string,
 ): Sketch {
   const now = Date.now();
@@ -94,7 +99,7 @@ export function newSketchObject(
     createdAt: now,
     updatedAt: now,
     files,
-    assets,
+    sources,
     ...(forkedFrom ? { forkedFrom } : {}),
   };
 }
@@ -102,10 +107,10 @@ export function newSketchObject(
 export async function createSketch(
   name: string,
   files: SketchFile[],
-  assets: SketchAsset[] = [],
+  sources: SketchSource[] = [],
   forkedFrom?: string,
 ): Promise<Sketch> {
-  const sketch = newSketchObject(name, files, assets, forkedFrom);
+  const sketch = newSketchObject(name, files, sources, forkedFrom);
   await withStore("readwrite", (s) => s.put(sketch));
   emit();
   return sketch;
@@ -119,14 +124,26 @@ export async function saveSketch(sketch: Sketch): Promise<Sketch> {
   return stored;
 }
 
+/** One-way migration: legacy sketches carried raw-PNG `assets`. Drop them (no
+ *  auto-quantize — depth is unknowable without the deleted bind context) and
+ *  default `sources`. On next saveSketch the record is rewritten clean. */
+function normalize(raw: Sketch & { assets?: unknown }): Sketch {
+  const { assets: _legacy, ...rest } = raw;
+  return { ...rest, sources: rest.sources ?? [] };
+}
+
 export async function loadSketch(id: string): Promise<Sketch | undefined> {
-  return withStore<Sketch | undefined>("readonly", (s) => s.get(id));
+  const raw = await withStore<(Sketch & { assets?: unknown }) | undefined>(
+    "readonly",
+    (s) => s.get(id),
+  );
+  return raw ? normalize(raw) : undefined;
 }
 
 export async function listSketches(): Promise<SketchMeta[]> {
-  const all = await withStore<Sketch[]>("readonly", (s) => s.getAll());
+  const all = await withStore<(Sketch & { assets?: unknown })[]>("readonly", (s) => s.getAll());
   return all
-    .map(({ files: _files, assets: _assets, ...meta }) => meta)
+    .map(({ files: _f, sources: _s, assets: _a, ...meta }) => meta)
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
@@ -139,7 +156,7 @@ export async function renameSketch(id: string, name: string): Promise<void> {
 export async function duplicateSketch(id: string): Promise<Sketch | undefined> {
   const sketch = await loadSketch(id);
   if (!sketch) return undefined;
-  return createSketch(`${sketch.name} (copy)`, sketch.files, sketch.assets, sketch.forkedFrom);
+  return createSketch(`${sketch.name} (copy)`, sketch.files, sketch.sources, sketch.forkedFrom);
 }
 
 export async function deleteSketch(id: string): Promise<void> {

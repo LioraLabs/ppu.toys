@@ -1,42 +1,25 @@
 import { transport } from "../transport/transport";
 import { assetStore } from "../assets/sharedAssets";
-import { registerAsset } from "../assets/assetStore";
-import { decodeImageBlob } from "../assets/decode";
 import { DEMOS } from "../demos/demos";
 import { loadDemo } from "../demos/loadDemo";
 import type { OpenContext } from "./openSketch";
 
-/** Load an open context's assets into the live core + shared asset list.
- *  Browser-only (PNG decode via canvas).
- *
- *  Determinism contract: the shared list is reset, the forked-from demo's
- *  procedural assets replay first (literal ids), then the sketch's stored
- *  PNGs register in array order through the same registerAsset/assetId
- *  dedupe as the original uploads — reproducing the exact ids the sketch's
- *  Lua source was written against.
- *
- *  `cancelled` makes overlapping runs safe (StrictMode double-effects, rapid
- *  opens): a superseded run must stop mutating the shared list after its next
- *  await, or its assets interleave with the newer context's reset/replay. */
-export async function restoreOpenContext(
-  ctx: OpenContext,
-  cancelled: () => boolean = () => false,
-): Promise<void> {
+/** Load an open context's graphics into the live core + shared list. A forked
+ *  demo replays its procedural assets first (literal ids), then the sketch's
+ *  stored source payloads register by name via the core's addSource —
+ *  reproducing render state without decoding any PNG. Fully synchronous: no
+ *  await window, so overlapping opens can't interleave their list mutations. */
+export function restoreOpenContext(ctx: OpenContext): void {
   assetStore.reset();
   if (ctx.kind === "demo") {
     const demo = DEMOS.find((d) => d.id === ctx.demoId);
     if (demo) loadDemo(demo);
     return;
   }
-  const from = ctx.sketch.forkedFrom
-    ? DEMOS.find((d) => d.id === ctx.sketch.forkedFrom)
-    : undefined;
+  const from = ctx.sketch.forkedFrom ? DEMOS.find((d) => d.id === ctx.sketch.forkedFrom) : undefined;
   if (from) loadDemo(from);
-  for (const a of ctx.sketch.assets) {
-    const blob = new Blob([a.png as BlobPart], { type: "image/png" });
-    const decoded = await decodeImageBlob(blob, a.name);
-    if (cancelled()) return;
-    const asset = registerAsset(transport.uploadTexture, assetStore.list(), decoded);
-    assetStore.add(asset);
+  for (const s of ctx.sketch.sources) {
+    transport.addSource(s.name, s.payload);
+    assetStore.set({ id: s.name, name: s.name, width: s.meta.width, height: s.meta.height, preview: "" });
   }
 }
