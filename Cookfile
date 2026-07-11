@@ -6,9 +6,9 @@
 #   ── build ──────────────────────────────────────────────────────────────────
 #   cook             full build (default): WASM module + web/dist
 #   cook build       same as above
-#   cook wasm        (re)build the WASM module into web/src/wasm/pkg  [content-cached]
+#   cook wasm        (re)build the WASM module into web/src/wasm/pkg
 #   cook web         production web build -> web/dist
-#   cook deps        npm install in web/
+#   cook deps        install web/node_modules
 #
 #   ── run ──────────────────────────────────────────────────────────────────────
 #   cook dev         Vite dev server, mock core (no WASM build needed)
@@ -16,7 +16,7 @@
 #
 #   ── verify ─────────────────────────────────────────────────────────────────
 #   cook test-core   cargo test (core unit + golden framebuffer compare)
-#   cook test-web    vitest (the MockPpuCore tests)
+#   cook test-web    vitest
 #   cook typecheck   tsc --noEmit over the web app
 #   cook check       typecheck + both test suites (pre-commit umbrella)
 #   cook fmt         cargo fmt
@@ -25,17 +25,24 @@
 #   cook clean       remove build artifacts (target, dist, wasm pkg, .cook cache)
 #   cook distclean   clean + remove web/node_modules
 #
-# Caching: `wasm` is the one content-cached recipe — wasm-pack emits a small set
-# of deterministic files, so cook hashes the Rust sources and rebuilds the module
-# only when they change. `deps` and `web` are chores: npm's node_modules and Vite's
-# content-hashed dist are large and/or non-deterministic, so they don't round-trip
-# as declared file outputs — npm and vite keep their own incremental state instead.
+# Caching: all three generated artifacts are content-cached recipes, so a no-op
+# `cook build` is ~0s and `clean` + rebuild restores from cache.
+#   - `wasm`  declares its files explicitly (its pkg lives inside web's source tree,
+#             so a globbed directory output would collide with web's `web/src/**`
+#             ingredient globs).
+#   - `deps`  and `web` use DIRECTORY outputs (trailing `/`). This is safe now that
+#             cook preserves symlinks + file modes on restore: node_modules'
+#             `.bin/*` relative symlinks and Vite's content-hashed dist both round-trip
+#             faithfully. Trade-off: a `deps` cache MISS (lockfile changed) empties
+#             node_modules and does a full `npm install`; a cache HIT restores the tree
+#             from the store. deps for THIS repo is npm (relative, in-tree symlinks) —
+#             a pnpm repo (global-store hardlinks) would not be portable; keep it local.
 #
 # Cook gotcha: one command per line; a multi-step shell line needs `sh -c "a && b"`.
 
-# ── WASM: rebuild the module only when the Rust core or its manifests change.
-#    The four files Vite + tsc consume are declared as outputs, so a cache hit
-#    restores the whole set. wasm-pack's --out-dir is relative to the crate dir.
+# ── WASM: rebuild the module only when the Rust core or its manifests change. The
+#    files Vite + tsc consume are declared explicitly (so web forms file-level edges
+#    to them). wasm-pack's --out-dir is relative to the crate dir.
 recipe wasm
     ingredients "crates/ppu-core/src/**/*.rs" "crates/ppu-core/Cargo.toml" "Cargo.toml" "Cargo.lock"
     cook "web/src/wasm/pkg/ppu_core.js"
@@ -45,18 +52,29 @@ recipe wasm
         wasm-pack build crates/ppu-core --target web --out-dir ../../web/src/wasm/pkg
     }
 
-# ── DEPS: install node_modules. Idempotent — a no-op when the lockfile is current.
-chore deps
-    npm --prefix web install --no-audit --no-fund
+# ── DEPS: install node_modules as a cached directory output, keyed on the manifest
+#    + lockfile. Relative `.bin/*` symlinks and exec bits round-trip.
+recipe deps
+    ingredients "web/package.json" "web/package-lock.json"
+    cook "web/node_modules/" {
+        npm --prefix web install --no-audit --no-fund
+    }
 
-# ── WEB: production bundle -> web/dist. Needs the wasm pkg (dep: wasm) and the
-#    installed deps (dep: deps); `build:app` is tsc + vite build (no wasm rebuild —
-#    cook already owns that via the wasm dep).
-chore web: wasm deps
-    npm --prefix web run build:app
+# ── WEB: production bundle -> web/dist (cached directory output). Inputs are web's
+#    sources/config, the lockfile (so a dep bump reaches the bundle), and the two
+#    wasm pkg files Vite bundles (so a Rust change does too). cook owns the wasm
+#    rebuild via the dep edge, so `build:app` (tsc + vite build) skips it.
+recipe web: wasm deps
+    ingredients "web/src/**/*.ts" "web/src/**/*.tsx" "web/index.html"
+                "web/vite.config.ts" "web/tsconfig.json" "web/tsconfig.node.json"
+                "web/package.json" "web/package-lock.json"
+                "web/src/wasm/pkg/ppu_core.js" "web/src/wasm/pkg/ppu_core_bg.wasm"
+    cook "web/dist/" {
+        npm --prefix web run build:app
+    }
 
 # ── BUILD: the default target — the whole pipeline.
-chore build: web
+recipe build: web
 
 # ── DEV SERVERS: long-running, interactive. Mock core by default; dev-wasm builds
 #    the real module first and selects it via VITE_USE_WASM=1.
