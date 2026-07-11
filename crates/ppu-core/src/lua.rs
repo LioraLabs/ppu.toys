@@ -578,6 +578,16 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     ctx.set_global("color", color).unwrap();
     ctx.set_global("__color_base", Table::new(&ctx)).unwrap();
     sync_color(ctx, 0, 0, 0); // power-on defaults = decode of zeroed registers
+
+    // Friendly screen-designation namespace over TM/TS ($212C/$212D). Same
+    // baseline change-detection pattern as `color` above; `__screen_base`
+    // records the bytes at each (re-)baseline.
+    let screen = Table::new(&ctx);
+    screen.set(ctx, "main", Table::new(&ctx)).unwrap();
+    screen.set(ctx, "sub", Table::new(&ctx)).unwrap();
+    ctx.set_global("screen", screen).unwrap();
+    ctx.set_global("__screen_base", Table::new(&ctx)).unwrap();
+    sync_screen(ctx, 0x1f, 0x00); // decode of the playground power-on TM/TS
 }
 
 /// Chunk (source file) name a Lua function was compiled from; `None` for
@@ -737,6 +747,83 @@ fn sync_color(ctx: piccolo::Context<'_>, cgwsel: u8, cgadsub: u8, coldata: u16) 
     }
 }
 
+/// TM/TS bits owned by the friendly `screen` namespace: bits 0-4 =
+/// BG1..BG4, OBJ. Bits 5-7 are unused by hardware — leave them to the raw byte.
+const SCREEN_MASK: u8 = 0x1f;
+
+/// The five TM/TS layer-enable fields, LSB-first.
+const SCREEN_LAYERS: [(&str, u8); 5] = [
+    ("bg1", 0x01),
+    ("bg2", 0x02),
+    ("bg3", 0x04),
+    ("bg4", 0x08),
+    ("obj", 0x10),
+];
+
+/// The TM/TS bytes as of the last install_bindings/write_state — the
+/// baseline the friendly `screen` fold diffs against.
+fn read_screen_base(ctx: piccolo::Context<'_>) -> (u8, u8) {
+    match ctx.get_global("__screen_base") {
+        Value::Table(t) => (
+            t.get(ctx, "tm").to_integer().unwrap_or(0) as u8,
+            t.get(ctx, "ts").to_integer().unwrap_or(0) as u8,
+        ),
+        _ => (0, 0),
+    }
+}
+
+/// Pack the friendly `screen` table into (tm, ts). Any field that is
+/// nil/non-boolean takes its bits from `base` (absent friendly -> the raw
+/// register keeps those bits, i.e. "no change").
+fn pack_screen(ctx: piccolo::Context<'_>, base: (u8, u8)) -> (u8, u8) {
+    fn side<'gc>(
+        ctx: piccolo::Context<'gc>,
+        screen: Table<'gc>,
+        name: &'static str,
+        base_byte: u8,
+    ) -> u8 {
+        let Value::Table(t) = screen.get(ctx, name) else {
+            return base_byte & SCREEN_MASK;
+        };
+        let mut out = 0u8;
+        for (field, mask) in SCREEN_LAYERS {
+            out |= match t.get(ctx, field) {
+                Value::Boolean(true) => mask,
+                Value::Boolean(false) => 0,
+                _ => base_byte & mask,
+            };
+        }
+        out
+    }
+    let (base_tm, base_ts) = base;
+    let Value::Table(screen) = ctx.get_global("screen") else {
+        return base;
+    };
+    (
+        side(ctx, screen, "main", base_tm),
+        side(ctx, screen, "sub", base_ts),
+    )
+}
+
+/// Unpack TM/TS into the friendly `screen` fields (mirror live values so
+/// hooks can read them — HDMA persistence, matching `color`) and record the
+/// bytes in `__screen_base` for read_state's change detection.
+fn sync_screen(ctx: piccolo::Context<'_>, tm: u8, ts: u8) {
+    if let Value::Table(screen) = ctx.get_global("screen") {
+        for (name, byte) in [("main", tm), ("sub", ts)] {
+            if let Value::Table(t) = screen.get(ctx, name) {
+                for (field, mask) in SCREEN_LAYERS {
+                    t.set(ctx, field, byte & mask != 0).unwrap();
+                }
+            }
+        }
+    }
+    if let Value::Table(b) = ctx.get_global("__screen_base") {
+        b.set(ctx, "tm", tm as i64).unwrap();
+        b.set(ctx, "ts", ts as i64).unwrap();
+    }
+}
+
 /// Read the per-scanline register globals into a `LineTableRow`. Missing globals
 /// keep their `LineTableRow::default()` value (sticky semantics).
 fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
@@ -753,6 +840,19 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
     if let Some(v) = ctx.get_global("TS").to_integer() {
         row.ts = v as u8;
     }
+    // Friendly `screen.*` fold — same coexistence contract as the `color`
+    // fold below: XOR the packed friendly fields against the `__screen_base`
+    // baseline recorded by install_bindings/write_state. Bits the user moved
+    // via screen.main/.sub are authoritative (set AND clear, and beat a
+    // same-cycle raw write); untouched bits keep the raw TM/TS byte, so
+    // raw-only scripts (incl. inside hooks) and the both-off power-on state
+    // stay byte-identical.
+    let sbase = read_screen_base(ctx);
+    let (f_tm, f_ts) = pack_screen(ctx, sbase);
+    let changed_tm = (f_tm ^ sbase.0) & SCREEN_MASK;
+    row.tm = (row.tm & !changed_tm) | (f_tm & changed_tm);
+    let changed_ts = (f_ts ^ sbase.1) & SCREEN_MASK;
+    row.ts = (row.ts & !changed_ts) | (f_ts & changed_ts);
     if let Some(v) = ctx.get_global("WH0").to_integer() {
         row.wh0 = v as u8;
     }
@@ -894,6 +994,7 @@ fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
     ctx.set_global("brightness", row.brightness as i64).unwrap();
     ctx.set_global("TM", row.tm as i64).unwrap();
     ctx.set_global("TS", row.ts as i64).unwrap();
+    sync_screen(ctx, row.tm, row.ts);
     ctx.set_global("WH0", row.wh0 as i64).unwrap();
     ctx.set_global("WH1", row.wh1 as i64).unwrap();
     ctx.set_global("WH2", row.wh2 as i64).unwrap();
