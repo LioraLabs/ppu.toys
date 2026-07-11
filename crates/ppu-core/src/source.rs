@@ -25,7 +25,11 @@
 //! palettes are color lists (sub-palette entry 0 transparent, implicit).
 //! Decode is strict: unknown version/kind/params reject, trailing bytes reject.
 
+use crate::import::obj::ObjCell;
+use crate::import::BudgetReport;
+use crate::import_m7::Mode7ImportReport;
 use crate::memory::Memory;
+use serde::Serialize;
 
 pub const PAYLOAD_VERSION: u8 = 1;
 
@@ -102,6 +106,31 @@ impl std::fmt::Display for PayloadError {
             PayloadError::TrailingBytes => write!(f, "trailing bytes after payload"),
         }
     }
+}
+
+/// What travels ALONGSIDE a payload (never inside it): source dims, the
+/// authoring-time budget snapshot, and (obj) the per-cell attribute map that
+/// makes source cells addressable via obj[i].
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct SourceMeta {
+    pub width: u32,
+    pub height: u32,
+    pub report: SourceReport,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cells: Option<Vec<ObjCell>>,
+}
+
+/// Budget snapshot, tagged like the ImportReport shape the UI already consumes
+/// (minus `layer`, which is a bind-time concept).
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(tag = "mode")]
+pub enum SourceReport {
+    #[serde(rename = "tile")]
+    Tile { report: BudgetReport },
+    #[serde(rename = "m7")]
+    Mode7 { report: Mode7ImportReport },
+    #[serde(rename = "obj")]
+    Obj { report: BudgetReport },
 }
 
 /// Tilemap length in words for a BGnSC screen-size field.

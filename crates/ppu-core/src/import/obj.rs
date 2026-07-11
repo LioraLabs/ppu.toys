@@ -22,7 +22,7 @@ const OBJ_CGRAM_BASE: usize = 128;
 /// The OBJ attributes one source cell resolved to. `tile` indexes the emitted
 /// OBJ char data (0 = reserved blank); flips reproduce the source from the
 /// deduped stored tile.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct ObjCell {
     pub tile: u16,
     pub pal: u8,
