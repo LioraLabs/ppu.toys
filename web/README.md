@@ -114,7 +114,15 @@ Pokes (`web/src/studio/pokes/`): Compose/Windows controls, CGRAM cell colors,
 and register readout rows all poke through one path — `poke()`/`unpoke()`/
 `clearPokes()` (`pokeStore.ts`) parse and regenerate the reserved, read-only
 `pokes.lua` file (`POKES_FILE`, always tab 0) from a `{lvalue, expr, note?}`
-list (`pokes.ts`). The FILE is the source of truth: every poke rewrites the
+list (`pokes.ts`). Pokes come in two dialects sharing that one file format:
+friendly field assignments (`color.op = "sub"`, `screen.main.bg1 = true`,
+`win.w1.lo = 40`) where the field is the poke's identity, so each touched
+field owns its line and neighboring bits are preserved by the core's namespace
+fold, and raw whole-register writes (`TM = 0x13`) — the register-readout hex
+editor still pokes raw. `parsePokes` is dialect-agnostic. Mixed dialects obey
+the core's fold order: the friendly namespaces fold last in `read_state`, so
+on overlapping bits a friendly poke wins over a raw same-register poke in the
+same frame. The FILE is the source of truth: every poke rewrites the
 whole generated `apply_pokes()` function body, entries sorted by lvalue for
 byte-stable output. Script wins by convention, not by a separate override
 layer: `apply_pokes()` runs as `frame()`'s first line (every bundled demo and

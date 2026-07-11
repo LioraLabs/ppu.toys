@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import "fake-indexeddb/auto";
 import { openSketchStore, openContextFiles } from "../sketches/openSketch";
 import { POKES_FILE } from "./pokes";
-import { currentPokes, poke, pokeMany, unpoke, clearPokes, hasApplyCall } from "./pokeStore";
+import { currentPokes, poke, pokeMany, unpoke, unpokeMany, clearPokes, hasApplyCall } from "./pokeStore";
 
 describe("pokeStore", () => {
   beforeEach(() => openSketchStore.newSketch());
@@ -36,6 +36,20 @@ describe("pokeStore", () => {
       { lvalue: "WH1", expr: "200" },
     ]);
     expect(currentPokes(openSketchStore.state()).map((p) => p.lvalue)).toEqual(["WH0", "WH1"]);
+  });
+
+  it("unpokeMany removes several lvalues in one store write", () => {
+    pokeMany([
+      { lvalue: "win.bg1.w1", expr: "true" },
+      { lvalue: "win.bg1.w2", expr: "true" },
+      { lvalue: "color.op", expr: '"sub"' },
+    ]);
+    let emits = 0;
+    const unsub = openSketchStore.subscribe(() => emits++);
+    unpokeMany(["win.bg1.w1", "win.bg1.w2"]);
+    unsub();
+    expect(emits).toBe(1);
+    expect(currentPokes(openSketchStore.state())).toEqual([{ lvalue: "color.op", expr: '"sub"' }]);
   });
 
   it("hasApplyCall finds the call outside pokes.lua only", () => {

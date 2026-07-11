@@ -3,11 +3,20 @@ import type { Poke } from "../../pokes/pokes";
 
 /** Pure decode/encode logic for the Compose/Windows tabs + Compositor overlay.
  *  The UI reads LIVE register values (power-on default when the core omits
- *  the register) and turns every click into a whole-register write emitted as
- *  a poke — a generated DSL assignment in pokes.lua. The script wins:
- *  apply_pokes() runs at the top of frame(), so a later script write shows
- *  its own value with the poke marker hollow. Encodings mirror the core's
- *  derive_registers round-trip. */
+ *  the register) and turns every click into a friendly FIELD poke —
+ *  `color.op = "sub"`, `win.w1.lo = 40` — one generated DSL assignment per
+ *  touched field (a control may cover several, e.g. the window-enable chip).
+ *  The field IS the poke's identity: each field owns its
+ *  line, and the core's namespace fold overrides only that field's own bits,
+ *  preserving neighbor bits in the register. The raw whole-register dialect
+ *  (`TM = 0x13`) stays available via `writesToPokes(_, "raw")`; a user-facing
+ *  dialect toggle is a follow-up. The script wins: apply_pokes() runs at the
+ *  top of frame(), so a later script write shows its own value with the poke
+ *  marker hollow. Encodings mirror the core's derive_registers round-trip.
+ *  Two ownership subtleties: CGWSEL is co-owned — win never writes it, the
+ *  color window's math region routes through `color.region` — and
+ *  `win.*.invert` is deliberately lossy, since both hardware invert bits
+ *  share the one friendly field. */
 
 export const REG = {
   W12SEL: 0x2123,
@@ -22,6 +31,7 @@ export const REG = {
   TM: 0x212c,
   TS: 0x212d,
   TMW: 0x212e,
+  TSW: 0x212f,
   CGWSEL: 0x2130,
   CGADSUB: 0x2131,
   COLDATA: 0x2132,
@@ -39,12 +49,6 @@ export function liveReg(registers: RegisterView[], addr: number): number {
 
 /** Live-value accessor the encode helpers read through. */
 export type ReadReg = (addr: number) => number;
-
-/** One whole-register write a control produces; the sink turns it into a poke. */
-export interface RegWrite {
-  addr: number;
-  value: number;
-}
 
 /** Every compose/windows register the UI writes, by $21xx address, to its DSL
  *  flat-global mnemonic. This IS the poke inverse map — pokes emit `TM = 0x13`. */
@@ -80,15 +84,38 @@ export function regPoke(addr: number, value: number): Poke {
 
 const ADDR_BY_LVALUE = new Map(Object.entries(REG_LVALUES).map(([a, l]) => [l, Number(a)]));
 
-/** Solid/hollow decision for the poke marker: true = the live register equals
- *  the poked value (solid), false = a later script write overrode it (hollow),
- *  null = non-comparable (non-numeric expr or an lvalue this map doesn't know). */
-export function pokeMatchesLive(p: Poke, registers: RegisterView[]): boolean | null {
-  const want = Number(p.expr);
-  const addr = ADDR_BY_LVALUE.get(p.lvalue);
-  if (Number.isNaN(want) || addr === undefined) return null;
-  return liveReg(registers, addr) === want;
+/** One friendly-field write a control produces. Carries BOTH poke identities:
+ *  the friendly field (field = lvalue, expr = canonical RHS) and the raw
+ *  register (addr + whole-register value after the control action). Dialect
+ *  selection (the upcoming raw/friendly toggle) is a pure projection — see
+ *  writesToPokes. */
+export interface FieldWrite {
+  field: string;
+  expr: string;
+  addr: number;
+  value: number;
 }
+
+/** A field write as a friendly-dialect poke: `color.op = "sub" -- $2131`. */
+export function fieldPoke(w: FieldWrite): Poke {
+  return { lvalue: w.field, expr: w.expr, note: `$${w.addr.toString(16).toUpperCase()}` };
+}
+
+export type PokeDialect = "friendly" | "raw";
+
+/** Project one control action's field writes into pokes. friendly = one poke
+ *  per field (neighbor bits preserved by the core's fold); raw = one
+ *  whole-register poke per touched register, last write wins. */
+export function writesToPokes(writes: readonly FieldWrite[], dialect: PokeDialect): Poke[] {
+  if (dialect === "friendly") return writes.map(fieldPoke);
+  const last = new Map<number, number>();
+  for (const w of writes) last.set(w.addr, w.value);
+  return [...last].map(([addr, value]) => regPoke(addr, value));
+}
+
+// Canonical friendly-dialect RHS forms, used by the field-write emitters below.
+const bool = (b: boolean) => (b ? "true" : "false");
+const str = (s: string) => `"${s}"`;
 
 // ── Compose: screen assignment + color math ─────────────────────────────────
 
@@ -111,9 +138,10 @@ export const COMPOSE_LAYERS: ComposeLayer[] = [
 /** CGADSUB bit 5 — backdrop math enable (the matrix Backdrop row). */
 export const BACKDROP_MATH_BIT = 5;
 
-/** Flip one designation bit, preserving the rest of the register. */
-export function toggleMaskBit(addr: number, current: number, bit: number): RegWrite {
-  return { addr, value: current ^ (1 << bit) };
+/** Flip one TM/TS/CGADSUB designation bit as a friendly bool field write. */
+export function toggleDesignation(field: string, addr: number, current: number, bit: number): FieldWrite {
+  const on = (current & (1 << bit)) === 0;
+  return { field, expr: bool(on), addr, value: current ^ (1 << bit) };
 }
 
 export type MathOp = "add" | "sub";
@@ -144,6 +172,27 @@ export function mathAddend(cgwsel: number): MathAddend {
 
 export function withMathAddend(cgwsel: number, addend: MathAddend): number {
   return addend === "sub" ? cgwsel | 0x02 : cgwsel & ~0x02;
+}
+
+export function setMathOp(op: MathOp, cgadsub: number): FieldWrite {
+  return { field: "color.op", expr: str(op), addr: REG.CGADSUB, value: withMathOp(cgadsub, op) };
+}
+
+export function setMathHalf(half: boolean, cgadsub: number): FieldWrite {
+  return { field: "color.half", expr: bool(half), addr: REG.CGADSUB, value: withMathHalf(cgadsub, half) };
+}
+
+export function setMathAddend(addend: MathAddend, cgwsel: number): FieldWrite {
+  return { field: "color.addend", expr: str(addend), addr: REG.CGWSEL, value: withMathAddend(cgwsel, addend) };
+}
+
+export function setFixedColor(bgr555: number): FieldWrite {
+  return {
+    field: "color.fixed",
+    expr: `0x${bgr555.toString(16).padStart(4, "0")}`,
+    addr: REG.COLDATA,
+    value: bgr555,
+  };
 }
 
 /** The equation chip, exactly as the handoff renders it. */
@@ -194,6 +243,27 @@ export const WINDOW_LAYERS: WindowLayer[] = [
   { id: "color", label: "Color math", color: "var(--cyan)", selAddr: REG.WOBJSEL, shift: 4 },
 ];
 
+/** WH edge registers -> their friendly scalar fields (whole-value semantics). */
+const WH_FIELDS: Readonly<Record<number, string>> = {
+  [REG.WH0]: "win.w1.lo",
+  [REG.WH1]: "win.w1.hi",
+  [REG.WH2]: "win.w2.lo",
+  [REG.WH3]: "win.w2.hi",
+};
+
+/** Friendly window-layer geometry — mirrors the Rust core's WIN_LAYERS
+ *  (includes bg4, which has registers but no UI row). */
+const WIN_FIELD_LAYERS: {
+  id: string; selAddr: number; shift: 0 | 4; logAddr: number; logShift: number; tmwBit?: number;
+}[] = [
+  { id: "bg1", selAddr: REG.W12SEL, shift: 0, logAddr: REG.WBGLOG, logShift: 0, tmwBit: 0 },
+  { id: "bg2", selAddr: REG.W12SEL, shift: 4, logAddr: REG.WBGLOG, logShift: 2, tmwBit: 1 },
+  { id: "bg3", selAddr: REG.W34SEL, shift: 0, logAddr: REG.WBGLOG, logShift: 4, tmwBit: 2 },
+  { id: "bg4", selAddr: REG.W34SEL, shift: 4, logAddr: REG.WBGLOG, logShift: 6, tmwBit: 3 },
+  { id: "obj", selAddr: REG.WOBJSEL, shift: 0, logAddr: REG.WOBJLOG, logShift: 0, tmwBit: 4 },
+  { id: "color", selAddr: REG.WOBJSEL, shift: 4, logAddr: REG.WOBJLOG, logShift: 2 },
+];
+
 /** Select-nibble layout, LSB first: W1 invert, W1 enable, W2 invert, W2 enable. */
 const ENABLE_BITS = 0b1010;
 const INVERT_BITS = 0b0101;
@@ -221,30 +291,46 @@ function withNibbleBits(reg: number, shift: number, bits: number, on: boolean): 
  *  against the real core); the color row instead points CGWSEL's prevent-math
  *  region (bits 4-5) at "outside the window" (1) when enabling — color math
  *  only inside — and back to "never" (0) when disabling. */
-export function toggleWindowEnable(layer: WindowLayer, read: ReadReg): RegWrite[] {
+export function toggleWindowEnable(layer: WindowLayer, read: ReadReg): FieldWrite[] {
   const on = !windowRow(layer, read).enabled;
-  const writes: RegWrite[] = [
-    { addr: layer.selAddr, value: withNibbleBits(read(layer.selAddr), layer.shift, ENABLE_BITS, on) },
+  const sel = withNibbleBits(read(layer.selAddr), layer.shift, ENABLE_BITS, on);
+  const writes: FieldWrite[] = [
+    { field: `win.${layer.id}.w1`, expr: bool(on), addr: layer.selAddr, value: sel },
+    { field: `win.${layer.id}.w2`, expr: bool(on), addr: layer.selAddr, value: sel },
   ];
   if (layer.tmwBit !== undefined) {
     const tmw = read(REG.TMW);
     writes.push({
+      field: `win.${layer.id}.main`,
+      expr: bool(on),
       addr: REG.TMW,
       value: on ? tmw | (1 << layer.tmwBit) : tmw & ~(1 << layer.tmwBit),
     });
   }
   if (layer.id === "color") {
-    writes.push({ addr: REG.CGWSEL, value: (read(REG.CGWSEL) & ~0x30) | (on ? 0x10 : 0) });
+    // WHERE math is prevented is color's turf (CGWSEL is co-owned): route
+    // through color.region — `win` never writes CGWSEL.
+    writes.push({
+      field: "color.region",
+      expr: str(on ? "inside" : "everywhere"),
+      addr: REG.CGWSEL,
+      value: (read(REG.CGWSEL) & ~0x30) | (on ? 0x10 : 0),
+    });
   }
   return writes;
 }
 
 /** Toggle a row's invert (both windows' invert bits at once). */
-export function toggleWindowInvert(layer: WindowLayer, read: ReadReg): RegWrite[] {
+export function toggleWindowInvert(layer: WindowLayer, read: ReadReg): FieldWrite[] {
   const on = !windowRow(layer, read).inverted;
-  return [
-    { addr: layer.selAddr, value: withNibbleBits(read(layer.selAddr), layer.shift, INVERT_BITS, on) },
-  ];
+  return [{
+    // lossy on purpose: the friendly field drives BOTH invert bits, exactly
+    // like this control always has; a lone invert bit stays raw-only
+    field: `win.${layer.id}.invert`,
+    expr: bool(on),
+    addr: layer.selAddr,
+    value: withNibbleBits(read(layer.selAddr), layer.shift, INVERT_BITS, on),
+  }];
 }
 
 // ── Combine + area segmenteds ────────────────────────────────────────────────
@@ -267,11 +353,15 @@ export function combineValue(read: ReadReg): WinLogic | null {
 }
 
 /** Write one combine op into every slot of both logic registers. */
-export function setCombine(op: WinLogic): RegWrite[] {
-  return [
-    { addr: REG.WBGLOG, value: op * 0b01010101 },
-    { addr: REG.WOBJLOG, value: op * 0b0101 },
-  ];
+export function setCombine(op: WinLogic): FieldWrite[] {
+  const bgByte = op * 0b01010101;
+  const objByte = op * 0b0101;
+  return WIN_FIELD_LAYERS.map((l) => ({
+    field: `win.${l.id}.combine`,
+    expr: str(LOGIC_LABELS[op]),
+    addr: l.logAddr,
+    value: l.logAddr === REG.WBGLOG ? bgByte : objByte,
+  }));
 }
 
 export type WinArea = "inside" | "outside";
@@ -285,14 +375,132 @@ export function areaValue(read: ReadReg): WinArea | null {
 }
 
 /** Bulk-set the invert bits of every row nibble (W34SEL's BG4 nibble untouched). */
-export function setArea(area: WinArea, read: ReadReg): RegWrite[] {
+export function setArea(area: WinArea, read: ReadReg): FieldWrite[] {
   const on = area === "outside";
   const byAddr = new Map<number, number>();
   for (const l of WINDOW_LAYERS) {
     const cur = byAddr.get(l.selAddr) ?? read(l.selAddr);
     byAddr.set(l.selAddr, withNibbleBits(cur, l.shift, INVERT_BITS, on));
   }
-  return [...byAddr].map(([addr, value]) => ({ addr, value }));
+  return WINDOW_LAYERS.map((l) => ({
+    field: `win.${l.id}.invert`,
+    expr: bool(on),
+    addr: l.selAddr,
+    value: byAddr.get(l.selAddr) ?? 0,
+  }));
+}
+
+export function setWindowEdge(addr: number, x: number): FieldWrite {
+  return { field: WH_FIELDS[addr], expr: String(x), addr, value: x };
+}
+
+/** Field groups the section-header PokeDots key on. */
+export const SCREEN_MAIN_FIELDS = COMPOSE_LAYERS.map((l) => `screen.main.${l.id}`);
+export const SCREEN_SUB_FIELDS = COMPOSE_LAYERS.map((l) => `screen.sub.${l.id}`);
+export const MATH_ENABLE_FIELDS = [...COMPOSE_LAYERS.map((l) => `color.on.${l.id}`), "color.on.backdrop"];
+export const OPERATION_FIELDS = ["color.op", "color.half"];
+export const ADDEND_FIELDS = ["color.addend"];
+export const FIXED_FIELDS = ["color.fixed"];
+export const COMBINE_FIELDS = WIN_FIELD_LAYERS.map((l) => `win.${l.id}.combine`);
+export const AREA_FIELDS = WINDOW_LAYERS.map((l) => `win.${l.id}.invert`);
+
+/** Every field a Windows layer row's controls can emit — the row's marker
+ *  must cover them all so one click on the dot unpokes the WHOLE row: the
+ *  enable toggle also writes `win.<id>.main` (TMW clip), and the color row
+ *  writes `color.region` instead (win never touches CGWSEL). */
+export function winRowFields(l: WindowLayer): string[] {
+  const sel = [`win.${l.id}.w1`, `win.${l.id}.w2`, `win.${l.id}.invert`];
+  return l.id === "color" ? [...sel, "color.region"] : [...sel, `win.${l.id}.main`];
+}
+
+// ── Field decode table ───────────────────────────────────────────────────────
+
+/** SEL-nibble enable bits, matching the core: W1 = 0x2, W2 = 0x8. */
+const W1_ENABLE = 0x2;
+const W2_ENABLE = 0x8;
+
+/** CGWSEL bits 4-5 decode, matching the core's color.region. */
+const REGION_NAMES = ["everywhere", "inside", "outside", "never"] as const;
+
+type FieldValue = string | number | boolean;
+
+/** THE dual-dialect round-trip table: friendly field lvalue -> the register
+ *  it lives in + a live-decode returning the field's current value. Emission
+ *  and pokeMatchesLive both key on it; ownership mirrors the Rust folds
+ *  (win never owns CGWSEL; the color window has no TMW/TSW bit). */
+export const FIELD_SPECS: ReadonlyMap<string, { addr: number; live: (read: ReadReg) => FieldValue }> =
+  buildFieldSpecs();
+
+function buildFieldSpecs() {
+  const m = new Map<string, { addr: number; live: (read: ReadReg) => FieldValue }>();
+  const layerBits: [string, number][] = [["bg1", 0], ["bg2", 1], ["bg3", 2], ["bg4", 3], ["obj", 4]];
+  for (const [id, bit] of layerBits) {
+    m.set(`screen.main.${id}`, { addr: REG.TM, live: (r) => (r(REG.TM) & (1 << bit)) !== 0 });
+    m.set(`screen.sub.${id}`, { addr: REG.TS, live: (r) => (r(REG.TS) & (1 << bit)) !== 0 });
+    m.set(`color.on.${id}`, { addr: REG.CGADSUB, live: (r) => (r(REG.CGADSUB) & (1 << bit)) !== 0 });
+  }
+  m.set("color.on.backdrop", { addr: REG.CGADSUB, live: (r) => (r(REG.CGADSUB) & 0x20) !== 0 });
+  m.set("color.op", { addr: REG.CGADSUB, live: (r) => mathOp(r(REG.CGADSUB)) });
+  m.set("color.half", { addr: REG.CGADSUB, live: (r) => mathHalf(r(REG.CGADSUB)) });
+  m.set("color.addend", { addr: REG.CGWSEL, live: (r) => mathAddend(r(REG.CGWSEL)) });
+  m.set("color.region", { addr: REG.CGWSEL, live: (r) => REGION_NAMES[(r(REG.CGWSEL) >> 4) & 3] });
+  m.set("color.fixed", { addr: REG.COLDATA, live: (r) => r(REG.COLDATA) & 0x7fff });
+  for (const [addr, field] of Object.entries(WH_FIELDS)) {
+    const a = Number(addr);
+    m.set(field, { addr: a, live: (r) => r(a) });
+  }
+  for (const l of WIN_FIELD_LAYERS) {
+    const nib = (r: ReadReg) => (r(l.selAddr) >> l.shift) & 0xf;
+    m.set(`win.${l.id}.w1`, { addr: l.selAddr, live: (r) => (nib(r) & W1_ENABLE) !== 0 });
+    m.set(`win.${l.id}.w2`, { addr: l.selAddr, live: (r) => (nib(r) & W2_ENABLE) !== 0 });
+    // lossy shared decode, mirrors the core: true if EITHER invert bit is set
+    m.set(`win.${l.id}.invert`, { addr: l.selAddr, live: (r) => (nib(r) & INVERT_BITS) !== 0 });
+    m.set(`win.${l.id}.combine`, { addr: l.logAddr, live: (r) => LOGIC_LABELS[(r(l.logAddr) >> l.logShift) & 3] });
+    const bit = l.tmwBit;
+    if (bit !== undefined) {
+      m.set(`win.${l.id}.main`, { addr: REG.TMW, live: (r) => (r(REG.TMW) & (1 << bit)) !== 0 });
+      m.set(`win.${l.id}.sub`, { addr: REG.TSW, live: (r) => (r(REG.TSW) & (1 << bit)) !== 0 });
+    }
+  }
+  return m;
+}
+
+/** Parse a friendly poke's RHS: true/false, a "quoted string", or a Lua
+ *  number (decimal or 0x hex). null = non-comparable. */
+function parseFieldExpr(expr: string): FieldValue | null {
+  if (expr === "true") return true;
+  if (expr === "false") return false;
+  const s = /^"([^"]*)"$/.exec(expr);
+  if (s) return s[1];
+  const n = Number(expr);
+  return Number.isNaN(n) ? null : n;
+}
+
+/** Solid/hollow decision for the poke marker, both dialects: friendly field
+ *  pokes decode the live register through FIELD_SPECS; raw register pokes
+ *  compare the whole byte. null = non-comparable. */
+export function pokeMatchesLive(p: Poke, registers: RegisterView[]): boolean | null {
+  const read: ReadReg = (addr) => liveReg(registers, addr);
+  const spec = FIELD_SPECS.get(p.lvalue);
+  if (spec) {
+    const want = parseFieldExpr(p.expr);
+    return want === null ? null : spec.live(read) === want;
+  }
+  const want = Number(p.expr);
+  const addr = ADDR_BY_LVALUE.get(p.lvalue);
+  if (Number.isNaN(want) || addr === undefined) return null;
+  return read(addr) === want;
+}
+
+/** Pokes targeting a control: its raw whole-register poke plus, with a
+ *  `fields` list, exactly those friendly pokes (control labels), or, without
+ *  one, ANY friendly field living in the register (register-centric rows). */
+export function pokesAt(pokes: readonly Poke[], addr: number, fields?: readonly string[]): Poke[] {
+  return pokes.filter(
+    (p) =>
+      p.lvalue === REG_LVALUES[addr] ||
+      (fields ? fields.includes(p.lvalue) : FIELD_SPECS.get(p.lvalue)?.addr === addr),
+  );
 }
 
 // ── Window preview geometry + buffers ────────────────────────────────────────

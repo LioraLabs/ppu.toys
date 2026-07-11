@@ -36,6 +36,10 @@ export function unpoke(lvalue: string): void {
   write(currentPokes(openSketchStore.state()).filter((p) => p.lvalue !== lvalue));
 }
 
+export function unpokeMany(lvalues: readonly string[]): void {
+  write(currentPokes(openSketchStore.state()).filter((p) => !lvalues.includes(p.lvalue)));
+}
+
 export function clearPokes(): void {
   write([]);
 }
