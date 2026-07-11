@@ -1,7 +1,6 @@
 import type { FrameResult } from "../../../ppu/core";
-import { POKES_FILE, type Poke } from "../../pokes/pokes";
-import { hasApplyCall, pokeMany, usePokes } from "../../pokes/pokeStore";
-import { openContextFiles, useOpenSketch } from "../../sketches/openSketch";
+import type { Poke } from "../../pokes/pokes";
+import { pokeMany, usePokes } from "../../pokes/pokeStore";
 import { useInspectorFrame } from "../useInspectorFrame";
 import { liveReg, pokesAt, writesToPokes, type FieldWrite, type ReadReg } from "./model";
 import { pokeDialect } from "./dialect";
@@ -22,7 +21,6 @@ export function compositorWrite(writes: readonly FieldWrite[]): void {
  *  the persisted dialect setting says so). */
 export interface Compositor {
   frame: FrameResult;
-  pokes: Poke[];
   /** Live register value, else power-on default. */
   read: ReadReg;
   /** Upsert one control action's poke. */
@@ -32,24 +30,16 @@ export interface Compositor {
   /** Pokes targeting a control: raw poke on `addr` plus the listed fields
    *  (or, without a list, every field living in the register). */
   pokedAt: (addr: number, fields?: readonly string[]) => Poke[];
-  /** Something outside pokes.lua calls apply_pokes(). */
-  pokesApplied: boolean;
-  /** Verbatim pokes.lua source — the PokeBar copy-function chip. */
-  pokesSource: string;
 }
 
 export function useCompositor(): Compositor {
   const frame = useInspectorFrame();
   const pokes = usePokes();
-  const files = openContextFiles(useOpenSketch());
   return {
     frame,
-    pokes,
     read: (addr) => liveReg(frame.registers, addr),
     write: (w) => compositorWrite([w]),
     writeMany: compositorWrite,
     pokedAt: (addr, fields) => pokesAt(pokes, addr, fields),
-    pokesApplied: hasApplyCall(files),
-    pokesSource: files.find((f) => f.name === POKES_FILE)?.source ?? "",
   };
 }

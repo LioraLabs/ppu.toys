@@ -515,10 +515,7 @@ describe("FIELD_SPECS encode/live round-trip", () => {
     expect(formatFieldValue(true)).toBe("true");
     expect(formatFieldValue("sub")).toBe('"sub"');
     expect(formatFieldValue(0x41)).toBe("0x41");
-    // NOTE: deviates from the plan's literal "40" example — 40 > 9, so under
-    // the specified `v > 9 ? hex : decimal` rule it hexes to "0x28", not
-    // "40". Using 5 here (<=9) actually exercises the decimal branch; see the
-    // task-completion report for the full discrepancy writeup.
+    // 5 (not 40) because 40 > 9 would hex under the current rule.
     expect(formatFieldValue(5)).toBe("5");
   });
 });
