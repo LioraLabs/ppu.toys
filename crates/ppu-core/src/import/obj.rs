@@ -8,21 +8,18 @@
 use std::collections::BTreeMap;
 
 use super::quantize::{median_cut, nearest, region_fit};
-use super::tiles::{pack_planar, split_tiles, IndexTile, TileSet};
+use super::tiles::{pack_planar, split_tiles, IndexTile, PixelTile, TileSet};
 use super::{BudgetReport, Overflow};
-use crate::memory::Memory;
 
 /// OBJ 4bpp: 15 colors/sub-palette (index 0 transparent), 8 palettes, 16
-/// words/tile. CGRAM base 128 (OBJ palettes 8-15).
+/// words/tile. CGRAM base 128 (OBJ palettes 8-15) is `place_obj`'s concern.
 const CAP: usize = 15;
-const PAL_STRIDE: usize = 16;
 const WORDS_PER_TILE: usize = 16;
-const OBJ_CGRAM_BASE: usize = 128;
 
 /// The OBJ attributes one source cell resolved to. `tile` indexes the emitted
 /// OBJ char data (0 = reserved blank); flips reproduce the source from the
 /// deduped stored tile.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct ObjCell {
     pub tile: u16,
     pub pal: u8,
@@ -30,47 +27,68 @@ pub struct ObjCell {
     pub flip_y: bool,
 }
 
-/// OBJ importer output: bitplane-packed 4bpp char data (write at the OBJ char
-/// base), OBJ CGRAM writes (`(index >= 128, BGR555)`), the source-grid cell map,
-/// and the budget report.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ObjImport {
-    pub char_words: Vec<u16>,
-    pub cgram: Vec<(u8, u16)>,
-    pub cells: Vec<ObjCell>,
-    pub cols: usize,
-    pub rows: usize,
-    pub report: BudgetReport,
+/// Convert an RGBA sprite sheet into 4bpp OBJ char + OBJ CGRAM palettes.
+/// Pure and deterministic. `cell_size` picks the layout: 8 runs the classic
+/// per-tile pipeline (flip-aware dedup, reserved blank tile 0); 16/32/64 run
+/// the block layout, where each NxN-tile cell is a straight raster copy into
+/// contiguous name-table slots so ONE `obj[i].tile` (the block's base)
+/// addresses the whole cell via the renderer's `obj_tile_addr` stride
+/// (right +1 within the 16-wide band, down +16).
+pub fn import_obj_sheet(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    cell_size: u8,
+) -> (crate::source::ObjSource, crate::source::SourceMeta) {
+    match cell_size {
+        16 | 32 | 64 => import_obj_blocks(rgba, width, height, cell_size),
+        _ => import_obj_cells8(rgba, width, height),
+    }
 }
 
-/// Convert an RGBA sprite sheet into 4bpp OBJ char + OBJ CGRAM palettes.
-/// Pure and deterministic. Mirrors the tile-BG importer's pipeline (split ->
-/// global color budget -> region fit -> nearest remap -> flip-aware dedup ->
-/// bitplane pack) but emits for OBJ: CGRAM base 128, no tilemap, a per-cell
-/// attribute map.
-pub fn import_obj_sheet(rgba: &[u8], width: u32, height: u32) -> ObjImport {
-    let mut overflows = Vec::new();
-    let (w, h) = (width as usize, height as usize);
-    let (ptiles, cols, rows) = split_tiles(rgba, w, h);
-
+/// Global color budget over all source tiles: returns a remap closure that
+/// snaps any BGR555 color to the (<= 8*CAP) budgeted global palette, plus the
+/// honest Colors overflow if the image blew the budget.
+fn global_remap(ptiles: &[PixelTile]) -> (impl Fn(u16) -> u16, Option<Overflow>) {
     let mut hist: BTreeMap<u16, u32> = BTreeMap::new();
-    for t in &ptiles {
+    for t in ptiles {
         for c in t.iter().flatten() {
             *hist.entry(*c).or_default() += 1;
         }
     }
     let budget = 8 * CAP;
-    let global: Option<Vec<u16>> = if hist.len() > budget {
-        overflows.push(Overflow::Colors {
-            unique: hist.len(),
-            budget,
-        });
+    let (global, overflow) = if hist.len() > budget {
         let hv: Vec<(u16, u32)> = hist.iter().map(|(&c, &n)| (c, n)).collect();
-        Some(median_cut(&hv, budget))
+        (
+            Some(median_cut(&hv, budget)),
+            Some(Overflow::Colors {
+                unique: hist.len(),
+                budget,
+            }),
+        )
     } else {
-        None
+        (None, None)
     };
-    let map_color = |c: u16| global.as_ref().map_or(c, |g| g[nearest(g, c)]);
+    (
+        move |c: u16| global.as_ref().map_or(c, |g| g[nearest(g, c)]),
+        overflow,
+    )
+}
+
+/// The classic 8x8 path: split -> global color budget -> region fit ->
+/// nearest remap -> flip-aware dedup -> bitplane pack. No CGRAM base baked in
+/// (placement's job), no tilemap, a per-cell attribute map.
+fn import_obj_cells8(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+) -> (crate::source::ObjSource, crate::source::SourceMeta) {
+    let mut overflows = Vec::new();
+    let (w, h) = (width as usize, height as usize);
+    let (ptiles, cols, rows) = split_tiles(rgba, w, h);
+
+    let (map_color, color_overflow) = global_remap(&ptiles);
+    overflows.extend(color_overflow);
 
     let tile_pals: Vec<Vec<u16>> = ptiles
         .iter()
@@ -139,13 +157,6 @@ pub fn import_obj_sheet(rgba: &[u8], width: u32, height: u32) -> ObjImport {
         char_words.extend(pack_planar(t, 4));
     }
 
-    let mut cgram = Vec::new();
-    for (pi, p) in fit.palettes.iter().enumerate() {
-        for (ci, &c) in p.iter().enumerate() {
-            cgram.push(((OBJ_CGRAM_BASE + pi * PAL_STRIDE + ci + 1) as u8, c));
-        }
-    }
-
     let report = BudgetReport {
         colors_used: fit.palettes.iter().map(|p| p.len()).sum(),
         palettes_used: fit.palettes.len(),
@@ -154,25 +165,163 @@ pub fn import_obj_sheet(rgba: &[u8], width: u32, height: u32) -> ObjImport {
         vram_words: char_words.len(),
         overflows,
     };
-    ObjImport {
-        char_words,
-        cgram,
-        cells,
-        cols,
-        rows,
-        report,
-    }
+    (
+        crate::source::ObjSource {
+            cell_size: 8,
+            palettes: fit.palettes,
+            char_words,
+        },
+        crate::source::SourceMeta {
+            width,
+            height,
+            report: crate::source::SourceReport::Obj { report },
+            cells: Some(cells),
+        },
+    )
 }
 
-/// Write an `ObjImport` into real memory: char words at `char_base` (wrapping
-/// VRAM) and the OBJ CGRAM palette entries (indices are already >= 128).
-pub fn apply_obj_import(mem: &mut Memory, import: &ObjImport, char_base: u16) {
-    for (i, &w) in import.char_words.iter().enumerate() {
-        mem.vram[(char_base as usize + i) & 0x7fff] = w;
+/// 16/32/64 block layout: each cell is an NxN block of 8x8 subtiles copied
+/// raster-order into contiguous name-table slots (`base + sy*16 + sx`,
+/// matching `sprite::obj_tile_addr`). One palette per CELL (one OAM entry =
+/// one palette), no dedup, no flips (an OAM flip flips the whole sprite).
+fn import_obj_blocks(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    cell_size: u8,
+) -> (crate::source::ObjSource, crate::source::SourceMeta) {
+    let mut overflows = Vec::new();
+    let n = (cell_size / 8) as usize; // tiles per cell edge: 2/4/8
+    let per_row = 16 / n; // cells per 16-wide name-table band: 8/4/2
+    let (ptiles, cols, rows) = split_tiles(rgba, width as usize, height as usize);
+    let big_cols = cols.div_ceil(n);
+    let big_rows = rows.div_ceil(n);
+    let ncells = big_cols * big_rows;
+
+    // Subtile (sy, sx) of cell (cy, cx); None = off-sheet (fully transparent).
+    let subtile = |cy: usize, cx: usize, sy: usize, sx: usize| -> Option<&PixelTile> {
+        let (gy, gx) = (cy * n + sy, cx * n + sx);
+        (gy < rows && gx < cols).then(|| &ptiles[gy * cols + gx])
+    };
+
+    let (map_color, color_overflow) = global_remap(&ptiles);
+    overflows.extend(color_overflow);
+
+    // Per-CELL palettes: one OAM entry = one palette, so all subtiles of a
+    // cell must share it.
+    let cell_pals: Vec<Vec<u16>> = (0..ncells)
+        .map(|k| {
+            let (cy, cx) = (k / big_cols, k % big_cols);
+            let mut cs: Vec<u16> = Vec::new();
+            for sy in 0..n {
+                for sx in 0..n {
+                    if let Some(t) = subtile(cy, cx, sy, sx) {
+                        for c in t.iter().flatten() {
+                            cs.push(map_color(*c));
+                        }
+                    }
+                }
+            }
+            cs.sort_unstable();
+            cs.dedup();
+            if cs.len() > CAP {
+                let hv: Vec<(u16, u32)> = cs.iter().map(|&c| (c, 1)).collect();
+                median_cut(&hv, CAP)
+            } else {
+                cs
+            }
+        })
+        .collect();
+
+    let fit = region_fit(&cell_pals, 8, CAP);
+    if fit.palettes_needed > 8 {
+        let remapped = cell_pals
+            .iter()
+            .zip(&fit.assignment)
+            .filter(|(cp, &a)| {
+                !cp.is_empty() && cp.iter().any(|c| !fit.palettes[a as usize].contains(c))
+            })
+            .count();
+        overflows.push(Overflow::Palettes {
+            needed: fit.palettes_needed,
+            remapped_tiles: remapped,
+        });
     }
-    for &(idx, color) in &import.cgram {
-        mem.cgram[idx as usize] = color;
+
+    // Name table = 512 8x8 tiles; each cell consumes n*n of them.
+    let max_cells = 512 / (n * n);
+    let kept_cells = ncells.min(max_cells);
+    if ncells > max_cells {
+        overflows.push(Overflow::Tiles {
+            unique: ncells * n * n,
+            kept: kept_cells * n * n,
+        });
     }
+
+    // Base tile of kept cell k: cells pack per_row per 16-wide band; each
+    // band-row of cells spans n tile rows.
+    let base_of = |k: usize| -> u16 {
+        let gx = (k % per_row) * n;
+        let gy = (k / per_row) * n;
+        (gy * 16 + gx) as u16
+    };
+    let tile_rows = kept_cells.div_ceil(per_row) * n; // 8x8 name-table rows used
+    let mut char_words = vec![0u16; tile_rows * 16 * WORDS_PER_TILE];
+    for k in 0..kept_cells {
+        let (cy, cx) = (k / big_cols, k % big_cols);
+        let palette: &[u16] = fit
+            .palettes
+            .get(fit.assignment[k] as usize)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
+        let base = base_of(k) as usize;
+        for sy in 0..n {
+            for sx in 0..n {
+                let grid: IndexTile = match subtile(cy, cx, sy, sx) {
+                    Some(pt) => std::array::from_fn(|i| match pt[i] {
+                        Some(c) if !palette.is_empty() => nearest(palette, map_color(c)) as u8 + 1,
+                        _ => 0,
+                    }),
+                    None => [0u8; 64],
+                };
+                let words = pack_planar(&grid, 4);
+                let slot = base + sy * 16 + sx;
+                char_words[slot * WORDS_PER_TILE..(slot + 1) * WORDS_PER_TILE]
+                    .copy_from_slice(&words);
+            }
+        }
+    }
+
+    let cells: Vec<ObjCell> = (0..ncells)
+        .map(|k| ObjCell {
+            tile: if k < kept_cells { base_of(k) } else { 0 },
+            pal: fit.assignment[k] & 7,
+            flip_x: false,
+            flip_y: false,
+        })
+        .collect();
+
+    let report = BudgetReport {
+        colors_used: fit.palettes.iter().map(|p| p.len()).sum(),
+        palettes_used: fit.palettes.len(),
+        tile_cells: ncells,
+        unique_tiles: kept_cells * n * n,
+        vram_words: char_words.len(),
+        overflows,
+    };
+    (
+        crate::source::ObjSource {
+            cell_size,
+            palettes: fit.palettes,
+            char_words,
+        },
+        crate::source::SourceMeta {
+            width,
+            height,
+            report: crate::source::SourceReport::Obj { report },
+            cells: Some(cells),
+        },
+    )
 }
 
 #[cfg(test)]
@@ -197,16 +346,15 @@ mod tests {
 
     #[test]
     fn imports_two_obj_tiles_into_palette_8() {
-        let out = import_obj_sheet(&two_tile_rgba(), 16, 8);
-        assert_eq!(out.cgram, vec![(129, 0x001f), (130, 0x7c00)]);
-        assert_eq!(out.char_words.len(), 3 * 16);
-        assert_eq!(&out.char_words[0..16], &[0u16; 16]);
-        assert_eq!(out.char_words[16], 0x00ff);
-        assert_eq!(out.char_words[32], 0x0ff0);
-        assert_eq!(out.cols, 2);
-        assert_eq!(out.rows, 1);
+        let (src, meta) = import_obj_sheet(&two_tile_rgba(), 16, 8, 8);
+        assert_eq!(src.palettes, vec![vec![0x001f, 0x7c00]]);
+        assert_eq!(src.char_words.len(), 3 * 16);
+        assert_eq!(&src.char_words[0..16], &[0u16; 16]);
+        assert_eq!(src.char_words[16], 0x00ff);
+        assert_eq!(src.char_words[32], 0x0ff0);
+        let cells = meta.cells.as_ref().unwrap();
         assert_eq!(
-            out.cells[0],
+            cells[0],
             ObjCell {
                 tile: 1,
                 pal: 0,
@@ -215,7 +363,7 @@ mod tests {
             }
         );
         assert_eq!(
-            out.cells[1],
+            cells[1],
             ObjCell {
                 tile: 2,
                 pal: 0,
@@ -223,17 +371,20 @@ mod tests {
                 flip_y: false
             }
         );
-        assert_eq!(out.report.palettes_used, 1);
-        assert_eq!(out.report.colors_used, 2);
-        assert_eq!(out.report.unique_tiles, 2);
-        assert!(out.report.overflows.is_empty());
+        let crate::source::SourceReport::Obj { report } = &meta.report else {
+            panic!("expected obj report");
+        };
+        assert_eq!(report.palettes_used, 1);
+        assert_eq!(report.colors_used, 2);
+        assert_eq!(report.unique_tiles, 2);
+        assert!(report.overflows.is_empty());
     }
 
     #[test]
-    fn apply_writes_char_words_and_obj_cgram() {
-        let out = import_obj_sheet(&two_tile_rgba(), 16, 8);
+    fn place_obj_writes_char_words_and_obj_cgram() {
+        let (src, _meta) = import_obj_sheet(&two_tile_rgba(), 16, 8, 8);
         let mut mem = Memory::new();
-        apply_obj_import(&mut mem, &out, 0x2000);
+        crate::source::place_obj(&src, &mut mem, 0x2000);
         assert_eq!(mem.vram[0x2000 + 16], 0x00ff);
         assert_eq!(mem.cgram[129], 0x001f);
         assert_eq!(mem.cgram[130], 0x7c00);
@@ -253,11 +404,15 @@ mod tests {
                 }
             }
         }
-        let out = import_obj_sheet(&v, 16, 8);
-        assert_eq!(out.report.unique_tiles, 1);
-        assert_eq!(out.cells[0].tile, 1);
+        let (_src, meta) = import_obj_sheet(&v, 16, 8, 8);
+        let crate::source::SourceReport::Obj { report } = &meta.report else {
+            panic!("expected obj report");
+        };
+        assert_eq!(report.unique_tiles, 1);
+        let cells = meta.cells.as_ref().unwrap();
+        assert_eq!(cells[0].tile, 1);
         assert_eq!(
-            out.cells[1],
+            cells[1],
             ObjCell {
                 tile: 1,
                 pal: 0,
@@ -282,23 +437,118 @@ mod tests {
                 });
             }
         }
-        let out = import_obj_sheet(&rgba, 16, 16);
-        assert_eq!((out.cols, out.rows), (2, 2)); // 4 source cells
-        assert_eq!(out.cells.len(), 4);
-        // Every emitted tile is exactly 16 words (one 8x8 4bpp tile) — no size coupling.
-        assert_eq!(out.char_words.len() % WORDS_PER_TILE, 0);
-        // The import signature takes only (rgba, w, h): no size/size_sel parameter.
-        let _f: fn(&[u8], u32, u32) -> ObjImport = import_obj_sheet;
+        let (src, meta) = import_obj_sheet(&rgba, 16, 16, 8);
+        assert_eq!(src.cell_size, 8);
+        assert_eq!(meta.cells.as_ref().unwrap().len(), 4); // 4 source cells
+                                                           // Every emitted tile is exactly 16 words (one 8x8 4bpp tile) — no size coupling.
+        assert_eq!(src.char_words.len() % WORDS_PER_TILE, 0);
+        // The import signature takes (rgba, w, h, cell_size) and returns a source + meta pair.
+        let _f: fn(&[u8], u32, u32, u8) -> (crate::source::ObjSource, crate::source::SourceMeta) =
+            import_obj_sheet;
+    }
+
+    #[test]
+    fn cell_size_16_lays_subtiles_for_one_large_tile() {
+        // 16x16 sheet, four distinct solid quadrants.
+        let mut rgba = Vec::new();
+        let quads = [[255u8, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0]];
+        for y in 0..16 {
+            for x in 0..16 {
+                let q = &quads[(y / 8) * 2 + x / 8];
+                rgba.extend_from_slice(&[q[0], q[1], q[2], 255]);
+            }
+        }
+        let (src, meta) = import_obj_sheet(&rgba, 16, 16, 16);
+        assert_eq!(src.cell_size, 16);
+        let cells = meta.cells.as_ref().unwrap();
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].tile, 0); // base of block (0,0)
+        assert!(!cells[0].flip_x && !cells[0].flip_y);
+        // Subtiles live at name-table slots base+0, +1, +16, +17 (obj_tile_addr stride).
+        assert_eq!(src.char_words.len(), 32 * 16); // two 16-wide tile rows of name-table space
+                                                   // Non-blank = any nonzero word in the tile's 16-word 4bpp char (a solid
+                                                   // tile of palette index 4 has zero planes 0/1, so word 0 alone is not enough).
+        let tile_nonblank = |t: usize| src.char_words[t * 16..(t + 1) * 16].iter().any(|&w| w != 0);
+        assert!(tile_nonblank(0)); // (0,0)
+        assert!(tile_nonblank(1)); // (0,1)
+        assert!(tile_nonblank(16)); // (1,0)
+        assert!(tile_nonblank(17)); // (1,1)
+        assert!(!tile_nonblank(2)); // outside the cell block: blank
+    }
+
+    #[test]
+    fn cell_size_16_second_cell_gets_next_block() {
+        // 32x16 sheet -> two 16px cells side by side; cell 1 base = tile 2.
+        let mut rgba = Vec::new();
+        for _y in 0..16 {
+            for x in 0..32 {
+                let c: [u8; 4] = if x < 16 {
+                    [255, 0, 0, 255]
+                } else {
+                    [0, 0, 255, 255]
+                };
+                rgba.extend_from_slice(&c);
+            }
+        }
+        let (_src, meta) = import_obj_sheet(&rgba, 32, 16, 16);
+        let cells = meta.cells.as_ref().unwrap();
+        assert_eq!(cells.len(), 2);
+        assert_eq!(cells[0].tile, 0);
+        assert_eq!(cells[1].tile, 2); // two 8x8 tiles right of cell 0's base
+    }
+
+    #[test]
+    fn cell_size_blocks_have_uniform_palette_per_cell() {
+        // One 16px cell whose four subtiles use 4 different colors -> a single
+        // sub-palette serves the whole cell (one OAM entry = one palette).
+        let mut rgba = Vec::new();
+        let quads = [[255u8, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0]];
+        for y in 0..16 {
+            for x in 0..16 {
+                let q = &quads[(y / 8) * 2 + x / 8];
+                rgba.extend_from_slice(&[q[0], q[1], q[2], 255]);
+            }
+        }
+        let (src, meta) = import_obj_sheet(&rgba, 16, 16, 16);
+        assert_eq!(meta.cells.as_ref().unwrap()[0].pal, 0);
+        assert_eq!(src.palettes.len(), 1);
+        assert_eq!(src.palettes[0].len(), 4);
+    }
+
+    #[test]
+    fn cell_size_overflow_reports_and_falls_back() {
+        // 64px cells: 512/(8*8) = 8 cells fit. A 9-cell sheet (576x64) overflows.
+        let mut rgba = Vec::new();
+        for _y in 0..64 {
+            for x in 0..576 {
+                let v = (x / 64 * 20) as u8;
+                rgba.extend_from_slice(&[v, 255 - v, 128, 255]);
+            }
+        }
+        let (_src, meta) = import_obj_sheet(&rgba, 576, 64, 64);
+        let cells = meta.cells.as_ref().unwrap();
+        assert_eq!(cells.len(), 9);
+        assert_eq!(cells[8].tile, 0); // over budget -> honest fallback
+        let crate::source::SourceReport::Obj { report } = &meta.report else {
+            panic!()
+        };
+        assert!(report
+            .overflows
+            .iter()
+            .any(|o| matches!(o, Overflow::Tiles { .. })));
     }
 
     #[test]
     fn fully_transparent_sheet_is_blank() {
-        let out = import_obj_sheet(&vec![0u8; 8 * 8 * 4], 8, 8);
-        assert!(out.cgram.is_empty());
-        assert_eq!(out.report.unique_tiles, 0);
-        assert_eq!(out.char_words.len(), 16);
+        let (src, meta) = import_obj_sheet(&vec![0u8; 8 * 8 * 4], 8, 8, 8);
+        assert!(src.palettes.iter().all(|p| p.is_empty()));
+        let crate::source::SourceReport::Obj { report } = &meta.report else {
+            panic!("expected obj report");
+        };
+        assert_eq!(report.unique_tiles, 0);
+        assert_eq!(src.char_words.len(), 16);
         assert_eq!(
-            out.cells[0],
+            meta.cells.as_ref().unwrap()[0],
             ObjCell {
                 tile: 0,
                 pal: 0,
