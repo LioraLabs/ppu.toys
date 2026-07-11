@@ -11,7 +11,7 @@ import "./compose/compose.css";
 
 /** COMPOSE — main/sub screens + color math. Previews are core buffers
  *  (compositor intermediates + live framebuffer); every control writes a
- *  whole-register poke into the generated pokes.lua. */
+ *  friendly field poke into the generated pokes.lua. */
 export function ComposeTab() {
   const c = useCompositor();
   return (

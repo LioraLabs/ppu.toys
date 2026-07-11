@@ -10,7 +10,7 @@ import {
 import "./compose/compose.css";
 
 /** WINDOWS — the two hardware window masks (W1/W2) and their combine logic.
- *  Every control writes a whole-register poke into the generated pokes.lua. */
+ *  Every control writes a friendly field poke into the generated pokes.lua. */
 export function WindowsTab() {
   const c = useCompositor();
   return (

@@ -3,11 +3,19 @@ import type { Poke } from "../../pokes/pokes";
 
 /** Pure decode/encode logic for the Compose/Windows tabs + Compositor overlay.
  *  The UI reads LIVE register values (power-on default when the core omits
- *  the register) and turns every click into a whole-register write emitted as
- *  a poke — a generated DSL assignment in pokes.lua. The script wins:
- *  apply_pokes() runs at the top of frame(), so a later script write shows
- *  its own value with the poke marker hollow. Encodings mirror the core's
- *  derive_registers round-trip. */
+ *  the register) and turns every click into a friendly FIELD poke —
+ *  `color.op = "sub"`, `win.w1.lo = 40` — one generated DSL assignment per
+ *  touched control. The field IS the poke's identity: each control owns its
+ *  line, and the core's namespace fold overrides only that field's own bits,
+ *  preserving neighbor bits in the register. The raw whole-register dialect
+ *  (`TM = 0x13`) stays available via `writesToPokes(_, "raw")`; a user-facing
+ *  dialect toggle is a follow-up. The script wins: apply_pokes() runs at the
+ *  top of frame(), so a later script write shows its own value with the poke
+ *  marker hollow. Encodings mirror the core's derive_registers round-trip.
+ *  Two ownership subtleties: CGWSEL is co-owned — win never writes it, the
+ *  color window's math region routes through `color.region` — and
+ *  `win.*.invert` is deliberately lossy, since both hardware invert bits
+ *  share the one friendly field. */
 
 export const REG = {
   W12SEL: 0x2123,
@@ -104,8 +112,7 @@ export function writesToPokes(writes: readonly FieldWrite[], dialect: PokeDialec
   return [...last].map(([addr, value]) => regPoke(addr, value));
 }
 
-// Canonical-expr helpers for the friendly dialect (module-private; wired up
-// by the emitters in a later task).
+// Canonical friendly-dialect RHS forms, used by the field-write emitters below.
 const bool = (b: boolean) => (b ? "true" : "false");
 const str = (s: string) => `"${s}"`;
 
