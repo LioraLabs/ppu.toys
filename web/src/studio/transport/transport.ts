@@ -192,7 +192,7 @@ export class Transport {
   /** Register a source payload for rendering under `name`, then refresh the frame. */
   addSource = (name: string, payload: Uint8Array): { ok: boolean; error?: string } => {
     const res = this.coreRef().addSource(name, payload);
-    this.renderOnce();
+    this.renderOnce(); // registered source shows on the next rendered frame
     return res;
   };
 }
