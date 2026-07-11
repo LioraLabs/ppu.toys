@@ -12,6 +12,7 @@ const GLOBALS: Completion[] = [
   { label: "m7", type: "variable", detail: "Mode 7 .a .b .c .d .cx .cy .extbg · $211A-$2120" },
   { label: "color", type: "variable", detail: "color math .op .half .on .addend .region .fixed · CGWSEL/CGADSUB/COLDATA $2130-$2132" },
   { label: "screen", type: "variable", detail: "screen designation .main .sub (.bg1..bg4 .obj) · TM/TS $212C-$212D" },
+  { label: "win", type: "variable", detail: "windows .w1 .w2 .bg1..bg4 .obj .color · WH0-3/W*SEL/W*LOG/TMW/TSW $2123-$212F" },
   { label: "cgram", type: "variable", detail: "cgram[0..255] palette, 15-bit BGR · $2121/$2122" },
   { label: "vram", type: "variable", detail: "vram[0..0x7FFF] raw 16-bit words · $2116-$2119" },
   { label: "obj", type: "variable", detail: "obj[0..127] sprites; obj.sheet · OAM, OBSEL $2101" },
@@ -142,6 +143,34 @@ const SCREEN_LAYER_MEMBERS: Completion[] = [
   { label: "obj", type: "property", detail: "bool layer enable · TM/TS.4" },
 ];
 
+/** win.* members (friendly window namespace). */
+const WIN_MEMBERS: Completion[] = [
+  { label: "w1", type: "property", detail: ".lo/.hi window 1 edges · WH0/WH1 $2126-$2127" },
+  { label: "w2", type: "property", detail: ".lo/.hi window 2 edges · WH2/WH3 $2128-$2129" },
+  { label: "bg1", type: "property", detail: ".w1 .w2 .invert .combine .main .sub · W12SEL/WBGLOG/TMW/TSW" },
+  { label: "bg2", type: "property", detail: ".w1 .w2 .invert .combine .main .sub · W12SEL/WBGLOG/TMW/TSW" },
+  { label: "bg3", type: "property", detail: ".w1 .w2 .invert .combine .main .sub · W34SEL/WBGLOG/TMW/TSW" },
+  { label: "bg4", type: "property", detail: ".w1 .w2 .invert .combine .main .sub · W34SEL/WBGLOG/TMW/TSW" },
+  { label: "obj", type: "property", detail: ".w1 .w2 .invert .combine .main .sub · WOBJSEL/WOBJLOG/TMW/TSW" },
+  { label: "color", type: "property", detail: ".w1 .w2 .invert .combine (no main/sub) · WOBJSEL/WOBJLOG" },
+];
+
+/** win.w1.* / win.w2.* window edges. */
+const WIN_EDGE_MEMBERS: Completion[] = [
+  { label: "lo", type: "property", detail: "left edge 0..255 · WH0/WH2" },
+  { label: "hi", type: "property", detail: "right edge 0..255 · WH1/WH3" },
+];
+
+/** win.<layer>.* fields (color has no main/sub — TMW/TSW carry no color bit). */
+const WIN_LAYER_MEMBERS: Completion[] = [
+  { label: "w1", type: "property", detail: "bool window-1 enable · W12SEL/W34SEL/WOBJSEL" },
+  { label: "w2", type: "property", detail: "bool window-2 enable · W12SEL/W34SEL/WOBJSEL" },
+  { label: "invert", type: "property", detail: "bool invert both windows · SEL nibble bits 0/2" },
+  { label: "combine", type: "property", detail: '"OR"|"AND"|"XOR"|"XNOR" · WBGLOG/WOBJLOG $212A-$212B' },
+  { label: "main", type: "property", detail: "bool main-screen mask enable · TMW $212E (BG/OBJ only)" },
+  { label: "sub", type: "property", detail: "bool sub-screen mask enable · TSW $212F (BG/OBJ only)" },
+];
+
 function memberOptions(text: string): Completion[] {
   if (text.startsWith("bg")) return BG_MEMBERS;
   if (/^obj\s*\[/.test(text)) return OBJ_SPRITE_MEMBERS;
@@ -151,6 +180,9 @@ function memberOptions(text: string): Completion[] {
   if (text.startsWith("color")) return COLOR_MEMBERS;
   if (/^screen\s*\.\s*(?:main|sub)/.test(text)) return SCREEN_LAYER_MEMBERS;
   if (text.startsWith("screen")) return SCREEN_MEMBERS;
+  if (/^win\s*\.\s*w[12]/.test(text)) return WIN_EDGE_MEMBERS;
+  if (/^win\s*\.\s*(?:bg[1-4]|obj|color)/.test(text)) return WIN_LAYER_MEMBERS;
+  if (text.startsWith("win")) return WIN_MEMBERS;
   return M7_MEMBERS;
 }
 
@@ -161,7 +193,7 @@ export function ppuCompletions(ctx: CompletionContext): CompletionResult | null 
   // complete as obj/bg (nested-bracket indices like bg[t[1]] degrade to the
   // plain-globals path — acceptable)
   const member = ctx.matchBefore(
-    /(?<![\w.\]])((?:bg|obj)\s*\[[^\]]*\]|math|obj|m7|color\s*\.\s*on|color|screen\s*\.\s*(?:main|sub)|screen)\s*\.\w*/,
+    /(?<![\w.\]])((?:bg|obj)\s*\[[^\]]*\]|math|obj|m7|color\s*\.\s*on|color|screen\s*\.\s*(?:main|sub)|screen|win\s*\.\s*(?:w[12]|bg[1-4]|obj|color)|win)\s*\.\w*/,
   );
   if (member) {
     const from = member.from + member.text.lastIndexOf(".") + 1;
