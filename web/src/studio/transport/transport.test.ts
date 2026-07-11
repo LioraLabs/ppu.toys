@@ -89,6 +89,18 @@ function makeCore(state: { throwing: boolean }): PpuCore {
     traceBgPixel: () => null,
     traceBgTile: () => null,
     traceObj: () => null,
+    convertSource: () => ({
+      payload: new Uint8Array(),
+      meta: {
+        width: 0,
+        height: 0,
+        report: {
+          mode: "tile",
+          report: { colors_used: 0, palettes_used: 0, tile_cells: 0, unique_tiles: 0, vram_words: 0, overflows: [] },
+        },
+      },
+    }),
+    addSource: () => ({ ok: true }),
   };
 }
 
