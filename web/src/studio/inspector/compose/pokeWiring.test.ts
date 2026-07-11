@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import "fake-indexeddb/auto";
 import type { RegisterView } from "../../../ppu/core";
 import { openSketchStore, openContextFiles } from "../../sketches/openSketch";
@@ -15,6 +15,8 @@ import {
   regPoke,
   setMathOp,
 } from "./model";
+import { compositorWrite } from "./useCompositor";
+import { pokeDialect } from "./dialect";
 
 /** Logic-level wiring tests: the compose/windows control handlers are
  *  (decode via liveReg) -> (encode via the model emitters, returning
@@ -34,6 +36,7 @@ function pokesSource(): string {
 
 describe("poke wiring", () => {
   beforeEach(() => openSketchStore.newSketch());
+  afterEach(() => pokeDialect.set("friendly"));
 
   it("a matrix-cell toggle lands the friendly field line in pokes.lua", () => {
     // the handler: read live TM (power-on fallback), flip one bit, poke the friendly field
@@ -109,6 +112,27 @@ describe("poke wiring", () => {
     poke(regPoke(REG.CGADSUB, 0x80));
     // parsed back in file order — the codepoint sort puts uppercase mnemonics first
     expect(currentPokes(openSketchStore.state()).map((p) => p.lvalue)).toEqual(["CGADSUB", "cgram[0x41]"]);
+  });
+
+  it("the persisted setting picks the emission dialect: default friendly", () => {
+    expect(pokeDialect.get()).toBe("friendly");
+    compositorWrite([setMathOp("sub", 0x00)]);
+    expect(pokesSource()).toContain('  color.op = "sub" -- $2131');
+    expect(pokesSource()).not.toContain("CGADSUB =");
+  });
+
+  it("flipping the setting to raw flips emission to whole-register mnemonics", () => {
+    pokeDialect.set("raw");
+    compositorWrite([setMathOp("sub", 0x00)]);
+    expect(pokesSource()).toContain("  CGADSUB = 0x80 -- $2131");
+    expect(pokesSource()).not.toContain("color.op");
+  });
+
+  it("toggling mid-config: the raw rewrite evicts the friendly line for that register", () => {
+    compositorWrite([setMathOp("add", 0x00)]); // friendly (default)
+    pokeDialect.set("raw");
+    compositorWrite([setMathOp("sub", 0x00)]);
+    expect(currentPokes(openSketchStore.state())).toEqual([{ lvalue: "CGADSUB", expr: "0x80", note: "$2131" }]);
   });
 });
 

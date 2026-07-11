@@ -3,19 +3,23 @@ import { POKES_FILE, type Poke } from "../../pokes/pokes";
 import { hasApplyCall, pokeMany, usePokes } from "../../pokes/pokeStore";
 import { openContextFiles, useOpenSketch } from "../../sketches/openSketch";
 import { useInspectorFrame } from "../useInspectorFrame";
-import { liveReg, pokesAt, writesToPokes, type FieldWrite, type PokeDialect, type ReadReg } from "./model";
+import { liveReg, pokesAt, writesToPokes, type FieldWrite, type ReadReg } from "./model";
+import { pokeDialect } from "./dialect";
 
-/** Poke dialect the controls emit. The upcoming raw/friendly toggle replaces
- *  this constant with a user-facing setting — writesToPokes is the projection
- *  point, nothing else changes. */
-const DIALECT: PokeDialect = "friendly";
+/** The compositor write path: project field writes through the persisted
+ *  dialect setting and upsert in ONE pokes.lua regeneration (cross-dialect
+ *  eviction happens inside pokeMany). Plain function so the wiring tests
+ *  drive it without rendering the hook. */
+export function compositorWrite(writes: readonly FieldWrite[]): void {
+  pokeMany(writesToPokes(writes, pokeDialect.get()));
+}
 
 /** Everything the Compose/Windows sections render from — shared by the docked
  *  tabs and the Compositor overlay. Controls READ the live register value
  *  (the script wins: apply_pokes() runs at the top of frame()) and WRITE
  *  friendly field pokes into the generated pokes.lua — one line per touched
  *  control, each overriding only its own bits (raw whole-register pokes when
- *  the dialect says so). */
+ *  the persisted dialect setting says so). */
 export interface Compositor {
   frame: FrameResult;
   pokes: Poke[];
@@ -42,8 +46,8 @@ export function useCompositor(): Compositor {
     frame,
     pokes,
     read: (addr) => liveReg(frame.registers, addr),
-    write: (w) => pokeMany(writesToPokes([w], DIALECT)),
-    writeMany: (writes) => pokeMany(writesToPokes(writes, DIALECT)),
+    write: (w) => compositorWrite([w]),
+    writeMany: compositorWrite,
     pokedAt: (addr, fields) => pokesAt(pokes, addr, fields),
     pokesApplied: hasApplyCall(files),
     pokesSource: files.find((f) => f.name === POKES_FILE)?.source ?? "",
