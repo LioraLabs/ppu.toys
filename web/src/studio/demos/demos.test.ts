@@ -109,8 +109,9 @@ describe("DEMOS", () => {
     expect(s.source).toContain("CGWSEL = 0x40");
     expect(s.source).toContain("hdma(0, 223");
     const g = DEMOS.find((d) => d.id === "glow")!;
-    expect(g.source).toContain("CGADSUB = 0x01");
-    expect(g.source).toContain("COLDATA = rgb(120, 60, 0)");
+    expect(g.source).toContain('color.op = "add"; color.on.bg1 = true');
+    expect(g.source).toContain('color.addend = "fixed"');
+    expect(g.source).toContain("color.fixed = rgb(120, 60, 0)");
     for (const a of t.assets) expect(a.data.length).toBe(a.width * a.height * 4);
   });
 

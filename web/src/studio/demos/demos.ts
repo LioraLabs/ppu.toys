@@ -303,10 +303,12 @@ function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15
   bg[1].source = "ribbons"
-  TM = 0x01               -- BG1 on the main screen
-  CGADSUB = 0x01          -- add (bit7 clear) + BG1 math-enable, no half
-  CGWSEL = 0x00           -- addend = COLDATA fixed colour
-  COLDATA = rgb(120, 60, 0)  -- warm glow added to every BG1 pixel
+  screen.main.bg1 = true    -- BG1 only on the main screen
+  screen.main.bg2 = false; screen.main.bg3 = false
+  screen.main.bg4 = false; screen.main.obj = false
+  color.op = "add"; color.on.bg1 = true   -- add at full strength (half stays off)
+  color.addend = "fixed"    -- addend = the fixed colour, not the sub screen
+  color.fixed = rgb(120, 60, 0)  -- warm glow added to every BG1 pixel
 end
 `;
 
