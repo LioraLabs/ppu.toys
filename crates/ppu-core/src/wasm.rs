@@ -9,7 +9,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::{
     derive_registers, render_frame_view, render_layer_view, trace_bg_screen, trace_bg_tile,
-    trace_obj, AssetInfo, LineTable, LuaEngine, LuaErrorView, OamSprite, ObjOverflow, Register,
+    trace_obj, LineTable, LuaEngine, LuaErrorView, OamSprite, ObjOverflow, Register,
     SetSourceResult, HEIGHT, WIDTH,
 };
 
@@ -141,29 +141,6 @@ impl PpuCore {
     #[wasm_bindgen(js_name = objOverflow)]
     pub fn obj_overflow(&self) -> Result<JsValue, JsValue> {
         serde_wasm_bindgen::to_value(&self.obj_overflow).map_err(Into::into)
-    }
-
-    #[wasm_bindgen(js_name = listAssets)]
-    pub fn list_assets(&self) -> Result<JsValue, JsValue> {
-        let assets: Vec<AssetInfo> = self
-            .engine
-            .assets()
-            .into_iter()
-            .map(|(id, width, height)| AssetInfo { id, width, height })
-            .collect(); // already sorted by id (stable order for the inspector)
-        serde_wasm_bindgen::to_value(&assets).map_err(Into::into)
-    }
-
-    #[wasm_bindgen(js_name = uploadTexture)]
-    pub fn upload_texture(&mut self, slot: String, image_data: JsValue) {
-        let get = |k: &str| Reflect::get(&image_data, &JsValue::from_str(k)).ok();
-        let width = get("width").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
-        let height = get("height").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
-        let Some(data) = get("data") else { return };
-        let rgba = Uint8ClampedArray::new(&data).to_vec();
-        // The engine owns the asset store + import cache and validates malformed
-        // ImageData (zero dims / wrong buffer length) internally.
-        self.engine.upload_asset(slot, width, height, rgba);
     }
 
     /// Per-layer import budget reports from the most recent `frame()`
