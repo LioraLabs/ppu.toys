@@ -1,25 +1,33 @@
 import type { FrameResult } from "../../../ppu/core";
 import { POKES_FILE, type Poke } from "../../pokes/pokes";
-import { hasApplyCall, poke, pokeMany, usePokes } from "../../pokes/pokeStore";
+import { hasApplyCall, pokeMany, usePokes } from "../../pokes/pokeStore";
 import { openContextFiles, useOpenSketch } from "../../sketches/openSketch";
 import { useInspectorFrame } from "../useInspectorFrame";
-import { REG_LVALUES, liveReg, regPoke, type ReadReg, type RegWrite } from "./model";
+import { liveReg, pokesAt, writesToPokes, type FieldWrite, type PokeDialect, type ReadReg } from "./model";
+
+/** Poke dialect the controls emit. The upcoming raw/friendly toggle replaces
+ *  this constant with a user-facing setting — writesToPokes is the projection
+ *  point, nothing else changes. */
+const DIALECT: PokeDialect = "friendly";
 
 /** Everything the Compose/Windows sections render from — shared by the docked
  *  tabs and the Compositor overlay. Controls READ the live register value
  *  (the script wins: apply_pokes() runs at the top of frame()) and WRITE
- *  whole-register pokes into the generated pokes.lua. */
+ *  friendly field pokes into the generated pokes.lua — one line per touched
+ *  control, each overriding only its own bits (raw whole-register pokes when
+ *  the dialect says so). */
 export interface Compositor {
   frame: FrameResult;
   pokes: Poke[];
   /** Live register value, else power-on default. */
   read: ReadReg;
-  /** Upsert one whole-register poke. */
-  write: (addr: number, value: number) => void;
-  /** Upsert a batch of register pokes in ONE pokes.lua regeneration. */
-  writeMany: (writes: readonly RegWrite[]) => void;
-  /** The poke targeting `addr`, if any. */
-  pokedAt: (addr: number) => Poke | undefined;
+  /** Upsert one control action's poke. */
+  write: (w: FieldWrite) => void;
+  /** Upsert a batch of field writes in ONE pokes.lua regeneration. */
+  writeMany: (writes: readonly FieldWrite[]) => void;
+  /** Pokes targeting a control: raw poke on `addr` plus the listed fields
+   *  (or, without a list, every field living in the register). */
+  pokedAt: (addr: number, fields?: readonly string[]) => Poke[];
   /** Something outside pokes.lua calls apply_pokes(). */
   pokesApplied: boolean;
   /** Verbatim pokes.lua source — the PokeBar copy-function chip. */
@@ -34,9 +42,9 @@ export function useCompositor(): Compositor {
     frame,
     pokes,
     read: (addr) => liveReg(frame.registers, addr),
-    write: (addr, value) => poke(regPoke(addr, value)),
-    writeMany: (writes) => pokeMany(writes.map((w) => regPoke(w.addr, w.value))),
-    pokedAt: (addr) => pokes.find((p) => p.lvalue === REG_LVALUES[addr]),
+    write: (w) => pokeMany(writesToPokes([w], DIALECT)),
+    writeMany: (writes) => pokeMany(writesToPokes(writes, DIALECT)),
+    pokedAt: (addr, fields) => pokesAt(pokes, addr, fields),
     pokesApplied: hasApplyCall(files),
     pokesSource: files.find((f) => f.name === POKES_FILE)?.source ?? "",
   };

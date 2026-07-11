@@ -1,32 +1,36 @@
 import { formatAddr, formatValue } from "../format";
 import { useCopyToast } from "../copyToast";
-import { clearPokes, unpoke } from "../../pokes/pokeStore";
+import { clearPokes, unpoke, unpokeMany } from "../../pokes/pokeStore";
 import { HexPoke } from "../../pokes/HexPoke";
 import { pokeMatchesLive } from "./model";
 import type { Compositor } from "./useCompositor";
 
-/** Marker a poked control wears; click = unpoke that register. SOLID while
- *  the live register still shows the poked value; HOLLOW when a later script
- *  write overrode it (apply_pokes() runs first in frame(), so the script
- *  wins). Renders nothing while the register is unpoked. */
-export function PokeDot({ c, addr }: { c: Compositor; addr: number }) {
-  const p = c.pokedAt(addr);
-  if (!p) return null;
-  const match = pokeMatchesLive(p, c.frame.registers);
+/** Marker a poked control wears; click = unpoke everything it covers. SOLID
+ *  while every covered poke still matches the live registers; HOLLOW when a
+ *  later script write overrode any of them (apply_pokes() runs first in
+ *  frame(), so the script wins). Renders nothing while unpoked. `fields`
+ *  scopes the marker to a control's friendly fields; without it the marker
+ *  is register-centric (any poke living in `addr`). */
+export function PokeDot({ c, addr, fields }: { c: Compositor; addr: number; fields?: readonly string[] }) {
+  const ps = c.pokedAt(addr, fields);
+  if (ps.length === 0) return null;
+  const matches = ps.map((p) => pokeMatchesLive(p, c.frame.registers));
+  const match = matches.some((m) => m === false) ? false : matches.every((m) => m === true) ? true : null;
   const state =
     match === null
       ? "poked"
       : match
         ? "poked · live matches"
         : "poked · live value differs (script write or quantization)";
+  const what = ps.map((p) => `${p.lvalue} = ${p.expr}`).join(", ");
   return (
     <button
       type="button"
       className={"cmp-poke" + (match === false ? " cmp-poke--overridden" : "")}
-      title={`${formatAddr(addr)} ${p.lvalue} = ${p.expr} — ${state}. Click to unpoke.`}
+      title={`${formatAddr(addr)} ${what} — ${state}. Click to unpoke.`}
       onClick={(e) => {
         e.stopPropagation();
-        unpoke(p.lvalue);
+        unpokeMany(ps.map((p) => p.lvalue));
       }}
     />
   );

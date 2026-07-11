@@ -2,20 +2,27 @@ import { useState } from "react";
 import { HEIGHT, WIDTH } from "../../../ppu/core";
 import { cgram15ToCss } from "../format";
 import {
+  ADDEND_FIELDS,
   BACKDROP_MATH_BIT,
   COMPOSE_LAYERS,
   FIXED_COLOR_SWATCHES,
+  FIXED_FIELDS,
+  MATH_ENABLE_FIELDS,
+  OPERATION_FIELDS,
   REG,
+  SCREEN_MAIN_FIELDS,
+  SCREEN_SUB_FIELDS,
   equation,
   hexToBgr555,
   mathAddend,
   mathHalf,
   mathOp,
+  setFixedColor,
+  setMathAddend,
+  setMathHalf,
+  setMathOp,
   tintMathRegion,
   toggleDesignation,
-  withMathAddend,
-  withMathHalf,
-  withMathOp,
 } from "./model";
 import { screensFor } from "./screens";
 import { PokeDot, RegRow } from "./chrome";
@@ -104,25 +111,23 @@ export function AssignmentMatrix({ c }: { c: Compositor }) {
   const tm = c.read(REG.TM);
   const ts = c.read(REG.TS);
   const adsub = c.read(REG.CGADSUB);
-  const toggle = (field: string, addr: number, current: number, bit: number) => {
-    const w = toggleDesignation(field, addr, current, bit);
-    c.write(w.addr, w.value);
-  };
+  const toggle = (field: string, addr: number, current: number, bit: number) =>
+    c.write(toggleDesignation(field, addr, current, bit));
   return (
     <div className="cmp-matrix">
       <div className="cmp-matrix-head">
         <span className="cmp-lay">LAYER</span>
         <span className="cmp-col">
           MAIN
-          <PokeDot c={c} addr={REG.TM} />
+          <PokeDot c={c} addr={REG.TM} fields={SCREEN_MAIN_FIELDS} />
         </span>
         <span className="cmp-col">
           SUB
-          <PokeDot c={c} addr={REG.TS} />
+          <PokeDot c={c} addr={REG.TS} fields={SCREEN_SUB_FIELDS} />
         </span>
         <span className="cmp-col">
           MATH
-          <PokeDot c={c} addr={REG.CGADSUB} />
+          <PokeDot c={c} addr={REG.CGADSUB} fields={MATH_ENABLE_FIELDS} />
         </span>
       </div>
       {COMPOSE_LAYERS.map((l) => (
@@ -171,20 +176,20 @@ export function MathControls({ c, fill }: { c: Compositor; fill?: boolean }) {
       <div>
         <div className="cmp-ctl-label">
           OPERATION · $2131
-          <PokeDot c={c} addr={REG.CGADSUB} />
+          <PokeDot c={c} addr={REG.CGADSUB} fields={OPERATION_FIELDS} />
         </div>
         <div className="cmp-seg">
           <button
             type="button"
             className={op === "add" ? "cmp-seg--on" : ""}
-            onClick={() => c.write(REG.CGADSUB, withMathOp(adsub, "add"))}
+            onClick={() => c.write(setMathOp("add", adsub))}
           >
             + add
           </button>
           <button
             type="button"
             className={op === "sub" ? "cmp-seg--on" : ""}
-            onClick={() => c.write(REG.CGADSUB, withMathOp(adsub, "sub"))}
+            onClick={() => c.write(setMathOp("sub", adsub))}
           >
             − sub
           </button>
@@ -193,20 +198,20 @@ export function MathControls({ c, fill }: { c: Compositor; fill?: boolean }) {
       <div>
         <div className="cmp-ctl-label">
           ADDEND · $2130
-          <PokeDot c={c} addr={REG.CGWSEL} />
+          <PokeDot c={c} addr={REG.CGWSEL} fields={ADDEND_FIELDS} />
         </div>
         <div className="cmp-seg">
           <button
             type="button"
             className={addend === "sub" ? "cmp-seg--on" : ""}
-            onClick={() => c.write(REG.CGWSEL, withMathAddend(c.read(REG.CGWSEL), "sub"))}
+            onClick={() => c.write(setMathAddend("sub", c.read(REG.CGWSEL)))}
           >
             sub screen
           </button>
           <button
             type="button"
             className={addend === "fixed" ? "cmp-seg--on" : ""}
-            onClick={() => c.write(REG.CGWSEL, withMathAddend(c.read(REG.CGWSEL), "fixed"))}
+            onClick={() => c.write(setMathAddend("fixed", c.read(REG.CGWSEL)))}
           >
             fixed color
           </button>
@@ -215,7 +220,7 @@ export function MathControls({ c, fill }: { c: Compositor; fill?: boolean }) {
       <button
         type="button"
         className={"cmp-half" + (half ? " cmp-half--on" : "")}
-        onClick={() => c.write(REG.CGADSUB, withMathHalf(adsub, !half))}
+        onClick={() => c.write(setMathHalf(!half, adsub))}
       >
         <span className="cmp-half-track">
           <span className="cmp-half-knob" />
@@ -225,7 +230,7 @@ export function MathControls({ c, fill }: { c: Compositor; fill?: boolean }) {
       <div className={addend === "sub" ? "cmp-fixed-off" : ""}>
         <div className="cmp-ctl-label">
           FIXED SUB COLOR · $2132
-          <PokeDot c={c} addr={REG.COLDATA} />
+          <PokeDot c={c} addr={REG.COLDATA} fields={FIXED_FIELDS} />
         </div>
         <div className="cmp-swatches">
           {FIXED_COLOR_SWATCHES.map((hex) => (
@@ -237,7 +242,7 @@ export function MathControls({ c, fill }: { c: Compositor; fill?: boolean }) {
               title={`fixed sub color ${hex}`}
               aria-label={`fixed sub color ${hex}`}
               aria-pressed={coldata === hexToBgr555(hex)}
-              onClick={() => c.write(REG.COLDATA, hexToBgr555(hex))}
+              onClick={() => c.write(setFixedColor(hexToBgr555(hex)))}
             />
           ))}
         </div>

@@ -2,6 +2,8 @@ import { useRef } from "react";
 import { HEIGHT, WIDTH } from "../../../ppu/core";
 import { formatAddr } from "../format";
 import {
+  AREA_FIELDS,
+  COMBINE_FIELDS,
   LOGIC_LABELS,
   REG,
   WINDOW_LAYERS,
@@ -12,10 +14,12 @@ import {
   nearestEdgeAddr,
   setArea,
   setCombine,
+  setWindowEdge,
   toggleWindowEnable,
   toggleWindowInvert,
   windowBounds,
   windowRow,
+  winRowFields,
   type WinLogic,
 } from "./model";
 import { PokeDot, RegRow } from "./chrome";
@@ -52,10 +56,10 @@ export function WindowPreview({ c }: { c: Compositor }) {
       }}
       onDown={(x) => {
         drag.current = nearestEdgeAddr(x, b);
-        c.write(drag.current, x);
+        c.write(setWindowEdge(drag.current, x));
       }}
       onDrag={(x) => {
-        if (drag.current !== null) c.write(drag.current, x);
+        if (drag.current !== null) c.write(setWindowEdge(drag.current, x));
       }}
       onUp={() => {
         drag.current = null;
@@ -74,7 +78,7 @@ export function WindowControls({ c }: { c: Compositor }) {
       <div className="winp-combine">
         <div className="cmp-ctl-label">
           W1 · W2 COMBINE · $212A
-          <PokeDot c={c} addr={REG.WBGLOG} />
+          <PokeDot c={c} addr={REG.WBGLOG} fields={COMBINE_FIELDS} />
         </div>
         <div className="cmp-seg">
           {LOGIC_LABELS.map((label, i) => (
@@ -93,7 +97,7 @@ export function WindowControls({ c }: { c: Compositor }) {
       <div className="winp-area">
         <div className="cmp-ctl-label">
           MASK AREA
-          <PokeDot c={c} addr={REG.W12SEL} />
+          <PokeDot c={c} addr={REG.W12SEL} fields={AREA_FIELDS} />
         </div>
         <div className="cmp-seg">
           {(["inside", "outside"] as const).map((a) => (
@@ -149,7 +153,7 @@ export function LayerMaskRows({ c }: { c: Compositor }) {
           <div key={l.id} className="winp-layer">
             <span className="cmp-ldot" style={{ background: l.color }} />
             <span className="winp-lname">{l.label}</span>
-            <PokeDot c={c} addr={l.selAddr} />
+            <PokeDot c={c} addr={l.selAddr} fields={winRowFields(l)} />
             <button
               type="button"
               className={"winp-chip" + (row.inverted ? " winp-chip--inv-on" : "")}

@@ -41,12 +41,6 @@ export function liveReg(registers: RegisterView[], addr: number): number {
 /** Live-value accessor the encode helpers read through. */
 export type ReadReg = (addr: number) => number;
 
-/** One whole-register write a control produces; the sink turns it into a poke. */
-export interface RegWrite {
-  addr: number;
-  value: number;
-}
-
 /** Every compose/windows register the UI writes, by $21xx address, to its DSL
  *  flat-global mnemonic. This IS the poke inverse map — pokes emit `TM = 0x13`. */
 export const REG_LVALUES: Readonly<Record<number, string>> = {
