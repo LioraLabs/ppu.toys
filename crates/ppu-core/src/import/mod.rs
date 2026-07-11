@@ -17,6 +17,11 @@ use self::tiles::{pack_planar, split_tiles, IndexTile, TileSet};
 /// the mode table (`modes::mode_info`) — the BGMODE value itself is omitted
 /// from the cache key on purpose: mode only affects import output via
 /// bit-depth, so caching by bit-depth avoids spurious re-quantization.
+///
+/// Bases (map_base/char_base) are NOT format — they're bind-time PLACEMENT,
+/// decided when a source is written into VRAM (see `crate::source::place_bg`),
+/// not when it's authored. They were dropped from this struct in the source-
+/// payload refactor.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ImportOptions {
     /// Target bits per pixel: 2, 4, or 8.
@@ -24,10 +29,6 @@ pub struct ImportOptions {
     /// Tile edge in px. Only 8 is packed today; 16 falls back to 8 and is
     /// reported as `Overflow::TileSize16`.
     pub tile_size: u8,
-    /// Tilemap base VRAM word address the caller will bind (register echo).
-    pub map_base: u16,
-    /// Char base VRAM word address; bounds the char budget.
-    pub char_base: u16,
 }
 
 impl Default for ImportOptions {
@@ -35,19 +36,8 @@ impl Default for ImportOptions {
         ImportOptions {
             bit_depth: 4,
             tile_size: 8,
-            map_base: 0x0000,
-            char_base: 0x1000,
         }
     }
-}
-
-/// Register values the importer wants bound alongside its data.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct ImportRegisters {
-    pub map_base: u16,
-    pub char_base: u16,
-    pub screen_size: u8,
-    pub tile_size: u8,
 }
 
 /// One honest budget overflow. Structured for the UI (m4/inspector); the
@@ -87,32 +77,24 @@ pub struct BudgetReport {
     pub overflows: Vec<Overflow>,
 }
 
-/// The importer's full output: everything `bg[n].source =` writes into real
-/// memory, plus the budget report for the UI.
-#[derive(Clone, Debug, PartialEq)]
-pub struct TileBgImport {
-    /// Bitplane-packed char data, tile 0 (reserved blank) first; write at
-    /// `registers.char_base`.
-    pub char_words: Vec<u16>,
-    /// Screen-ordered tilemap (n 32x32 screens, 0x400 words each); write at
-    /// `registers.map_base`.
-    pub tilemap_words: Vec<u16>,
-    /// (CGRAM index, BGR555) writes; transparent slots are not listed.
-    pub cgram: Vec<(u8, u16)>,
-    pub registers: ImportRegisters,
-    pub report: BudgetReport,
-}
-
 /// Convert an RGBA image into authentic tile-BG data: split -> global color
 /// budget -> multi-palette region fit -> nearest-remap -> flip-aware dedup ->
-/// bitplane pack + screen-ordered tilemap + CGRAM writes + register echo.
-/// Pure and deterministic: identical inputs yield identical outputs.
-pub fn import_tile_bg(rgba: &[u8], width: u32, height: u32, opts: &ImportOptions) -> TileBgImport {
+/// bitplane pack + screen-ordered tilemap. Pure and deterministic: identical
+/// inputs yield identical outputs. Returns the render-data payload
+/// (`BgSource`) plus the dims/budget that travel alongside it (`SourceMeta`);
+/// placement (VRAM/CGRAM bases) is a bind-time concern handled separately by
+/// `crate::source::place_bg`.
+pub fn import_tile_bg(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    opts: &ImportOptions,
+) -> (crate::source::BgSource, crate::source::SourceMeta) {
     let mut overflows = Vec::new();
-    let (bpp, cap, pal_stride, palette_count) = match opts.bit_depth {
-        2 => (2u8, 3usize, 4usize, 8usize),
-        8 => (8u8, 255usize, 256usize, 1usize),
-        _ => (4u8, 15usize, 16usize, 8usize),
+    let (bpp, cap, palette_count) = match opts.bit_depth {
+        2 => (2u8, 3usize, 8usize),
+        8 => (8u8, 255usize, 1usize),
+        _ => (4u8, 15usize, 8usize),
     };
     if opts.tile_size >= 16 {
         overflows.push(Overflow::TileSize16);
@@ -192,7 +174,7 @@ pub fn import_tile_bg(rgba: &[u8], width: u32, height: u32, opts: &ImportOptions
     // 6. index remap + flip-aware dedup; tile 0 reserved blank so padding and
     //    dropped cells are honestly transparent
     let words_per_tile = bpp as usize * 4;
-    let max_tiles = ((0x8000 - opts.char_base as usize) / words_per_tile).clamp(1, 1024);
+    let max_tiles = 1024usize; // 10-bit tilemap tile field — placement-fit is a bind-time concern
     let mut set = TileSet::new(true);
     set.insert([0u8; 64]);
     let mut cells: Vec<u16> = Vec::with_capacity(ptiles.len());
@@ -247,14 +229,6 @@ pub fn import_tile_bg(rgba: &[u8], width: u32, height: u32, opts: &ImportOptions
         }
     }
 
-    // 9. CGRAM writes (sub-palette index 0 stays transparent/unwritten)
-    let mut cgram = Vec::new();
-    for (pi, p) in fit.palettes.iter().enumerate() {
-        for (ci, &c) in p.iter().enumerate() {
-            cgram.push(((pi * pal_stride + ci + 1) as u8, c));
-        }
-    }
-
     let report = BudgetReport {
         colors_used: fit.palettes.iter().map(|p| p.len()).sum(),
         palettes_used: fit.palettes.len(),
@@ -263,64 +237,22 @@ pub fn import_tile_bg(rgba: &[u8], width: u32, height: u32, opts: &ImportOptions
         vram_words: char_words.len() + tilemap_words.len(),
         overflows,
     };
-    TileBgImport {
-        char_words,
-        tilemap_words,
-        cgram,
-        registers: ImportRegisters {
-            map_base: opts.map_base,
-            char_base: opts.char_base,
-            screen_size,
+    (
+        crate::source::BgSource {
+            bit_depth: bpp,
             tile_size: 8,
+            palettes: fit.palettes,
+            char_words,
+            screen_size,
+            tilemap_words,
         },
-        report,
-    }
-}
-
-/// Memoization key: `(asset slot, upload generation, options)`. The caller
-/// (the `source =` wiring) bumps `generation` when a slot is re-uploaded;
-/// options carry bit-depth/tile-size/bases (see `ImportOptions` for why the
-/// BGMODE value itself is not in the key).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ImportKey {
-    pub asset: String,
-    pub generation: u64,
-    pub options: ImportOptions,
-}
-
-/// Import memo: `source =` calls `get_or_import` per frame; the pipeline runs
-/// only on a cold key, so re-quantization never happens at 60fps.
-#[derive(Default)]
-pub struct ImportCache {
-    map: std::collections::HashMap<ImportKey, TileBgImport>,
-}
-
-impl ImportCache {
-    /// Return the cached import for `key`, running the pipeline on a miss.
-    pub fn get_or_import(
-        &mut self,
-        key: ImportKey,
-        rgba: &[u8],
-        width: u32,
-        height: u32,
-    ) -> &TileBgImport {
-        self.map
-            .entry(key)
-            .or_insert_with_key(|k| import_tile_bg(rgba, width, height, &k.options))
-    }
-
-    /// Drop every cached import of one asset slot (re-upload / slot delete).
-    pub fn invalidate_asset(&mut self, asset: &str) {
-        self.map.retain(|k, _| k.asset != asset);
-    }
-
-    pub fn len(&self) -> usize {
-        self.map.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
-    }
+        crate::source::SourceMeta {
+            width,
+            height,
+            report: crate::source::SourceReport::Tile { report },
+            cells: None,
+        },
+    )
 }
 
 #[cfg(test)]
@@ -344,45 +276,44 @@ mod tests {
 
     #[test]
     fn imports_two_tiles_one_palette_4bpp() {
-        let out = import_tile_bg(&two_tile_rgba(), 16, 8, &ImportOptions::default());
+        let (src, meta) = import_tile_bg(&two_tile_rgba(), 16, 8, &ImportOptions::default());
         // palette 0 sorted: red 0x001f -> index 1, blue 0x7c00 -> index 2
-        assert_eq!(out.cgram, vec![(1, 0x001f), (2, 0x7c00)]);
+        assert_eq!(src.palettes, vec![vec![0x001f, 0x7c00]]);
         // tile 0 = reserved blank, tile 1 = all-red, tile 2 = half/half
-        assert_eq!(out.char_words.len(), 3 * 16);
-        assert_eq!(&out.char_words[0..16], &[0u16; 16]); // blank
-        assert_eq!(out.char_words[16], 0x00ff); // all index 1: plane0 full row
-        assert_eq!(out.char_words[24], 0x0000); // planes 2/3 empty
-        assert_eq!(out.char_words[32], 0x0ff0); // 1111 2222 row
+        assert_eq!(src.char_words.len(), 3 * 16);
+        assert_eq!(&src.char_words[0..16], &[0u16; 16]); // blank
+        assert_eq!(src.char_words[16], 0x00ff); // all index 1: plane0 full row
+        assert_eq!(src.char_words[24], 0x0000); // planes 2/3 empty
+        assert_eq!(src.char_words[32], 0x0ff0); // 1111 2222 row
                                                 // tilemap: 32x32 screen, cells (0,0)=tile1 (1,0)=tile2, pal 0, rest blank
-        assert_eq!(out.tilemap_words.len(), 0x400);
-        assert_eq!(out.tilemap_words[0], 0x0001);
-        assert_eq!(out.tilemap_words[1], 0x0002);
-        assert!(out.tilemap_words[2..].iter().all(|&w| w == 0));
+        assert_eq!(src.tilemap_words.len(), 0x400);
+        assert_eq!(src.tilemap_words[0], 0x0001);
+        assert_eq!(src.tilemap_words[1], 0x0002);
+        assert!(src.tilemap_words[2..].iter().all(|&w| w == 0));
         // registers + report
-        assert_eq!(
-            (out.registers.map_base, out.registers.char_base),
-            (0x0000, 0x1000)
-        );
-        assert_eq!((out.registers.screen_size, out.registers.tile_size), (0, 8));
-        assert_eq!(out.report.palettes_used, 1);
-        assert_eq!(out.report.colors_used, 2);
-        assert_eq!(out.report.tile_cells, 2);
-        assert_eq!(out.report.unique_tiles, 2);
-        assert!(out.report.overflows.is_empty());
+        assert_eq!((src.screen_size, src.tile_size), (0, 8));
+        let crate::source::SourceReport::Tile { report } = &meta.report else {
+            panic!("expected tile report");
+        };
+        assert_eq!(report.palettes_used, 1);
+        assert_eq!(report.colors_used, 2);
+        assert_eq!(report.tile_cells, 2);
+        assert_eq!(report.unique_tiles, 2);
+        assert!(report.overflows.is_empty());
     }
 
     #[test]
-    fn imports_2bpp_with_4_entry_palette_stride() {
+    fn imports_2bpp_palette_is_color_list() {
         let opts = ImportOptions {
             bit_depth: 2,
             ..Default::default()
         };
-        let out = import_tile_bg(&two_tile_rgba(), 16, 8, &opts);
-        assert_eq!(out.cgram, vec![(1, 0x001f), (2, 0x7c00)]); // pal 0 base = 0
-        assert_eq!(out.char_words.len(), 3 * 8); // 8 words/tile
-        assert_eq!(out.char_words[8], 0x00ff);
-        assert_eq!(out.char_words[16], 0x0ff0);
-        assert_eq!(out.tilemap_words[1], 0x0002);
+        let (src, _meta) = import_tile_bg(&two_tile_rgba(), 16, 8, &opts);
+        assert_eq!(src.palettes, vec![vec![0x001f, 0x7c00]]);
+        assert_eq!(src.char_words.len(), 3 * 8); // 8 words/tile
+        assert_eq!(src.char_words[8], 0x00ff);
+        assert_eq!(src.char_words[16], 0x0ff0);
+        assert_eq!(src.tilemap_words[1], 0x0002);
     }
 
     #[test]
@@ -399,21 +330,27 @@ mod tests {
                 }
             }
         }
-        let out = import_tile_bg(&v, 16, 8, &ImportOptions::default());
-        assert_eq!(out.report.unique_tiles, 1);
-        assert_eq!(out.tilemap_words[0], 0x0001);
-        assert_eq!(out.tilemap_words[1], 0x0001 | 1 << 14); // H-flip bit
+        let (src, meta) = import_tile_bg(&v, 16, 8, &ImportOptions::default());
+        let crate::source::SourceReport::Tile { report } = &meta.report else {
+            panic!("expected tile report");
+        };
+        assert_eq!(report.unique_tiles, 1);
+        assert_eq!(src.tilemap_words[0], 0x0001);
+        assert_eq!(src.tilemap_words[1], 0x0001 | 1 << 14); // H-flip bit
     }
 
     #[test]
     fn fully_transparent_image_yields_blank_everything() {
         let rgba = vec![0u8; 8 * 8 * 4];
-        let out = import_tile_bg(&rgba, 8, 8, &ImportOptions::default());
-        assert!(out.cgram.is_empty());
-        assert_eq!(out.report.palettes_used, 0);
-        assert_eq!(out.report.unique_tiles, 0);
-        assert_eq!(out.char_words.len(), 16); // just the reserved blank tile
-        assert!(out.tilemap_words.iter().all(|&w| w == 0));
+        let (src, meta) = import_tile_bg(&rgba, 8, 8, &ImportOptions::default());
+        assert!(src.palettes.is_empty() || src.palettes.iter().all(|p| p.is_empty()));
+        let crate::source::SourceReport::Tile { report } = &meta.report else {
+            panic!("expected tile report");
+        };
+        assert_eq!(report.palettes_used, 0);
+        assert_eq!(report.unique_tiles, 0);
+        assert_eq!(src.char_words.len(), 16); // just the reserved blank tile
+        assert!(src.tilemap_words.iter().all(|&w| w == 0));
     }
 
     #[test]
@@ -430,19 +367,13 @@ mod tests {
                 v.extend_from_slice(&c);
             }
         }
-        let mut opts = ImportOptions::default();
-        let out = import_tile_bg(&v, 264, 8, &opts);
-        assert_eq!(out.registers.screen_size, 1); // 64x32
-        assert_eq!(out.tilemap_words.len(), 2 * 0x400);
-        assert_eq!(out.tilemap_words[0], 0x0001); // red tile in SC0 cell 0
+        let opts = ImportOptions::default();
+        let (src, _meta) = import_tile_bg(&v, 264, 8, &opts);
+        assert_eq!(src.screen_size, 1); // 64x32
+        assert_eq!(src.tilemap_words.len(), 2 * 0x400);
+        assert_eq!(src.tilemap_words[0], 0x0001); // red tile in SC0 cell 0
                                                   // column 32 lives in SC1 (words 0x400..)
-        assert!(out.tilemap_words[0x400..].iter().all(|&w| w == 0));
-        // and the same input imported at a different char_base changes capacity
-        // bookkeeping but not content determinism
-        opts.char_base = 0x2000;
-        let out2 = import_tile_bg(&v, 264, 8, &opts);
-        assert_eq!(out2.registers.char_base, 0x2000);
-        assert_eq!(out2.char_words, out.char_words);
+        assert!(src.tilemap_words[0x400..].iter().all(|&w| w == 0));
     }
 
     #[test]
@@ -453,41 +384,14 @@ mod tests {
             let c = i % 200;
             v.extend_from_slice(&[(c % 32 * 8) as u8, (c / 32 * 8 + 8) as u8, 128, 255]);
         }
-        let out = import_tile_bg(&v, 16, 16, &ImportOptions::default());
-        assert!(out.report.colors_used <= 120);
-        assert!(out
-            .report
+        let (_src, meta) = import_tile_bg(&v, 16, 16, &ImportOptions::default());
+        let crate::source::SourceReport::Tile { report } = &meta.report else {
+            panic!("expected tile report");
+        };
+        assert!(report.colors_used <= 120);
+        assert!(report
             .overflows
             .iter()
             .any(|o| matches!(o, Overflow::Colors { budget: 120, .. })));
-    }
-
-    #[test]
-    fn cache_memoizes_by_key_and_invalidates_per_asset() {
-        let rgba = two_tile_rgba();
-        let mut cache = ImportCache::default();
-        let key = ImportKey {
-            asset: "sky".into(),
-            generation: 1,
-            options: ImportOptions::default(),
-        };
-        let a = cache.get_or_import(key.clone(), &rgba, 16, 8).clone();
-        assert_eq!(cache.len(), 1);
-        let b = cache.get_or_import(key.clone(), &rgba, 16, 8).clone();
-        assert_eq!(cache.len(), 1); // hit, no re-quantize entry
-        assert_eq!(a, b);
-        // different bit-depth = different key
-        let key2 = ImportKey {
-            options: ImportOptions {
-                bit_depth: 2,
-                ..Default::default()
-            },
-            ..key.clone()
-        };
-        cache.get_or_import(key2, &rgba, 16, 8);
-        assert_eq!(cache.len(), 2);
-        // re-upload bumps generation; invalidate drops all entries for the slot
-        cache.invalidate_asset("sky");
-        assert_eq!(cache.len(), 0);
     }
 }

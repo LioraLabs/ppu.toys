@@ -20,10 +20,11 @@ function toImageData(a: DemoAsset): ImageData {
 /** Push a demo's bundled sources into the live core and the shared asset store,
  *  using the demo's literal slot ids (not slugified) so the Lua references
  *  resolve. The editor doc swap (which triggers setSources) is the caller's job. */
-export function loadDemo(demo: Demo, upload = transport.uploadTexture): void {
+export function loadDemo(demo: Demo): void {
   for (const a of demo.assets) {
     const image = toImageData(a);
-    upload(a.id, image);
-    assetStore.set({ id: a.id, name: `${a.id} · demo`, width: a.width, height: a.height, preview: preview(image) });
+    const { payload, meta } = transport.convertSource(a.kind, a.options, image);
+    transport.addSource(a.id, payload);
+    assetStore.set({ id: a.id, name: `${a.id} · demo`, width: meta.width, height: meta.height, preview: preview(image) });
   }
 }

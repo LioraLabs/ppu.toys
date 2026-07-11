@@ -58,13 +58,7 @@ export function EditorPane({ onSources }: EditorPaneProps) {
   // (re)load the context's assets on every EXPLICIT open. Keyed on session so
   // a lazy fork (same session, same live assets) does not reload anything.
   useEffect(() => {
-    let cancelled = false;
-    restoreOpenContext(openSketchStore.state().context, () => cancelled).catch((e) =>
-      console.error("asset restore failed", e),
-    );
-    return () => {
-      cancelled = true;
-    };
+    restoreOpenContext(openSketchStore.state().context);
   }, [session]);
 
   // ── active tab: by name, clamped to the live list (deletes/renames).

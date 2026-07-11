@@ -4,12 +4,12 @@
 //! the framebuffer/registers/cgram/oam for the per-field getters.
 use std::collections::HashMap;
 
-use js_sys::{Reflect, Uint8ClampedArray};
+use js_sys::{Object, Reflect, Uint8Array, Uint8ClampedArray};
 use wasm_bindgen::prelude::*;
 
 use crate::{
     derive_registers, render_frame_view, render_layer_view, trace_bg_screen, trace_bg_tile,
-    trace_obj, AssetInfo, LineTable, LuaEngine, LuaErrorView, OamSprite, ObjOverflow, Register,
+    trace_obj, LineTable, LuaEngine, LuaErrorView, OamSprite, ObjOverflow, Register,
     SetSourceResult, HEIGHT, WIDTH,
 };
 
@@ -143,29 +143,6 @@ impl PpuCore {
         serde_wasm_bindgen::to_value(&self.obj_overflow).map_err(Into::into)
     }
 
-    #[wasm_bindgen(js_name = listAssets)]
-    pub fn list_assets(&self) -> Result<JsValue, JsValue> {
-        let assets: Vec<AssetInfo> = self
-            .engine
-            .assets()
-            .into_iter()
-            .map(|(id, width, height)| AssetInfo { id, width, height })
-            .collect(); // already sorted by id (stable order for the inspector)
-        serde_wasm_bindgen::to_value(&assets).map_err(Into::into)
-    }
-
-    #[wasm_bindgen(js_name = uploadTexture)]
-    pub fn upload_texture(&mut self, slot: String, image_data: JsValue) {
-        let get = |k: &str| Reflect::get(&image_data, &JsValue::from_str(k)).ok();
-        let width = get("width").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
-        let height = get("height").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
-        let Some(data) = get("data") else { return };
-        let rgba = Uint8ClampedArray::new(&data).to_vec();
-        // The engine owns the asset store + import cache and validates malformed
-        // ImageData (zero dims / wrong buffer length) internally.
-        self.engine.upload_asset(slot, width, height, rgba);
-    }
-
     /// Per-layer import budget reports from the most recent `frame()`
     /// (m4/importer -> m4/inspector).
     #[wasm_bindgen(js_name = importReports)]
@@ -270,6 +247,67 @@ impl PpuCore {
             Some(t) => serde_wasm_bindgen::to_value(&t).map_err(Into::into),
             None => Ok(JsValue::NULL),
         }
+    }
+
+    /// Pure quantize+pack: image -> versioned source payload + meta. No engine
+    /// state mutation. Returns `{ payload: Uint8Array, meta: SourceMeta }`.
+    #[wasm_bindgen(js_name = convertSource)]
+    pub fn convert_source(
+        &self,
+        kind: &str,
+        options: JsValue,
+        image_data: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let kind = match kind {
+            "bg" => crate::SourceKind::Bg,
+            "m7" => crate::SourceKind::M7,
+            "obj" => crate::SourceKind::Obj,
+            other => return Err(JsValue::from_str(&format!("unknown source kind '{other}'"))),
+        };
+        let opts: crate::ConvertOptions = if options.is_undefined() || options.is_null() {
+            Default::default()
+        } else {
+            serde_wasm_bindgen::from_value(options)?
+        };
+        let get = |k: &str| Reflect::get(&image_data, &JsValue::from_str(k)).ok();
+        let width = get("width").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
+        let height = get("height").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
+        let rgba = get("data")
+            .map(|d| Uint8ClampedArray::new(&d).to_vec())
+            .unwrap_or_default();
+        let (payload, meta) = crate::convert_source(kind, &opts, &rgba, width, height)
+            .map_err(|e| JsValue::from_str(&e))?;
+        let out = Object::new();
+        Reflect::set(
+            &out,
+            &"payload".into(),
+            &Uint8Array::from(payload.encode().as_slice()).into(),
+        )?;
+        Reflect::set(&out, &"meta".into(), &serde_wasm_bindgen::to_value(&meta)?)?;
+        Ok(out.into())
+    }
+
+    /// Decode + register a payload in the source store. Never throws for a bad
+    /// payload — returns `{ ok: false, error }` (the structured-diagnostic channel).
+    #[wasm_bindgen(js_name = addSource)]
+    pub fn add_source(&mut self, name: &str, payload: &[u8]) -> Result<JsValue, JsValue> {
+        #[derive(serde::Serialize)]
+        struct AddSourceResult {
+            ok: bool,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            error: Option<String>,
+        }
+        let res = match self.engine.add_source(name, payload) {
+            Ok(()) => AddSourceResult {
+                ok: true,
+                error: None,
+            },
+            Err(e) => AddSourceResult {
+                ok: false,
+                error: Some(e.to_string()),
+            },
+        };
+        serde_wasm_bindgen::to_value(&res).map_err(Into::into)
     }
 }
 

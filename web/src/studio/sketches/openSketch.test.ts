@@ -9,7 +9,17 @@ import {
   openContextFiles,
 } from "./openSketch";
 import { listSketches, loadSketch, saveSketch, _resetSketchStoreForTests } from "./sketchStore";
+import type { SketchSource } from "./sketchStore";
 import { POKES_FILE, EMPTY_POKES } from "../pokes/pokes";
+
+function src(name: string, byte = 1): SketchSource {
+  return {
+    name, kind: "bg", options: { bit_depth: 4 }, payload: new Uint8Array([byte]),
+    meta: { width: 8, height: 8, report: { mode: "tile", report: {
+      colors_used: 0, palettes_used: 0, tile_cells: 0, unique_tiles: 0, vram_words: 0, overflows: [],
+    } } },
+  };
+}
 
 const demo = DEMOS[0];
 const demoMain = demoFiles(demo).find((f) => f.name === "main.lua")!.source;
@@ -80,20 +90,20 @@ describe("lazy demo fork", () => {
   });
 
   it("forks with the pristine demo source when an asset upload is the first change", () => {
-    openSketchStore.addAsset({ name: "sky.png", png: new Uint8Array([1, 2, 3]) });
+    openSketchStore.addSource(src("sky.png"));
     const sk = openSketch();
     expect(sk.forkedFrom).toBe(demo.id);
     expect(sk.files).toEqual(demoFiles(demo)); // pokes.lua already ships first
-    expect(sk.assets.map((a) => a.name)).toEqual(["sky.png"]);
+    expect(sk.sources.map((a) => a.name)).toEqual(["sky.png"]);
   });
 
-  it("addAsset on a demo forks and notifies subscribers exactly ONCE", () => {
+  it("addSource on a demo forks and notifies subscribers exactly ONCE", () => {
     let emits = 0;
     const unsub = openSketchStore.subscribe(() => emits++);
-    openSketchStore.addAsset({ name: "sky.png", png: new Uint8Array([1]) });
+    openSketchStore.addSource(src("sky.png"));
     unsub();
     expect(emits).toBe(1);
-    expect(openSketch().assets.map((a) => a.name)).toEqual(["sky.png"]);
+    expect(openSketch().sources.map((a) => a.name)).toEqual(["sky.png"]);
   });
 });
 
@@ -119,14 +129,14 @@ describe("autosave", () => {
     expect(openSketchStore.state().dirty).toBe(false);
   });
 
-  it("round-trips uploaded asset bytes through the flush", async () => {
+  it("round-trips source payloads through the flush", async () => {
     await openSketchStore.newSketch();
-    openSketchStore.addAsset({ name: "hills.png", png: new Uint8Array([9, 8, 7]) });
+    openSketchStore.addSource(src("hills.png", 9));
     await openSketchStore.flush();
     const id = (await listSketches())[0].id;
     const loaded = await loadSketch(id);
-    expect(loaded!.assets.map((a) => a.name)).toEqual(["hills.png"]);
-    expect(Array.from(loaded!.assets[0].png)).toEqual([9, 8, 7]);
+    expect(loaded!.sources.map((a) => a.name)).toEqual(["hills.png"]);
+    expect(Array.from(loaded!.sources[0].payload)).toEqual([9]);
   });
 });
 

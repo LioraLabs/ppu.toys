@@ -75,9 +75,7 @@ function makeCore(state: { throwing: boolean }): PpuCore {
       if (state.throwing) throw { message: "attempt to index a nil value", line: 3, file: "fx.lua" };
       return fakeFrame();
     },
-    uploadTexture: () => {},
     setLayerVisible: () => {},
-    listAssets: () => [],
     vram: () => new Uint16Array(0),
     importReports: () => [],
     screens: () => ({
@@ -89,6 +87,18 @@ function makeCore(state: { throwing: boolean }): PpuCore {
     traceBgPixel: () => null,
     traceBgTile: () => null,
     traceObj: () => null,
+    convertSource: () => ({
+      payload: new Uint8Array(),
+      meta: {
+        width: 0,
+        height: 0,
+        report: {
+          mode: "tile",
+          report: { colors_used: 0, palettes_used: 0, tile_cells: 0, unique_tiles: 0, vram_words: 0, overflows: [] },
+        },
+      },
+    }),
+    addSource: () => ({ ok: true }),
   };
 }
 

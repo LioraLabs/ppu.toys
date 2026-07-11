@@ -1,6 +1,9 @@
 import { useSyncExternalStore } from "react";
 import { ppuCore } from "../../ppu/instance";
-import type { FrameResult, LuaError, PpuCore, SourceFile } from "../../ppu/core";
+import type {
+  FrameResult, LuaError, PpuCore, SourceFile,
+  SourceKind, ConvertSourceOptions, ConvertSourceResult,
+} from "../../ppu/core";
 import { advanceClock, scrubToClock, type Clock } from "../output/clock";
 
 export interface TransportState {
@@ -175,9 +178,17 @@ export class Transport {
     this.renderOnce();
   };
 
-  uploadTexture = (slot: string, image: ImageData) => {
-    this.coreRef().uploadTexture(slot, image);
-    this.renderOnce();
+  /** Pure quantize+pack (no engine mutation) — the Add Source dialog and
+   *  the drop path use this to produce a payload. */
+  convertSource = (kind: SourceKind, options: ConvertSourceOptions, image: ImageData): ConvertSourceResult => {
+    return this.coreRef().convertSource(kind, options, image);
+  };
+
+  /** Register a source payload for rendering under `name`, then refresh the frame. */
+  addSource = (name: string, payload: Uint8Array): { ok: boolean; error?: string } => {
+    const res = this.coreRef().addSource(name, payload);
+    this.renderOnce(); // registered source shows on the next rendered frame
+    return res;
   };
 }
 

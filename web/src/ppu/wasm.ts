@@ -6,13 +6,15 @@ import {
   LuaError,
   OamSprite,
   ObjOverflow,
-  AssetInfo,
   ImportReport,
   SourceFile,
   CompositorScreens,
   PlaneId,
   BgTrace,
   ObjTrace,
+  SourceKind,
+  ConvertSourceOptions,
+  ConvertSourceResult,
 } from "./core";
 
 /** The slice of the wasm-bindgen core the adapter calls. Extracted so the adapter
@@ -32,9 +34,7 @@ export interface WasmCoreLike {
   vram(): Uint16Array;
   oam(): OamSprite[];
   objOverflow(): ObjOverflow;
-  listAssets(): AssetInfo[];
   importReports(): ImportReport[];
-  uploadTexture(slot: string, imageData: ImageData): void;
   setLayerVisible(id: string, visible: boolean): void;
   mainScreen(): ArrayLike<number>;
   subScreen(): ArrayLike<number>;
@@ -43,6 +43,8 @@ export interface WasmCoreLike {
   traceBgPixel(layer: number, x: number, y: number): unknown;
   traceBgTile(layer: number, tx: number, ty: number, y: number): unknown;
   traceObj(index: number): unknown;
+  convertSource(kind: SourceKind, options: ConvertSourceOptions, imageData: ImageData): unknown;
+  addSource(name: string, payload: Uint8Array): unknown;
 }
 
 /** Adapt a wasm-bindgen core to the PpuCore seam. Pure (no wasm load) so it can be
@@ -66,14 +68,8 @@ export function wrapWasmCore(core: WasmCoreLike): PpuCore {
         objOverflow: core.objOverflow(),
       };
     },
-    uploadTexture(slot: string, imageData: ImageData) {
-      core.uploadTexture(slot, imageData);
-    },
     setLayerVisible(id: string, visible: boolean) {
       core.setLayerVisible(id, visible);
-    },
-    listAssets(): AssetInfo[] {
-      return core.listAssets();
     },
     vram(): Uint16Array {
       return core.vram();
@@ -101,6 +97,12 @@ export function wrapWasmCore(core: WasmCoreLike): PpuCore {
     },
     traceObj(index: number): ObjTrace | null {
       return (core.traceObj(index) as ObjTrace | null | undefined) ?? null;
+    },
+    convertSource(kind: SourceKind, options: ConvertSourceOptions, imageData: ImageData): ConvertSourceResult {
+      return core.convertSource(kind, options, imageData) as ConvertSourceResult;
+    },
+    addSource(name: string, payload: Uint8Array) {
+      return core.addSource(name, payload) as { ok: boolean; error?: string };
     },
   };
 }
