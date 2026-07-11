@@ -147,14 +147,6 @@ pub struct ObjOverflow {
     pub max_tiles: u16,
 }
 
-/// An uploaded image source, mapped to the JS `AssetInfo` shape.
-#[derive(Serialize)]
-pub struct AssetInfo {
-    pub id: String,
-    pub width: u32,
-    pub height: u32,
-}
-
 /// Derive the inspector register list from the resolved absolute row. Values are
 /// the register bit pattern (masked to the register's display width); `changed`
 /// is true when `prev` held a different value for that addr.
