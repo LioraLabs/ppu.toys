@@ -7,7 +7,7 @@ import {
   saveSketch,
   loadSketch,
   type Sketch,
-  type SketchAsset,
+  type SketchSource,
   type SketchFile,
 } from "./sketchStore";
 
@@ -34,7 +34,7 @@ function ensurePokesFirst(files: SketchFile[]): SketchFile[] {
 }
 
 /** What the editor is looking at: a read-only bundled demo, or a stored
- *  sketch. Demos become sketches lazily — see editFile/addAsset. */
+ *  sketch. Demos become sketches lazily — see editFile/addSource. */
 export type OpenContext =
   | { kind: "demo"; demoId: string }
   | { kind: "sketch"; sketch: Sketch };
@@ -103,7 +103,7 @@ function mutateSketch(update: (s: Sketch) => Sketch) {
 }
 
 /** The open context as a mutable Sketch: the live sketch, or — for a demo —
- *  a brand-new in-memory fork ("<label> (copy)", pristine files, no assets). */
+ *  a brand-new in-memory fork ("<label> (copy)", pristine files, no sources). */
 function sketchToMutate(ctx: OpenContext): Sketch {
   if (ctx.kind === "sketch") return ctx.sketch;
   const label = DEMOS.find((d) => d.id === ctx.demoId)?.label ?? ctx.demoId;
@@ -258,15 +258,14 @@ export const openSketchStore = {
     });
   },
 
-  /** Record an uploaded PNG into the open sketch (an upload IS an edit, so a
-   *  demo forks first — with all its pristine files, since any prior edit would
-   *  already have forked it). Same-named uploads replace. One emit. */
-  addAsset(asset: SketchAsset): void {
+  /** Record a converted graphics source into the open sketch (an add IS an edit,
+   *  so a demo forks first). Same-named sources replace. One emit. */
+  addSource(source: SketchSource): void {
     mutateOpen((s) => ({
       ...s,
-      assets: s.assets.some((a) => a.name === asset.name)
-        ? s.assets.map((a) => (a.name === asset.name ? asset : a))
-        : [...s.assets, asset],
+      sources: s.sources.some((x) => x.name === source.name)
+        ? s.sources.map((x) => (x.name === source.name ? source : x))
+        : [...s.sources, source],
     }));
   },
 
