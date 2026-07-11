@@ -8,11 +8,16 @@ import { transport, useTransportRuntimeError } from "./transport/transport";
 import { openSketchStore, useOpenSketch, openContextFiles } from "./sketches/openSketch";
 import { restoreOpenContext } from "./sketches/restore";
 import { POKES_FILE } from "./pokes/pokes";
+import { usePokes } from "./pokes/pokeStore";
 import { DialectToggle, PokeBar } from "./inspector/compose/chrome";
 
 /** The only machine-generated file — read-only tab, CRUD-guarded (see
  *  openSketchStore), never a default active-tab target. */
 const GENERATED = new Set([POKES_FILE]);
+
+/** Stable empty-set identity: reused whenever there are no pokes, so
+ *  FileTabs doesn't see a new Set on every render. */
+const EMPTY_SET: ReadonlySet<string> = new Set();
 
 /** First non-generated file, falling back to files[0] when every file is
  *  generated (should not happen — a sketch always keeps >= 1 real file). */
@@ -149,6 +154,7 @@ export function EditorPane({ onSources }: EditorPaneProps) {
   };
 
   const activeFile = files.find((f) => f.name === active);
+  const pokedFiles = usePokes().length > 0 ? GENERATED : EMPTY_SET;
 
   return (
     <section className="editor">
@@ -157,6 +163,7 @@ export function EditorPane({ onSources }: EditorPaneProps) {
         active={active}
         errorFiles={errorFiles}
         generated={GENERATED}
+        pokedFiles={pokedFiles}
         onSelect={setActiveName}
         onAdd={() => setActiveName(openSketchStore.addFile())}
         onRename={rename}
