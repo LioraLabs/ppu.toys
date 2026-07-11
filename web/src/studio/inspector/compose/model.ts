@@ -134,6 +134,18 @@ export function withMathHalf(cgadsub: number, half: boolean): number {
   return half ? cgadsub | 0x40 : cgadsub & ~0x40;
 }
 
+export type MathAddend = "sub" | "fixed";
+
+/** CGWSEL bit1 — is the math addend the sub screen (true) or the COLDATA
+ *  fixed color (false)? */
+export function mathAddend(cgwsel: number): MathAddend {
+  return cgwsel & 0x02 ? "sub" : "fixed";
+}
+
+export function withMathAddend(cgwsel: number, addend: MathAddend): number {
+  return addend === "sub" ? cgwsel | 0x02 : cgwsel & ~0x02;
+}
+
 /** The equation chip, exactly as the handoff renders it. */
 export function equation(op: MathOp, half: boolean): string {
   return `out = ( main ${op === "sub" ? "−" : "+"} sub )${half ? " ÷ 2" : ""}`;

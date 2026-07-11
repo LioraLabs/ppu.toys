@@ -129,6 +129,8 @@
 .cmp-swatches { display: flex; gap: 4px; flex-wrap: wrap; }
 .cmp-swatch { width: 24px; height: 24px; border-radius: 5px; border: 2px solid transparent; cursor: pointer; padding: 0; }
 .cmp-swatch--sel { border-color: var(--orange); }
+/* Fixed-color group is inert while the addend is the sub screen. */
+.cmp-fixed-off { opacity: 0.4; }
 
 /* ── register readout rows ──────────────────────────────────────────────── */
 .cmp-regs { margin-top: 10px; display: flex; flex-direction: column; gap: 2px; }

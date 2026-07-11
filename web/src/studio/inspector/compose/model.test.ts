@@ -15,6 +15,7 @@ import {
   equation,
   hexToBgr555,
   liveReg,
+  mathAddend,
   mathHalf,
   mathOp,
   nearestEdgeAddr,
@@ -27,6 +28,7 @@ import {
   toggleWindowInvert,
   windowBounds,
   windowRow,
+  withMathAddend,
   withMathHalf,
   withMathOp,
   type ReadReg,
@@ -106,6 +108,14 @@ describe("compose matrix + color math", () => {
     expect(withMathOp(0xbf, "add")).toBe(0x3f);
     expect(withMathHalf(0x3f, true)).toBe(0x7f);
     expect(withMathHalf(0x7f, false)).toBe(0x3f);
+  });
+
+  it("decodes and re-encodes the CGWSEL addend source without touching other bits", () => {
+    expect(mathAddend(0x00)).toBe("fixed");
+    expect(mathAddend(0x02)).toBe("sub");
+    // Preserve prevent/clip nibbles + direct-color bit when flipping addend.
+    expect(withMathAddend(0xf1, "sub")).toBe(0xf3);
+    expect(withMathAddend(0xf3, "fixed")).toBe(0xf1);
   });
 
   it("equation chip covers all four op/half combos", () => {

@@ -8,10 +8,12 @@ import {
   REG,
   equation,
   hexToBgr555,
+  mathAddend,
   mathHalf,
   mathOp,
   tintMathRegion,
   toggleMaskBit,
+  withMathAddend,
   withMathHalf,
   withMathOp,
 } from "./model";
@@ -163,6 +165,7 @@ export function MathControls({ c, fill }: { c: Compositor; fill?: boolean }) {
   const coldata = c.read(REG.COLDATA);
   const half = mathHalf(adsub);
   const op = mathOp(adsub);
+  const addend = mathAddend(c.read(REG.CGWSEL));
   return (
     <div className={"cmp-controls" + (fill ? " cmp-controls--fill" : "")}>
       <div>
@@ -187,6 +190,28 @@ export function MathControls({ c, fill }: { c: Compositor; fill?: boolean }) {
           </button>
         </div>
       </div>
+      <div>
+        <div className="cmp-ctl-label">
+          ADDEND · $2130
+          <PokeDot c={c} addr={REG.CGWSEL} />
+        </div>
+        <div className="cmp-seg">
+          <button
+            type="button"
+            className={addend === "sub" ? "cmp-seg--on" : ""}
+            onClick={() => c.write(REG.CGWSEL, withMathAddend(c.read(REG.CGWSEL), "sub"))}
+          >
+            sub screen
+          </button>
+          <button
+            type="button"
+            className={addend === "fixed" ? "cmp-seg--on" : ""}
+            onClick={() => c.write(REG.CGWSEL, withMathAddend(c.read(REG.CGWSEL), "fixed"))}
+          >
+            fixed color
+          </button>
+        </div>
+      </div>
       <button
         type="button"
         className={"cmp-half" + (half ? " cmp-half--on" : "")}
@@ -197,7 +222,7 @@ export function MathControls({ c, fill }: { c: Compositor; fill?: boolean }) {
         </span>
         ÷ 2 (half)
       </button>
-      <div>
+      <div className={addend === "sub" ? "cmp-fixed-off" : ""}>
         <div className="cmp-ctl-label">
           FIXED SUB COLOR · $2132
           <PokeDot c={c} addr={REG.COLDATA} />
