@@ -5,6 +5,7 @@
 .ftab--active { color: var(--text-hi); background: var(--bg-editor); border-bottom-color: var(--accent-orange); }
 .ftab--drop { border-bottom-color: var(--text-dim); }
 .ftab-gen { color: var(--dim); font-size: 11px; line-height: 1; flex: none; }
+.ftab-gen--poked { color: var(--accent-orange); }
 .ftab-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent-orange); flex: none; }
 .ftab-err { width: 7px; height: 7px; border-radius: 50%; background: var(--accent-magenta); flex: none; }
 .ftab-close { appearance: none; border: none; background: none; padding: 0 2px; margin-right: -7px; font-size: 13px; line-height: 1; color: transparent; cursor: pointer; }

@@ -12,6 +12,9 @@ export interface FileTabsProps {
    *  draggable, not rename/delete-able, and pinned as a drop floor — nothing
    *  can be reordered before or onto a generated tab's position. */
   generated: ReadonlySet<string>;
+  /** Generated files that currently have pokes applied to them — swaps the
+   *  ⚙ glyph for an accent ⚡ so a poked pokes.lua reads as "live". */
+  pokedFiles?: ReadonlySet<string>;
   onSelect: (name: string) => void;
   onAdd: () => void;
   /** Store-validated rename; returns false when rejected (dup/empty). */
@@ -77,7 +80,13 @@ export function FileTabs(props: FileTabsProps) {
               if (!isGenerated) setEditing(name);
             }}
           >
-            {isGenerated && <span className="ftab-gen">⚙</span>}
+            {isGenerated && (
+              props.pokedFiles?.has(name) ? (
+                <span className="ftab-gen ftab-gen--poked">⚡</span>
+              ) : (
+                <span className="ftab-gen">⚙</span>
+              )
+            )}
             {name === active && <span className="ftab-dot" />}
             {name !== active && errorFiles.has(name) && <span className="ftab-err" />}
             {editing === name ? (

@@ -1,10 +1,18 @@
 import { formatAddr, formatValue } from "../format";
 import { useCopyToast } from "../copyToast";
-import { clearPokes, unpoke, unpokeMany } from "../../pokes/pokeStore";
+import {
+  clearPokes,
+  setDialect,
+  unpoke,
+  unpokeMany,
+  usePokes,
+  usePokesApplied,
+  usePokesSource,
+} from "../../pokes/pokeStore";
 import { HexPoke } from "../../pokes/HexPoke";
 import { pokeMatchesLive } from "./model";
 import type { Compositor } from "./useCompositor";
-import { pokeDialect, usePokeDialect } from "./dialect";
+import { usePokeDialect } from "./dialect";
 
 /** Marker a poked control wears; click = unpoke everything it covers. SOLID
  *  while every covered poke still matches the live registers; HOLLOW when a
@@ -53,7 +61,7 @@ export function DialectToggle() {
           className={d === "friendly" ? "cmp-seg--on" : ""}
           aria-pressed={d === "friendly"}
           title={'new pokes emit friendly fields — color.op = "sub"'}
-          onClick={() => pokeDialect.set("friendly")}
+          onClick={() => setDialect("friendly")}
         >
           friendly
         </button>
@@ -62,7 +70,7 @@ export function DialectToggle() {
           className={d === "raw" ? "cmp-seg--on" : ""}
           aria-pressed={d === "raw"}
           title="new pokes emit whole-register mnemonics — CGADSUB = 0x41"
-          onClick={() => pokeDialect.set("raw")}
+          onClick={() => setDialect("raw")}
         >
           raw
         </button>
@@ -75,20 +83,23 @@ export function DialectToggle() {
  *  apply_pokes() source, clear-all, and a warning chip when pokes exist but
  *  nothing calls apply_pokes(). Rendered by both docked tabs and the overlay;
  *  hidden while nothing is poked. ▶ Run does NOT clear pokes. */
-export function PokeBar({ c }: { c: Compositor }) {
-  if (c.pokes.length === 0) return null;
+export function PokeBar() {
+  const pokes = usePokes();
+  const source = usePokesSource();
+  const applied = usePokesApplied();
+  if (pokes.length === 0) return null;
   const copyFn = () => {
     try {
       // the FILE is the source of truth — copy its bytes, never a re-generation
-      void navigator.clipboard?.writeText(c.pokesSource).catch(() => {});
+      void navigator.clipboard?.writeText(source).catch(() => {});
     } catch {
       /* clipboard unavailable (permissions/tests) */
     }
   };
   return (
     <div className="cmp-pokebar">
-      <span className="cmp-pokebar-label">◉ {c.pokes.length} poked</span>
-      {c.pokes.map((p) => (
+      <span className="cmp-pokebar-label">◉ {pokes.length} poked</span>
+      {pokes.map((p) => (
         <button
           key={p.lvalue}
           type="button"
@@ -99,7 +110,7 @@ export function PokeBar({ c }: { c: Compositor }) {
           {p.lvalue}={p.expr} ✕
         </button>
       ))}
-      {!c.pokesApplied && (
+      {!applied && (
         <span
           className="cmp-pokewarn"
           title="pokes.lua is generated, but no file calls apply_pokes() — the pokes never run"

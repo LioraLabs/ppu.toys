@@ -144,9 +144,67 @@ export function evictCrossDialect(existing: readonly Poke[], incoming: readonly 
   });
 }
 
+/** Rewrite every dual-dialect compositing poke into `dialect`, preserving the
+ *  resulting register bytes (computed over power-on defaults, NOT live state).
+ *  Non-dual pokes (cgram[...], vram[...], m7.*, bg[...], scalars) pass through
+ *  untouched. friendly output emits ALL owned fields per byte (whole-register
+ *  fidelity; sparse output is a deferred refinement). Note win.<id>.invert is
+ *  lossy — both invert bits collapse to one field.
+ *  friendly output emits only owned fields, so raw→friendly does NOT preserve
+ *  bits no friendly field owns — notably CGWSEL bit 0 (direct_color, authored
+ *  separately as the `direct_color` global) and bits 6-7 (clip-to-black,
+ *  raw-only by design). A raw poke carrying those bits loses them when
+ *  regenerated to friendly. */
+export function regeneratePokes(pokes: readonly Poke[], dialect: PokeDialect): Poke[] {
+  const passthrough: Poke[] = [];
+  const bytes = new Map<number, number>();
+  const ensure = (addr: number) =>
+    bytes.get(addr) ?? bytes.set(addr, POWER_ON.get(addr) ?? 0).get(addr)!;
+  for (const p of pokes) {
+    const t = pokeTarget(p);
+    if (!t) { passthrough.push(p); continue; }
+    if (t.raw) {
+      const v = Number(p.expr);
+      if (!Number.isNaN(v)) bytes.set(t.addr, v);
+    } else {
+      const spec = FIELD_SPECS.get(p.lvalue)!;
+      const v = parseFieldExpr(p.expr);
+      if (v !== null) bytes.set(t.addr, spec.encode(ensure(t.addr), v));
+    }
+  }
+  const out: Poke[] = [];
+  for (const [addr, value] of bytes) {
+    if (dialect === "raw") { out.push(regPoke(addr, value)); continue; }
+    const read: ReadReg = (a) => (a === addr ? value : POWER_ON.get(a) ?? 0);
+    for (const [field, spec] of FIELD_SPECS) {
+      if (spec.addr !== addr) continue;
+      const decoded = spec.live(read);
+      const expr =
+        WH_FIELDS[addr] === field
+          ? String(decoded)
+          // match setFixedColor's 4-hex-digit pad so a raw->friendly->raw
+          // round-trip via a control re-poke doesn't churn the RHS
+          : field === "color.fixed"
+            ? `0x${(decoded as number).toString(16).padStart(4, "0")}`
+            : formatFieldValue(decoded);
+      out.push({ lvalue: field, expr, note: `$${addr.toString(16).toUpperCase()}` });
+    }
+  }
+  return [...passthrough, ...out];
+}
+
 // Canonical friendly-dialect RHS forms, used by the field-write emitters below.
 const bool = (b: boolean) => (b ? "true" : "false");
 const str = (s: string) => `"${s}"`;
+
+/** A decoded FieldValue -> the exact canonical RHS the field emitters produce:
+ *  bool -> true/false, string -> "quoted", register numbers -> 0xNN, small ints
+ *  (WH edges) callers may format decimally. */
+export function formatFieldValue(v: FieldValue): string {
+  if (typeof v === "boolean") return bool(v);
+  if (typeof v === "string") return str(v);
+  return v > 9 ? `0x${v.toString(16)}` : String(v);
+}
 
 // ── Compose: screen assignment + color math ─────────────────────────────────
 
@@ -456,41 +514,117 @@ const REGION_NAMES = ["everywhere", "inside", "outside", "never"] as const;
 type FieldValue = string | number | boolean;
 
 /** THE dual-dialect round-trip table: friendly field lvalue -> the register
- *  it lives in + a live-decode returning the field's current value. Emission
- *  and pokeMatchesLive both key on it; ownership mirrors the Rust folds
- *  (win never owns CGWSEL; the color window has no TMW/TSW bit). */
-export const FIELD_SPECS: ReadonlyMap<string, { addr: number; live: (read: ReadReg) => FieldValue }> =
-  buildFieldSpecs();
+ *  it lives in + a live-decode returning the field's current value, plus the
+ *  inverse encode (current register byte, new field value -> next register
+ *  byte) a regen pass folds a friendly poke's RHS back through. Emission and
+ *  pokeMatchesLive both key on it; ownership mirrors the Rust folds (win
+ *  never owns CGWSEL; the color window has no TMW/TSW bit). */
+export const FIELD_SPECS: ReadonlyMap<
+  string,
+  { addr: number; live: (read: ReadReg) => FieldValue; encode: (cur: number, v: FieldValue) => number }
+> = buildFieldSpecs();
 
 function buildFieldSpecs() {
-  const m = new Map<string, { addr: number; live: (read: ReadReg) => FieldValue }>();
+  const m = new Map<
+    string,
+    { addr: number; live: (read: ReadReg) => FieldValue; encode: (cur: number, v: FieldValue) => number }
+  >();
+  const setBit = (cur: number, bit: number, on: boolean) => (on ? cur | (1 << bit) : cur & ~(1 << bit));
   const layerBits: [string, number][] = [["bg1", 0], ["bg2", 1], ["bg3", 2], ["bg4", 3], ["obj", 4]];
   for (const [id, bit] of layerBits) {
-    m.set(`screen.main.${id}`, { addr: REG.TM, live: (r) => (r(REG.TM) & (1 << bit)) !== 0 });
-    m.set(`screen.sub.${id}`, { addr: REG.TS, live: (r) => (r(REG.TS) & (1 << bit)) !== 0 });
-    m.set(`color.on.${id}`, { addr: REG.CGADSUB, live: (r) => (r(REG.CGADSUB) & (1 << bit)) !== 0 });
+    m.set(`screen.main.${id}`, {
+      addr: REG.TM,
+      live: (r) => (r(REG.TM) & (1 << bit)) !== 0,
+      encode: (cur, v) => setBit(cur, bit, v as boolean),
+    });
+    m.set(`screen.sub.${id}`, {
+      addr: REG.TS,
+      live: (r) => (r(REG.TS) & (1 << bit)) !== 0,
+      encode: (cur, v) => setBit(cur, bit, v as boolean),
+    });
+    m.set(`color.on.${id}`, {
+      addr: REG.CGADSUB,
+      live: (r) => (r(REG.CGADSUB) & (1 << bit)) !== 0,
+      encode: (cur, v) => setBit(cur, bit, v as boolean),
+    });
   }
-  m.set("color.on.backdrop", { addr: REG.CGADSUB, live: (r) => (r(REG.CGADSUB) & 0x20) !== 0 });
-  m.set("color.op", { addr: REG.CGADSUB, live: (r) => mathOp(r(REG.CGADSUB)) });
-  m.set("color.half", { addr: REG.CGADSUB, live: (r) => mathHalf(r(REG.CGADSUB)) });
-  m.set("color.addend", { addr: REG.CGWSEL, live: (r) => mathAddend(r(REG.CGWSEL)) });
-  m.set("color.region", { addr: REG.CGWSEL, live: (r) => REGION_NAMES[(r(REG.CGWSEL) >> 4) & 3] });
-  m.set("color.fixed", { addr: REG.COLDATA, live: (r) => r(REG.COLDATA) & 0x7fff });
+  m.set("color.on.backdrop", {
+    addr: REG.CGADSUB,
+    live: (r) => (r(REG.CGADSUB) & 0x20) !== 0,
+    encode: (cur, v) => setBit(cur, 5, v as boolean),
+  });
+  m.set("color.op", {
+    addr: REG.CGADSUB,
+    live: (r) => mathOp(r(REG.CGADSUB)),
+    encode: (cur, v) => withMathOp(cur, v as MathOp),
+  });
+  m.set("color.half", {
+    addr: REG.CGADSUB,
+    live: (r) => mathHalf(r(REG.CGADSUB)),
+    encode: (cur, v) => withMathHalf(cur, v as boolean),
+  });
+  m.set("color.addend", {
+    addr: REG.CGWSEL,
+    live: (r) => mathAddend(r(REG.CGWSEL)),
+    encode: (cur, v) => withMathAddend(cur, v as MathAddend),
+  });
+  m.set("color.region", {
+    addr: REG.CGWSEL,
+    live: (r) => REGION_NAMES[(r(REG.CGWSEL) >> 4) & 3],
+    encode: (cur, v) => {
+      // unknown region name -> index 0 (never a negative byte from indexOf's -1)
+      const idx = Math.max(REGION_NAMES.indexOf(v as (typeof REGION_NAMES)[number]), 0);
+      return (cur & ~0x30) | (idx << 4);
+    },
+  });
+  m.set("color.fixed", {
+    addr: REG.COLDATA,
+    live: (r) => r(REG.COLDATA) & 0x7fff,
+    encode: (_cur, v) => (v as number) & 0x7fff,
+  });
   for (const [addr, field] of Object.entries(WH_FIELDS)) {
     const a = Number(addr);
-    m.set(field, { addr: a, live: (r) => r(a) });
+    m.set(field, { addr: a, live: (r) => r(a), encode: (_cur, v) => (v as number) & 0xff });
   }
   for (const l of WIN_FIELD_LAYERS) {
     const nib = (r: ReadReg) => (r(l.selAddr) >> l.shift) & 0xf;
-    m.set(`win.${l.id}.w1`, { addr: l.selAddr, live: (r) => (nib(r) & W1_ENABLE) !== 0 });
-    m.set(`win.${l.id}.w2`, { addr: l.selAddr, live: (r) => (nib(r) & W2_ENABLE) !== 0 });
+    m.set(`win.${l.id}.w1`, {
+      addr: l.selAddr,
+      live: (r) => (nib(r) & W1_ENABLE) !== 0,
+      encode: (cur, v) => (cur & ~(W1_ENABLE << l.shift)) | ((v as boolean) ? W1_ENABLE << l.shift : 0),
+    });
+    m.set(`win.${l.id}.w2`, {
+      addr: l.selAddr,
+      live: (r) => (nib(r) & W2_ENABLE) !== 0,
+      encode: (cur, v) => (cur & ~(W2_ENABLE << l.shift)) | ((v as boolean) ? W2_ENABLE << l.shift : 0),
+    });
     // lossy shared decode, mirrors the core: true if EITHER invert bit is set
-    m.set(`win.${l.id}.invert`, { addr: l.selAddr, live: (r) => (nib(r) & INVERT_BITS) !== 0 });
-    m.set(`win.${l.id}.combine`, { addr: l.logAddr, live: (r) => LOGIC_LABELS[(r(l.logAddr) >> l.logShift) & 3] });
+    m.set(`win.${l.id}.invert`, {
+      addr: l.selAddr,
+      live: (r) => (nib(r) & INVERT_BITS) !== 0,
+      encode: (cur, v) => (cur & ~(INVERT_BITS << l.shift)) | ((v as boolean) ? INVERT_BITS << l.shift : 0),
+    });
+    m.set(`win.${l.id}.combine`, {
+      addr: l.logAddr,
+      live: (r) => LOGIC_LABELS[(r(l.logAddr) >> l.logShift) & 3],
+      encode: (cur, v) => {
+        // unknown logic label -> index 0 (never a negative byte from indexOf's -1)
+        const idx = Math.max(LOGIC_LABELS.indexOf(v as (typeof LOGIC_LABELS)[number]), 0);
+        return (cur & ~(3 << l.logShift)) | (idx << l.logShift);
+      },
+    });
     const bit = l.tmwBit;
     if (bit !== undefined) {
-      m.set(`win.${l.id}.main`, { addr: REG.TMW, live: (r) => (r(REG.TMW) & (1 << bit)) !== 0 });
-      m.set(`win.${l.id}.sub`, { addr: REG.TSW, live: (r) => (r(REG.TSW) & (1 << bit)) !== 0 });
+      m.set(`win.${l.id}.main`, {
+        addr: REG.TMW,
+        live: (r) => (r(REG.TMW) & (1 << bit)) !== 0,
+        encode: (cur, v) => setBit(cur, bit, v as boolean),
+      });
+      m.set(`win.${l.id}.sub`, {
+        addr: REG.TSW,
+        live: (r) => (r(REG.TSW) & (1 << bit)) !== 0,
+        encode: (cur, v) => setBit(cur, bit, v as boolean),
+      });
     }
   }
   return m;

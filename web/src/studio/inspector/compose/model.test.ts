@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RegisterView } from "../../../ppu/core";
-import { parsePokes, pokesToLua } from "../../pokes/pokes";
+import { parsePokes, pokesToLua, type Poke } from "../../pokes/pokes";
 import {
   ADDEND_FIELDS,
   BACKDROP_MATH_BIT,
@@ -24,6 +24,7 @@ import {
   equation,
   evictCrossDialect,
   fieldPoke,
+  formatFieldValue,
   hexToBgr555,
   liveReg,
   mathAddend,
@@ -32,6 +33,7 @@ import {
   nearestEdgeAddr,
   pokeMatchesLive,
   pokesAt,
+  regeneratePokes,
   regPoke,
   setArea,
   setCombine,
@@ -492,5 +494,94 @@ describe("evictCrossDialect (dialect flip must not leave conflicting lines)", ()
 
   it("cross-dialect eviction and same-dialect survival compose on ONE register", () => {
     expect(evictCrossDialect([rawAdsub, friendlyHalf], [friendlyOp])).toEqual([friendlyHalf]);
+  });
+});
+
+describe("FIELD_SPECS encode/live round-trip", () => {
+  const read = (byte: number) => () => byte; // single-register ReadReg stub
+  it("encode then live returns the value, for representative fields", () => {
+    for (const [field, val] of [
+      ["screen.main.bg1", true], ["color.op", "sub"], ["color.half", true],
+      ["color.on.bg1", true], ["color.addend", "fixed"], ["color.region", "outside"],
+      ["win.bg1.w1", true], ["win.bg1.combine", "AND"], ["color.fixed", 0x1234],
+      ["win.w1.lo", 40],
+    ] as const) {
+      const spec = FIELD_SPECS.get(field)!;
+      const byte = spec.encode(0, val);
+      expect(spec.live(read(byte))).toBe(val);
+    }
+  });
+  it("formatFieldValue emits canonical Lua RHS", () => {
+    expect(formatFieldValue(true)).toBe("true");
+    expect(formatFieldValue("sub")).toBe('"sub"');
+    expect(formatFieldValue(0x41)).toBe("0x41");
+    // 5 (not 40) because 40 > 9 would hex under the current rule.
+    expect(formatFieldValue(5)).toBe("5");
+  });
+});
+
+describe("regeneratePokes", () => {
+  it("friendly -> raw aggregates fields into one whole-register byte", () => {
+    const src: Poke[] = [
+      { lvalue: "color.op", expr: '"sub"' },
+      { lvalue: "color.half", expr: "true" },
+      { lvalue: "color.on.bg1", expr: "true" },
+    ];
+    expect(regeneratePokes(src, "raw")).toEqual([
+      { lvalue: "CGADSUB", expr: "0xc1", note: "$2131" },
+    ]);
+  });
+
+  it("raw -> friendly decodes the byte into all owned fields", () => {
+    const out = regeneratePokes([{ lvalue: "CGADSUB", expr: "0xc1" }], "friendly");
+    expect(out).toEqual(expect.arrayContaining([
+      { lvalue: "color.op", expr: '"sub"', note: "$2131" },
+      { lvalue: "color.half", expr: "true", note: "$2131" },
+      { lvalue: "color.on.bg1", expr: "true", note: "$2131" },
+    ]));
+  });
+
+  it("passes non-dual pokes through untouched", () => {
+    const keep: Poke[] = [{ lvalue: "cgram[0x41]", expr: "0x1f" }, { lvalue: "m7.a", expr: "1" }];
+    expect(regeneratePokes(keep, "raw")).toEqual(keep);
+  });
+
+  it("is idempotent when already in the target dialect", () => {
+    const raw: Poke[] = [{ lvalue: "TM", expr: "0x03", note: "$212C" }];
+    expect(regeneratePokes(raw, "raw")).toEqual(raw);
+  });
+
+  it("WH-edge fields regenerate decimally in both directions (hex/decimal distinction)", () => {
+    const friendly: Poke[] = [{ lvalue: "win.w1.lo", expr: "40" }];
+    const raw = regeneratePokes(friendly, "raw");
+    expect(raw).toEqual([{ lvalue: "WH0", expr: "0x28", note: "$2126" }]);
+    expect(regeneratePokes(raw, "friendly")).toEqual([
+      { lvalue: "win.w1.lo", expr: "40", note: "$2126" },
+    ]);
+  });
+
+  it("raw->friendly is lossy for CGWSEL bits no friendly field owns (direct_color, clip) — documented, not recoverable", () => {
+    const friendly = regeneratePokes([{ lvalue: "CGWSEL", expr: "0xff" }], "friendly");
+    const roundTripped = regeneratePokes(friendly, "raw");
+    // Only bit1 (color.addend) and bits4-5 (color.region) are owned; bit0
+    // (direct_color) and bits2-3/6-7 (clip-to-black, unused) are dropped.
+    expect(roundTripped).toEqual([{ lvalue: "CGWSEL", expr: "0x32", note: "$2130" }]);
+    expect(roundTripped).not.toEqual([{ lvalue: "CGWSEL", expr: "0xff", note: "$2130" }]);
+  });
+
+  it("friendly->raw folds over TM's non-zero power-on default", () => {
+    expect(regeneratePokes([{ lvalue: "screen.main.bg1", expr: "false" }], "raw")).toEqual([
+      { lvalue: "TM", expr: "0x1e", note: "$212C" },
+    ]);
+  });
+
+  it("drops a malformed raw expr instead of emitting 0xNaN", () => {
+    expect(regeneratePokes([{ lvalue: "TM", expr: "garbage" }], "raw")).toEqual([]);
+  });
+
+  it("color.fixed regenerates 4-hex-digit padded, matching setFixedColor's canonical form", () => {
+    expect(regeneratePokes([{ lvalue: "COLDATA", expr: "0xabc" }], "friendly")).toEqual([
+      { lvalue: "color.fixed", expr: "0x0abc", note: "$2132" },
+    ]);
   });
 });
