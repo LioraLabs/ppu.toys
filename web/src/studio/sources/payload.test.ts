@@ -93,4 +93,22 @@ describe("decodeSourcePayload", () => {
     expect(pixels[0]).toBe(0);
     expect(pixels[2]).toBe(255);
   });
+
+  it("quantizedRgba m7: chunky byte 0 transparent, byte i+1 -> palette[i]", () => {
+    // 1 tile 1x1, palette[0]=blue(0x7c00) palette[1]=red(0x001f); tile pixel0=1 -> palette[0]
+    const bytes = new Uint8Array([
+      1, 1, 0, // version, kind=m7, opts_len=0
+      2, ...u16le(0x7c00), ...u16le(0x001f), // pal_len=2
+      ...u16le(1), // tile_count=1
+      1, ...Array(63).fill(0), // tile: px0 index1 (=palette[0]), rest transparent
+      1, 1, // tiles_w, tiles_h
+      0,    // map -> tile 0
+    ]);
+    const d = decodeSourcePayload(bytes)!;
+    const { pixels } = quantizedRgba(d, 8, 8);
+    // px0 = byte 1 -> palette[0] = blue -> r=0,b=255, opaque
+    expect([pixels[0], pixels[2], pixels[3]]).toEqual([0, 255, 255]);
+    // px1 = byte 0 -> transparent
+    expect(pixels[7]).toBe(0); // alpha of second pixel
+  });
 });

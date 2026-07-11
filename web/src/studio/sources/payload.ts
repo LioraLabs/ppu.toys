@@ -9,7 +9,7 @@ export interface DecodedBg {
 }
 export interface DecodedM7 {
   kind: "m7";
-  palette: number[];    // flat BGR555 (index 0 transparent)
+  palette: number[];    // flat BGR555, 0-based; chunky byte 0 = transparent, byte i+1 = palette[i]
   tiles: number[][];    // 64 chunky bytes each
   tilesW: number;
   tilesH: number;
@@ -143,7 +143,7 @@ export function quantizedRgba(d: Decoded, width: number, height: number): { pixe
       const tile = d.tiles[d.map[ty * d.tilesW + tx] ?? 0] ?? [];
       for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
         const b = tile[y * 8 + x] ?? 0;
-        put(tx * 8 + x, ty * 8 + y, b === 0 ? null : rgbaFrom555(d.palette[b] ?? 0));
+        put(tx * 8 + x, ty * 8 + y, b === 0 ? null : rgbaFrom555(d.palette[b - 1] ?? 0));
       }
     }
   } else {
