@@ -2,8 +2,8 @@ import { useCallback, useRef, useState } from "react";
 import type { ChangeEvent, DragEvent } from "react";
 import { useAssets } from "../assets/useAssets";
 
-/** LIVE OUTPUT drop zone: PNG → quantized into VRAM tiles + a CGRAM
- *  sub-palette via the existing importer (useAssets → transport.uploadTexture). */
+/** LIVE OUTPUT drop zone: PNG → quantized into a format-committed graphics
+ *  source (useAssets → convertSource → addSource) + persisted on the sketch. */
 export function DropZone() {
   const { error, addFiles } = useAssets();
   const [over, setOver] = useState(false);
