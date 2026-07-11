@@ -145,10 +145,12 @@ function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15
   bg[1].source = "ribbons"
-  TM = 0x01               -- BG1 on the main screen
-  CGADSUB = 0x01          -- add (bit7 clear) + BG1 math-enable, no half
-  CGWSEL = 0x00           -- addend = COLDATA fixed colour
-  COLDATA = rgb(120, 60, 0)  -- warm glow added to every BG1 pixel
+  screen.main.bg1 = true    -- BG1 only on the main screen
+  screen.main.bg2 = false; screen.main.bg3 = false
+  screen.main.bg4 = false; screen.main.obj = false
+  color.op = "add"; color.on.bg1 = true   -- add at full strength (half stays off)
+  color.addend = "fixed"    -- addend = the fixed colour, not the sub screen
+  color.fixed = rgb(120, 60, 0)  -- warm glow added to every BG1 pixel
 end
 "#;
 
@@ -776,8 +778,8 @@ fn glow_demo_adds_fixed_color_over_baseline() {
     let (glow, _) = render_demo(GLOW_SRC);
     // Baseline: identical scene with no colour math.
     let baseline_src = GLOW_SRC
-        .replace("CGADSUB = 0x01", "CGADSUB = 0x00")
-        .replace("COLDATA = rgb(120, 60, 0)", "COLDATA = 0");
+        .replace("color.on.bg1 = true", "color.on.bg1 = false")
+        .replace("color.fixed = rgb(120, 60, 0)", "color.fixed = 0");
     let (base, _) = render_demo(&baseline_src);
     // The additive red channel must lift the frame overall (sum of R over the frame).
     let sum_r = |fb: &[u8]| fb.chunks_exact(4).map(|p| p[0] as u64).sum::<u64>();
