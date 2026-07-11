@@ -191,3 +191,63 @@ describe("screen namespace", () => {
     expect(complete("myscreen.")!.options.map((o) => o.label)).not.toContain("main");
   });
 });
+
+describe("win namespace", () => {
+  it("offers the win global with its register annotation", () => {
+    const opts = complete("wi")!.options;
+    const win = opts.find((o) => o.label === "win");
+    expect(win).toBeDefined();
+    expect(win!.detail).toContain("$2123");
+  });
+
+  it("offers win.* members after `win.`", () => {
+    const labels = complete("win.")!.options.map((o) => o.label);
+    for (const m of ["w1", "w2", "bg1", "bg2", "bg3", "bg4", "obj", "color"]) {
+      expect(labels).toContain(m);
+    }
+    expect(labels).not.toContain("lo");
+    expect(labels).not.toContain("invert");
+  });
+
+  it("offers lo/hi after `win.w1.` and `win.w2.`", () => {
+    for (const base of ["win.w1.", "win.w2."]) {
+      const labels = complete(base)!.options.map((o) => o.label);
+      expect(labels).toContain("lo");
+      expect(labels).toContain("hi");
+      expect(labels).not.toContain("combine");
+    }
+  });
+
+  it("offers layer fields after `win.bg1.` .. `win.color.`", () => {
+    for (const base of ["win.bg1.", "win.bg4.", "win.obj.", "win.color."]) {
+      const labels = complete(base)!.options.map((o) => o.label);
+      for (const m of ["w1", "w2", "invert", "combine", "main", "sub"]) {
+        expect(labels).toContain(m);
+      }
+      expect(labels).not.toContain("lo");
+      expect(labels).not.toContain("bg2");
+    }
+  });
+
+  it("completes the partial word after win.bg1.", () => {
+    const res = complete("win.bg1.com")!;
+    expect(res.options.map((o) => o.label)).toContain("combine");
+    expect(res.from).toBe("win.bg1.".length);
+  });
+
+  it("does NOT treat identifiers ending in win as the namespace", () => {
+    expect(complete("darwin.")!.options.map((o) => o.label)).not.toContain("w1");
+  });
+
+  it("does NOT hijack win.color. into the color namespace", () => {
+    const labels = complete("win.color.")!.options.map((o) => o.label);
+    expect(labels).toContain("invert");
+    expect(labels).not.toContain("region");
+  });
+
+  it("does NOT hijack win.obj. into the obj namespace", () => {
+    const labels = complete("win.obj.")!.options.map((o) => o.label);
+    expect(labels).toContain("combine");
+    expect(labels).not.toContain("sheet");
+  });
+});
