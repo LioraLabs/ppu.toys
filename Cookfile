@@ -18,6 +18,12 @@
 #   cook dev-wasm    Vite dev server against the real WASM core
 #   cook server.run  boot the backend serving web/dist + the live API
 #
+#   ── deploy/ops (runnable slices of deploy/RUNBOOK.md) ────────────────────────
+#   cook deploy.ship      trigger the CI deploy (gh workflow run deploy.yml)
+#   cook deploy.rollback  swap back to the previous binary (needs DEPLOY_HOST/USER)
+#   cook deploy.health    curl the live /api/health (PPU_BASE_URL override)
+#   cook deploy.logs      follow the server journal on the box (DEPLOY_HOST/USER)
+#
 #   ── verify ─────────────────────────────────────────────────────────────────
 #   cook test-core   cargo test (core unit + golden framebuffer compare)
 #   cook test-web    vitest
@@ -46,8 +52,10 @@
 # Cook gotcha: one command per line; a multi-step shell line needs `sh -c "a && b"`.
 
 # ── MODULES: the axum backend lives in its own Cookfile (dogfood-style), referenced
-#    as server.build / server.test / server.run.
+#    as server.build / server.test / server.run. The deploy/ ops chores (the
+#    runnable slices of RUNBOOK.md) come in as deploy.ship / rollback / health / logs.
 import server ./crates/ppu-server
+import deploy ./deploy
 
 # ── WASM: rebuild the module only when the Rust core or its manifests change. The
 #    files Vite + tsc consume are declared explicitly (so web forms file-level edges
