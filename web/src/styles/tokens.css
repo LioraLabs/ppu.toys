@@ -71,7 +71,7 @@
 }
 
 :root {
-  /* ── Legacy aliases (pre-M9 names). var() resolves per-theme because the
+  /* ── Aliases for legacy names. var() resolves per-theme because the
      primitives above are overridden on the same root element. ── */
   --bg-bar: var(--panel2);
   --bg-tabbar: var(--panel2);

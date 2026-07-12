@@ -119,8 +119,8 @@ its fields moved.
 
 ## Inspector map
 
-`web/src/studio/inspector/tabs.ts` defines the M9 done-gate tab set — the full
-seven are permanent:
+`web/src/studio/inspector/tabs.ts` defines the permanent inspector tab set —
+all seven are part of the current architecture:
 
 - **Workspace tabs**: Trace, Memory, Compose, Windows.
 - **Full-screen overlays** (⤢ Expand): Trace/Memory open the **Memory & Layers**
