@@ -11,8 +11,8 @@ pub async fn connect(path: &str) -> anyhow::Result<SqlitePool> {
     Ok(pool)
 }
 
-pub async fn migrate(_pool: &SqlitePool) -> anyhow::Result<()> {
-    // migrations wired in Task 2
+pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
+    sqlx::migrate!("./migrations").run(pool).await?;
     Ok(())
 }
 
