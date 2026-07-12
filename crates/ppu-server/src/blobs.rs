@@ -10,9 +10,16 @@ impl<'a> BlobKey<'a> {
         match self {
             BlobKey::Clip(id) => root.join("clip").join(id),
             BlobKey::Thumb(id) => root.join("thumb").join(id),
-            BlobKey::Source(t, n) => root.join("src").join(format!("{t}__{n}")),
+            // Hex-encode the client-supplied source name so it can never contain
+            // path separators / `..` (traversal) and can never collide with another
+            // name. Toy id is a server-generated slug and used as a subdir.
+            BlobKey::Source(t, n) => root.join("src").join(t).join(hex(n.as_bytes())),
         }
     }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 pub async fn store(state: &AppState, key: BlobKey<'_>, bytes: &[u8]) -> AppResult<()> {

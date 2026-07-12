@@ -14,6 +14,13 @@ async fn roundtrip(mode: BlobMode) {
 
     let missing = blobs::load(&app.state, BlobKey::Thumb("toyA")).await.unwrap();
     assert_eq!(missing, None);
+
+    // Source payload roundtrip. In db mode the row must pre-exist (payload is a
+    // column on it); a name with path-hazard chars must be handled safely.
+    sqlx::query("INSERT INTO toy_sources(toy_id,name,kind) VALUES('toyA','a/../b','bg')").execute(&app.state.pool).await.unwrap();
+    blobs::store(&app.state, BlobKey::Source("toyA", "a/../b"), b"srcbytes").await.unwrap();
+    let got = blobs::load(&app.state, BlobKey::Source("toyA", "a/../b")).await.unwrap();
+    assert_eq!(got.as_deref(), Some(&b"srcbytes"[..]));
 }
 
 #[tokio::test]
