@@ -1,0 +1,21 @@
+.site { min-height: 100vh; display: flex; flex-direction: column; }
+.site-header {
+  display: flex; align-items: center; gap: 1rem;
+  padding: 0.6rem 1rem; border-bottom: 1px solid #2a2a33;
+  background: #14141a; color: #e8e8ef;
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+}
+.site-header .brand { font-weight: 700; font-size: 1.1rem; color: #e8e8ef; text-decoration: none; }
+.site-nav { margin-left: auto; display: flex; align-items: center; gap: 1rem; }
+.site-nav a, .site-nav .linklike {
+  color: #b9b9c6; text-decoration: none; background: none; border: none;
+  font: inherit; cursor: pointer;
+}
+.site-nav a:hover, .site-nav .linklike:hover { color: #e8e8ef; }
+.btn-discord {
+  background: #5865f2; color: #fff !important; padding: 0.35rem 0.7rem;
+  border-radius: 6px; font-weight: 600;
+}
+.site-main { flex: 1; min-height: 0; }
+.doc-page { max-width: 720px; margin: 2rem auto; padding: 0 1rem; line-height: 1.6;
+  font-family: "IBM Plex Sans", system-ui, sans-serif; }
