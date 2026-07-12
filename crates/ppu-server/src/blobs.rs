@@ -1,3 +1,8 @@
+use axum::extract::{Path, State};
+use axum::http::{header, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
+use axum::Router;
 use crate::error::AppResult;
 use crate::config::BlobMode;
 use crate::state::AppState;
@@ -55,5 +60,15 @@ pub async fn load(state: &AppState, key: BlobKey<'_>) -> AppResult<Option<Vec<u8
     }
 }
 
-// serving handlers replace this stub in Task 9
-pub fn routes() -> axum::Router<AppState> { axum::Router::new() }
+async fn serve_blob(state: AppState, key: BlobKey<'_>, content_type: &'static str) -> AppResult<Response> {
+    match load(&state, key).await? {
+        Some(bytes) => Ok(([(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "public, max-age=31536000, immutable")], bytes).into_response()),
+        None => Ok(StatusCode::NOT_FOUND.into_response()),
+    }
+}
+async fn clip(State(s): State<AppState>, Path(id): Path<String>) -> AppResult<Response> { serve_blob(s, BlobKey::Clip(&id), "video/webm").await }
+async fn thumb(State(s): State<AppState>, Path(id): Path<String>) -> AppResult<Response> { serve_blob(s, BlobKey::Thumb(&id), "image/png").await }
+
+pub fn routes() -> Router<AppState> {
+    Router::new().route("/blobs/clip/{id}", get(clip)).route("/blobs/thumb/{id}", get(thumb))
+}
