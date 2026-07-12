@@ -37,8 +37,6 @@ export const cloudDraft = {
     return () => void listeners.delete(cb);
   },
 
-  _snapshot: () => bound,
-
   /** Test hook: back to the boot state. */
   _resetForTests(): void {
     bound = null;

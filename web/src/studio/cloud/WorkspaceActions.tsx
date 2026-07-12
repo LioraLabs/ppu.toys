@@ -25,16 +25,18 @@ export function WorkspaceActions() {
 
   /** Ensure-saved: serialize the open workspace and create-or-update the
    *  bound cloud draft, returning its id. Shared by the Save button and the
-   *  publish flow (PublishDialog calls this same function via prop). */
-  async function save(): Promise<string> {
+   *  publish flow (PublishDialog calls this same function via prop, passing
+   *  its edited title/description so they persist before publishing). */
+  async function save(meta?: { title?: string; description?: string }): Promise<string> {
     const { files, sources } = serializeWorkspace(state);
-    const title = openContextLabel(state);
+    const title = meta?.title ?? openContextLabel(state);
+    const description = meta?.description ?? "";
     const existing = cloudDraft.current(state.session);
     if (existing) {
-      await updateToy(existing, { title, files, sources });
+      await updateToy(existing, { title, description, files, sources });
       return existing;
     }
-    const created = await createToy({ title, files, sources });
+    const created = await createToy({ title, description, files, sources });
     cloudDraft.set(created.id, state.session);
     return created.id;
   }
@@ -65,7 +67,7 @@ export function WorkspaceActions() {
     <div className="workspace-actions">
       {status && <span className="cloud-status">{status}</span>}
       {draftId && <span className="cloud-draft-dot" title="Saved to a cloud draft" />}
-      <button type="button" className="btn-ghost" disabled={busy} onClick={() => void handleSave()}>
+      <button type="button" className="btn-ghost" disabled={busy || showPublish} onClick={() => void handleSave()}>
         Save
       </button>
       <button type="button" className="btn-solid" disabled={busy} onClick={() => setShowPublish(true)}>

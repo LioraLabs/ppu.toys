@@ -19,7 +19,7 @@ export interface PublishDialogProps {
   /** Ensure-saved: the exact same create-or-update logic the Save button
    *  uses, passed down so both paths agree on what "saved" means. Resolves
    *  to the toy id to publish. */
-  save: () => Promise<string>;
+  save: (meta?: { title?: string; description?: string }) => Promise<string>;
 }
 
 /** Title + description, then: save → record the loop clip → upload. Stays
@@ -47,7 +47,7 @@ export function PublishDialog({ onClose, save }: PublishDialogProps) {
     setError(null);
     try {
       setPhase("saving");
-      const id = await save();
+      const id = await save({ title, description });
       setPhase("recording");
       const { clip, thumb } = await recordClip();
       setPhase("uploading");

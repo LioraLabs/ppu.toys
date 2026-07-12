@@ -69,6 +69,8 @@ describe("WorkspaceActions", () => {
     await waitFor(() => expect(mockCreateToy).toHaveBeenCalledTimes(1));
     const body = mockCreateToy.mock.calls[0][0];
     expect(body.sources.every((s: { payload: unknown }) => typeof s.payload === "string" && s.payload.length > 0)).toBe(true);
+    expect(typeof body.description).toBe("string");
+    expect(body.description).toBe("");
 
     fireEvent.click(saveBtn);
     await waitFor(() => expect(mockUpdateToy).toHaveBeenCalledTimes(1));
