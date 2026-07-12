@@ -73,3 +73,18 @@ async fn callback_rejects_state_mismatch() {
     ).await.unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn callback_rejects_banned_discord_id() {
+    let base = mock_discord().await;
+    let app = common::test_app_with(Some(discord_cfg(&base)), BlobMode::Db).await;
+    // mock userinfo returns id "9001"; pre-ban it
+    sqlx::query("INSERT INTO bans(discord_id,created_at) VALUES('9001',1)").execute(&app.state.pool).await.unwrap();
+    let res = app.router.clone().oneshot(
+        Request::builder().uri("/api/auth/callback?code=xyz&state=st")
+            .header("cookie", "ppu_oauth_state=st").body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sessions").fetch_one(&app.state.pool).await.unwrap();
+    assert_eq!(n, 0, "no session minted for a banned id");
+}

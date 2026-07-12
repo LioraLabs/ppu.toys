@@ -48,6 +48,13 @@ pub fn build_cookie(sid: String, ttl_days: i64) -> Cookie<'static> {
         .build()
 }
 
+/// A cookie shaped for removal. `CookieJar::remove` only emits a clearing
+/// Set-Cookie for the SAME path the cookie was set with (RFC 6265); our cookies
+/// use `Path=/`, so removals must too or the browser keeps the cookie.
+fn removal_cookie(name: &'static str) -> Cookie<'static> {
+    Cookie::build((name, "")).path("/").build()
+}
+
 async fn me(user: AuthUser) -> impl IntoResponse {
     Json(serde_json::json!({ "id": user.id, "handle": user.handle, "isAdmin": user.is_admin }))
 }
@@ -56,7 +63,7 @@ async fn logout(State(state): State<AppState>, _user: AuthUser, jar: CookieJar) 
     if let Some(c) = jar.get(SESSION_COOKIE) {
         sqlx::query("DELETE FROM sessions WHERE id=?").bind(c.value()).execute(&state.pool).await?;
     }
-    let jar = jar.remove(Cookie::from(SESSION_COOKIE));
+    let jar = jar.remove(removal_cookie(SESSION_COOKIE));
     Ok((jar, StatusCode::NO_CONTENT).into_response())
 }
 
@@ -123,7 +130,7 @@ async fn discord_callback(State(state): State<AppState>, jar: CookieJar, Query(q
     // into one jar makes the emitted Set-Cookie header order (and thus which cookie
     // `HeaderMap::get("set-cookie")` returns) nondeterministic across requests.
     let session_jar = CookieJar::new().add(build_cookie(sid, state.cfg.session_ttl_days));
-    let removal_jar = jar.remove(Cookie::from(STATE_COOKIE));
+    let removal_jar = jar.remove(removal_cookie(STATE_COOKIE));
     Ok((session_jar, removal_jar, Redirect::to("/")).into_response())
 }
 
