@@ -17,7 +17,7 @@ probe rust:tools
 #    invalidate). Stamp output (cargo owns target/); `local` since the artifact
 #    is a host-specific binary.
 recipe build
-    ingredients "src/**/*.rs" "migrations/*.sql" "Cargo.toml" "../../Cargo.toml" "../../Cargo.lock"
+    ingredients "src/**/*.rs" "migrations/**" "Cargo.toml" "//Cargo.toml" "//Cargo.lock"
     seal rust:tools
     cook "build/ppu-server.stamp" {
         cargo build -p ppu-server
@@ -29,8 +29,7 @@ recipe build
 #    so compile errors surface under `build` first and the two cargo invocations
 #    don't race on target/.
 recipe test: build
-    ingredients "src/**/*.rs" "tests/**/*.rs" "migrations/*.sql"
-    seal rust:tools
+    ingredients "src/**/*.rs" "tests/**/*.rs" "migrations/**"
     test { cargo test -p ppu-server }
 
 # ── RUN: boot the server locally. Serves the built SPA (../../web/dist relative
