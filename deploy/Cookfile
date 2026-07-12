@@ -2,7 +2,7 @@
 # `deploy` (so: cook deploy.ship / deploy.rollback / deploy.health / deploy.logs).
 #
 # These are thin, env-driven wrappers around production operations. CI
-# (.github/workflows/deploy.yml) owns aarch64 cross-compilation and shipping;
+# (.github/workflows/deploy.yml) owns the native x86_64 build and shipping;
 # `deploy.ship` only triggers that workflow. Discord, Cloudflare, R2, and GitHub
 # secret setup is manual dashboard work. Database restore is an operator procedure
 # and is not automated here.
@@ -10,9 +10,8 @@
 # Guards fail LOUDLY on missing env (`${VAR:?message}`) rather than running a
 # broken ssh/curl — a missing input should never look like success.
 
-# ── SHIP: trigger the CI deploy (build aarch64 + ship + restart runs on GitHub,
-#    where the cross toolchain lives). Requires `gh` auth and the workflow present
-#    on the default branch.
+# ── SHIP: trigger the CI deploy (build x86_64 + ship + restart runs on GitHub).
+#    Requires `gh` auth and the workflow present on the default branch.
 chore ship
     gh workflow run deploy.yml
 

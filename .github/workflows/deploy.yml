@@ -17,20 +17,15 @@ concurrency:
 #     'sudo cp -a /opt/ppu/ppu-server.prev /opt/ppu/ppu-server && sudo systemctl restart ppu-server'
 jobs:
   deploy:
-    name: build aarch64 + ship to box
-    runs-on: ubuntu-latest
+    # Match the production box's Ubuntu 24.04 glibc with a native GNU build.
+    name: build x86_64 + ship to box
+    runs-on: ubuntu-24.04
     environment: production
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-unknown-linux-gnu
       - uses: Swatinem/rust-cache@v2
-      - name: Install aarch64 cross-linker
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Install wasm-pack
         uses: jetli/wasm-pack-action@v0.4.0
@@ -45,10 +40,8 @@ jobs:
           npm --prefix web ci
           npm --prefix web run build
 
-      - name: Cross-compile ppu-server (aarch64 release)
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-        run: cargo build --release --locked --target aarch64-unknown-linux-gnu --bin ppu-server
+      - name: Build ppu-server (x86_64 release)
+        run: cargo build --release --locked --bin ppu-server
 
       - name: Prepare SSH
         env:
@@ -66,7 +59,7 @@ jobs:
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
         run: |
           set -euo pipefail
-          BIN=target/aarch64-unknown-linux-gnu/release/ppu-server
+          BIN=target/release/ppu-server
           KEY=~/.ssh/id_ed25519
           TARGET="${DEPLOY_USER}@${DEPLOY_HOST}"
           scp -i "$KEY" "$BIN" "${TARGET}:/tmp/ppu-server.new"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # box-setup.sh — idempotent one-time provisioning for the ppu.toys box.
-# Target: Hetzner CAX11 (ARM64 / aarch64), fresh Debian/Ubuntu LTS.
+# Target: Linode Nanode (x86_64 / amd64), Ubuntu 24.04 LTS.
 # Usage (as root, from the repo):  sudo bash deploy/box-setup.sh
 # Safe to re-run: every step guards against redoing work. Does NOT start
 # ppu-server/litestream (they need the deployed binary + filled secrets first).
@@ -85,10 +85,10 @@ install_litestream() {
 		log "Litestream already installed"
 		return
 	fi
-	log "Installing Litestream ${LITESTREAM_VERSION} (arm64)"
-	local deb="/tmp/litestream-${LITESTREAM_VERSION}-arm64.deb"
+	log "Installing Litestream ${LITESTREAM_VERSION} (amd64)"
+	local deb="/tmp/litestream-${LITESTREAM_VERSION}-amd64.deb"
 	curl -fsSL -o "${deb}" \
-		"https://github.com/benbjohnson/litestream/releases/download/v${LITESTREAM_VERSION}/litestream-v${LITESTREAM_VERSION}-linux-arm64.deb"
+		"https://github.com/benbjohnson/litestream/releases/download/v${LITESTREAM_VERSION}/litestream-v${LITESTREAM_VERSION}-linux-amd64.deb"
 	dpkg -i "${deb}"
 	rm -f "${deb}"
 	# The .deb ships its own unit + /etc/litestream.yml; we override both, so
