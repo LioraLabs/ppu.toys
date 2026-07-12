@@ -1,7 +1,7 @@
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine;
 use rand::Rng;
@@ -120,6 +120,24 @@ async fn get_toy(State(state): State<AppState>, maybe: Option<AuthUser>, Path(id
     })).into_response())
 }
 
+/// Fork a toy into a new draft owned by the caller: copies title/description/files
+/// plus all toy_sources rows (payloads included, via INSERT...SELECT — this only
+/// copies the payload column, so in disk blob mode the on-disk blob itself is not
+/// duplicated; out of scope here, S1 default is db mode).
+async fn fork(State(state): State<AppState>, user: AuthUser, Path(id): Path<String>) -> AppResult<Response> {
+    let src: Option<(String,String,String)> = sqlx::query_as("SELECT title,description,files_json FROM toys WHERE id=?").bind(&id).fetch_optional(&state.pool).await?;
+    let (title, description, files_json) = src.ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such toy"))?;
+    let nid = slug();
+    let now = crate::db::now();
+    sqlx::query("INSERT INTO toys(id,author_id,title,description,files_json,state,forked_from,created_at) VALUES(?,?,?,?,?, 'draft', ?, ?)")
+        .bind(&nid).bind(&user.id).bind(&title).bind(&description).bind(&files_json).bind(&id).bind(now).execute(&state.pool).await?;
+    sqlx::query("INSERT INTO toy_sources(toy_id,name,kind,builtin_id,options_json,payload,meta_json)
+                 SELECT ?, name,kind,builtin_id,options_json,payload,meta_json FROM toy_sources WHERE toy_id=?")
+        .bind(&nid).bind(&id).execute(&state.pool).await?;
+    snapshot_revision(&state, &nid, &files_json).await?;
+    Ok(Json(serde_json::json!({ "id": nid })).into_response())
+}
+
 #[derive(Deserialize)]
 pub struct WallQuery { #[serde(default)] sort: Option<String>, #[serde(default)] page: Option<i64> }
 
@@ -169,5 +187,6 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/toys", get(wall).post(create))
         .route("/toys/{id}", get(get_toy).put(update))
+        .route("/toys/{id}/fork", post(fork))
         .route("/users/{handle}", get(profile))
 }
