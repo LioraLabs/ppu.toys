@@ -1,0 +1,25 @@
+[Unit]
+Description=Litestream — SQLite continuous replication to Cloudflare R2
+After=network-online.target
+Wants=network-online.target
+# Start replication before the app opens the DB for writes.
+Before=ppu-server.service
+
+[Service]
+Type=simple
+User=ppu
+Group=ppu
+EnvironmentFile=/etc/ppu/litestream.env
+ExecStart=/usr/bin/litestream replicate -config /etc/litestream.yml
+Restart=on-failure
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/ppu
+
+[Install]
+WantedBy=multi-user.target

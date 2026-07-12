@@ -1,0 +1,19 @@
+# Litestream — continuously replicate the SQLite DB to Cloudflare R2.
+# This file is fully static — no hand-editing. Every operator value comes from
+# /etc/ppu/litestream.env (injected by litestream.service) and is expanded here
+# by Litestream's ${VAR} substitution:
+#   LITESTREAM_ACCESS_KEY_ID / LITESTREAM_SECRET_ACCESS_KEY  (R2 API token)
+#   LITESTREAM_R2_ACCOUNT_ID                                 (R2 account id)
+# Keeping it static means box-setup.sh can re-copy it on every run without ever
+# clobbering the filled-in values. Bucket name is fixed (create it as-is; see
+# RUNBOOK: R2 bucket + token).
+
+dbs:
+  - path: /var/lib/ppu/ppu.db
+    replicas:
+      - type: s3
+        bucket: ppu-toys-backup
+        path: ppu.db
+        endpoint: https://${LITESTREAM_R2_ACCOUNT_ID}.r2.cloudflarestorage.com
+        region: auto
+        force-path-style: true

@@ -1,0 +1,90 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+# Requires repo secrets: DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY (private key
+# for a deploy user on the box with passwordless sudo for the swap below).
+# Rollback one-liner (also in deploy/RUNBOOK.md):
+#   ssh $DEPLOY_USER@$DEPLOY_HOST \
+#     'sudo cp -a /opt/ppu/ppu-server.prev /opt/ppu/ppu-server && sudo systemctl restart ppu-server'
+jobs:
+  deploy:
+    name: build aarch64 + ship to box
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@v2
+      - name: Install aarch64 cross-linker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build web bundle (wasm + vite)
+        run: |
+          npm --prefix web ci
+          npm --prefix web run build
+
+      - name: Cross-compile ppu-server (aarch64 release)
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --release --locked --target aarch64-unknown-linux-gnu --bin ppu-server
+
+      - name: Prepare SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          install -d -m 0700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 0600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+
+      - name: Ship + swap + restart (keep previous binary for rollback)
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -euo pipefail
+          BIN=target/aarch64-unknown-linux-gnu/release/ppu-server
+          KEY=~/.ssh/id_ed25519
+          TARGET="${DEPLOY_USER}@${DEPLOY_HOST}"
+          scp -i "$KEY" "$BIN" "${TARGET}:/tmp/ppu-server.new"
+          scp -i "$KEY" -r web/dist "${TARGET}:/tmp/ppu-web-dist"
+          ssh -i "$KEY" "$TARGET" 'sudo bash -s' <<'REMOTE'
+          set -euo pipefail
+          # Keep the currently-running binary for a one-command rollback.
+          if [ -f /opt/ppu/ppu-server ]; then
+            cp -a /opt/ppu/ppu-server /opt/ppu/ppu-server.prev
+          fi
+          install -o ppu -g ppu -m 0755 /tmp/ppu-server.new /opt/ppu/ppu-server
+          rm -f /tmp/ppu-server.new
+          # Replace the web bundle.
+          rm -rf /opt/ppu/web/dist
+          install -d -o ppu -g ppu -m 0755 /opt/ppu/web
+          cp -a /tmp/ppu-web-dist /opt/ppu/web/dist
+          chown -R ppu:ppu /opt/ppu/web/dist
+          rm -rf /tmp/ppu-web-dist
+          systemctl restart ppu-server
+          systemctl --no-pager --lines=0 status ppu-server
+          REMOTE

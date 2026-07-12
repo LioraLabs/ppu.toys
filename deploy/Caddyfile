@@ -1,0 +1,19 @@
+# ppu.toys — Caddy terminates TLS (auto Let's Encrypt) and reverse-proxies every
+# request to ppu-server on 127.0.0.1:8080. Cloudflare sits in front (proxied);
+# this box is the origin. The server serves the SPA + API + blobs itself.
+
+ppu.toys {
+	encode zstd gzip
+
+	# Blob bytes (loop clips + thumbs) are content-addressed by toy id and never
+	# change — cache them hard in the browser and at the Cloudflare edge.
+	@blobs path /blobs/*
+	header @blobs Cache-Control "public, max-age=31536000, immutable"
+
+	reverse_proxy 127.0.0.1:8080
+}
+
+# Send apex-www to the canonical apex.
+www.ppu.toys {
+	redir https://ppu.toys{uri} permanent
+}
