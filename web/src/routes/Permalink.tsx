@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { getToy, forkToy, type ToyFull } from "../api/apiClient";
 import { useSession } from "../api/session";
+import { openCloudToy } from "../studio/cloud/openCloudToy";
 import { decodeBase64 } from "../api/base64";
 import { ReadOnlyPlayer, type PlayerSource } from "../components/ReadOnlyPlayer";
 import { HeartButton } from "../components/HeartButton";
@@ -48,7 +49,9 @@ export function Permalink() {
     setForking(true);
     setForkFailed(false);
     try {
-      await forkToy(id);
+      const { id: forkId } = await forkToy(id);
+      const toy = await getToy(forkId);
+      await openCloudToy(toy);
       navigate("/studio");
     } catch {
       // Surface the failure instead of leaving the click silently dead — the

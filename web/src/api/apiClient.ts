@@ -104,3 +104,47 @@ export function removeHeart(id: string): Promise<void> {
 export function logout(): Promise<void> {
   return request<void>("/api/auth/logout", { method: "POST" });
 }
+
+export interface SaveToyBody {
+  title: string;
+  description?: string;
+  files: ToyFile[];
+  sources: ToySource[];
+}
+
+export function createToy(body: SaveToyBody): Promise<{ id: string }> {
+  return request<{ id: string }>("/api/toys", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateToy(id: string, body: SaveToyBody): Promise<void> {
+  return request<void>(`/api/toys/${id}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export interface PublishMeta {
+  title: string;
+  description?: string;
+}
+
+export function publishToy(
+  id: string,
+  meta: PublishMeta,
+  clip: Blob,
+  thumb: Blob,
+): Promise<{ id: string; state: string }> {
+  const fd = new FormData();
+  fd.append("meta", JSON.stringify(meta));
+  fd.append("clip", clip, "clip.webm");
+  fd.append("thumb", thumb, "thumb.png");
+  return request<{ id: string; state: string }>(`/api/toys/${id}/publish`, {
+    method: "POST",
+    body: fd,
+  });
+}

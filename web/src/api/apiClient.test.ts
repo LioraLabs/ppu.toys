@@ -1,9 +1,10 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { getMe, getWall, getToy, getProfile } from "./apiClient";
+import type { SaveToyBody } from "./apiClient";
 
 function mockFetch(status: number, body: unknown) {
   return vi.fn(
-    (): Promise<Response> =>
+    (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
       Promise.resolve(
         new Response(body === undefined ? null : JSON.stringify(body), {
           status,
@@ -117,5 +118,77 @@ describe("mutations send X-PPU-CSRF", () => {
         headers: expect.objectContaining({ "X-PPU-CSRF": "1" }),
       }),
     );
+  });
+});
+
+describe("write endpoints", () => {
+  const saveBody: SaveToyBody = {
+    title: "My Toy",
+    description: "desc",
+    files: [{ name: "main.lua", source: "-- code" }],
+    sources: [{ name: "s1", kind: "builtin", builtinId: "b1", options: {}, meta: {}, payload: "YmFzZTY0" }],
+  };
+
+  it("createToy POSTs /api/toys with CSRF, JSON content-type, and body; returns id", async () => {
+    const spy = mockFetch(200, { id: "new1" });
+    vi.stubGlobal("fetch", spy);
+    const { createToy } = await import("./apiClient");
+    expect(await createToy(saveBody)).toEqual({ id: "new1" });
+    expect(spy).toHaveBeenCalledWith(
+      "/api/toys",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        headers: expect.objectContaining({
+          "X-PPU-CSRF": "1",
+          "content-type": "application/json",
+        }),
+        body: JSON.stringify(saveBody),
+      }),
+    );
+  });
+
+  it("updateToy PUTs /api/toys/:id with CSRF and JSON body; 204 resolves undefined", async () => {
+    const spy = mockFetch(204, undefined);
+    vi.stubGlobal("fetch", spy);
+    const { updateToy } = await import("./apiClient");
+    expect(await updateToy("abc", saveBody)).toBeUndefined();
+    expect(spy).toHaveBeenCalledWith(
+      "/api/toys/abc",
+      expect.objectContaining({
+        method: "PUT",
+        credentials: "include",
+        headers: expect.objectContaining({
+          "X-PPU-CSRF": "1",
+          "content-type": "application/json",
+        }),
+        body: JSON.stringify(saveBody),
+      }),
+    );
+  });
+
+  it("publishToy POSTs /api/toys/:id/publish with FormData body, CSRF, and no content-type override", async () => {
+    const spy = mockFetch(200, { id: "abc", state: "published" });
+    vi.stubGlobal("fetch", spy);
+    const { publishToy } = await import("./apiClient");
+    const clip = new Blob(["clipdata"], { type: "video/webm" });
+    const thumb = new Blob(["thumbdata"], { type: "image/png" });
+    const result = await publishToy("abc", { title: "My Toy", description: "desc" }, clip, thumb);
+    expect(result).toEqual({ id: "abc", state: "published" });
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [calledUrl, calledInit] = spy.mock.calls[0];
+    if (!calledInit) throw new Error("fetch was called without an init argument");
+    expect(calledUrl).toBe("/api/toys/abc/publish");
+    expect(calledInit.method).toBe("POST");
+    expect(calledInit.credentials).toBe("include");
+    expect(calledInit.body).toBeInstanceOf(FormData);
+    expect((calledInit.headers as Record<string, string>)["X-PPU-CSRF"]).toBe("1");
+    expect(calledInit.headers).not.toHaveProperty("content-type");
+
+    const fd = calledInit.body as FormData;
+    expect(JSON.parse(fd.get("meta") as string)).toEqual({ title: "My Toy", description: "desc" });
+    expect(fd.get("clip")).toBeInstanceOf(Blob);
+    expect(fd.get("thumb")).toBeInstanceOf(Blob);
   });
 });
