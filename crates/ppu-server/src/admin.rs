@@ -13,10 +13,13 @@ fn require_admin(u: &AuthUser) -> AppResult<()> {
 
 async fn delete_toy(State(s): State<AppState>, user: AuthUser, Path(id): Path<String>) -> AppResult<Response> {
     require_admin(&user)?;
-    sqlx::query("DELETE FROM hearts WHERE toy_id=?").bind(&id).execute(&s.pool).await?;
-    sqlx::query("DELETE FROM toy_sources WHERE toy_id=?").bind(&id).execute(&s.pool).await?;
-    sqlx::query("DELETE FROM toy_revisions WHERE toy_id=?").bind(&id).execute(&s.pool).await?;
-    sqlx::query("DELETE FROM toys WHERE id=?").bind(&id).execute(&s.pool).await?;
+    // One transaction: detach forks first (forked_from is RESTRICT, so a toy others
+    // forked would otherwise FK-fail the delete), then delete the toy. The hearts /
+    // toy_sources / toy_revisions rows go via ON DELETE CASCADE.
+    let mut tx = s.pool.begin().await?;
+    sqlx::query("UPDATE toys SET forked_from=NULL WHERE forked_from=?").bind(&id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM toys WHERE id=?").bind(&id).execute(&mut *tx).await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
