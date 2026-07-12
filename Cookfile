@@ -2,7 +2,7 @@
 #
 # Monorepo shape: a pure, headless Rust core (crates/ppu-core) compiled to WASM via
 # wasm-pack, consumed by a React + Vite app (web/) behind the `PpuCore` TS seam;
-# plus the S1 backend, a single axum binary (crates/ppu-server) imported as the
+# plus the site backend, a single axum binary (crates/ppu-server) imported as the
 # `server` module below.
 #
 #   ── build ──────────────────────────────────────────────────────────────────
@@ -18,7 +18,7 @@
 #   cook dev-wasm    Vite dev server against the real WASM core
 #   cook server.run  boot the backend serving web/dist + the live API
 #
-#   ── deploy/ops (production operations) ─────────────────────────────────────────
+#   ── deploy/ops (production operations) ────────────────────────────────────
 #   cook deploy.ship      trigger the CI deploy (gh workflow run deploy.yml)
 #   cook deploy.rollback  swap back to the previous binary (needs DEPLOY_HOST/USER)
 #   cook deploy.health    curl the live /api/health (PPU_BASE_URL override)
@@ -51,7 +51,7 @@
 #
 # Cook gotcha: one command per line; a multi-step shell line needs `sh -c "a && b"`.
 
-# ── MODULES: the axum backend lives in its own Cookfile (dogfood-style), referenced
+# ── MODULES: the axum backend lives in its own imported Cookfile, referenced
 #    as server.build / server.test / server.run. The deploy/ production operations
 #    come in as deploy.ship / rollback / health / logs.
 import server ./crates/ppu-server
