@@ -1,6 +1,7 @@
 import { transport } from "./transport/transport";
 import { useTheme } from "./theme";
 import { AddSourceButton } from "./sources/AddSourceButton";
+import { WorkspaceActions } from "./cloud/WorkspaceActions";
 
 export interface ToolbarProps {
   /** Open-sketch name. Placeholder default until the sketch store wires
@@ -31,7 +32,7 @@ export function Toolbar({ sketchName = "dusk-parallax", dirty = false }: Toolbar
       <button type="button" className="btn-ghost" onClick={toggleTheme} aria-label="Toggle color theme">
         {theme === "dark" ? "Light" : "Dark"}
       </button>
-      {/* Share button intentionally absent — hidden until S1 */}
+      <WorkspaceActions />
       <div className="avatar" />
     </header>
   );
