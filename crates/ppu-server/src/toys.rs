@@ -80,7 +80,6 @@ async fn snapshot_revision(state: &AppState, toy_id: &str, files_json: &str) -> 
 }
 
 async fn create(State(state): State<AppState>, user: AuthUser, Json(body): Json<SaveBody>) -> AppResult<Response> {
-    if !state.limiter.check_save(&user.id) { return Err(AppError::status(StatusCode::TOO_MANY_REQUESTS, "save rate limit")); }
     validate_files(&body.files)?;
     validate_sources(&body.sources)?;
     let id = slug();
@@ -94,6 +93,7 @@ async fn create(State(state): State<AppState>, user: AuthUser, Json(body): Json<
 }
 
 async fn update(State(state): State<AppState>, user: AuthUser, Path(id): Path<String>, Json(body): Json<SaveBody>) -> AppResult<Response> {
+    // ~1/min throttle applies to re-saves (autosave/edit), not the one-shot create
     if !state.limiter.check_save(&user.id) { return Err(AppError::status(StatusCode::TOO_MANY_REQUESTS, "save rate limit")); }
     let author: Option<(String,)> = sqlx::query_as("SELECT author_id FROM toys WHERE id=?").bind(&id).fetch_optional(&state.pool).await?;
     let author = author.ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such toy"))?.0;
