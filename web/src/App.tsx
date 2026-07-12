@@ -1,5 +1,10 @@
-import { Studio } from "./studio/Studio";
+import { BrowserRouter } from "react-router-dom";
+import { AppRoutes } from "./routes/AppRoutes";
 
 export default function App() {
-  return <Studio />;
+  return (
+    <BrowserRouter>
+      <AppRoutes />
+    </BrowserRouter>
+  );
 }
