@@ -1,0 +1,43 @@
+// @vitest-environment jsdom
+import { describe, it, expect, afterEach, vi } from "vitest";
+import "@testing-library/jest-dom/vitest";
+import { render, screen, cleanup } from "@testing-library/react";
+import { MemoryRouter, Routes, Route } from "react-router-dom";
+import { ProfilePage } from "./ProfilePage";
+import type { Profile } from "../api/apiClient";
+
+vi.mock("../api/apiClient", () => ({ getProfile: vi.fn() }));
+vi.mock("../api/session", () => ({ useSession: () => ({ user: null, loading: false }) }));
+import { getProfile } from "../api/apiClient";
+
+const profile: Profile = {
+  user: { handle: "ada", avatar: null },
+  toys: [{ id: "a", title: "Toy a", author: { handle: "ada", avatar: null },
+    thumbUrl: "/blobs/thumb/a", clipUrl: "/blobs/clip/a", heartCount: 1, hearted: false }],
+};
+const mockGetProfile = getProfile as ReturnType<typeof vi.fn>;
+afterEach(() => { cleanup(); vi.clearAllMocks(); });
+
+function renderAt(handle = "ada") {
+  return render(
+    <MemoryRouter initialEntries={[`/u/${handle}`]}>
+      <Routes><Route path="/u/:handle" element={<ProfilePage />} /></Routes>
+    </MemoryRouter>,
+  );
+}
+
+describe("ProfilePage", () => {
+  it("fetches by handle and lists the user's toys", async () => {
+    mockGetProfile.mockResolvedValue(profile);
+    renderAt();
+    expect(await screen.findByRole("heading", { name: "ada" })).toBeInTheDocument();
+    expect(screen.getByText("Toy a")).toBeInTheDocument();
+    expect(mockGetProfile).toHaveBeenCalledWith("ada");
+  });
+
+  it("shows an empty state when the user has no toys", async () => {
+    mockGetProfile.mockResolvedValue({ user: { handle: "ada", avatar: null }, toys: [] });
+    renderAt();
+    expect(await screen.findByText(/no published toys/i)).toBeInTheDocument();
+  });
+});

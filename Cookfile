@@ -1,24 +1,35 @@
 # Cookfile for ppu.toys — a ShaderToy-style web playground for an emulated SNES PPU.
 #
 # Monorepo shape: a pure, headless Rust core (crates/ppu-core) compiled to WASM via
-# wasm-pack, consumed by a React + Vite app (web/) behind the `PpuCore` TS seam.
+# wasm-pack, consumed by a React + Vite app (web/) behind the `PpuCore` TS seam;
+# plus the S1 backend, a single axum binary (crates/ppu-server) imported as the
+# `server` module below.
 #
 #   ── build ──────────────────────────────────────────────────────────────────
-#   cook             full build (default): WASM module + web/dist
+#   cook             full build (default): WASM module + web/dist + server
 #   cook build       same as above
 #   cook wasm        (re)build the WASM module into web/src/wasm/pkg
 #   cook web         production web build -> web/dist
 #   cook deps        install web/node_modules
+#   cook server.build  compile the axum backend (crates/ppu-server)
 #
 #   ── run ──────────────────────────────────────────────────────────────────────
 #   cook dev         Vite dev server, mock core (no WASM build needed)
 #   cook dev-wasm    Vite dev server against the real WASM core
+#   cook server.run  boot the backend serving web/dist + the live API
+#
+#   ── deploy/ops (runnable slices of deploy/RUNBOOK.md) ────────────────────────
+#   cook deploy.ship      trigger the CI deploy (gh workflow run deploy.yml)
+#   cook deploy.rollback  swap back to the previous binary (needs DEPLOY_HOST/USER)
+#   cook deploy.health    curl the live /api/health (PPU_BASE_URL override)
+#   cook deploy.logs      follow the server journal on the box (DEPLOY_HOST/USER)
 #
 #   ── verify ─────────────────────────────────────────────────────────────────
 #   cook test-core   cargo test (core unit + golden framebuffer compare)
 #   cook test-web    vitest
+#   cook server.test cargo test -p ppu-server (backend suites)
 #   cook typecheck   tsc --noEmit over the web app
-#   cook check       typecheck + both test suites (pre-commit umbrella)
+#   cook check       typecheck + all three test suites (pre-commit umbrella)
 #   cook fmt         cargo fmt
 #
 #   ── housekeeping ─────────────────────────────────────────────────────────────
@@ -39,6 +50,12 @@
 #             a pnpm repo (global-store hardlinks) would not be portable; keep it local.
 #
 # Cook gotcha: one command per line; a multi-step shell line needs `sh -c "a && b"`.
+
+# ── MODULES: the axum backend lives in its own Cookfile (dogfood-style), referenced
+#    as server.build / server.test / server.run. The deploy/ ops chores (the
+#    runnable slices of RUNBOOK.md) come in as deploy.ship / rollback / health / logs.
+import server ./crates/ppu-server
+import deploy ./deploy
 
 # ── WASM: rebuild the module only when the Rust core or its manifests change. The
 #    files Vite + tsc consume are declared explicitly (so web forms file-level edges
@@ -73,8 +90,10 @@ recipe web: wasm deps
         npm --prefix web run build:app
     }
 
-# ── BUILD: the default target — the whole pipeline.
-recipe build: web
+# ── BUILD: the default target — the whole stack. server.build is an order-only
+#    fence (it produces nothing the web build reads) kept so `cook build` compiles
+#    the backend too.
+recipe build: web server.build
 
 # ── DEV SERVERS: long-running, interactive. Mock core by default; dev-wasm builds
 #    the real module first and selects it via VITE_USE_WASM=1.
@@ -94,8 +113,8 @@ chore test-web: deps
 chore typecheck: deps
     npm --prefix web run typecheck
 
-# Pre-commit umbrella: types + both suites.
-chore check: typecheck test-core test-web
+# Pre-commit umbrella: types + all three suites (core, web, backend).
+chore check: typecheck test-core test-web server.test
 
 chore fmt
     cargo fmt

@@ -1,0 +1,39 @@
+# Cookfile for ppu-server — the single axum binary that IS the S1 backend
+# (Discord OAuth + sessions, toys/sources/revisions/fork, publish + webhook,
+# wall, hearts, moderation) over SQLite. Imported by the root Cookfile as
+# `server`, so the targets below are `cook server.build` / `cook server.test`
+# / `cook server.run`.
+#
+# Modelled on the dogfood services/api module: a compiled build is cached via a
+# stamp + `local` (a native binary with absolute rpaths isn't remote-portable),
+# and `test` fences on `build` (order-only) so compile errors surface once and
+# the test run doesn't contend with the build on the shared target/ tree.
+
+probe rust:tools
+    tools { cargo }
+
+# ── BUILD: compile the server crate. Cached on the crate's sources + migrations
+#    + the workspace manifests (a shared dep bump in the root lockfile must
+#    invalidate). Stamp output (cargo owns target/); `local` since the artifact
+#    is a host-specific binary.
+recipe build
+    ingredients "src/**/*.rs" "migrations/**" "Cargo.toml" "//Cargo.toml" "//Cargo.lock"
+    seal rust:tools
+    cook "build/ppu-server.stamp" {
+        cargo build -p ppu-server
+        mkdir -p build && echo ok > $<out>
+    } local
+
+# ── TEST: cargo test for the crate. `: build` is a deliberate order-only fence
+#    (tests recompile the crate themselves and never read build's stamp), kept
+#    so compile errors surface under `build` first and the two cargo invocations
+#    don't race on target/.
+recipe test: build
+    ingredients "src/**/*.rs" "tests/**/*.rs" "migrations/**"
+    test { cargo test -p ppu-server }
+
+# ── RUN: boot the server locally. Serves the built SPA (../../web/dist relative
+#    to this module dir → the repo's web/dist) alongside the live API; boots fine
+#    with no Discord creds (auth 503, everything else works). Long-running.
+chore run
+    PPU_WEB_DIR=../../web/dist cargo run -p ppu-server

@@ -1,0 +1,7 @@
+.profile-head {
+  display: flex; align-items: baseline; gap: 0.75rem; padding: 1.5rem 1.5rem 0;
+  font-family: "IBM Plex Sans", system-ui, sans-serif; color: #e8e8ef;
+}
+.profile-head h1 { margin: 0; font-size: 1.4rem; }
+.profile-count { color: #8b8b98; }
+.profile-msg { padding: 2rem 1.5rem; color: #8b8b98; font-family: "IBM Plex Sans", system-ui, sans-serif; }

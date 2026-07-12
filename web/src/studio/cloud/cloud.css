@@ -1,0 +1,31 @@
+.workspace-actions { display: flex; align-items: center; gap: 8px; }
+.cloud-status { font-family: var(--font-sans); font-size: 12px; color: var(--mid); }
+.cloud-draft-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+
+.cloud-scrim {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55);
+  display: flex; align-items: center; justify-content: center; z-index: 50;
+}
+.cloud-dialog {
+  width: min(420px, 94vw); max-height: 90vh; overflow: auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+}
+.cloud-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px; border-bottom: 1px solid var(--line);
+}
+.cloud-title { font-family: var(--font-sans); font-weight: 600; color: var(--txt); font-size: 14px; }
+.cloud-body { display: flex; flex-direction: column; gap: 10px; padding: 14px; }
+.cloud-field {
+  display: flex; flex-direction: column; gap: 4px;
+  font-family: var(--font-sans); font-size: 12px; color: var(--mid);
+}
+.cloud-field input, .cloud-field textarea {
+  font-family: var(--font-sans); font-size: 13px; color: var(--txt);
+  background: var(--sunken); border: 1px solid var(--line); border-radius: 6px;
+  padding: 6px 8px; resize: vertical;
+}
+.cloud-field input:disabled, .cloud-field textarea:disabled { opacity: 0.6; }
+.cloud-error { color: var(--red); font-size: 12px; }
+.cloud-status-line { color: var(--mid); font-size: 12px; }
+.cloud-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }

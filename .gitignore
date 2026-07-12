@@ -4,3 +4,4 @@
 /web/src/wasm/pkg
 .cook/
 .worktrees/
+/crates/ppu-server/build/

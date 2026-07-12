@@ -1,0 +1,15 @@
+.wall-toolbar {
+  display: flex; gap: 0.5rem; padding: 1rem 1.5rem 0;
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+}
+.sort-tab {
+  background: none; border: 1px solid #2a2a33; color: #b9b9c6;
+  padding: 0.3rem 0.8rem; border-radius: 999px; cursor: pointer; font: inherit;
+}
+.sort-tab--on { background: #2a2a33; color: #e8e8ef; }
+.wall-empty { padding: 2rem 1.5rem; color: #8b8b98; font-family: "IBM Plex Sans", system-ui, sans-serif; }
+.wall-more { display: flex; justify-content: center; padding: 0 0 2rem; }
+.wall-more button {
+  background: #2a2a33; color: #e8e8ef; border: none; border-radius: 6px;
+  padding: 0.5rem 1.2rem; cursor: pointer; font: inherit;
+}

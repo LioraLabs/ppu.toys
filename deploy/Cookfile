@@ -1,0 +1,34 @@
+# Cookfile for deploy/ ops — the runnable slices of deploy/RUNBOOK.md, imported by
+# the root Cookfile as `deploy` (so: cook deploy.ship / deploy.rollback /
+# deploy.health / deploy.logs).
+#
+# These are thin, env-driven wrappers around operations that already exist in
+# deploy.yml + the RUNBOOK. What is DELIBERATELY not here:
+#   - the aarch64 cross-build + ship: CI (.github/workflows/deploy.yml) owns it and
+#     runs where the cross toolchain exists; `deploy.ship` just triggers that.
+#   - Discord / Cloudflare / R2 / GitHub-secrets setup: dashboard steps, not runnable.
+#   - the restore-from-R2 drill: a deliberate, box-side, run-once procedure — it
+#     stays as documented steps in RUNBOOK.md Step 8, not a one-shot chore.
+#
+# Guards fail LOUDLY on missing env (`${VAR:?message}`) rather than running a
+# broken ssh/curl — a missing input should never look like success.
+
+# ── SHIP: trigger the CI deploy (build aarch64 + ship + restart runs on GitHub,
+#    where the cross toolchain lives). Requires `gh` auth and the workflow present
+#    on the default branch. Equivalent to RUNBOOK Step 6's "Actions → Run workflow".
+chore ship
+    gh workflow run deploy.yml
+
+# ── ROLLBACK: swap back to the previous binary kept by the last deploy. Needs
+#    DEPLOY_HOST + DEPLOY_USER (same values as the GitHub deploy secrets).
+chore rollback
+    sh -c ': "${DEPLOY_HOST:?set DEPLOY_HOST}" "${DEPLOY_USER:?set DEPLOY_USER}"; ssh "$DEPLOY_USER@$DEPLOY_HOST" "sudo cp -a /opt/ppu/ppu-server.prev /opt/ppu/ppu-server && sudo systemctl restart ppu-server"'
+
+# ── HEALTH: hit the live health endpoint. Override PPU_BASE_URL for staging/local.
+chore health
+    sh -c 'curl -fsS "${PPU_BASE_URL:-https://ppu.toys}/api/health" && echo'
+
+# ── LOGS: follow the server journal on the box (Ctrl-C to stop). Set PPU_UNIT to
+#    tail caddy/litestream instead of ppu-server.
+chore logs
+    sh -c ': "${DEPLOY_HOST:?set DEPLOY_HOST}" "${DEPLOY_USER:?set DEPLOY_USER}"; ssh -t "$DEPLOY_USER@$DEPLOY_HOST" "journalctl -u ${PPU_UNIT:-ppu-server} -f"'

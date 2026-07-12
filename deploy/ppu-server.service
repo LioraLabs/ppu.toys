@@ -1,0 +1,26 @@
+[Unit]
+Description=ppu.toys server (axum, one binary)
+Documentation=https://ppu.toys
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ppu
+Group=ppu
+EnvironmentFile=/etc/ppu/ppu-server.env
+WorkingDirectory=/opt/ppu
+ExecStart=/opt/ppu/ppu-server
+Restart=on-failure
+RestartSec=2
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+StateDirectory=ppu
+ReadWritePaths=/var/lib/ppu
+
+[Install]
+WantedBy=multi-user.target
