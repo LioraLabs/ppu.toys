@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getWall, type WallCard, type WallSort } from "../api/apiClient";
 import { useSession } from "../api/session";
 import { ToyCard } from "../components/ToyCard";
@@ -11,6 +11,11 @@ export function Wall() {
   const [cards, setCards] = useState<WallCard[]>([]);
   const [nextPage, setNextPage] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  // Always holds the latest sort, so an in-flight loadMore can detect a sort
+  // change that happened while it was awaiting and discard its stale page.
+  const sortRef = useRef(sort);
+  sortRef.current = sort;
 
   // Reload from page 0 whenever the sort changes.
   useEffect(() => {
@@ -26,10 +31,20 @@ export function Wall() {
   }, [sort]);
 
   async function loadMore() {
-    if (nextPage === null) return;
-    const p = await getWall(sort, nextPage);
-    setCards((prev) => [...prev, ...p.toys]);
-    setNextPage(p.nextPage);
+    if (nextPage === null || loadingMore) return; // guard concurrent/duplicate loads
+    const sortAtRequest = sort;
+    setLoadingMore(true);
+    try {
+      const p = await getWall(sortAtRequest, nextPage);
+      // A sort change since this fetch started already reset the list — the
+      // page-0 effect owns the new sort, so drop this stale page rather than
+      // append recent-sorted toys onto a popular list.
+      if (sortRef.current !== sortAtRequest) return;
+      setCards((prev) => [...prev, ...p.toys]);
+      setNextPage(p.nextPage);
+    } finally {
+      setLoadingMore(false);
+    }
   }
 
   return (
@@ -54,7 +69,9 @@ export function Wall() {
       </div>
       {nextPage !== null && (
         <div className="wall-more">
-          <button onClick={() => void loadMore()}>Load more</button>
+          <button onClick={() => void loadMore()} disabled={loadingMore}>
+            {loadingMore ? "Loading…" : "Load more"}
+          </button>
         </div>
       )}
     </div>

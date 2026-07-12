@@ -53,4 +53,28 @@ describe("Wall", () => {
     render(<MemoryRouter><Wall /></MemoryRouter>);
     expect(await screen.findByText(/no toys yet/i)).toBeInTheDocument();
   });
+
+  it("disables Load more while a page is in flight (no double-append)", async () => {
+    // First page resolves; the load-more fetch hangs so we can observe the
+    // pending guard.
+    let releaseSecond: (v: { toys: WallCard[]; nextPage: number | null }) => void = () => {};
+    mockGetWall
+      .mockResolvedValueOnce({ toys: [card("a")], nextPage: 1 })
+      .mockImplementationOnce(
+        () => new Promise((resolve) => { releaseSecond = resolve; }),
+      );
+    render(<MemoryRouter><Wall /></MemoryRouter>);
+    await screen.findByText("Toy a");
+
+    const btn = screen.getByRole("button", { name: /load more/i });
+    fireEvent.click(btn);
+    // While pending, the button is disabled — a second click can't fire a
+    // duplicate fetch.
+    await waitFor(() => expect(screen.getByRole("button", { name: /loading/i })).toBeDisabled());
+    fireEvent.click(screen.getByRole("button", { name: /loading/i }));
+    expect(mockGetWall).toHaveBeenCalledTimes(2); // still just mount + one loadMore
+
+    releaseSecond({ toys: [card("b")], nextPage: null });
+    expect(await screen.findByText("Toy b")).toBeInTheDocument();
+  });
 });
