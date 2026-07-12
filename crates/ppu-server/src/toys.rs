@@ -1,4 +1,4 @@
-use axum::extract::{Path, Query, State};
+use axum::extract::{Multipart, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -157,6 +157,55 @@ async fn fork(State(state): State<AppState>, user: AuthUser, Path(id): Path<Stri
     Ok(Json(serde_json::json!({ "id": nid })).into_response())
 }
 
+/// Publish a draft: validates author + caps, stores clip/thumb blobs, flips
+/// state, and (if configured) fires the Discord announce webhook in the
+/// background — a webhook failure only logs a warning and never fails the
+/// publish response itself.
+async fn publish(State(state): State<AppState>, user: AuthUser, Path(id): Path<String>, mut mp: Multipart) -> AppResult<Response> {
+    if !state.limiter.check_publish(&user.id) { return Err(AppError::status(StatusCode::TOO_MANY_REQUESTS, "publish rate limit")); }
+    let author: Option<(String,)> = sqlx::query_as("SELECT author_id FROM toys WHERE id=?").bind(&id).fetch_optional(&state.pool).await?;
+    let author = author.ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such toy"))?.0;
+    if author != user.id { return Err(AppError::status(StatusCode::FORBIDDEN, "not your toy")); }
+
+    let mut clip: Option<Vec<u8>> = None;
+    let mut thumb: Option<Vec<u8>> = None;
+    let mut meta_title: Option<String> = None;
+    while let Some(field) = mp.next_field().await.map_err(|e| AppError::status(StatusCode::BAD_REQUEST, format!("bad multipart: {e}")))? {
+        match field.name().unwrap_or("").to_string().as_str() {
+            "meta" => { let t = field.text().await.unwrap_or_default();
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) { meta_title = v["title"].as_str().map(|s| s.to_string()); } }
+            "clip" => clip = Some(field.bytes().await.map_err(|e| AppError::status(StatusCode::BAD_REQUEST, format!("{e}")))?.to_vec()),
+            "thumb" => thumb = Some(field.bytes().await.map_err(|e| AppError::status(StatusCode::BAD_REQUEST, format!("{e}")))?.to_vec()),
+            _ => { let _ = field.bytes().await; }
+        }
+    }
+    let clip = clip.ok_or_else(|| AppError::status(StatusCode::BAD_REQUEST, "missing clip"))?;
+    let thumb = thumb.ok_or_else(|| AppError::status(StatusCode::BAD_REQUEST, "missing thumb"))?;
+    if clip.len() > crate::config::CAP_CLIP { return Err(AppError::status(StatusCode::PAYLOAD_TOO_LARGE, "clip too large")); }
+    if thumb.len() > crate::config::CAP_THUMB { return Err(AppError::status(StatusCode::PAYLOAD_TOO_LARGE, "thumb too large")); }
+
+    crate::blobs::store(&state, crate::blobs::BlobKey::Clip(&id), &clip).await?;
+    crate::blobs::store(&state, crate::blobs::BlobKey::Thumb(&id), &thumb).await?;
+    let now = crate::db::now();
+    if let Some(t) = &meta_title { sqlx::query("UPDATE toys SET title=? WHERE id=?").bind(t).bind(&id).execute(&state.pool).await?; }
+    sqlx::query("UPDATE toys SET state='published', published_at=? WHERE id=?").bind(now).bind(&id).execute(&state.pool).await?;
+
+    if let Some(d) = state.cfg.discord.as_ref() {
+        if let Some(url) = d.webhook_url.clone() {
+            let http = state.http.clone();
+            let permalink = format!("{}/t/{}", state.cfg.base_url, id);
+            let title = meta_title.clone().unwrap_or_else(|| id.clone());
+            tokio::spawn(async move {
+                let form = reqwest::multipart::Form::new()
+                    .text("content", format!("New toy: {title}\n{permalink}"))
+                    .part("files[0]", reqwest::multipart::Part::bytes(clip).file_name("clip.webm").mime_str("video/webm").unwrap());
+                if let Err(e) = http.post(&url).multipart(form).send().await { tracing::warn!(error=%e, "discord webhook failed"); }
+            });
+        }
+    }
+    Ok(Json(serde_json::json!({ "id": id, "state": "published" })).into_response())
+}
+
 #[derive(Deserialize)]
 pub struct WallQuery { #[serde(default)] sort: Option<String>, #[serde(default)] page: Option<i64> }
 
@@ -207,5 +256,6 @@ pub fn routes() -> Router<AppState> {
         .route("/toys", get(wall).post(create))
         .route("/toys/{id}", get(get_toy).put(update))
         .route("/toys/{id}/fork", post(fork))
+        .route("/toys/{id}/publish", post(publish))
         .route("/users/{handle}", get(profile))
 }

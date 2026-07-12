@@ -9,6 +9,7 @@ pub mod hearts;
 pub mod admin;
 pub mod web;
 
+use axum::extract::DefaultBodyLimit;
 use axum::routing::get;
 use axum::Router;
 use state::AppState;
@@ -19,7 +20,11 @@ pub fn build_router(state: AppState) -> Router {
         .merge(auth::routes())
         .merge(toys::routes())
         .merge(hearts::routes())
-        .merge(admin::routes());
+        .merge(admin::routes())
+        // axum's default body limit is 2MB, which would reject a legitimately-capped
+        // ~2MB clip once the thumb + multipart overhead push the request past it; the
+        // publish handler enforces the real per-field caps (CAP_CLIP/CAP_THUMB) itself.
+        .layer(DefaultBodyLimit::max(8 * 1024 * 1024));
     Router::new()
         .nest("/api", api)
         .merge(blobs::routes())
