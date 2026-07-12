@@ -18,7 +18,6 @@ export function ReadOnlyPlayer({
 }: { files: { name: string; source: string }[]; sources: PlayerSource[] }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const displayRef = useRef<HTMLDivElement>(null);
-  const presenterRef = useRef<Presenter | null>(null);
   const [forceCanvas2d, setForceCanvas2d] = useState(false);
 
   // Push the toy's program into the shared core: files first, then each M10
@@ -36,10 +35,8 @@ export function ReadOnlyPlayer({
     if (!canvas || !container) return;
     const presenter = new Presenter();
     const ok = presenter.init(canvas, forceCanvas2d);
-    presenterRef.current = presenter;
     if (!ok && !forceCanvas2d) {
       presenter.dispose();
-      presenterRef.current = null;
       setForceCanvas2d(true);
       return;
     }
@@ -57,7 +54,6 @@ export function ReadOnlyPlayer({
       ro.disconnect();
       unsub();
       presenter.dispose();
-      presenterRef.current = null;
     };
   }, [forceCanvas2d]);
 

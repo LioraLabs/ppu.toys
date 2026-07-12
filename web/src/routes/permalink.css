@@ -15,6 +15,7 @@
   padding: 0.4rem 1rem; cursor: pointer; font: inherit;
 }
 .fork-btn:disabled { opacity: 0.6; cursor: default; }
+.fork-error { color: #ff7a7a; font-size: 0.85rem; }
 .code-tabs { display: flex; gap: 0.25rem; flex-wrap: wrap; }
 .code-tab {
   background: none; border: 1px solid #2a2a33; color: #b9b9c6;

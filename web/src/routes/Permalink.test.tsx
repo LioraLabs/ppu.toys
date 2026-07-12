@@ -60,4 +60,14 @@ describe("Permalink", () => {
     renderAt("nope");
     expect(await screen.findByText(/not found/i)).toBeInTheDocument();
   });
+
+  it("surfaces an error and stays on the page when fork fails", async () => {
+    mockGetToy.mockResolvedValue(toy);
+    mockFork.mockRejectedValue(new Error("POST /api/toys/abc/fork → 500"));
+    renderAt();
+    await screen.findByText("Dusk");
+    fireEvent.click(screen.getByRole("button", { name: /fork/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/fork failed/i);
+    expect(navigate).not.toHaveBeenCalled();
+  });
 });

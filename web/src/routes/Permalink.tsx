@@ -16,6 +16,7 @@ export function Permalink() {
   const [load, setLoad] = useState<Load>({ status: "loading" });
   const [active, setActive] = useState(0);
   const [forking, setForking] = useState(false);
+  const [forkFailed, setForkFailed] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -45,9 +46,14 @@ export function Permalink() {
   async function fork() {
     if (!id) return;
     setForking(true);
+    setForkFailed(false);
     try {
       await forkToy(id);
       navigate("/studio");
+    } catch {
+      // Surface the failure instead of leaving the click silently dead — the
+      // user stays on the page and can retry.
+      setForkFailed(true);
     } finally {
       setForking(false);
     }
@@ -71,6 +77,7 @@ export function Permalink() {
           <button className="fork-btn" onClick={() => void fork()} disabled={!user || forking}>
             {forking ? "Forking…" : "Fork"}
           </button>
+          {forkFailed && <span className="fork-error" role="alert">Fork failed — try again.</span>}
         </div>
         <div className="code-view">
           <div className="code-tabs">
