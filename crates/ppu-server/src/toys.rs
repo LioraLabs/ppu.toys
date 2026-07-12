@@ -1,7 +1,7 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::get;
 use axum::{Json, Router};
 use base64::Engine;
 use rand::Rng;
@@ -120,8 +120,54 @@ async fn get_toy(State(state): State<AppState>, maybe: Option<AuthUser>, Path(id
     })).into_response())
 }
 
+#[derive(Deserialize)]
+pub struct WallQuery { #[serde(default)] sort: Option<String>, #[serde(default)] page: Option<i64> }
+
+const PAGE_SIZE: i64 = 24;
+
+fn wall_card(id: &str, title: &str, handle: &str, avatar: &Option<String>, heart_count: i64, hearted: bool) -> serde_json::Value {
+    serde_json::json!({
+        "id": id, "title": title,
+        "author": { "handle": handle, "avatar": avatar },
+        "thumbUrl": format!("/blobs/thumb/{id}"),
+        "clipUrl": format!("/blobs/clip/{id}"),
+        "heartCount": heart_count, "hearted": hearted,
+    })
+}
+
+async fn wall(State(state): State<AppState>, maybe: Option<AuthUser>, Query(q): Query<WallQuery>) -> AppResult<Response> {
+    let page = q.page.unwrap_or(0).max(0);
+    let order = match q.sort.as_deref() { Some("popular") => "t.heart_count DESC, t.created_at DESC", _ => "t.created_at DESC" };
+    let sql = format!("SELECT t.id,t.title,t.heart_count,u.handle,u.avatar_hash FROM toys t JOIN users u ON u.id=t.author_id
+                       WHERE t.state='published' ORDER BY {order} LIMIT ? OFFSET ?");
+    let rows: Vec<(String,String,i64,String,Option<String>)> = sqlx::query_as(&sql)
+        .bind(PAGE_SIZE + 1).bind(page * PAGE_SIZE).fetch_all(&state.pool).await?;
+    let uid = maybe.as_ref().map(|u| u.id.clone());
+    let has_more = rows.len() as i64 > PAGE_SIZE;
+    let mut cards = Vec::new();
+    for (id,title,hc,handle,avatar) in rows.into_iter().take(PAGE_SIZE as usize) {
+        let hearted = match &uid { Some(u) => sqlx::query_as::<_,(i64,)>("SELECT 1 FROM hearts WHERE user_id=? AND toy_id=?").bind(u).bind(&id).fetch_optional(&state.pool).await?.is_some(), None => false };
+        cards.push(wall_card(&id,&title,&handle,&avatar,hc,hearted));
+    }
+    Ok(Json(serde_json::json!({ "toys": cards, "nextPage": if has_more { Some(page+1) } else { None } })).into_response())
+}
+
+async fn profile(State(state): State<AppState>, maybe: Option<AuthUser>, Path(handle): Path<String>) -> AppResult<Response> {
+    let u: Option<(String,String,Option<String>)> = sqlx::query_as("SELECT id,handle,avatar_hash FROM users WHERE handle=?").bind(&handle).fetch_optional(&state.pool).await?;
+    let (uid, handle, avatar) = u.ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such user"))?;
+    let rows: Vec<(String,String,i64)> = sqlx::query_as("SELECT id,title,heart_count FROM toys WHERE author_id=? AND state='published' ORDER BY created_at DESC").bind(&uid).fetch_all(&state.pool).await?;
+    let viewer = maybe.as_ref().map(|x| x.id.clone());
+    let mut cards = Vec::new();
+    for (id,title,hc) in rows {
+        let hearted = match &viewer { Some(v) => sqlx::query_as::<_,(i64,)>("SELECT 1 FROM hearts WHERE user_id=? AND toy_id=?").bind(v).bind(&id).fetch_optional(&state.pool).await?.is_some(), None => false };
+        cards.push(wall_card(&id,&title,&handle,&avatar,hc,hearted));
+    }
+    Ok(Json(serde_json::json!({ "user": { "handle": handle, "avatar": avatar }, "toys": cards })).into_response())
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/toys", post(create))
+        .route("/toys", get(wall).post(create))
         .route("/toys/{id}", get(get_toy).put(update))
+        .route("/users/{handle}", get(profile))
 }
