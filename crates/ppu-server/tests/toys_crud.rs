@@ -69,3 +69,48 @@ async fn source_payload_roundtrips_through_get() {
     assert_eq!(v["sources"][0]["payload"], "AQIDBA==");
     assert_eq!(v["sources"][0]["options"]["a"], 1);
 }
+
+#[tokio::test]
+async fn oversized_lua_file_rejected_413() {
+    let app = common::test_app().await;
+    let sid = common::seed_session(&app.state, "1", "ann", false).await;
+    let big = "x".repeat(64 * 1024 + 1);
+    let res = app.router.clone().oneshot(authed("POST", "/api/toys", &sid, serde_json::json!({
+        "title":"B","files":[{"name":"m.lua","source":big}],"sources":[]
+    }))).await.unwrap();
+    assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM toys").fetch_one(&app.state.pool).await.unwrap();
+    assert_eq!(n, 0, "rejected before any toy row is written");
+}
+
+#[tokio::test]
+async fn oversized_source_payload_rejected_413() {
+    let app = common::test_app().await;
+    let sid = common::seed_session(&app.state, "1", "ann", false).await;
+    use base64::Engine;
+    let payload = base64::engine::general_purpose::STANDARD.encode(vec![0u8; 128 * 1024 + 1]);
+    let res = app.router.clone().oneshot(authed("POST", "/api/toys", &sid, serde_json::json!({
+        "title":"B","files":[],"sources":[{"name":"bg","kind":"bg","payload":payload}]
+    }))).await.unwrap();
+    assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM toys").fetch_one(&app.state.pool).await.unwrap();
+    assert_eq!(n, 0, "rejected before any toy row is written");
+}
+
+#[tokio::test]
+async fn update_replaces_source_set() {
+    let app = common::test_app().await;
+    let sid = common::seed_session(&app.state, "1", "ann", false).await;
+    let res = app.router.clone().oneshot(authed("POST", "/api/toys", &sid, serde_json::json!({
+        "title":"S","files":[],"sources":[{"name":"a","kind":"bg"},{"name":"b","kind":"bg"}]
+    }))).await.unwrap();
+    let b = axum::body::to_bytes(res.into_body(), 1<<20).await.unwrap();
+    let id = serde_json::from_slice::<serde_json::Value>(&b).unwrap()["id"].as_str().unwrap().to_string();
+    // update dropping source "b"
+    let res = app.router.clone().oneshot(authed("PUT", &format!("/api/toys/{id}"), &sid, serde_json::json!({
+        "title":"S","files":[],"sources":[{"name":"a","kind":"bg"}]
+    }))).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let names: Vec<(String,)> = sqlx::query_as("SELECT name FROM toy_sources WHERE toy_id=? ORDER BY name").bind(&id).fetch_all(&app.state.pool).await.unwrap();
+    assert_eq!(names.iter().map(|(n,)| n.as_str()).collect::<Vec<_>>(), vec!["a"], "dropped source is removed, not left stale");
+}

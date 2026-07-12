@@ -39,6 +39,20 @@ fn validate_files(files: &[FileDto]) -> AppResult<()> {
     Ok(())
 }
 
+/// Decode + cap-check every source payload BEFORE any row is written, so a cap
+/// violation on a later source can't leave a half-written toy behind.
+fn validate_sources(sources: &[SourceDto]) -> AppResult<()> {
+    for s in sources {
+        if let Some(p) = &s.payload {
+            let bytes = unb64(p)?;
+            if bytes.len() > crate::config::CAP_SOURCE_PAYLOAD {
+                return Err(AppError::status(StatusCode::PAYLOAD_TOO_LARGE, "source payload too large"));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Upsert source metadata rows, then push each payload through the blob layer so
 /// PPU_BLOB_MODE (db|disk) is honored uniformly. The row is written first (payload
 /// column NULL); blobs::store then fills it (db) or writes a file (disk).
@@ -68,6 +82,7 @@ async fn snapshot_revision(state: &AppState, toy_id: &str, files_json: &str) -> 
 async fn create(State(state): State<AppState>, user: AuthUser, Json(body): Json<SaveBody>) -> AppResult<Response> {
     if !state.limiter.check_save(&user.id) { return Err(AppError::status(StatusCode::TOO_MANY_REQUESTS, "save rate limit")); }
     validate_files(&body.files)?;
+    validate_sources(&body.sources)?;
     let id = slug();
     let files_json = serde_json::to_string(&body.files)?;
     let now = crate::db::now();
@@ -84,8 +99,12 @@ async fn update(State(state): State<AppState>, user: AuthUser, Path(id): Path<St
     let author = author.ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such toy"))?.0;
     if author != user.id { return Err(AppError::status(StatusCode::FORBIDDEN, "not your toy")); }
     validate_files(&body.files)?;
+    validate_sources(&body.sources)?;
     let files_json = serde_json::to_string(&body.files)?;
     sqlx::query("UPDATE toys SET title=?, description=?, files_json=? WHERE id=?").bind(&body.title).bind(&body.description).bind(&files_json).bind(&id).execute(&state.pool).await?;
+    // PUT replaces the whole source set: drop rows that are gone, then upsert the
+    // current set (db mode; disk-mode orphan files are the known escape-hatch limit).
+    sqlx::query("DELETE FROM toy_sources WHERE toy_id=?").bind(&id).execute(&state.pool).await?;
     write_sources(&state, &id, &body.sources).await?;
     snapshot_revision(&state, &id, &files_json).await?;
     Ok(StatusCode::NO_CONTENT.into_response())
