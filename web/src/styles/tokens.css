@@ -1,8 +1,7 @@
-/* Design tokens — Workspace handoff (design_handoff_ppu_toys_workspace/README.md,
-   "Design Tokens"). Two final palettes: dark (default, :root) and light
+/* Shared design tokens for the dark (default, :root) and light themes
    ([data-theme="light"] set on <html> by the toolbar theme toggle).
-   Component CSS should use the handoff names; the legacy alias block keeps
-   pre-M9 panel CSS (inspector.css, editor) working in both themes. */
+   Component CSS should use these tokens; the legacy alias block keeps older
+   panel CSS (inspector.css, editor) working in both themes. */
 
 :root {
   /* Backgrounds */

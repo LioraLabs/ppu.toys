@@ -1,8 +1,8 @@
 # ppu.toys web studio
 
-React + Vite authoring workspace over the WASM-compiled `ppu-core` engine. This
-covers the M9 studio shape: layout, the live authoring loop, the sketch model,
-multi-file semantics, and the inspector tab set.
+React + Vite authoring workspace over the WASM-compiled `ppu-core` engine. The
+architecture covers the studio layout, live authoring loop, sketch model,
+multi-file semantics, and inspector tab set.
 
 ## Layout
 

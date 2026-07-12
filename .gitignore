@@ -1,7 +1,23 @@
+# Build outputs and dependencies
 /target
-**/node_modules
-/web/dist
-/web/src/wasm/pkg
+**/node_modules/
+/web/dist/
+/web/src/wasm/pkg/
 .cook/
 .worktrees/
 /crates/ppu-server/build/
+
+# Local configuration and data
+.env
+.env.*
+!.env.example
+/ppu.db
+/ppu.db-*
+/data/
+/coverage/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
