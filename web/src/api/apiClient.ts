@@ -88,3 +88,19 @@ export function getToy(id: string): Promise<ToyFull> {
 export function getProfile(handle: string): Promise<Profile> {
   return request<Profile>(`/api/users/${handle}`);
 }
+
+export function forkToy(id: string): Promise<{ id: string }> {
+  return request<{ id: string }>(`/api/toys/${id}/fork`, { method: "POST" });
+}
+
+export function addHeart(id: string): Promise<void> {
+  return request<void>(`/api/toys/${id}/heart`, { method: "PUT" });
+}
+
+export function removeHeart(id: string): Promise<void> {
+  return request<void>(`/api/toys/${id}/heart`, { method: "DELETE" });
+}
+
+export function logout(): Promise<void> {
+  return request<void>("/api/auth/logout", { method: "POST" });
+}

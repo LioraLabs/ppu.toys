@@ -54,3 +54,37 @@ describe("read endpoints", () => {
     await expect(getToy("x")).rejects.toThrow();
   });
 });
+
+describe("mutations send X-PPU-CSRF", () => {
+  it("forkToy POSTs with the CSRF header and returns the new id", async () => {
+    const spy = mockFetch(200, { id: "new1" });
+    vi.stubGlobal("fetch", spy);
+    const { forkToy } = await import("./apiClient");
+    expect(await forkToy("abc")).toEqual({ id: "new1" });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe("/api/toys/abc/fork");
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>)["X-PPU-CSRF"]).toBe("1");
+    expect(init.credentials).toBe("include");
+  });
+
+  it("addHeart PUTs, removeHeart DELETEs, both with CSRF", async () => {
+    const spy = mockFetch(204, undefined);
+    vi.stubGlobal("fetch", spy);
+    const { addHeart, removeHeart } = await import("./apiClient");
+    await addHeart("abc");
+    await removeHeart("abc");
+    expect(spy.mock.calls[0][1].method).toBe("PUT");
+    expect(spy.mock.calls[1][1].method).toBe("DELETE");
+    expect((spy.mock.calls[0][1].headers as Record<string, string>)["X-PPU-CSRF"]).toBe("1");
+  });
+
+  it("logout POSTs to /api/auth/logout with CSRF", async () => {
+    const spy = mockFetch(204, undefined);
+    vi.stubGlobal("fetch", spy);
+    const { logout } = await import("./apiClient");
+    await logout();
+    expect(spy.mock.calls[0][0]).toBe("/api/auth/logout");
+    expect(spy.mock.calls[0][1].method).toBe("POST");
+  });
+});
