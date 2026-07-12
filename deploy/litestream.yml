@@ -5,8 +5,8 @@
 #   LITESTREAM_ACCESS_KEY_ID / LITESTREAM_SECRET_ACCESS_KEY  (R2 API token)
 #   LITESTREAM_R2_ACCOUNT_ID                                 (R2 account id)
 # Keeping it static means box-setup.sh can re-copy it on every run without ever
-# clobbering the filled-in values. Bucket name is fixed (create it as-is; see
-# RUNBOOK: R2 bucket + token).
+# clobbering the filled-in values. Bucket name is fixed; create it as-is and
+# grant the R2 API token access to it.
 
 dbs:
   - path: /var/lib/ppu/ppu.db

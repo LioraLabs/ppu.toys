@@ -111,7 +111,7 @@ install_env_templates() {
 	if [ -f "${app_env}" ]; then
 		log "${app_env} already present — leaving as is"
 	else
-		log "Dropping env template ${app_env} (fill secrets — see RUNBOOK)"
+		log "Dropping env template ${app_env} (fill required values before deploying)"
 		install -o root -g "${PPU_GROUP}" -m 0640 \
 			"${SCRIPT_DIR}/ppu-server.env.example" "${app_env}"
 	fi
@@ -120,7 +120,7 @@ install_env_templates() {
 	else
 		log "Writing R2 credentials template ${ls_env}"
 		cat >"${ls_env}" <<'EOF'
-# Cloudflare R2 config for Litestream (see RUNBOOK: R2 bucket + token).
+# Cloudflare R2 config for Litestream (requires an R2 bucket and API token).
 # ACCOUNT_ID is your Cloudflare account id; the two keys are the R2 API token.
 # All three are expanded into /etc/litestream.yml at runtime — that file stays
 # static, so this env file is the ONLY place these values live.
@@ -138,7 +138,7 @@ enable_services() {
 	systemctl daemon-reload
 	systemctl enable caddy
 	# ppu-server + litestream are ENABLED (start on boot) but NOT started now:
-	# they need the binary deployed + secrets filled. See RUNBOOK first deploy.
+	# they need the binary deployed and secrets filled before the first deploy.
 	systemctl enable ppu-server.service
 	systemctl enable litestream.service
 }
@@ -155,7 +155,7 @@ main() {
 	install_configs
 	install_env_templates
 	enable_services
-	log "Done. Next: fill ${ETC_DIR}/ppu-server.env + ${ETC_DIR}/litestream.env, then deploy (RUNBOOK step: First deploy)."
+	log "Done. Next: fill /etc/ppu/ppu-server.env and /etc/ppu/litestream.env, then trigger the deploy workflow."
 }
 
 main "$@"

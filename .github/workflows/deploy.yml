@@ -12,7 +12,7 @@ concurrency:
 
 # Requires repo secrets: DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY (private key
 # for a deploy user on the box with passwordless sudo for the swap below).
-# Rollback one-liner (also in deploy/RUNBOOK.md):
+# Rollback one-liner:
 #   ssh $DEPLOY_USER@$DEPLOY_HOST \
 #     'sudo cp -a /opt/ppu/ppu-server.prev /opt/ppu/ppu-server && sudo systemctl restart ppu-server'
 jobs:

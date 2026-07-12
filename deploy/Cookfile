@@ -1,21 +1,18 @@
-# Cookfile for deploy/ ops — the runnable slices of deploy/RUNBOOK.md, imported by
-# the root Cookfile as `deploy` (so: cook deploy.ship / deploy.rollback /
-# deploy.health / deploy.logs).
+# Cookfile for deploy/ production operations, imported by the root Cookfile as
+# `deploy` (so: cook deploy.ship / deploy.rollback / deploy.health / deploy.logs).
 #
-# These are thin, env-driven wrappers around operations that already exist in
-# deploy.yml + the RUNBOOK. What is DELIBERATELY not here:
-#   - the aarch64 cross-build + ship: CI (.github/workflows/deploy.yml) owns it and
-#     runs where the cross toolchain exists; `deploy.ship` just triggers that.
-#   - Discord / Cloudflare / R2 / GitHub-secrets setup: dashboard steps, not runnable.
-#   - the restore-from-R2 drill: a deliberate, box-side, run-once procedure — it
-#     stays as documented steps in RUNBOOK.md Step 8, not a one-shot chore.
+# These are thin, env-driven wrappers around production operations. CI
+# (.github/workflows/deploy.yml) owns aarch64 cross-compilation and shipping;
+# `deploy.ship` only triggers that workflow. Discord, Cloudflare, R2, and GitHub
+# secret setup is manual dashboard work. Database restore is an operator procedure
+# and is not automated here.
 #
 # Guards fail LOUDLY on missing env (`${VAR:?message}`) rather than running a
 # broken ssh/curl — a missing input should never look like success.
 
 # ── SHIP: trigger the CI deploy (build aarch64 + ship + restart runs on GitHub,
 #    where the cross toolchain lives). Requires `gh` auth and the workflow present
-#    on the default branch. Equivalent to RUNBOOK Step 6's "Actions → Run workflow".
+#    on the default branch.
 chore ship
     gh workflow run deploy.yml
 
