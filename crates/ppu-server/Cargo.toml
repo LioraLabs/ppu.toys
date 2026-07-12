@@ -15,7 +15,6 @@ path = "src/main.rs"
 axum = { version = "0.8", features = ["multipart"] }
 axum-extra = { version = "0.10", features = ["cookie"] }
 tokio = { version = "1", features = ["full"] }
-tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["fs"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
@@ -30,3 +29,4 @@ time = "0.3"
 
 [dev-dependencies]
 tempfile = "3"
+tower = { version = "0.5", features = ["util"] }

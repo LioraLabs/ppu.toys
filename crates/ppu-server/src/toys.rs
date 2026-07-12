@@ -14,6 +14,7 @@ use crate::state::AppState;
 pub struct FileDto { pub name: String, pub source: String }
 
 #[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")] // write side accepts `builtinId`, matching the read side
 pub struct SourceDto {
     pub name: String,
     pub kind: String,
@@ -34,21 +35,28 @@ fn slug() -> String {
 fn b64(bytes: &[u8]) -> String { base64::engine::general_purpose::STANDARD.encode(bytes) }
 fn unb64(s: &str) -> AppResult<Vec<u8>> { base64::engine::general_purpose::STANDARD.decode(s).map_err(|_| AppError::status(StatusCode::BAD_REQUEST, "bad base64 payload")) }
 
-fn validate_files(files: &[FileDto]) -> AppResult<()> {
-    for f in files { if f.source.len() > crate::config::CAP_LUA_FILE { return Err(AppError::status(StatusCode::PAYLOAD_TOO_LARGE, "lua file too large")); } }
-    Ok(())
-}
-
-/// Decode + cap-check every source payload BEFORE any row is written, so a cap
-/// violation on a later source can't leave a half-written toy behind.
-fn validate_sources(sources: &[SourceDto]) -> AppResult<()> {
+/// Validate a save BEFORE any row is written: per-file cap, per-source-payload cap,
+/// and the aggregate ≤1MB toy-total cap. Doing it up front means a cap violation on a
+/// later item can't leave a half-written toy behind.
+fn validate_save(files: &[FileDto], sources: &[SourceDto]) -> AppResult<()> {
+    let mut total = 0usize;
+    for f in files {
+        if f.source.len() > crate::config::CAP_LUA_FILE {
+            return Err(AppError::status(StatusCode::PAYLOAD_TOO_LARGE, "lua file too large"));
+        }
+        total += f.source.len();
+    }
     for s in sources {
         if let Some(p) = &s.payload {
             let bytes = unb64(p)?;
             if bytes.len() > crate::config::CAP_SOURCE_PAYLOAD {
                 return Err(AppError::status(StatusCode::PAYLOAD_TOO_LARGE, "source payload too large"));
             }
+            total += bytes.len();
         }
+    }
+    if total > crate::config::CAP_TOY_TOTAL {
+        return Err(AppError::status(StatusCode::PAYLOAD_TOO_LARGE, "toy exceeds total size cap"));
     }
     Ok(())
 }
@@ -80,8 +88,7 @@ async fn snapshot_revision(state: &AppState, toy_id: &str, files_json: &str) -> 
 }
 
 async fn create(State(state): State<AppState>, user: AuthUser, Json(body): Json<SaveBody>) -> AppResult<Response> {
-    validate_files(&body.files)?;
-    validate_sources(&body.sources)?;
+    validate_save(&body.files, &body.sources)?;
     let id = slug();
     let files_json = serde_json::to_string(&body.files)?;
     let now = crate::db::now();
@@ -98,8 +105,7 @@ async fn update(State(state): State<AppState>, user: AuthUser, Path(id): Path<St
     let author: Option<(String,)> = sqlx::query_as("SELECT author_id FROM toys WHERE id=?").bind(&id).fetch_optional(&state.pool).await?;
     let author = author.ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such toy"))?.0;
     if author != user.id { return Err(AppError::status(StatusCode::FORBIDDEN, "not your toy")); }
-    validate_files(&body.files)?;
-    validate_sources(&body.sources)?;
+    validate_save(&body.files, &body.sources)?;
     let files_json = serde_json::to_string(&body.files)?;
     sqlx::query("UPDATE toys SET title=?, description=?, files_json=? WHERE id=?").bind(&body.title).bind(&body.description).bind(&files_json).bind(&id).execute(&state.pool).await?;
     // PUT replaces the whole source set: drop rows that are gone, then upsert the

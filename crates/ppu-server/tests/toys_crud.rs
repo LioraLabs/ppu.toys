@@ -98,6 +98,41 @@ async fn oversized_source_payload_rejected_413() {
 }
 
 #[tokio::test]
+async fn toy_exceeding_total_cap_rejected_413() {
+    let app = common::test_app().await;
+    let sid = common::seed_session(&app.state, "1", "ann", false).await;
+    use base64::Engine;
+    // 9 sources * 120KB each = 1.08MB > 1MB total, though each is under the 128KB per-source cap
+    let sources: Vec<serde_json::Value> = (0..9).map(|i| serde_json::json!({
+        "name": format!("s{i}"), "kind": "bg",
+        "payload": base64::engine::general_purpose::STANDARD.encode(vec![0u8; 120 * 1024]),
+    })).collect();
+    let res = app.router.clone().oneshot(authed("POST", "/api/toys", &sid, serde_json::json!({
+        "title":"Big","files":[],"sources":sources
+    }))).await.unwrap();
+    assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM toys").fetch_one(&app.state.pool).await.unwrap();
+    assert_eq!(n, 0, "aggregate-cap rejection writes nothing");
+}
+
+#[tokio::test]
+async fn builtin_id_round_trips_as_camel_case() {
+    let app = common::test_app().await;
+    let sid = common::seed_session(&app.state, "1", "ann", false).await;
+    // write side accepts camelCase `builtinId` (symmetric with the read side)
+    let res = app.router.clone().oneshot(authed("POST", "/api/toys", &sid, serde_json::json!({
+        "title":"B","files":[],"sources":[{"name":"logo","kind":"builtin","builtinId":"mode7-photo"}]
+    }))).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let b = axum::body::to_bytes(res.into_body(), 1<<20).await.unwrap();
+    let id = serde_json::from_slice::<serde_json::Value>(&b).unwrap()["id"].as_str().unwrap().to_string();
+    let res = app.router.clone().oneshot(Request::builder().uri(format!("/api/toys/{id}")).body(Body::empty()).unwrap()).await.unwrap();
+    let b = axum::body::to_bytes(res.into_body(), 1<<20).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+    assert_eq!(v["sources"][0]["builtinId"], "mode7-photo");
+}
+
+#[tokio::test]
 async fn update_replaces_source_set() {
     let app = common::test_app().await;
     let sid = common::seed_session(&app.state, "1", "ann", false).await;
