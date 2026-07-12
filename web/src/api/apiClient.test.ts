@@ -1,26 +1,26 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { getMe, getWall, getToy, getProfile } from "./apiClient";
 
 function mockFetch(status: number, body: unknown) {
-  return vi.fn(async () =>
-    new Response(body === undefined ? null : JSON.stringify(body), {
-      status,
-      headers: { "content-type": "application/json" },
-    }),
+  return vi.fn(
+    (): Promise<Response> =>
+      Promise.resolve(
+        new Response(body === undefined ? null : JSON.stringify(body), {
+          status,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
   );
 }
 
-let fetchSpy: ReturnType<typeof mockFetch>;
 afterEach(() => vi.unstubAllGlobals());
 
 describe("read endpoints", () => {
-  it("getMe returns the user on 200", async () => {
-    fetchSpy = mockFetch(200, { id: "1", handle: "ada", isAdmin: false });
+  it("getMe returns the user on 200 with credentials included", async () => {
+    const fetchSpy = mockFetch(200, { id: "1", handle: "ada", isAdmin: false });
     vi.stubGlobal("fetch", fetchSpy);
     expect(await getMe()).toEqual({ id: "1", handle: "ada", isAdmin: false });
-    const [url, init] = fetchSpy.mock.calls[0];
-    expect(url).toBe("/api/me");
-    expect(init.credentials).toBe("include");
+    expect(fetchSpy).toHaveBeenCalledWith("/api/me", { credentials: "include" });
   });
 
   it("getMe returns null on 401 (signed out)", async () => {
@@ -29,24 +29,37 @@ describe("read endpoints", () => {
   });
 
   it("getWall builds the sort+page query", async () => {
-    fetchSpy = mockFetch(200, { toys: [], nextPage: null });
+    const fetchSpy = mockFetch(200, { toys: [], nextPage: null });
     vi.stubGlobal("fetch", fetchSpy);
     await getWall("popular", 2);
-    expect(fetchSpy.mock.calls[0][0]).toBe("/api/toys?sort=popular&page=2");
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/toys?sort=popular&page=2",
+      expect.objectContaining({ credentials: "include" }),
+    );
   });
 
   it("getToy hits /api/toys/:id", async () => {
-    fetchSpy = mockFetch(200, { id: "abc", files: [], sources: [] });
+    const fetchSpy = mockFetch(200, { id: "abc", files: [], sources: [] });
     vi.stubGlobal("fetch", fetchSpy);
     await getToy("abc");
-    expect(fetchSpy.mock.calls[0][0]).toBe("/api/toys/abc");
+    expect(fetchSpy).toHaveBeenCalledWith("/api/toys/abc", expect.anything());
   });
 
   it("getProfile hits /api/users/:handle", async () => {
-    fetchSpy = mockFetch(200, { user: { handle: "ada", avatar: null }, toys: [] });
+    const fetchSpy = mockFetch(200, { user: { handle: "ada", avatar: null }, toys: [] });
     vi.stubGlobal("fetch", fetchSpy);
     await getProfile("ada");
-    expect(fetchSpy.mock.calls[0][0]).toBe("/api/users/ada");
+    expect(fetchSpy).toHaveBeenCalledWith("/api/users/ada", expect.anything());
+  });
+
+  it("read requests do NOT send the CSRF header", async () => {
+    const fetchSpy = mockFetch(200, { toys: [], nextPage: null });
+    vi.stubGlobal("fetch", fetchSpy);
+    await getWall("recent", 0);
+    expect(fetchSpy).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ headers: expect.objectContaining({ "X-PPU-CSRF": "1" }) }),
+    );
   });
 
   it("throws on a 500", async () => {
@@ -61,11 +74,14 @@ describe("mutations send X-PPU-CSRF", () => {
     vi.stubGlobal("fetch", spy);
     const { forkToy } = await import("./apiClient");
     expect(await forkToy("abc")).toEqual({ id: "new1" });
-    const [url, init] = spy.mock.calls[0];
-    expect(url).toBe("/api/toys/abc/fork");
-    expect(init.method).toBe("POST");
-    expect((init.headers as Record<string, string>)["X-PPU-CSRF"]).toBe("1");
-    expect(init.credentials).toBe("include");
+    expect(spy).toHaveBeenCalledWith(
+      "/api/toys/abc/fork",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        headers: expect.objectContaining({ "X-PPU-CSRF": "1" }),
+      }),
+    );
   });
 
   it("addHeart PUTs, removeHeart DELETEs, both with CSRF", async () => {
@@ -74,9 +90,19 @@ describe("mutations send X-PPU-CSRF", () => {
     const { addHeart, removeHeart } = await import("./apiClient");
     await addHeart("abc");
     await removeHeart("abc");
-    expect(spy.mock.calls[0][1].method).toBe("PUT");
-    expect(spy.mock.calls[1][1].method).toBe("DELETE");
-    expect((spy.mock.calls[0][1].headers as Record<string, string>)["X-PPU-CSRF"]).toBe("1");
+    expect(spy).toHaveBeenNthCalledWith(
+      1,
+      "/api/toys/abc/heart",
+      expect.objectContaining({
+        method: "PUT",
+        headers: expect.objectContaining({ "X-PPU-CSRF": "1" }),
+      }),
+    );
+    expect(spy).toHaveBeenNthCalledWith(
+      2,
+      "/api/toys/abc/heart",
+      expect.objectContaining({ method: "DELETE" }),
+    );
   });
 
   it("logout POSTs to /api/auth/logout with CSRF", async () => {
@@ -84,7 +110,12 @@ describe("mutations send X-PPU-CSRF", () => {
     vi.stubGlobal("fetch", spy);
     const { logout } = await import("./apiClient");
     await logout();
-    expect(spy.mock.calls[0][0]).toBe("/api/auth/logout");
-    expect(spy.mock.calls[0][1].method).toBe("POST");
+    expect(spy).toHaveBeenCalledWith(
+      "/api/auth/logout",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ "X-PPU-CSRF": "1" }),
+      }),
+    );
   });
 });
