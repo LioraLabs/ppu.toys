@@ -4,6 +4,7 @@ use axum::Json;
 
 pub type AppResult<T> = Result<T, AppError>;
 
+#[derive(Debug)]
 pub enum AppError { Status(StatusCode, String), Internal(anyhow::Error) }
 
 impl AppError {
