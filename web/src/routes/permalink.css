@@ -1,0 +1,29 @@
+.permalink {
+  display: grid; grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr);
+  gap: 1.5rem; padding: 1.5rem; align-items: start;
+  font-family: "IBM Plex Sans", system-ui, sans-serif; color: #e8e8ef;
+}
+@media (max-width: 800px) { .permalink { grid-template-columns: 1fr; } }
+.permalink-stage { background: #000; border-radius: 8px; overflow: hidden; }
+.permalink-head h1 { margin: 0 0 0.25rem; font-size: 1.4rem; }
+.permalink-author { color: #8b8b98; text-decoration: none; }
+.permalink-author:hover { text-decoration: underline; }
+.permalink-desc { color: #b9b9c6; }
+.permalink-actions { display: flex; align-items: center; gap: 1rem; margin: 1rem 0; }
+.fork-btn {
+  background: #2a2a33; color: #e8e8ef; border: none; border-radius: 6px;
+  padding: 0.4rem 1rem; cursor: pointer; font: inherit;
+}
+.fork-btn:disabled { opacity: 0.6; cursor: default; }
+.code-tabs { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+.code-tab {
+  background: none; border: 1px solid #2a2a33; color: #b9b9c6;
+  padding: 0.2rem 0.6rem; border-radius: 4px 4px 0 0; cursor: pointer; font: inherit; font-size: 0.85rem;
+}
+.code-tab--on { background: #17171d; color: #e8e8ef; }
+.code-body {
+  margin: 0; padding: 0.75rem; background: #17171d; border: 1px solid #2a2a33;
+  border-radius: 0 4px 4px 4px; overflow-x: auto; max-height: 60vh;
+  font-family: "IBM Plex Mono", monospace; font-size: 0.8rem; color: #d6d6e0;
+}
+.permalink-msg { padding: 2rem; color: #8b8b98; font-family: "IBM Plex Sans", system-ui, sans-serif; }
