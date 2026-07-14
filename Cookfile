@@ -14,8 +14,7 @@
 #   cook server.build  compile the axum backend (crates/ppu-server)
 #
 #   ── run ──────────────────────────────────────────────────────────────────────
-#   cook dev         Vite dev server, mock core (no WASM build needed)
-#   cook dev-wasm    Vite dev server against the real WASM core
+#   cook dev         Vite dev server (builds the WASM core first)
 #   cook server.run  boot the backend serving web/dist + the live API
 #
 #   ── deploy/ops (production operations) ────────────────────────────────────
@@ -95,13 +94,10 @@ recipe web: wasm deps
 #    the backend too.
 recipe build: web server.build
 
-# ── DEV SERVERS: long-running, interactive. Mock core by default; dev-wasm builds
-#    the real module first and selects it via VITE_USE_WASM=1.
-chore dev: deps
+# ── DEV SERVER: long-running, interactive. Builds the WASM core first — the app
+#    has no mock fallback, so it can't render without it.
+chore dev: wasm deps
     npm --prefix web run dev
-
-chore dev-wasm: wasm deps
-    VITE_USE_WASM=1 npm --prefix web run dev
 
 # ── TESTS ────────────────────────────────────────────────────────────────────
 chore test-core

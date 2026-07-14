@@ -42,8 +42,8 @@ export const REG = {
 const POWER_ON = new Map<number, number>([[REG.TM, 0x1f]]);
 
 /** What a control displays for `addr`: the live value the core reports, else
- *  the power-on default (the mock core omits most registers; the wasm core
- *  reports all of them). */
+ *  the power-on default (a core may omit registers — the test stub reports
+ *  none; the wasm core reports all of them). */
 export function liveReg(registers: RegisterView[], addr: number): number {
   return registers.find((r) => r.addr === addr)?.value ?? POWER_ON.get(addr) ?? 0;
 }

@@ -12,5 +12,8 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // Installs a stub PpuCore before any test imports the transport singleton
+    // (see src/test/setup.ts) — real wasm can't init under node/jsdom.
+    setupFiles: ["./src/test/setup.ts"],
   },
 });

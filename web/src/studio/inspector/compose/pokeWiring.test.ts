@@ -42,7 +42,7 @@ describe("poke wiring", () => {
 
   it("a matrix-cell toggle lands the friendly field line in pokes.lua", () => {
     // the handler: read live TM (power-on fallback), flip one bit, poke the friendly field
-    const tm = liveReg([], REG.TM); // mock core omits TM -> 0x1f
+    const tm = liveReg([], REG.TM); // stub core omits TM -> 0x1f
     poke(fieldPoke(toggleDesignation("screen.main.bg3", REG.TM, tm, 2)));
     expect(pokesSource()).toContain("  screen.main.bg3 = false -- $212C");
     expect(currentPokes(openSketchStore.state())).toEqual([

@@ -4,7 +4,6 @@ import { clockToScrub, integerScale } from "./clock";
 import { transport, useTransport } from "../transport/transport";
 import { Presenter } from "./presenter";
 import { loadFx, saveFx, type PresentFx } from "./fx";
-import { coreKind } from "../../ppu/instance";
 import { DropZone } from "./DropZone";
 
 /** Right-column Output: presents the SHARED core's framebuffer through a WebGL
@@ -94,7 +93,7 @@ export function OutputCanvas() {
             height={HEIGHT}
           />
           <span className="display-badge">
-            {(forceCanvas2d ? "canvas" : "webgl") + " · " + (coreKind() === "wasm" ? "wasm-ppu" : "mock-ppu")}
+            {(forceCanvas2d ? "canvas" : "webgl") + " · wasm-ppu"}
           </span>
         </div>
         <div className="output-side">

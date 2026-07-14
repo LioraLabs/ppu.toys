@@ -188,8 +188,8 @@ export interface ObjTrace {
   palette: number[]; // the 16 BGR555 words of the sub-palette
 }
 
-/** The one hard seam. Headless — no canvas. Both the mock and the real WASM
- *  module implement this; JS owns presentation. */
+/** The one hard seam. Headless — no canvas. The real WASM module implements
+ *  this (and a lightweight test stub); JS owns presentation. */
 export interface PpuCore {
   /** Single-file sugar for setSources([{ name: "main.lua", source: src }]). */
   setSource(src: string): { ok: boolean; error?: LuaError };

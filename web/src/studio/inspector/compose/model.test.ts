@@ -75,7 +75,7 @@ describe("liveReg", () => {
     expect(liveReg([rv(REG.TM, "TM", 0x0b)], REG.TM)).toBe(0x0b);
   });
 
-  it("falls back to power-on defaults when the core omits the register (mock)", () => {
+  it("falls back to power-on defaults when the core omits the register (stub)", () => {
     expect(liveReg([], REG.TM)).toBe(0x1f);
     expect(liveReg([], REG.TS)).toBe(0);
     expect(liveReg([], REG.CGADSUB)).toBe(0);

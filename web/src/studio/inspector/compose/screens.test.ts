@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { transport } from "../../transport/transport";
 import { screensFor } from "./screens";
 
-/** Runs against the REAL singletons (mock core + shared transport), which is
+/** Runs against the REAL singletons (stub core + shared transport), which is
  *  the point: it verifies the wiring the tabs and overlay share. */
 
 describe("screensFor", () => {
