@@ -77,6 +77,115 @@ because the edit reached the static build before the shot was taken.
 
 (Revert the fixture edit when you're done experimenting.)
 
+## Studio panels: presentational vs wired
+
+The `src/studio/inspector/` tabs follow a two-tier split so that panels can
+be storied and screenshotted without booting the wasm PPU core. This is the
+durable convention for any new studio panel, not a one-off for the inspector.
+
+**Presentational panel** — a pure function of a `FrameResult`-shaped prop. It
+imports no `transport`, `ppuCore`, or `useInspectorFrame`; everything it
+renders comes from its props. `RegistersTab.tsx` and `SpritesTab.tsx` are the
+real examples: both are `({ frame }: { frame: FrameResult | null }) => ...`.
+Because a presentational panel takes its data as a prop, it gets prop-driven
+stories with no core involved.
+
+**Wired container** — a thin component that reads the live singleton/hook and
+passes the result down as props. `Inspector.tsx` is the real example: it
+calls `const frame = useInspectorFrame()` once and passes `frame` to both
+`<RegistersTab frame={frame} />` and `<SpritesTab frame={frame} />`. The
+container itself stays too thin to be worth storying on its own — its job is
+wiring, not rendering.
+
+### Storying a presentational panel wasm-free
+
+Pass the fixture straight in as a prop:
+
+```tsx
+<RegistersTab frame={frameResult} />
+```
+
+Import `frameResult` (a ready-made `FrameResult`) or `makeFrameResult`
+(overridable factory) from `src/fixtures`. Use `makeFrameResult({ ... })` to
+hit variant states without touching the component:
+
+- `makeFrameResult({ objOverflow: { rangeOver: true, timeOver: true, maxSprites: 32, maxTiles: 34 } })`
+  — triggers SpritesTab's RANGE OVER / TIME OVER badges.
+- `makeFrameResult({ oam: frameResult.oam.map((s) => ({ ...s, on: false })) })`
+  — every sprite off, SpritesTab's empty state.
+- `frame={null}` — the panel's own "waiting for frame…" state.
+
+No `initCore()`, no `ppuCore`, no MSW — the story never touches the wasm
+core or the network, because the panel itself never does.
+
+### The `useInspectorFrame` seam
+
+A presentational panel is easy to story because it only takes props. A wired
+container is harder, because it reads a singleton — but the singleton has a
+story/test seam built in. `useInspectorFrame` (`src/studio/inspector/useInspectorFrame.tsx`)
+checks a React context first and only falls back to subscribing to the live
+transport (which requires the wasm core) if nothing was injected:
+
+```tsx
+export function useInspectorFrame(): FrameResult {
+  const injected = useContext(InspectorFrameContext);
+  if (injected) return injected;
+  return useTransport().frame;
+}
+```
+
+`InspectorFrameProvider` sets that context. Wrap a wired consumer in it with
+a fixture frame and the hook returns the fixture instead of subscribing to
+the transport — no wasm core loads, `initCore()` is never called. In the real
+app no provider is mounted, so the app path is unchanged.
+
+Worked example — `ViaInspectorFrameSeam` in `RegistersTab.stories.tsx`:
+
+```tsx
+function WiredRegisters() {
+  const frame = useInspectorFrame();
+  return <RegistersTab frame={frame} />;
+}
+// story:
+<InspectorFrameProvider frame={frameResult}>
+  <WiredRegisters />
+</InspectorFrameProvider>
+```
+
+This renders identically to the direct-prop `Default` story — it exists to
+prove the seam works, not because you'd normally story a container this way.
+Prefer storying the presentational panel directly; reach for
+`InspectorFrameProvider` when you specifically need to exercise a wired
+consumer (e.g. a container you can't easily pull the prop out of, or a test
+asserting the hook's fallback behavior).
+
+### Recipe for a new studio panel
+
+1. If the panel reads frame data, give it a `FrameResult`-shaped prop (e.g.
+   `{ frame: FrameResult | null }`) and keep the component pure. Move any
+   `useInspectorFrame()` call or other singleton read up into the container
+   that renders it (e.g. `Inspector.tsx`), and pass the result down as a
+   prop instead.
+2. Colocate `Foo.stories.tsx` beside `Foo.tsx`. Keep stories props-only,
+   drawing fixture data from `src/fixtures` (`frameResult`, `makeFrameResult`,
+   or a new fixture factory added there if the panel needs different shape).
+3. Shoot it: `npm run shoot -- <story-id> --build`, then open the PNG and
+   eyeball it — see "The loop" above for the full cycle.
+
+### Scope caveat: this is a vertical slice, not a studio-wide rewrite
+
+Only `RegistersTab` and `SpritesTab` have been decoupled so far. Some other
+inspector tabs also read `ppuCore` directly and are NOT yet storyable
+wasm-free: `VramTab.tsx` calls `ppuCore.vram()` and `ppuCore.importReports()`
+in its own body, and `MemoryTab.tsx` calls `ppuCore.vram()` (and reads
+`useInspectorFrame()` itself, rather than taking `frame` as a prop). Neither
+can render without a live core today.
+
+Decouple those the same way — lift the `ppuCore` reads (and, for
+`MemoryTab`, the `useInspectorFrame()` call) up into `Inspector.tsx` and pass
+the results down as props — but only when you're next touching that panel.
+Don't rewrite the whole studio in one pass just to make everything storyable.
+
 ## Story IDs
 
 `web/build/meta.json` (produced by `ladle build`) is the source of truth for
