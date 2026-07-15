@@ -2,6 +2,8 @@
  *  these fixtures. Pure data only — no transport/ppuCore/router/msw imports. */
 
 import type { Me, Profile, ToyFull, WallCard, WallPage } from "../api/apiClient";
+import type { FrameResult, OamSprite, ObjOverflow, RegisterView } from "../ppu/core";
+import { HEIGHT, WIDTH } from "../ppu/core";
 
 export function makeWallCard(overrides?: Partial<WallCard>): WallCard {
   return {
@@ -69,3 +71,90 @@ export function makeToyFull(overrides?: Partial<ToyFull>): ToyFull {
 }
 
 export const toyFull: ToyFull = makeToyFull();
+
+/** A readable set of named registers covering the fields the inspector
+ *  decodes by name (see studio/inspector/format.ts). Mode 1, full brightness,
+ *  BG1+BG2+BG3+OBJ on main screen, additive color math on BG1+OBJ. */
+export const frameRegisters: RegisterView[] = [
+  { addr: 0x2100, name: "INIDISP", value: 0x0f, changed: false }, // full brightness, not force-blank
+  { addr: 0x2101, name: "OBSEL", value: 0x00, changed: false }, // 8x8/16x16 size pair
+  { addr: 0x2105, name: "BGMODE", value: 0x01, changed: true }, // mode 1
+  { addr: 0x2106, name: "MOSAIC", value: 0x00, changed: false },
+  { addr: 0x2107, name: "BG1SC", value: 0x00, changed: false },
+  { addr: 0x2108, name: "BG2SC", value: 0x04, changed: false },
+  { addr: 0x2109, name: "BG3SC", value: 0x08, changed: false },
+  { addr: 0x210b, name: "BG12NBA", value: 0x00, changed: false },
+  { addr: 0x210c, name: "BG34NBA", value: 0x00, changed: false },
+  { addr: 0x212c, name: "TM", value: 0x17, changed: true }, // BG1,BG2,BG3,OBJ on main
+  { addr: 0x212d, name: "TS", value: 0x00, changed: false },
+  { addr: 0x2126, name: "WH0", value: 0x30, changed: false },
+  { addr: 0x2127, name: "WH1", value: 0xa0, changed: false },
+  { addr: 0x2128, name: "WH2", value: 0x50, changed: false },
+  { addr: 0x2129, name: "WH3", value: 0xc0, changed: false },
+  { addr: 0x2130, name: "CGWSEL", value: 0x00, changed: false },
+  { addr: 0x2131, name: "CGADSUB", value: 0x21, changed: false }, // add, BG1+OBJ
+  { addr: 0x2132, name: "COLDATA", value: 0x00, changed: false },
+  { addr: 0x2133, name: "SETINI", value: 0x00, changed: false },
+];
+
+/** 256-entry BGR555 palette (0bBBBBB_GGGGG_RRRRR) with a visibly varied ramp
+ *  so swatches in the CGRAM viewer render distinct colours. Index 0x81
+ *  (OBJ palette 0, entry 1) is a bright, saturated colour for the sprite chip. */
+export const frameCgram: Uint16Array = (() => {
+  const cgram = new Uint16Array(256);
+  for (let i = 0; i < 256; i++) {
+    const r5 = i & 0x1f;
+    const g5 = (i >> 1) & 0x1f;
+    const b5 = (i >> 3) & 0x1f;
+    cgram[i] = (b5 << 10) | (g5 << 5) | r5;
+  }
+  cgram[0x81] = (4 << 10) | (28 << 5) | 30; // bright, saturated
+  return cgram;
+})();
+
+function makeOamSprite(overrides?: Partial<OamSprite>): OamSprite {
+  return {
+    x: 0,
+    y: 0,
+    tile: 0,
+    pal: 0,
+    prio: 0,
+    large: false,
+    flipX: false,
+    flipY: false,
+    on: false,
+    ...overrides,
+  };
+}
+
+const frameOam: OamSprite[] = Array.from({ length: 128 }, (_, i) => {
+  const activeSprites: OamSprite[] = [
+    { x: 24, y: 40, tile: 0x00, pal: 0, prio: 2, large: false, flipX: false, flipY: false, on: true },
+    { x: 96, y: 64, tile: 0x04, pal: 1, prio: 1, large: true, flipX: true, flipY: false, on: true },
+    { x: 160, y: 40, tile: 0x08, pal: 2, prio: 3, large: false, flipX: false, flipY: true, on: true },
+    { x: 200, y: 120, tile: 0x0c, pal: 3, prio: 0, large: true, flipX: true, flipY: true, on: true },
+    { x: 40, y: 160, tile: 0x10, pal: 4, prio: 2, large: false, flipX: false, flipY: false, on: true },
+    { x: 120, y: 180, tile: 0x14, pal: 5, prio: 1, large: false, flipX: true, flipY: false, on: true },
+  ];
+  return i < activeSprites.length ? activeSprites[i] : makeOamSprite();
+});
+
+const frameObjOverflow: ObjOverflow = {
+  rangeOver: false,
+  timeOver: false,
+  maxSprites: 12,
+  maxTiles: 34,
+};
+
+export function makeFrameResult(overrides?: Partial<FrameResult>): FrameResult {
+  return {
+    framebuffer: new Uint8ClampedArray(WIDTH * HEIGHT * 4),
+    registers: frameRegisters,
+    cgram: frameCgram,
+    oam: frameOam,
+    objOverflow: frameObjOverflow,
+    ...overrides,
+  };
+}
+
+export const frameResult: FrameResult = makeFrameResult();
