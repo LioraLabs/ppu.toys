@@ -5,14 +5,14 @@ import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/re
 import { MemoryRouter } from "react-router-dom";
 import { Wall } from "./Wall";
 import type { WallCard } from "../api/apiClient";
+import { makeWallCard } from "../fixtures";
 
 vi.mock("../api/apiClient", () => ({ getWall: vi.fn() }));
 vi.mock("../api/session", () => ({ useSession: () => ({ user: null, loading: false }) }));
 import { getWall } from "../api/apiClient";
 
 function card(id: string): WallCard {
-  return { id, title: `Toy ${id}`, author: { handle: "ada", avatar: null },
-    thumbUrl: `/blobs/thumb/${id}`, clipUrl: `/blobs/clip/${id}`, heartCount: 0, hearted: false };
+  return makeWallCard({ id, title: `Toy ${id}`, heartCount: 0 });
 }
 const mockGetWall = getWall as ReturnType<typeof vi.fn>;
 afterEach(() => { cleanup(); vi.clearAllMocks(); });

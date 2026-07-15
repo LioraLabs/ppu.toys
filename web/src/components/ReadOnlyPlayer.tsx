@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type Ref } from "react";
 import { WIDTH, HEIGHT } from "../ppu/core";
+import { ppuCore } from "../ppu/instance";
 import { transport } from "../studio/transport/transport";
 import { Presenter } from "../studio/output/presenter";
 import { integerScale } from "../studio/output/clock";
@@ -22,7 +23,10 @@ export function ReadOnlyPlayer({
 
   // Push the toy's program into the shared core: files first, then each M10
   // source payload by name (mirrors sketches/restore.ts, minus demo replay).
+  // Skip when no core is loaded (e.g. a Ladle story never calls initCore) so the
+  // frame renders blank instead of throwing on the unset singleton.
   useEffect(() => {
+    if (!ppuCore) return;
     transport.setSources(files);
     for (const s of sources) transport.addSource(s.name, s.payload);
   }, [files, sources]);
@@ -32,7 +36,7 @@ export function ReadOnlyPlayer({
   useEffect(() => {
     const canvas = canvasRef.current;
     const container = displayRef.current;
-    if (!canvas || !container) return;
+    if (!canvas || !container || !ppuCore) return;
     const presenter = new Presenter();
     const ok = presenter.init(canvas, forceCanvas2d);
     if (!ok && !forceCanvas2d) {
@@ -58,10 +62,32 @@ export function ReadOnlyPlayer({
   }, [forceCanvas2d]);
 
   return (
+    <PlayerFrame
+      displayRef={displayRef}
+      canvasRef={canvasRef}
+      canvasKey={forceCanvas2d ? "canvas2d" : "webgl"}
+    />
+  );
+}
+
+/** Presentational player frame: the black letterbox + the native-res pixelated
+ *  canvas, nothing else. Pure markup with no transport/core coupling, so it can
+ *  be storied and screenshotted without booting wasm. The wired `ReadOnlyPlayer`
+ *  drives it via refs; a story can paint the canvas through a callback ref. */
+export function PlayerFrame({
+  displayRef,
+  canvasRef,
+  canvasKey,
+}: {
+  displayRef?: Ref<HTMLDivElement>;
+  canvasRef?: Ref<HTMLCanvasElement>;
+  canvasKey?: string;
+}) {
+  return (
     <div className="player" ref={displayRef}>
       <canvas
         ref={canvasRef}
-        key={forceCanvas2d ? "canvas2d" : "webgl"}
+        key={canvasKey}
         className="player-canvas"
         width={WIDTH}
         height={HEIGHT}

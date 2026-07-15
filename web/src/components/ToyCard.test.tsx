@@ -4,7 +4,7 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { ToyCard } from "./ToyCard";
-import type { WallCard } from "../api/apiClient";
+import { makeWallCard } from "../fixtures";
 
 vi.mock("../api/apiClient", () => ({
   addHeart: vi.fn(async () => {}),
@@ -12,15 +12,7 @@ vi.mock("../api/apiClient", () => ({
 }));
 import { addHeart, removeHeart } from "../api/apiClient";
 
-const card: WallCard = {
-  id: "abc123",
-  title: "Dusk",
-  author: { handle: "ada", avatar: null },
-  thumbUrl: "/blobs/thumb/abc123",
-  clipUrl: "/blobs/clip/abc123",
-  heartCount: 3,
-  hearted: false,
-};
+const card = makeWallCard();
 
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
@@ -58,7 +50,7 @@ describe("ToyCard", () => {
 
   it("un-hearts an already-hearted card", async () => {
     render(
-      <MemoryRouter><ToyCard card={{ ...card, hearted: true }} signedIn /></MemoryRouter>,
+      <MemoryRouter><ToyCard card={makeWallCard({ hearted: true })} signedIn /></MemoryRouter>,
     );
     fireEvent.click(screen.getByRole("button", { name: /heart/i }));
     expect(removeHeart).toHaveBeenCalledWith("abc123");
