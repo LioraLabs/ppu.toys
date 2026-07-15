@@ -4,17 +4,15 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { ProfilePage } from "./ProfilePage";
-import type { Profile } from "../api/apiClient";
+import { makeProfile, makeWallCard } from "../fixtures";
 
 vi.mock("../api/apiClient", () => ({ getProfile: vi.fn() }));
 vi.mock("../api/session", () => ({ useSession: () => ({ user: null, loading: false }) }));
 import { getProfile } from "../api/apiClient";
 
-const profile: Profile = {
-  user: { handle: "ada", avatar: null },
-  toys: [{ id: "a", title: "Toy a", author: { handle: "ada", avatar: null },
-    thumbUrl: "/blobs/thumb/a", clipUrl: "/blobs/clip/a", heartCount: 1, hearted: false }],
-};
+const profile = makeProfile({
+  toys: [makeWallCard({ id: "a", title: "Toy a", heartCount: 1 })],
+});
 const mockGetProfile = getProfile as ReturnType<typeof vi.fn>;
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
@@ -36,7 +34,7 @@ describe("ProfilePage", () => {
   });
 
   it("shows an empty state when the user has no toys", async () => {
-    mockGetProfile.mockResolvedValue({ user: { handle: "ada", avatar: null }, toys: [] });
+    mockGetProfile.mockResolvedValue(makeProfile({ toys: [] }));
     renderAt();
     expect(await screen.findByText(/no published toys/i)).toBeInTheDocument();
   });

@@ -3,7 +3,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
-import type { ToyFull } from "../api/apiClient";
+import { makeToyFull } from "../fixtures";
 
 const navigate = vi.fn();
 vi.mock("react-router-dom", async (orig) => ({
@@ -20,18 +20,16 @@ vi.mock("../studio/cloud/openCloudToy", () => ({ openCloudToy: vi.fn() }));
 import { getToy, forkToy } from "../api/apiClient";
 import { openCloudToy } from "../studio/cloud/openCloudToy";
 
-const toy: ToyFull = {
-  id: "abc", title: "Dusk", description: "a toy", state: "published",
+const toy = makeToyFull({
+  id: "abc", description: "a toy", heartCount: 2,
   files: [{ name: "main.lua", source: "-- code here" }],
-  sources: [], heartCount: 2, hearted: false, forkedFrom: null,
   author: { id: "9", handle: "ada", avatar: null },
-};
-const fork1: ToyFull = {
+});
+const fork1 = makeToyFull({
   id: "fork1", title: "Dusk (fork)", description: "a toy", state: "draft",
   files: [{ name: "main.lua", source: "-- code here" }],
-  sources: [], heartCount: 0, hearted: false, forkedFrom: "abc",
-  author: { id: "1", handle: "ada", avatar: null },
-};
+  heartCount: 0, forkedFrom: "abc",
+});
 const mockGetToy = getToy as ReturnType<typeof vi.fn>;
 const mockFork = forkToy as ReturnType<typeof vi.fn>;
 const mockOpenCloudToy = openCloudToy as ReturnType<typeof vi.fn>;
