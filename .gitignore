@@ -2,6 +2,7 @@
 /target
 **/node_modules/
 /web/dist/
+/web/build/
 /web/src/wasm/pkg/
 .cook/
 .worktrees/
