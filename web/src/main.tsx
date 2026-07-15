@@ -11,6 +11,10 @@ const root = document.getElementById("root")!;
 // there is no tool, so we show a hard error rather than a fake PPU.
 initCore()
   .then(async () => {
+    if (import.meta.env.VITE_MSW) {
+      const { worker } = await import("./mocks/browser");
+      await worker.start({ onUnhandledRequest: "bypass" });
+    }
     const { default: App } = await import("./App");
     createRoot(root).render(
       <StrictMode>

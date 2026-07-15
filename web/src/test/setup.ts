@@ -6,6 +6,7 @@
 // the module by URL), so tests run against this stub: a PpuCore that returns
 // correctly-shaped, zeroed data. It exists ONLY so singleton-based tests have a
 // core; components/logic that need meaningful output inject their own doubles.
+import { beforeAll, afterEach, afterAll } from "vitest";
 import {
   PpuCore,
   FrameResult,
@@ -20,6 +21,7 @@ import {
   HEIGHT,
 } from "../ppu/core";
 import { setPpuCore } from "../ppu/instance";
+import { server } from "../mocks/server";
 
 function emptyOam(): OamSprite[] {
   return Array.from({ length: 128 }, () => ({
@@ -73,3 +75,9 @@ class StubPpuCore implements PpuCore {
 }
 
 setPpuCore(new StubPpuCore());
+
+// MSW node server: intercepts real `fetch` calls in tests so api/session tests
+// exercise the actual request path against the shared handlers.
+beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
+afterEach(() => server.resetHandlers());
+afterAll(() => server.close());
