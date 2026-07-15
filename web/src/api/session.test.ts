@@ -1,14 +1,16 @@
-import { describe, it, expect, afterEach, vi } from "vitest";
+// @vitest-environment jsdom
+//
+// jsdom (not the default node environment) so `location` exists: MSW resolves
+// handlers registered with root-relative paths (e.g. "/api/me") against
+// `location.href` — under plain "node" there's no location, so relative
+// patterns never match a request's absolute URL.
+import { describe, it, expect, afterEach } from "vitest";
+import { http, HttpResponse } from "msw";
+import { server } from "../mocks/server";
+import { me } from "../fixtures";
 import { sessionStore } from "./session";
 
-vi.mock("./apiClient", () => ({
-  getMe: vi.fn(),
-  logout: vi.fn(async () => {}),
-}));
-import { getMe, logout } from "./apiClient";
-
 afterEach(() => {
-  vi.clearAllMocks();
   sessionStore._resetForTests();
 });
 
@@ -18,26 +20,31 @@ describe("sessionStore", () => {
   });
 
   it("refresh loads the current user and clears loading", async () => {
-    (getMe as ReturnType<typeof vi.fn>).mockResolvedValue({ id: "1", handle: "ada", isAdmin: false });
     await sessionStore.refresh();
-    expect(sessionStore.get()).toEqual({ user: { id: "1", handle: "ada", isAdmin: false }, loading: false });
+    expect(sessionStore.get()).toEqual({ user: me, loading: false });
   });
 
   it("refresh on a signed-out session yields a null user", async () => {
-    (getMe as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    server.use(http.get("/api/me", () => new HttpResponse(null, { status: 401 })));
     await sessionStore.refresh();
     expect(sessionStore.get()).toEqual({ user: null, loading: false });
   });
 
   it("signOut calls the API then refreshes to null", async () => {
-    (getMe as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    let logoutHit = false;
+    server.use(
+      http.get("/api/me", () => new HttpResponse(null, { status: 401 })),
+      http.post("/api/auth/logout", () => {
+        logoutHit = true;
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
     await sessionStore.signOut();
-    expect(logout).toHaveBeenCalledOnce();
+    expect(logoutHit).toBe(true);
     expect(sessionStore.get().user).toBeNull();
   });
 
   it("notifies subscribers on change", async () => {
-    (getMe as ReturnType<typeof vi.fn>).mockResolvedValue(null);
     let hits = 0;
     const unsub = sessionStore.subscribe(() => hits++);
     await sessionStore.refresh();

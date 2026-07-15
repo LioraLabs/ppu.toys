@@ -1,6 +1,12 @@
 import { useEffect } from "react";
 import type { GlobalProvider } from "@ladle/react";
 import "../src/styles/tokens.css";
+import { worker } from "../src/mocks/browser";
+
+// Start the MSW browser worker once so page/wired stories that fetch (e.g.
+// against apiClient) resolve against the shared handlers. Module-level so it
+// only ever runs a single time, regardless of how many stories mount.
+worker.start({ onUnhandledRequest: "bypass", quiet: true }).catch(console.error);
 
 // Global story wrapper — this is the `withTheme` seam. It reuses Ladle's
 // built-in toolbar theme addon (globalState.theme) instead of adding any
