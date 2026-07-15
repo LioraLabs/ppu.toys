@@ -4,6 +4,7 @@
 /web/dist/
 /web/build/
 /web/src/wasm/pkg/
+/web/.shots/
 .cook/
 .worktrees/
 /crates/ppu-server/build/
