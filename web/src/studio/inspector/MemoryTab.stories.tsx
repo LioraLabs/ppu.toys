@@ -1,6 +1,7 @@
 import type { Story, StoryDefault } from "@ladle/react";
 import { MemoryTab } from "./MemoryTab";
 import { frameResult, frameVram } from "../../fixtures";
+import "./inspector.css";
 import "./tracemem/tracemem.css";
 
 // MemoryTab is now a pure props component: given a FrameResult and a VRAM
