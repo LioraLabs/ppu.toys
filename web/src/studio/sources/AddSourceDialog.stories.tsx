@@ -1,5 +1,5 @@
 import type { Story, StoryDefault } from "@ladle/react";
-import { OverlayStage } from "../../../.ladle/decorators";
+import { OverlayStage, withCore } from "../../../.ladle/decorators";
 import { AddSourceDialog } from "./AddSourceDialog";
 import "./sources.css";
 
@@ -21,3 +21,15 @@ export const Open: Story = () => (
     <AddSourceDialog onClose={noop} />
   </OverlayStage>
 );
+
+// Live-core variant: the `withCore` decorator boots the REAL wasm PPU core before
+// mounting, so dropping/choosing an image actually runs `ppuCore.convertSource`
+// (real quantize + tile import) and the preview shows the genuine converted
+// output — the wasm path AddSourceDialog.test.tsx stubs. This is the integration
+// counterpart to the wasm-free `Open` story above.
+export const OpenLiveCore: Story = () => (
+  <OverlayStage>
+    <AddSourceDialog onClose={noop} />
+  </OverlayStage>
+);
+OpenLiveCore.decorators = [withCore];

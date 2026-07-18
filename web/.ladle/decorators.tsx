@@ -1,6 +1,8 @@
-import type { ReactNode, CSSProperties } from "react";
+import { useEffect, useState } from "react";
+import type { ComponentType, ReactNode, CSSProperties } from "react";
 import type { StoryDecorator } from "@ladle/react";
 import { MemoryRouter } from "react-router-dom";
+import { initCore } from "../src/ppu/instance";
 
 // Per-story decorator (opt-in via a story's `decorators` array) so only
 // stories that render <Link> pull in a router.
@@ -25,4 +27,35 @@ export function OverlayStage({ children, style }: { children: ReactNode; style?:
       {children}
     </div>
   );
+}
+
+// Opt-in: boot the REAL wasm PPU core before the story mounts, so a story can
+// exercise genuine core logic (e.g. AddSourceDialog's `convertSource` image
+// import, or a live OutputCanvas). Most stories stay wasm-free by design — add
+// this only to stories that need the core. `initCore()` loads the same wasm the
+// app does (Ladle reuses the app's Vite config), and is shared across every
+// live-core story via one cached promise so the module instantiates once.
+let corePromise: Promise<void> | null = null;
+
+export const withCore: StoryDecorator = (Component) => <CoreBoot Component={Component} />;
+
+function CoreBoot({ Component }: { Component: ComponentType }) {
+  const [ready, setReady] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    (corePromise ??= initCore())
+      .then(() => live && setReady(true))
+      .catch((e) => live && setError(e instanceof Error ? e.message : String(e)));
+    return () => {
+      live = false;
+    };
+  }, []);
+  if (error) {
+    return <div style={{ padding: 16, fontFamily: "system-ui", color: "#ff5d6a" }}>PPU core failed to load: {error}</div>;
+  }
+  if (!ready) {
+    return <div style={{ padding: 16, fontFamily: "system-ui", color: "var(--mid, #9aa1ae)" }}>Booting the PPU core…</div>;
+  }
+  return <Component />;
 }

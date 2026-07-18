@@ -233,3 +233,32 @@ Network-backed data for full page stories is a separate concern, handled at
 the network seam by MSW (mock service worker) as a parallel effort. The
 screenshot harness itself doesn't know or care about that — it just renders
 whatever the static build produces.
+
+## Running the real wasm core in a story (opt-in)
+
+Stories are wasm-free by default — that's what makes the catalog fast and lets
+an agent iterate on one component in isolation. But some components have real
+logic *behind* the `PpuCore` seam that's worth exercising for real:
+AddSourceDialog's `convertSource` (image → quantized SNES tiles), a live
+OutputCanvas, the inspector against a genuinely-rasterized frame.
+
+For those, opt in with the `withCore` decorator (`web/.ladle/decorators.tsx`).
+It boots the same wasm core the app does (`initCore()`) and gates the story
+until it's live:
+
+```tsx
+import { withCore, OverlayStage } from "../../../.ladle/decorators";
+
+export const OpenLiveCore: Story = () => (
+  <OverlayStage>
+    <AddSourceDialog onClose={() => undefined} />
+  </OverlayStage>
+);
+OpenLiveCore.decorators = [withCore];
+```
+
+Now dropping/choosing an image in that story runs the real `ppuCore.convertSource`
+and the preview shows the genuine converted output. The core instantiates once
+and is shared across every live-core story. Keep this the exception, not the
+default: only add `withCore` to stories that actually need the core, so the rest
+of the catalog stays instant and node-testable.
