@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import type { FrameResult, ImportReport } from "../../ppu/core";
-import { ppuCore } from "../../ppu/instance";
 import { cgram15ToCss, formatValue } from "./format";
 
 type BgId = 0 | 1 | 2;
@@ -87,10 +86,16 @@ function reportLine(r: ImportReport): string {
   return `${who}: ${r.report.colors_used} colors · ${r.report.palettes_used} palettes · ${r.report.unique_tiles} tiles · ${r.report.vram_words} words${overflow}`;
 }
 
-export function VramTab({ frame }: { frame: FrameResult | null }) {
+export function VramTab({
+  frame,
+  vram,
+  reports,
+}: {
+  frame: FrameResult | null;
+  vram: Uint16Array;
+  reports: ImportReport[];
+}) {
   const [bg, setBg] = useState<BgId>(0);
-  const vram = ppuCore.vram();
-  const reports = ppuCore.importReports();
 
   const mode = frame ? reg(frame, "BGMODE") & 0x07 : 1;
   const bpp = bgBpp(mode, bg);

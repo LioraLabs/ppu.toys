@@ -9,7 +9,7 @@ import { MemoryLayersOverlay } from "./MemoryLayersOverlay";
 import { CompositorOverlay } from "./CompositorOverlay";
 import { RegistersTab } from "./RegistersTab";
 import { SpritesTab } from "./SpritesTab";
-import { VramTab } from "./VramTab";
+import { VramTabWired } from "./VramTabWired";
 import "./inspector.css";
 
 export function Inspector() {
@@ -47,7 +47,7 @@ export function Inspector() {
       {tab === "windows" && <WindowsTab />}
       {tab === "registers" && <RegistersTab frame={frame} />}
       {tab === "sprites" && <SpritesTab frame={frame} />}
-      {tab === "vram" && <VramTab frame={frame} />}
+      {tab === "vram" && <VramTabWired frame={frame} />}
       {overlay === "memory-layers" && <MemoryLayersOverlay onCollapse={() => setOverlay(null)} />}
       {overlay === "compositor" && <CompositorOverlay onCollapse={() => setOverlay(null)} />}
     </div>
