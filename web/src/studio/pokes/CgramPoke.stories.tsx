@@ -12,11 +12,20 @@ export default {
   title: "Studio/Pokes/CgramPoke",
 } satisfies StoryDefault;
 
-// The popover positions against a `position: relative` container the caller
-// provides; this frame stands in for the swatch/trigger cell.
+// The popover docks at top:100% of a `position: relative` trigger. Keep the
+// trigger small (a stand-in swatch cell) and give the outer box enough height
+// that #ladle-root's bounding box includes the popover for the screenshot.
 function Anchor({ children }: { children: React.ReactNode }) {
   return (
-    <div style={{ position: "relative", width: 240, height: 200, padding: 24 }}>{children}</div>
+    <div style={{ minHeight: 240, padding: 24 }}>
+      <div style={{ position: "relative", display: "inline-block" }}>
+        <span
+          aria-hidden
+          style={{ display: "inline-block", width: 24, height: 24, background: "#c86432", borderRadius: 4 }}
+        />
+        {children}
+      </div>
+    </div>
   );
 }
 

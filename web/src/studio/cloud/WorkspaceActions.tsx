@@ -8,7 +8,13 @@ import { PublishDialog } from "./PublishDialog";
 import "./cloud.css";
 
 /** Save + Publish, the toolbar's cloud seam. Signed-out collapses to a single
- *  sign-in link — Save/Publish/PublishDialog never mount without a session. */
+ *  sign-in link — Save/Publish/PublishDialog never mount without a session.
+ *
+ *  Intentionally left as a thin WIRED container (no story): it owns the session
+ *  refresh + serialize/create-or-update side effects and exists only to bind the
+ *  `save` seam it hands to the presentational PublishDialog, which IS storied.
+ *  A full story would fake the session + cloud without exercising anything the
+ *  PublishDialog story doesn't already cover. */
 export function WorkspaceActions() {
   const state = useOpenSketch();
   const { user } = useSession();
