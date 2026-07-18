@@ -5,7 +5,7 @@ import { TraceTab } from "./TraceTab";
 import { MemoryTabWired } from "./MemoryTabWired";
 import { ComposeTabWired } from "./ComposeTabWired";
 import { WindowsTab } from "./WindowsTab";
-import { MemoryLayersOverlay } from "./MemoryLayersOverlay";
+import { MemoryLayersOverlayWired } from "./MemoryLayersOverlayWired";
 import { CompositorOverlayWired } from "./CompositorOverlayWired";
 import { RegistersTab } from "./RegistersTab";
 import { SpritesTab } from "./SpritesTab";
@@ -48,7 +48,7 @@ export function Inspector() {
       {tab === "registers" && <RegistersTab frame={frame} />}
       {tab === "sprites" && <SpritesTab frame={frame} />}
       {tab === "vram" && <VramTabWired frame={frame} />}
-      {overlay === "memory-layers" && <MemoryLayersOverlay onCollapse={() => setOverlay(null)} />}
+      {overlay === "memory-layers" && <MemoryLayersOverlayWired onCollapse={() => setOverlay(null)} />}
       {overlay === "compositor" && <CompositorOverlayWired onCollapse={() => setOverlay(null)} />}
     </div>
   );
