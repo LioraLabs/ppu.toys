@@ -1,13 +1,11 @@
-import { useEffect, useState } from "react";
 import {
-  listSketches,
-  onSketchesChanged,
   renameSketch,
   duplicateSketch,
   deleteSketch,
   type SketchMeta,
 } from "./sketchStore";
-import { openSketchStore, useOpenSketch } from "./openSketch";
+import { openSketchStore } from "./openSketch";
+import { useLibraryData } from "./useLibrary";
 import { DEMOS } from "../demos/demos";
 import "./sketches.css";
 
@@ -19,29 +17,12 @@ function timeAgo(ms: number): string {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-function useSketchList(): SketchMeta[] {
-  const [list, setList] = useState<SketchMeta[]>([]);
-  useEffect(() => {
-    let live = true;
-    const refresh = () =>
-      void listSketches().then((l) => {
-        if (live) setList(l);
-      });
-    refresh();
-    const off = onSketchesChanged(refresh);
-    return () => {
-      live = false;
-      off();
-    };
-  }, []);
-  return list;
-}
-
 /** The sketch library, mounted off the Files rail item. Plain chrome by
- *  design — the Workspace restyle ticket reworks the shell around it. */
+ *  design — the Workspace restyle ticket reworks the shell around it. Reads
+ *  the sketch store through the useLibraryData seam so stories/tests can drive
+ *  it from fixtures with no IndexedDB and no wasm core. */
 export function LibraryPanel({ onClose }: { onClose: () => void }) {
-  const sketches = useSketchList();
-  const open = useOpenSketch();
+  const { sketches, open } = useLibraryData();
   const openId = open.context.kind === "sketch" ? open.context.sketch.id : undefined;
 
   const logErr = (what: string) => (e: unknown) => console.error(what, e);
