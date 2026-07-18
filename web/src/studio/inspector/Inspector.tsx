@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useInspectorFrame } from "./useInspectorFrame";
 import { INSPECTOR_TABS, overlayForTab, type OverlayId, type TabId } from "./tabs";
 import { TraceTab } from "./TraceTab";
-import { MemoryTab } from "./MemoryTab";
+import { MemoryTabWired } from "./MemoryTabWired";
 import { ComposeTab } from "./ComposeTab";
 import { WindowsTab } from "./WindowsTab";
 import { MemoryLayersOverlay } from "./MemoryLayersOverlay";
@@ -42,7 +42,7 @@ export function Inspector() {
         )}
       </div>
       {tab === "trace" && <TraceTab />}
-      {tab === "memory" && <MemoryTab />}
+      {tab === "memory" && <MemoryTabWired />}
       {tab === "compose" && <ComposeTab />}
       {tab === "windows" && <WindowsTab />}
       {tab === "registers" && <RegistersTab frame={frame} />}
