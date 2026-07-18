@@ -2,7 +2,14 @@
  *  these fixtures. Pure data only — no transport/ppuCore/router/msw imports. */
 
 import type { Me, Profile, ToyFull, WallCard, WallPage } from "../api/apiClient";
-import type { FrameResult, OamSprite, ObjOverflow, RegisterView } from "../ppu/core";
+import type {
+  CompositorScreens,
+  FrameResult,
+  ImportReport,
+  OamSprite,
+  ObjOverflow,
+  RegisterView,
+} from "../ppu/core";
 import { HEIGHT, WIDTH } from "../ppu/core";
 
 export function makeWallCard(overrides?: Partial<WallCard>): WallCard {
@@ -158,3 +165,82 @@ export function makeFrameResult(overrides?: Partial<FrameResult>): FrameResult {
 }
 
 export const frameResult: FrameResult = makeFrameResult();
+
+/** 32K-word VRAM image for the VramTab tile decoder + tilemap render (BG1,
+ *  char base 0 / map base 0 per frameRegisters mode 1). The general fill is a
+ *  deterministic multiplicative-hash gradient across the whole address space
+ *  (visibly varied everywhere); words 0..63 — the BG1 tilemap's first two
+ *  rows, per tilemapEntry's bit layout — are overwritten with crafted entries
+ *  cycling tile 0..31, palette 0..7, and prio/flipX/flipY, so both the
+ *  tilemap swatches and the tile-0..3 pixel decode (which reads those same
+ *  words as character data at char base 0) show non-trivial, varied output. */
+export const frameVram: Uint16Array = (() => {
+  const vram = new Uint16Array(0x8000);
+  for (let i = 0; i < 0x8000; i++) {
+    vram[i] = ((i * 0x9e3779b1 + (i >> 3) * 0x85ebca6b) ^ (i << 2)) & 0xffff;
+  }
+  for (let i = 0; i < 64; i++) {
+    const tile = i % 32;
+    const pal = i % 8;
+    const prio = i % 2 === 1 ? 1 : 0;
+    const flipX = i % 3 === 0 ? 1 : 0;
+    const flipY = i % 5 === 0 ? 1 : 0;
+    vram[i] = tile | (pal << 10) | (prio << 13) | (flipX << 14) | (flipY << 15);
+  }
+  return vram;
+})();
+
+/** Two import-report entries covering both render paths the Import tab
+ *  handles: a "tile" report with a non-empty overflow list (renders the
+ *  warn path) and an "obj" report with no overflows (renders clean). */
+export const frameImportReports: ImportReport[] = [
+  {
+    mode: "tile",
+    layer: 0,
+    report: {
+      colors_used: 15,
+      palettes_used: 4,
+      tile_cells: 512,
+      unique_tiles: 520,
+      vram_words: 8192,
+      overflows: [{ kind: "Tiles", unique: 520, kept: 512 }],
+    },
+  },
+  {
+    mode: "obj",
+    report: {
+      colors_used: 12,
+      palettes_used: 2,
+      tile_cells: 128,
+      unique_tiles: 96,
+      vram_words: 2048,
+      overflows: [],
+    },
+  },
+];
+
+/** Compositor main/sub screens + math mask for the Compose tab: main is a
+ *  warm gradient, sub a distinguishable cool gradient (visibly different
+ *  compose previews), and mathMask's bit0 is set across the left half of the
+ *  frame so the math-region tint toggle has a visible effect. */
+export const frameScreens: CompositorScreens = (() => {
+  const main = new Uint8ClampedArray(WIDTH * HEIGHT * 4);
+  const sub = new Uint8ClampedArray(WIDTH * HEIGHT * 4);
+  const mathMask = new Uint8Array(WIDTH * HEIGHT);
+  for (let y = 0; y < HEIGHT; y++) {
+    for (let x = 0; x < WIDTH; x++) {
+      const p = y * WIDTH + x;
+      const i = p * 4;
+      main[i] = Math.floor((x / WIDTH) * 255);
+      main[i + 1] = Math.floor((y / HEIGHT) * 255);
+      main[i + 2] = 64;
+      main[i + 3] = 255;
+      sub[i] = 32;
+      sub[i + 1] = Math.floor((1 - x / WIDTH) * 255);
+      sub[i + 2] = Math.floor((1 - y / HEIGHT) * 255);
+      sub[i + 3] = 255;
+      if (x < WIDTH / 2) mathMask[p] = 1;
+    }
+  }
+  return { main, sub, mathMask };
+})();
