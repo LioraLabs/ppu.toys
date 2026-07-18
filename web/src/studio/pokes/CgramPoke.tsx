@@ -18,14 +18,20 @@ export function cgramPoke(index: number, bgr555: number): Poke {
  *  every input event (regeneration is cheap; autosave debounces persistence).
  *  Positioned by the caller — a `position: relative` wrapper around the
  *  trigger element gives this its containing block. Dismisses on Escape and
- *  on an outside click. */
+ *  on an outside click.
+ *
+ *  `onChange` is the injectable write seam: by default it writes the poke
+ *  store, so every existing caller is render-identical. Stories/tests pass a
+ *  fixture `onChange` to render with no poke store on the path. */
 export function CgramPoke({
   index,
   current,
+  onChange,
   onClose,
 }: {
   index: number;
   current: number;
+  onChange?: (bgr555: number) => void;
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -67,7 +73,7 @@ export function CgramPoke({
         onInput={(e) => {
           const next = hexToBgr555(e.currentTarget.value);
           setBgr555(next);
-          poke(cgramPoke(index, next));
+          (onChange ?? ((v) => poke(cgramPoke(index, v))))(next);
         }}
       />
       <div className="pk-readout">

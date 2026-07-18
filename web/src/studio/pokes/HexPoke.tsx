@@ -24,14 +24,20 @@ export function parseHexPoke(addr: number, raw: string): number | null {
  *  an invalid value keeps editing with a `.pk-hex--bad` style instead of
  *  closing; Escape or blur cancels without poking. Script-wins semantics
  *  hold: a running script may immediately overwrite the poked value on the
- *  next frame (surfaced elsewhere by the poke marker, not by this control). */
+ *  next frame (surfaced elsewhere by the poke marker, not by this control).
+ *
+ *  `onChange` is the injectable write seam: by default a commit writes the
+ *  poke store, so every existing caller is render-identical. Stories/tests
+ *  pass a fixture `onChange` to render with no poke store on the path. */
 export function HexPoke({
   addr,
   value,
+  onChange,
   children,
 }: {
   addr: number;
   value: number;
+  onChange?: (value: number) => void;
   children?: ReactNode;
 }) {
   const editable = REG_LVALUES[addr] !== undefined;
@@ -89,7 +95,7 @@ export function HexPoke({
       setBad(true);
       return;
     }
-    poke(regPoke(addr, v));
+    (onChange ?? ((next) => poke(regPoke(addr, next))))(v);
     setEditing(false);
   };
 
