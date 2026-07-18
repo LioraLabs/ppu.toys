@@ -10,8 +10,11 @@ import type {
   ObjOverflow,
   RegisterView,
   SourceFile,
+  SourceMeta,
 } from "../ppu/core";
 import { HEIGHT, WIDTH } from "../ppu/core";
+import type { OpenContext, OpenSketchState } from "../studio/sketches/openSketch";
+import type { Sketch, SketchMeta } from "../studio/sketches/sketchStore";
 
 export function makeWallCard(overrides?: Partial<WallCard>): WallCard {
   return {
@@ -282,3 +285,112 @@ export const frameScreens: CompositorScreens = (() => {
  *  the Toolbar's placeholder default so the chrome renders as it does before
  *  the real sketch store wires a name through. */
 export const sketchName = "dusk-parallax";
+
+// ── Studio widgets & dialogs (sketch library / source / publish) ─────────────
+// Additive fixtures for the `web/src/studio/` widgets bucket. Type-only imports
+// from the stores keep this module pure data (no store/transport/ppuCore code).
+
+/** A library row (SketchMeta = a Sketch minus its payloads). */
+export function makeSketchMeta(overrides?: Partial<SketchMeta>): SketchMeta {
+  return {
+    id: "sk-dusk",
+    name: "Dusk study",
+    createdAt: 1_700_000_000_000,
+    updatedAt: Date.now() - 5 * 60_000, // "5m ago"
+    ...overrides,
+  };
+}
+
+/** A short library list with distinct ages so LibraryPanel's rows + timeAgo
+ *  labels render varied output. The first id matches `librarySketch` below so
+ *  the story can show the open-row highlight + disabled Delete. */
+export const sketchMetaList: SketchMeta[] = [
+  makeSketchMeta(),
+  makeSketchMeta({ id: "sk-ember", name: "Ember gradient", updatedAt: Date.now() - 3 * 3600_000 }),
+  makeSketchMeta({ id: "sk-mode7", name: "Mode 7 floor", updatedAt: Date.now() - 2 * 86_400_000 }),
+];
+
+/** A full Sketch matching the first list row — used as the open context so the
+ *  library highlights it and disables its Delete button. */
+export const librarySketch: Sketch = {
+  id: "sk-dusk",
+  name: "Dusk study",
+  createdAt: 1_700_000_000_000,
+  updatedAt: Date.now() - 5 * 60_000,
+  files: [
+    { name: "pokes.lua", source: "function apply_pokes()\nend\n" },
+    { name: "main.lua", source: "function frame(t, f)\n  apply_pokes()\nend\n" },
+  ],
+  sources: [],
+};
+
+/** Build an OpenSketchState around a given context (default: `librarySketch`
+ *  open). The store's `useOpenSketch` shape, as pure data for the seam story. */
+export function makeOpenSketchState(context?: OpenContext): OpenSketchState {
+  return {
+    context: context ?? { kind: "sketch", sketch: librarySketch },
+    dirty: false,
+    session: 1,
+  };
+}
+
+export const libraryOpenState: OpenSketchState = makeOpenSketchState();
+
+/** A valid v1 Mode-7 source payload (2×2 tiles = 16×16px) so SourcePreview
+ *  decodes a real quantized image with no wasm. Byte layout mirrors
+ *  studio/sources/payload.ts `decodeSourcePayload` (kind 1). */
+export const sourcePayloadM7: Uint8Array = (() => {
+  const bytes: number[] = [];
+  const u8 = (v: number) => bytes.push(v & 0xff);
+  const u16 = (v: number) => bytes.push(v & 0xff, (v >> 8) & 0xff); // little-endian
+  u8(1); // version
+  u8(1); // kind = m7
+  u8(0); // optsLen (no options block)
+  // palette: 15 BGR555 colors (index i renders palette[i-1]; 0 = transparent)
+  const pal: number[] = Array.from({ length: 15 }, (_, i) => {
+    const r5 = (i * 2) & 0x1f;
+    const g5 = (i * 3 + 4) & 0x1f;
+    const b5 = (31 - i) & 0x1f;
+    return (b5 << 10) | (g5 << 5) | r5;
+  });
+  u8(pal.length);
+  pal.forEach(u16);
+  const tileCount = 4;
+  u16(tileCount);
+  for (let t = 0; t < tileCount; t++) {
+    for (let p = 0; p < 64; p++) {
+      // deterministic per-tile pattern across indices 0..15 (0 = transparent)
+      u8(((p + t * 5) % 16));
+    }
+  }
+  u8(2); // tilesW
+  u8(2); // tilesH
+  [0, 1, 2, 3].forEach(u8); // map
+  return new Uint8Array(bytes);
+})();
+
+export function makeSourceMeta(overrides?: Partial<SourceMeta>): SourceMeta {
+  return {
+    width: 16,
+    height: 16,
+    report: {
+      mode: "m7",
+      report: {
+        colors: 15,
+        unique_tiles: 4,
+        tile_capacity: 256,
+        overflow_tiles: 0,
+        map_tiles_w: 2,
+        map_tiles_h: 2,
+      },
+    },
+    ...overrides,
+  };
+}
+
+export const sourceMetaM7: SourceMeta = makeSourceMeta();
+
+/** Ensure-saved stub for PublishDialog's `save` prop: resolves to a toy id
+ *  without touching the cloud, so the dialog stories run offline. */
+export const publishSave = async (_meta?: { title?: string; description?: string }): Promise<string> =>
+  "toy-fixture-123";
