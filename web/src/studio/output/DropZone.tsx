@@ -1,11 +1,18 @@
 import { useCallback, useRef, useState } from "react";
 import type { ChangeEvent, DragEvent } from "react";
-import { useAssets } from "../assets/useAssets";
 
-/** LIVE OUTPUT drop zone: PNG → quantized into a format-committed graphics
- *  source (useAssets → convertSource → addSource) + persisted on the sketch. */
-export function DropZone() {
-  const { error, addFiles } = useAssets();
+export interface DropZoneProps {
+  /** Convert/register error surfaced under the prompt (red), or null when clean. */
+  error: string | null;
+  /** Called with the picked/dropped files (PNG filtering happens downstream). */
+  onFiles: (files: FileList | File[]) => void;
+}
+
+/** LIVE OUTPUT drop zone (presentational): a PNG picker / drag target that
+ *  hands its files up via `onFiles`. The drag-over highlight is local UI
+ *  state driven by native DOM events; the convert/register pipeline lives in
+ *  the wired container (DropZoneWired → useAssets), so this renders wasm-free. */
+export function DropZone({ error, onFiles }: DropZoneProps) {
   const [over, setOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -13,17 +20,17 @@ export function DropZone() {
     (e: DragEvent<HTMLDivElement>) => {
       e.preventDefault();
       setOver(false);
-      if (e.dataTransfer.files.length) void addFiles(e.dataTransfer.files);
+      if (e.dataTransfer.files.length) onFiles(e.dataTransfer.files);
     },
-    [addFiles],
+    [onFiles],
   );
 
   const onPick = useCallback(
     (e: ChangeEvent<HTMLInputElement>) => {
-      if (e.target.files) void addFiles(e.target.files);
+      if (e.target.files) onFiles(e.target.files);
       e.target.value = "";
     },
-    [addFiles],
+    [onFiles],
   );
 
   return (
