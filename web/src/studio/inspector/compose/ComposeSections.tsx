@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { HEIGHT, WIDTH } from "../../../ppu/core";
+import { HEIGHT, WIDTH, type CompositorScreens } from "../../../ppu/core";
 import { cgram15ToCss } from "../format";
 import {
   ADDEND_FIELDS,
@@ -24,7 +24,6 @@ import {
   tintMathRegion,
   toggleDesignation,
 } from "./model";
-import { screensFor } from "./screens";
 import { PokeDot, RegRow } from "./chrome";
 import { BlitCanvas } from "../BlitCanvas";
 import type { Compositor } from "./useCompositor";
@@ -32,10 +31,18 @@ import type { Compositor } from "./useCompositor";
 /** MAIN / SUB / RESULT previews straight from the core: the two compositor
  *  intermediates (pre-math, pre-brightness) and the live framebuffer. The ▦
  *  toggle tints RESULT where the core's math-region mask says color math ran.
- *  `large` = overlay sizing. */
-export function ScreenPreviews({ c, large }: { c: Compositor; large?: boolean }) {
+ *  `large` = overlay sizing. `screens` is the caller's compositor intermediates
+ *  (wired: the core's per-frame screens; stories: a fixture). */
+export function ScreenPreviews({
+  c,
+  screens,
+  large,
+}: {
+  c: Compositor;
+  screens: CompositorScreens;
+  large?: boolean;
+}) {
   const [showMath, setShowMath] = useState(false);
-  const screens = screensFor(c.frame);
   const op = mathOp(c.read(REG.CGADSUB));
   const result = showMath
     ? tintMathRegion(c.frame.framebuffer, screens.mathMask)
