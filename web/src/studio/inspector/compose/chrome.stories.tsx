@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import type { Story, StoryDefault } from "@ladle/react";
-import { DialectToggle, PokeBar, RegRow } from "./chrome";
+import { DialectToggle, PokeBar, PokeDot, RegRow } from "./chrome";
 import { REG, setMathHalf, setMathOp, writesToPokes } from "./model";
 import { frameResult } from "../../../fixtures";
 import { makeFixtureCompositor } from "./storyCompositor";
@@ -27,6 +27,19 @@ export const RegRowStory: Story = () => (
   <RegRow c={c} addr={REG.CGADSUB} name="CGADSUB" note="add" />
 );
 RegRowStory.storyName = "RegRow";
+
+// PokeDot is the marker a poked control wears; it returns null when nothing is
+// poked. Here the fixture compositor's pokedAt is overridden to report one live
+// friendly poke on CGADSUB, so the dot renders (solid = live matches). Shown
+// next to a control label, exactly how ComposeSections/WindowSections use it.
+const pokedC = { ...c, pokedAt: () => writesToPokes([setMathOp("sub", 0x00)], "friendly") };
+export const PokeDotStory: Story = () => (
+  <div className="cmp-ctl-label">
+    MATH · $2131
+    <PokeDot c={pokedC} addr={REG.CGADSUB} />
+  </div>
+);
+PokeDotStory.storyName = "PokeDot";
 
 // PokeBar renders nothing when no poke exists (it returns null) — this story
 // documents that empty state. clearPokes() on mount guarantees it, regardless
