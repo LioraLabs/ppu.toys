@@ -4,11 +4,16 @@ import { clockToScrub, integerScale } from "./clock";
 import { transport, useTransport } from "../transport/transport";
 import { Presenter } from "./presenter";
 import { loadFx, saveFx, type PresentFx } from "./fx";
-import { DropZone } from "./DropZone";
+import { DropZoneWired } from "./DropZoneWired";
 
 /** Right-column Output: presents the SHARED core's framebuffer through a WebGL
  *  present pass (integer upscale + toggleable CRT/scanline/pixel-grid FX) and
- *  drives the SHARED transport (play/pause + scrubber). No private core or clock. */
+ *  drives the SHARED transport (play/pause + scrubber). No private core or clock.
+ *
+ *  No story (wired): owns the rAF present loop and reads live transport frames
+ *  (the wasm rasterizer's framebuffer) onto a real WebGL/Canvas2D surface — a
+ *  wasm-free story would render an empty canvas, so faking pixels here would be
+ *  dishonest. Its presentational leaf, DropZone, is storied instead. */
 export function OutputCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const displayRef = useRef<HTMLDivElement>(null);
@@ -132,7 +137,7 @@ export function OutputCanvas() {
             <span>frame {f}</span>
             <span>{fps}fps</span>
           </div>
-          <DropZone />
+          <DropZoneWired />
         </div>
       </div>
     </div>
