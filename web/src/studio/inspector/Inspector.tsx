@@ -2,14 +2,14 @@ import { useState } from "react";
 import { useInspectorFrame } from "./useInspectorFrame";
 import { INSPECTOR_TABS, overlayForTab, type OverlayId, type TabId } from "./tabs";
 import { TraceTab } from "./TraceTab";
-import { MemoryTab } from "./MemoryTab";
-import { ComposeTab } from "./ComposeTab";
+import { MemoryTabWired } from "./MemoryTabWired";
+import { ComposeTabWired } from "./ComposeTabWired";
 import { WindowsTab } from "./WindowsTab";
-import { MemoryLayersOverlay } from "./MemoryLayersOverlay";
-import { CompositorOverlay } from "./CompositorOverlay";
+import { MemoryLayersOverlayWired } from "./MemoryLayersOverlayWired";
+import { CompositorOverlayWired } from "./CompositorOverlayWired";
 import { RegistersTab } from "./RegistersTab";
 import { SpritesTab } from "./SpritesTab";
-import { VramTab } from "./VramTab";
+import { VramTabWired } from "./VramTabWired";
 import "./inspector.css";
 
 export function Inspector() {
@@ -42,14 +42,14 @@ export function Inspector() {
         )}
       </div>
       {tab === "trace" && <TraceTab />}
-      {tab === "memory" && <MemoryTab />}
-      {tab === "compose" && <ComposeTab />}
+      {tab === "memory" && <MemoryTabWired />}
+      {tab === "compose" && <ComposeTabWired />}
       {tab === "windows" && <WindowsTab />}
       {tab === "registers" && <RegistersTab frame={frame} />}
       {tab === "sprites" && <SpritesTab frame={frame} />}
-      {tab === "vram" && <VramTab frame={frame} />}
-      {overlay === "memory-layers" && <MemoryLayersOverlay onCollapse={() => setOverlay(null)} />}
-      {overlay === "compositor" && <CompositorOverlay onCollapse={() => setOverlay(null)} />}
+      {tab === "vram" && <VramTabWired frame={frame} />}
+      {overlay === "memory-layers" && <MemoryLayersOverlayWired onCollapse={() => setOverlay(null)} />}
+      {overlay === "compositor" && <CompositorOverlayWired onCollapse={() => setOverlay(null)} />}
     </div>
   );
 }

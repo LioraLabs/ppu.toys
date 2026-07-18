@@ -1,10 +1,9 @@
-import { HEIGHT, WIDTH, type ImportReport, type PlaneId } from "../../ppu/core";
-import { ppuCore } from "../../ppu/instance";
+import type { ReactNode } from "react";
+import { HEIGHT, WIDTH, type FrameResult, type ImportReport, type PlaneId } from "../../ppu/core";
 import { bgMode, formatAddr, formatValue } from "./format";
-import { useInspectorFrame } from "./useInspectorFrame";
 import { Copyable, useCopyToast } from "./copyToast";
 import { BlitCanvas } from "./BlitCanvas";
-import { ModeBadge, PlaneSeg, TraceCaption, TraceChain } from "./tracemem/TraceChain";
+import { ModeBadge, PlaneSeg, TraceCaption } from "./tracemem/TraceChain";
 import { CgramGrid, VramBar, VramLegend } from "./tracemem/MemoryPanels";
 import { MODE_BPP, REGION_COLORS, cgramOwners, vramRegions } from "./tracemem/regions";
 import { setLayerVisible, useLayerVis } from "./tracemem/stores";
@@ -42,16 +41,29 @@ function healthLine(r: ImportReport): { name: string; stats: string[]; warns: st
 
 /** Full-screen "Memory & Layers" overlay (Expand from Trace/Memory).
  *  Shares traceSelection + the memory panels with the docked tabs; the layer
- *  visibility toggles relocated here from the old LeftDock (M9 deviation). */
-export function MemoryLayersOverlay({ onCollapse }: { onCollapse: () => void }) {
-  const frame = useInspectorFrame();
+ *  visibility toggles relocated here from the old LeftDock (M9 deviation).
+ *  Presentational: `frame`/`vram`/`reports` are supplied by the caller (wired:
+ *  MemoryLayersOverlayWired; stories: fixtures), and the rasterizer-bound
+ *  resolution chain is injected via the `chain` slot so this component never
+ *  touches the wasm core directly. */
+export function MemoryLayersOverlay({
+  onCollapse,
+  frame,
+  vram,
+  reports,
+  chain,
+}: {
+  onCollapse: () => void;
+  frame: FrameResult;
+  vram: Uint16Array;
+  reports: ImportReport[];
+  chain: (copy: (label: string) => void) => ReactNode;
+}) {
   const { toast, copy } = useCopyToast();
   const vis = useLayerVis();
   const mode = bgMode(frame.registers);
-  const vram = ppuCore.vram();
   const regions = vramRegions(frame.registers, vram);
   const owners = cgramOwners(frame.registers, vram, frame.oam);
-  const reports = ppuCore.importReports();
   return (
     <div className="insp-overlay">
       <div className="insp-overlay-bar">
@@ -118,7 +130,7 @@ export function MemoryLayersOverlay({ onCollapse }: { onCollapse: () => void }) 
             </div>
             <TraceCaption frame={frame} />
             <div className="tm-ov-head">Resolution chain</div>
-            <TraceChain frame={frame} copy={copy} variant="overlay" />
+            {chain(copy)}
             <div className="tm-ov-head">VRAM address space · 32,768 words</div>
             <VramBar regions={regions} onCopy={copy} />
             <VramLegend regions={regions} onCopy={copy} />

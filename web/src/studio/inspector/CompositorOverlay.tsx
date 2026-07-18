@@ -1,3 +1,4 @@
+import type { CompositorScreens } from "../../ppu/core";
 import {
   AssignmentMatrix,
   ComposeReadout,
@@ -5,7 +6,7 @@ import {
   MathControls,
   ScreenPreviews,
 } from "./compose/ComposeSections";
-import { useCompositor } from "./compose/useCompositor";
+import type { Compositor } from "./compose/useCompositor";
 import {
   BoundCards,
   LayerMaskRows,
@@ -20,9 +21,17 @@ import "./compose/compose.css";
  *  frame registers — state lives in the sketch files and the core, so edits
  *  made here and in the tabs mirror each other by construction. Layout per the
  *  handoff: controls left (296px), composite + window mask center, register
- *  lists right (300px). */
-export function CompositorOverlay({ onCollapse }: { onCollapse: () => void }) {
-  const c = useCompositor();
+ *  lists right (300px). Presentational: `c` and `screens` are supplied by the
+ *  caller (wired: CompositorOverlayWired; stories: a fixture compositor). */
+export function CompositorOverlay({
+  onCollapse,
+  c,
+  screens,
+}: {
+  onCollapse: () => void;
+  c: Compositor;
+  screens: CompositorScreens;
+}) {
   return (
     <div className="insp-overlay">
       <div className="insp-overlay-bar">
@@ -43,7 +52,7 @@ export function CompositorOverlay({ onCollapse }: { onCollapse: () => void }) {
         <div className="cmpo-center">
           <section>
             <div className="cmpo-h">SCREEN COMPOSITE</div>
-            <ScreenPreviews c={c} large />
+            <ScreenPreviews c={c} screens={screens} large />
             <EquationChip c={c} />
           </section>
           <section className="cmpo-divider">

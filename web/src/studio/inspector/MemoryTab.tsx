@@ -1,5 +1,4 @@
-import { ppuCore } from "../../ppu/instance";
-import { useInspectorFrame } from "./useInspectorFrame";
+import type { FrameResult } from "../../ppu/core";
 import { useCopyToast } from "./copyToast";
 import { cgramOwners, vramRegions } from "./tracemem/regions";
 import { CgramGrid, VramBar, VramLegend } from "./tracemem/MemoryPanels";
@@ -7,10 +6,8 @@ import "./tracemem/tracemem.css";
 
 /** MEMORY — VRAM regions + CGRAM ownership, derived from the LIVE binding
  *  registers each frame (M9 deviation: never the handoff's hardcoded table). */
-export function MemoryTab() {
-  const frame = useInspectorFrame();
+export function MemoryTab({ frame, vram }: { frame: FrameResult; vram: Uint16Array }) {
   const { toast, copy } = useCopyToast();
-  const vram = ppuCore.vram();
   const regions = vramRegions(frame.registers, vram);
   const owners = cgramOwners(frame.registers, vram, frame.oam);
   return (
