@@ -1,4 +1,5 @@
 import type { Story, StoryDefault } from "@ladle/react";
+import { OverlayStage } from "../../../.ladle/decorators";
 import { AddSourceDialog } from "./AddSourceDialog";
 import "./sources.css";
 
@@ -13,10 +14,10 @@ export default {
 
 const noop = () => undefined;
 
-// The scrim is position:fixed, so give #ladle-root a viewport-sized in-flow box
-// (otherwise it collapses to 0 height and the screenshot target is "not visible").
+// The scrim is position:fixed; OverlayStage contains it to the story pane so it
+// doesn't cover Ladle's sidebar (which would trap clicks on this story).
 export const Open: Story = () => (
-  <div style={{ minHeight: "100vh" }}>
+  <OverlayStage>
     <AddSourceDialog onClose={noop} />
-  </div>
+  </OverlayStage>
 );

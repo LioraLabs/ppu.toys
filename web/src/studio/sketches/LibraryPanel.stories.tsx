@@ -1,4 +1,6 @@
+import type { CSSProperties } from "react";
 import type { Story, StoryDefault } from "@ladle/react";
+import { OverlayStage } from "../../../.ladle/decorators";
 import { LibraryPanel } from "./LibraryPanel";
 import { LibraryDataProvider } from "./useLibrary";
 import {
@@ -19,14 +21,14 @@ export default {
 const noop = () => undefined;
 
 // The .library aside is position:fixed against the shell's rail/toolbar vars.
-// A viewport-sized in-flow Stage gives #ladle-root height (else it collapses to
-// 0 and the screenshot target is "not visible"); zeroing the shell vars pins the
-// panel to the top-left since there's no rail/toolbar in the story.
+// OverlayStage contains the fixed panel to the story pane (so it doesn't cover
+// Ladle's sidebar and trap clicks); zeroing the shell vars pins the panel to the
+// stage's top-left since there's no rail/toolbar in the story.
 function Stage({ children }: { children: React.ReactNode }) {
   return (
-    <div style={{ minHeight: "100vh", "--rail-w": "0px", "--toolbar-h": "0px" } as React.CSSProperties}>
+    <OverlayStage style={{ "--rail-w": "0px", "--toolbar-h": "0px" } as CSSProperties}>
       {children}
-    </div>
+    </OverlayStage>
   );
 }
 
