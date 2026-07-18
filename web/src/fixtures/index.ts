@@ -244,3 +244,8 @@ export const frameScreens: CompositorScreens = (() => {
   }
   return { main, sub, mathMask };
 })();
+
+/** Open-sketch display name for studio chrome/shell (Toolbar) stories. Matches
+ *  the Toolbar's placeholder default so the chrome renders as it does before
+ *  the real sketch store wires a name through. */
+export const sketchName = "dusk-parallax";
