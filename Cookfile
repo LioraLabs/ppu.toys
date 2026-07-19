@@ -17,8 +17,8 @@
 #   cook dev         Vite dev server (builds the WASM core first)
 #   cook server.run  boot the backend serving web/dist + the live API
 #
-#   ── component workflow (Ladle catalog + fixtures + MSW) ──────────────────────
-#   cook ladle       Ladle component catalog — dev server, iterate a component in
+#   ── component workflow (Cosmos tree + fixtures + MSW) ────────────────────────
+#   cook cosmos      Cosmos component tree — dev server, drill into compositions
 #                    isolation (no backend, no wasm boot for presentational stories)
 #   cook catalog     static catalog build -> web/build (cached directory output)
 #   cook shoot       screenshot one story -> web/.shots (STORY=<story-id>, e.g.
@@ -99,20 +99,20 @@ recipe web: wasm deps
         npm --prefix web run build:app
     }
 
-# ── CATALOG: the Ladle component catalog as a static, cached bundle -> web/build.
+# ── CATALOG: the Cosmos component tree as a static, cached bundle -> web/build.
 #    Same input surface as `web` (stories/fixtures/mocks live under web/src, so the
-#    src globs already cover them) plus the `.ladle/` config and `public/` (the MSW
-#    worker Ladle serves). Depends on `wasm` because a story that imports the studio
+#    src globs already cover them) plus the Cosmos config and `public/` (the MSW
+#    worker Cosmos serves). Depends on `wasm` because a fixture that imports Studio
 #    transport transitively imports the wasm pkg module — Vite must resolve that file
 #    even though presentational stories never call initCore(). `shoot` reuses this.
 recipe catalog: wasm deps
     ingredients "web/src/**/*.ts" "web/src/**/*.tsx"
-                "web/.ladle/**/*" "web/public/**/*"
+                "web/cosmos.config.json" "web/public/**/*"
                 "web/vite.config.ts" "web/tsconfig.json" "web/tsconfig.node.json"
                 "web/package.json" "web/package-lock.json"
                 "web/src/wasm/pkg/ppu_core.js" "web/src/wasm/pkg/ppu_core_bg.wasm"
     cook "web/build/" {
-        npm --prefix web run ladle:build
+        npm --prefix web run cosmos:export
     }
 
 # ── BUILD: the default target — the whole stack. server.build is an order-only
@@ -130,18 +130,18 @@ chore dev: wasm deps
 chore dev-offline: wasm deps
     sh -c 'VITE_MSW=1 npm --prefix web run dev'
 
-# ── COMPONENT WORKFLOW: Ladle catalog (long-running, interactive, hot-reloads).
+# ── COMPONENT WORKFLOW: Cosmos tree (long-running, interactive, hot-reloads).
 #    Iterate any component in isolation from a fixture; wasm-free for presentational
-#    stories (deps on `wasm` only so studio stories that reference the pkg resolve).
-chore ladle: wasm deps
-    npm --prefix web run ladle
+#    fixtures (deps on `wasm` so live-core compositions use the real engine).
+chore cosmos: wasm deps
+    npm --prefix web run cosmos
 
-# ── SHOOT: render one story to a PNG under web/.shots for a tight (agent) visual
+# ── SHOOT: render one fixture to a PNG under web/.shots for a tight agent visual
 #    loop. STORY is required (env-driven, like the deploy chores); the shoot script
 #    screenshots the cached `catalog` build headlessly via Playwright. One-time host
 #    setup: `cd web && npx playwright install chromium`.
 chore shoot: catalog
-    sh -c 'npm --prefix web run shoot -- "${STORY:?set STORY=<story-id>, e.g. components--toycard--default}"'
+    sh -c 'npm --prefix web run shoot -- "${STORY:?set STORY=<component-path#variant>, e.g. components/ToyCard#Default}"'
 
 # ── TESTS ────────────────────────────────────────────────────────────────────
 chore test-core

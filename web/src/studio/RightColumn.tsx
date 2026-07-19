@@ -3,12 +3,12 @@ import { Inspector } from "./inspector/Inspector";
 import { ErrorBoundary } from "./ErrorBoundary";
 
 /** Thin container composing the two genuinely-wired right-column subsystems.
- *  Intentionally left wired (no Ladle story): OutputCanvas owns the rAF/wasm
- *  render loop (out of scope here — the editor/output ticket's domain) and
- *  Inspector is the inspector-frame wired container. Neither renders without a
- *  live core, so a RightColumn story would have to boot wasm — not meaningful.
- *  The wasm-free stories live on the inspector's presentational panels
- *  (RegistersTab, SpritesTab, VramTab, …) which the Inspector wires up. */
+ *  Intentionally left wired (no story of its own): OutputCanvas owns the
+ *  rAF/wasm render loop and the default Inspector tabs read the shared core.
+ *  The composed right column IS visible in Cosmos though — the StudioLayout
+ *  fixture (StudioLayout.fixture) rebuilds this aside from fixtures (BlitCanvas
+ *  output + slot-injected Inspector), and its LiveCore composition mounts this real
+ *  one under `CoreStage`. */
 export function RightColumn() {
   return (
     <aside className="right">

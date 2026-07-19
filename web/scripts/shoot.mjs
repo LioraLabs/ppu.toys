@@ -1,32 +1,27 @@
 #!/usr/bin/env node
-// Headless screenshot harness for Ladle stories.
-//
-// Usage:
-//   node scripts/shoot.mjs <story-id> [--out <path>] [--build] [--width N] [--height N] [--theme light|dark]
-//
-// Renders a single Ladle story (from the static `ladle build` output) to a PNG
-// using Playwright Chromium, without booting the full app or wasm.
+// Screenshot a Cosmos fixture from the static export.
+// Usage: node scripts/shoot.mjs <component-path[#variant]> [--build] [--out path]
 
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import { createServer } from "node:http";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveFixtureRef } from "./fixture-ref.mjs";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const webRoot = path.resolve(__dirname, "..");
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const webRoot = path.resolve(scriptDir, "..");
 const buildRoot = path.join(webRoot, "build");
-const metaPath = path.join(buildRoot, "meta.json");
+const manifestPath = path.join(buildRoot, "cosmos.fixtures.json");
 
 const MIME_TYPES = {
   ".html": "text/html",
   ".js": "text/javascript",
-  ".mjs": "text/javascript",
   ".css": "text/css",
   ".json": "application/json",
+  ".wasm": "application/wasm",
   ".svg": "image/svg+xml",
   ".png": "image/png",
-  ".webmanifest": "application/manifest+json",
   ".ico": "image/x-icon",
 };
 
@@ -36,139 +31,82 @@ function fail(message) {
 }
 
 function parseArgs(argv) {
-  const args = { storyId: null, out: null, build: false, width: 1280, height: 800, theme: null };
+  const args = { ref: null, out: null, build: false, width: 1280, height: 800, theme: null };
   const rest = [...argv];
-
-  while (rest.length > 0) {
+  while (rest.length) {
     const token = rest.shift();
-    switch (token) {
-      case "--out":
-        args.out = rest.shift();
-        break;
-      case "--build":
-        args.build = true;
-        break;
-      case "--width":
-        args.width = Number.parseInt(rest.shift(), 10);
-        break;
-      case "--height":
-        args.height = Number.parseInt(rest.shift(), 10);
-        break;
-      case "--theme":
-        args.theme = rest.shift();
-        break;
-      default:
-        if (token.startsWith("--")) {
-          fail(`Unknown flag: ${token}`);
-        } else if (args.storyId === null) {
-          args.storyId = token;
-        } else {
-          fail(`Unexpected extra argument: ${token}`);
-        }
-    }
+    if (token === "--out") args.out = rest.shift();
+    else if (token === "--build") args.build = true;
+    else if (token === "--width") args.width = Number.parseInt(rest.shift(), 10);
+    else if (token === "--height") args.height = Number.parseInt(rest.shift(), 10);
+    else if (token === "--theme") args.theme = rest.shift();
+    else if (token.startsWith("--")) fail(`Unknown flag: ${token}`);
+    else if (!args.ref) args.ref = token;
+    else fail(`Unexpected extra argument: ${token}`);
   }
-
-  if (!args.storyId) {
-    fail(
-      "Usage: node scripts/shoot.mjs <story-id> [--out <path>] [--build] [--width N] [--height N] [--theme light|dark]",
-    );
-  }
-  if (args.theme && args.theme !== "light" && args.theme !== "dark") {
-    fail(`Invalid --theme value: ${args.theme} (expected "light" or "dark")`);
-  }
-  if (Number.isNaN(args.width) || Number.isNaN(args.height)) {
-    fail("Invalid --width/--height: must be integers");
-  }
-
+  if (!args.ref) fail("Usage: npm run shoot -- <component-path[#variant]> [--build] [--out path]");
+  if (args.theme && !["light", "dark"].includes(args.theme)) fail(`Invalid theme: ${args.theme}`);
+  if (!Number.isInteger(args.width) || !Number.isInteger(args.height)) fail("Width and height must be integers");
   return args;
 }
 
-function runLadleBuild() {
+function runExport() {
   return new Promise((resolve, reject) => {
-    console.error("Running `npx ladle build` ...");
-    const child = spawn("npx", ["ladle", "build"], { cwd: webRoot, stdio: "inherit" });
+    console.error("Running `npm run cosmos:export` ...");
+    const child = spawn("npm", ["run", "cosmos:export"], { cwd: webRoot, stdio: "inherit" });
     child.on("error", reject);
-    child.on("exit", (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`ladle build exited with code ${code}`));
-      }
-    });
+    child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`Cosmos export exited with ${code}`))));
   });
 }
 
-async function ensureMeta(forceBuild) {
-  if (forceBuild || !fs.existsSync(metaPath)) {
-    await runLadleBuild();
-  }
-  if (!fs.existsSync(metaPath)) {
-    fail(`Could not find ${metaPath} even after running ladle build.`);
-  }
-  const raw = fs.readFileSync(metaPath, "utf8");
-  return JSON.parse(raw);
+async function loadManifest(forceBuild) {
+  if (forceBuild || !fs.existsSync(manifestPath)) await runExport();
+  if (!fs.existsSync(manifestPath)) fail(`Missing ${manifestPath}; run npm run cosmos:export`);
+  return JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 }
 
 function startStaticServer(root) {
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
-      try {
-        const url = new URL(req.url, "http://localhost");
-        let requestPath = decodeURIComponent(url.pathname);
-        if (requestPath === "/") {
-          requestPath = "/index.html";
-        }
-
-        const resolvedPath = path.normalize(path.join(root, requestPath));
-        const relative = path.relative(root, resolvedPath);
-        const isInsideRoot = relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-        if (!isInsideRoot) {
-          res.writeHead(403, { "Content-Type": "text/plain" });
-          res.end("Forbidden");
+      const url = new URL(req.url, "http://localhost");
+      const requestPath = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname);
+      const resolvedPath = path.normalize(path.join(root, requestPath));
+      const relative = path.relative(root, resolvedPath);
+      if (relative.startsWith("..") || path.isAbsolute(relative)) {
+        res.writeHead(403).end("Forbidden");
+        return;
+      }
+      fs.readFile(resolvedPath, (error, data) => {
+        if (error) {
+          res.writeHead(404).end("Not found");
           return;
         }
-
-        fs.readFile(resolvedPath, (err, data) => {
-          if (err) {
-            res.writeHead(404, { "Content-Type": "text/plain" });
-            res.end("Not found");
-            return;
-          }
-          const ext = path.extname(resolvedPath).toLowerCase();
-          const contentType = MIME_TYPES[ext] || "application/octet-stream";
-          res.writeHead(200, { "Content-Type": contentType });
-          res.end(data);
-        });
-      } catch (err) {
-        res.writeHead(500, { "Content-Type": "text/plain" });
-        res.end("Internal server error");
-      }
+        res.writeHead(200, { "Content-Type": MIME_TYPES[path.extname(resolvedPath)] || "application/octet-stream" });
+        res.end(data);
+      });
     });
-
     server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      resolve(server);
-    });
+    server.listen(0, "127.0.0.1", () => resolve(server));
   });
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-
-  const meta = await ensureMeta(args.build);
-  const storyIds = Object.keys(meta.stories ?? {});
-  if (!storyIds.includes(args.storyId)) {
-    console.error(`Unknown story id: "${args.storyId}"`);
-    console.error("Valid story ids:");
-    for (const id of storyIds.sort()) {
-      console.error(`  ${id}`);
+  const manifest = await loadManifest(args.build);
+  let fixtureId;
+  try {
+    fixtureId = resolveFixtureRef(manifest, args.ref);
+  } catch (error) {
+    console.error(error.message);
+    console.error("Available component paths:");
+    for (const fixture of manifest.fixtures) {
+      console.error(`  ${fixture.filePath.replace(/^src\//, "").replace(/\.fixture\.tsx$/, "")}`);
     }
     process.exit(1);
   }
 
-  const outPath = args.out
-    ? path.resolve(webRoot, args.out)
-    : path.join(webRoot, ".shots", `${args.storyId}.png`);
+  const safeRef = args.ref.replace(/[^a-zA-Z0-9_.-]+/g, "--");
+  const outPath = path.resolve(webRoot, args.out || path.join(".shots", `${safeRef}.png`));
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
 
   let server;
@@ -176,44 +114,23 @@ async function main() {
   try {
     server = await startStaticServer(buildRoot);
     const { port } = server.address();
-
-    let url = `http://127.0.0.1:${port}/?story=${encodeURIComponent(args.storyId)}&mode=preview`;
-    if (args.theme) {
-      url += `&theme=${args.theme}`;
-    }
-
+    const query = encodeURIComponent(JSON.stringify(fixtureId));
+    const url = `http://127.0.0.1:${port}/renderer.html?fixtureId=${query}&locked=true`;
     const { chromium } = await import("playwright");
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: args.width, height: args.height } });
     await page.goto(url);
-    await page.waitForSelector("[data-storyloaded]");
-    // Screenshot the story-content container (`#ladle-root`) rather than the
-    // fixed viewport, so the capture tightly bounds the rendered component: no
-    // viewport whitespace for small components, and no clipping for ones taller
-    // than the viewport. Fall back to a full-page shot if the container is
-    // missing so tall content is still never clipped.
-    const storyEl = await page.$("#ladle-root");
-    if (storyEl) {
-      await storyEl.screenshot({ path: outPath });
-    } else {
-      await page.screenshot({ path: outPath, fullPage: true });
-    }
-
-    const { size } = fs.statSync(outPath);
+    await page.waitForSelector("body[data-cosmos-ready='true']");
+    if (args.theme) await page.evaluate((theme) => (document.documentElement.dataset.theme = theme), args.theme);
+    await page.locator("#root > *").first().screenshot({ path: outPath });
     console.log(outPath);
-    console.log(`${size} bytes`);
-  } catch (err) {
-    fail(`shoot failed: ${err && err.stack ? err.stack : err}`);
+    console.log(`${fs.statSync(outPath).size} bytes`);
+  } catch (error) {
+    fail(`shoot failed: ${error?.stack || error}`);
   } finally {
-    if (browser) {
-      await browser.close();
-    }
-    if (server) {
-      await new Promise((resolve) => server.close(resolve));
-    }
+    if (browser) await browser.close();
+    if (server) await new Promise((resolve) => server.close(resolve));
   }
 }
 
-main().catch((err) => {
-  fail(`shoot failed: ${err && err.stack ? err.stack : err}`);
-});
+main().catch((error) => fail(`shoot failed: ${error?.stack || error}`));

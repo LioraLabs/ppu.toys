@@ -1,4 +1,4 @@
-/** Browser MSW worker (Ladle stories, dev-mode mocking). */
+/** Browser MSW worker (Cosmos fixtures, dev-mode mocking). */
 
 import { setupWorker } from "msw/browser";
 

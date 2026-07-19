@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
+import type { FrameResult } from "../../ppu/core";
 import { useInspectorFrame } from "./useInspectorFrame";
 import { INSPECTOR_TABS, overlayForTab, type OverlayId, type TabId } from "./tabs";
 import { TraceTab } from "./TraceTab";
@@ -12,7 +13,44 @@ import { SpritesTab } from "./SpritesTab";
 import { VramTabWired } from "./VramTabWired";
 import "./inspector.css";
 
-export function Inspector() {
+export interface InspectorProps {
+  /** Body renderer for the active tab. Defaults to the live wired set (which
+   *  reads the shared ppuCore for memory/vram/compose) — a fixture overrides it
+   *  with fixture-fed presentational tabs so the inspector chrome + tab
+   *  switching render wasm-free (see StudioLayout.fixture). */
+  renderTab?: (tab: TabId, frame: FrameResult) => ReactNode;
+  /** Same seam for the ⤢ Expand overlays (both wired defaults are core-bound). */
+  renderOverlay?: (overlay: OverlayId, frame: FrameResult, onCollapse: () => void) => ReactNode;
+}
+
+function wiredTab(tab: TabId, frame: FrameResult): ReactNode {
+  switch (tab) {
+    case "trace":
+      return <TraceTab />;
+    case "memory":
+      return <MemoryTabWired />;
+    case "compose":
+      return <ComposeTabWired />;
+    case "windows":
+      return <WindowsTab />;
+    case "registers":
+      return <RegistersTab frame={frame} />;
+    case "sprites":
+      return <SpritesTab frame={frame} />;
+    case "vram":
+      return <VramTabWired frame={frame} />;
+  }
+}
+
+function wiredOverlay(overlay: OverlayId, _frame: FrameResult, onCollapse: () => void): ReactNode {
+  return overlay === "memory-layers" ? (
+    <MemoryLayersOverlayWired onCollapse={onCollapse} />
+  ) : (
+    <CompositorOverlayWired onCollapse={onCollapse} />
+  );
+}
+
+export function Inspector({ renderTab = wiredTab, renderOverlay = wiredOverlay }: InspectorProps = {}) {
   const [tab, setTab] = useState<TabId>("trace");
   const [overlay, setOverlay] = useState<OverlayId | null>(null);
   const frame = useInspectorFrame();
@@ -41,15 +79,8 @@ export function Inspector() {
           </button>
         )}
       </div>
-      {tab === "trace" && <TraceTab />}
-      {tab === "memory" && <MemoryTabWired />}
-      {tab === "compose" && <ComposeTabWired />}
-      {tab === "windows" && <WindowsTab />}
-      {tab === "registers" && <RegistersTab frame={frame} />}
-      {tab === "sprites" && <SpritesTab frame={frame} />}
-      {tab === "vram" && <VramTabWired frame={frame} />}
-      {overlay === "memory-layers" && <MemoryLayersOverlayWired onCollapse={() => setOverlay(null)} />}
-      {overlay === "compositor" && <CompositorOverlayWired onCollapse={() => setOverlay(null)} />}
+      {renderTab(tab, frame)}
+      {overlay && renderOverlay(overlay, frame, () => setOverlay(null))}
     </div>
   );
 }

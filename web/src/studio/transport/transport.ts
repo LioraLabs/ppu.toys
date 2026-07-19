@@ -5,6 +5,24 @@ import type {
   SourceKind, ConvertSourceOptions, ConvertSourceResult,
 } from "../../ppu/core";
 import { advanceClock, scrubToClock, type Clock } from "../output/clock";
+import { WIDTH, HEIGHT } from "../../ppu/core";
+
+/** Power-on floor frame: black framebuffer, no registers (readers fall back to
+ *  power-on defaults), empty OAM/CGRAM. NOT a mock PPU — it is the honest
+ *  "no frame rendered yet" value, so `frame` keeps its non-null contract even
+ *  when the transport is constructed before the core is live (the app never
+ *  does — main.tsx boots the core first — but Cosmos evaluates the studio
+ *  module graph eagerly, and safeFrame's "keep last good frame" catch needs a
+ *  floor to keep). */
+function powerOnFrame(): FrameResult {
+  return {
+    framebuffer: new Uint8ClampedArray(WIDTH * HEIGHT * 4),
+    registers: [],
+    cgram: new Uint16Array(256),
+    oam: [],
+    objOverflow: { rangeOver: false, timeOver: false, maxSprites: 0, maxTiles: 0 },
+  };
+}
 
 export interface TransportState {
   t: number;
@@ -51,6 +69,7 @@ export class Transport {
   private lastSources: SourceFile[] | null = null;
 
   constructor(private coreRef: () => PpuCore = () => ppuCore) {
+    this.frame = powerOnFrame(); // floor for safeFrame's catch on the very first call
     this.frame = this.safeFrame(0, 0);
     this.snapshot = this.build();
   }

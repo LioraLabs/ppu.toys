@@ -23,7 +23,7 @@ export function ReadOnlyPlayer({
 
   // Push the toy's program into the shared core: files first, then each M10
   // source payload by name (mirrors sketches/restore.ts, minus demo replay).
-  // Skip when no core is loaded (e.g. a Ladle story never calls initCore) so the
+  // Skip when no core is loaded (e.g. a fixture never calls initCore) so the
   // frame renders blank instead of throwing on the unset singleton.
   useEffect(() => {
     if (!ppuCore) return;

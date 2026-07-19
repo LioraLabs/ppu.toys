@@ -9,9 +9,9 @@
     "build:app": "tsc && vite build",
     "build": "npm run build:wasm && npm run build:app",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "ladle": "ladle serve",
-    "ladle:build": "ladle build",
+    "test": "vitest run && node --test scripts/fixture-ref.node.mjs",
+    "cosmos": "cosmos",
+    "cosmos:export": "cosmos-export",
     "shoot": "node scripts/shoot.mjs"
   },
   "dependencies": {
@@ -30,7 +30,6 @@
     "react-router-dom": "^7.18.1"
   },
   "devDependencies": {
-    "@ladle/react": "^5.1.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/react": "^18.3.12",
@@ -40,6 +39,9 @@
     "jsdom": "^25.0.1",
     "msw": "^2.15.0",
     "playwright": "^1.61.1",
+    "react-cosmos": "^7.3.0",
+    "react-cosmos-plugin-open-fixture": "^7.3.0",
+    "react-cosmos-plugin-vite": "^7.3.0",
     "typescript": "^5.6.3",
     "vite": "^5.4.11",
     "vitest": "^2.1.8"

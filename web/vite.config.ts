@@ -1,12 +1,20 @@
 /// <reference types="vitest" />
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+import { shouldBypassApiProxy } from "./src/viteProxy";
 
 export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      "/api": "http://127.0.0.1:8080",
+      "/api": {
+        target: "http://127.0.0.1:8080",
+        // Cosmos roots Vite at src, making src/api/apiClient.ts available at
+        // /api/apiClient.ts. Let Vite serve source modules under this otherwise
+        // backend-owned prefix.
+        bypass: (req) =>
+          req.url && shouldBypassApiProxy(req.url) ? req.url : undefined,
+      },
       "/blobs": "http://127.0.0.1:8080",
     },
   },

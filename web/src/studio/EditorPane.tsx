@@ -48,10 +48,10 @@ export function PokeFileBar({ active }: { active: string }) {
   );
 }
 
-/** Thin wired container — no story: reads the open-sketch/poke stores and the
+/** Wired composition root: reads the open-sketch/poke stores and the
  *  shared transport (default source sink) and drives the debounced whole-program
- *  push. Its presentational leaves (FileTabs, CodeEditor) are storied wasm-free;
- *  storying the pane itself would boot the transport, which the ticket forbids. */
+ *  push. Its parent fixture renders FileTabs + CodeEditor together and boots
+ *  the real core because restoring imported demo assets calls convertSource. */
 export function EditorPane({ onSources }: EditorPaneProps) {
   const state = useOpenSketch();
   const { session } = state;
