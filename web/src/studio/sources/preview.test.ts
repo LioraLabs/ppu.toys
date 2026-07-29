@@ -18,10 +18,11 @@ describe("buildPreviewModel", () => {
     expect(m.cols).toBe(2);
     expect(m.rows).toBe(1);
     expect(m.cells).toHaveLength(2);
-    expect(m.cells[0]).toMatchObject({ top: "t0", bot: "p0" });
-    expect(m.cells[1]).toMatchObject({ top: "t1", bot: "p2" });
+    expect(m.cells[0]).toMatchObject({ top: "t0", bot: "p0", pal: 0 });
+    expect(m.cells[1]).toMatchObject({ top: "t1", bot: "p2", pal: 2 });
     expect(m.budget).toContain("2/1024 tiles");
     expect(m.image).not.toBeNull(); // quantized RGBA present
+    expect(m.palettes).toEqual([[0x1f]]); // decoded sub-palette rows for swatches
   });
 
   it("obj: cell grid from meta.cells, labels tile#/pal", () => {

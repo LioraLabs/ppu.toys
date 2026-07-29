@@ -14,20 +14,31 @@ const KINDS: { id: SourceKind; label: string }[] = [
   { id: "obj", label: "OBJ (sprites)" },
 ];
 
+type Dither = "none" | "bayer" | "diffusion";
+const DITHERS: { id: Dither; label: string }[] = [
+  { id: "none", label: "none · flat nearest color" },
+  { id: "bayer", label: "ordered · 8×8 Bayer" },
+  { id: "diffusion", label: "diffusion · Floyd-Steinberg" },
+];
+
 export function AddSourceDialog({ onClose }: { onClose: () => void }) {
   const [image, setImage] = useState<ImageData | null>(null);
   const [fileName, setFileName] = useState("");
   const [kind, setKind] = useState<SourceKind>("bg");
   const [bitDepth, setBitDepth] = useState<2 | 4 | 8>(4);
   const [cellSize, setCellSize] = useState<8 | 16 | 32 | 64>(16);
+  const [dither, setDither] = useState<Dither>("none");
+  const [strength, setStrength] = useState(50);
+  const [alphaT, setAlphaT] = useState(128);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const options: ConvertSourceOptions = useMemo(
-    () => (kind === "bg" ? { bit_depth: bitDepth, tile_size: 8 } : kind === "obj" ? { cell_size: cellSize } : {}),
-    [kind, bitDepth, cellSize],
-  );
+  const options: ConvertSourceOptions = useMemo(() => {
+    if (kind === "m7") return {}; // fixed pipeline, no remap options
+    const remap = { dither, dither_strength: strength, alpha_threshold: alphaT };
+    return kind === "bg" ? { bit_depth: bitDepth, tile_size: 8, ...remap } : { cell_size: cellSize, ...remap };
+  }, [kind, bitDepth, cellSize, dither, strength, alphaT]);
 
   const converted = useMemo(() => {
     if (!image) return null;
@@ -115,6 +126,25 @@ export function AddSourceDialog({ onClose }: { onClose: () => void }) {
             )}
             {kind === "obj" && <div className="srcpv-note">Uniform grid, no margins — one cell = OBJ size. Pre-crop irregular/marginned downloaded sheets; we quantize what's given (no slicer/reflow).</div>}
             {kind === "m7" && <div className="srcpv-note">Fixed: 8bpp chunky, ≤256 tiles, flat palette. No options.</div>}
+
+            {kind !== "m7" && (
+              <>
+                <label className="srcdlg-field">dither
+                  <select value={dither} onChange={(e) => setDither(e.target.value as Dither)}>
+                    {DITHERS.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
+                  </select>
+                </label>
+                {dither === "diffusion" && <div className="srcpv-note">Smoothest gradients, but the noise defeats tile dedup — expect a much higher unique-tile count.</div>}
+                {dither !== "none" && (
+                  <label className="srcdlg-field">dither strength · {strength}%
+                    <input type="range" min={0} max={100} value={strength} onChange={(e) => setStrength(Number(e.target.value))} />
+                  </label>
+                )}
+                <label className="srcdlg-field">alpha threshold · {alphaT}
+                  <input type="range" min={0} max={255} value={alphaT} onChange={(e) => setAlphaT(Number(e.target.value))} />
+                </label>
+              </>
+            )}
 
             <label className="srcdlg-field">name
               <input type="text" value={name} placeholder="track" onChange={(e) => setName(e.target.value)} />

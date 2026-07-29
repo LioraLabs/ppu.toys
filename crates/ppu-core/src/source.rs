@@ -484,6 +484,36 @@ pub struct ConvertOptions {
     pub bit_depth: Option<u8>,
     pub tile_size: Option<u8>,
     pub cell_size: Option<u8>,
+    /// "none" (default) | "bayer" | "diffusion". bg + obj; ignored for m7.
+    pub dither: Option<String>,
+    /// Dither intensity 0-100 (default 50).
+    pub dither_strength: Option<u8>,
+    /// Source alpha >= this is opaque, 0-255 (default 128). bg + obj.
+    pub alpha_threshold: Option<u8>,
+}
+
+/// Validate + collapse the remap-stage fields of [`ConvertOptions`].
+fn remap_options(opts: &ConvertOptions) -> Result<crate::import::dither::RemapOptions, String> {
+    use crate::import::dither::DitherMode;
+    let dither = match opts.dither.as_deref() {
+        None | Some("none") => DitherMode::None,
+        Some("bayer") => DitherMode::Bayer,
+        Some("diffusion") => DitherMode::Diffusion,
+        Some(other) => {
+            return Err(format!(
+                "dither must be none, bayer or diffusion (got {other})"
+            ))
+        }
+    };
+    let strength = opts.dither_strength.unwrap_or(50);
+    if strength > 100 {
+        return Err(format!("dither_strength must be 0-100 (got {strength})"));
+    }
+    Ok(crate::import::dither::RemapOptions {
+        dither,
+        strength,
+        alpha_threshold: opts.alpha_threshold.unwrap_or(128),
+    })
 }
 
 /// Pure conversion: quantize + pack an RGBA image into (payload, meta). No
@@ -507,6 +537,7 @@ pub fn convert_source(
             let io = crate::import::ImportOptions {
                 bit_depth,
                 tile_size: opts.tile_size.unwrap_or(8),
+                remap: remap_options(opts)?,
             };
             let (src, meta) = crate::import::import_tile_bg(rgba, width, height, &io);
             Ok((SourcePayload::Bg(src), meta))
@@ -522,7 +553,13 @@ pub fn convert_source(
                     "obj cell_size must be 8, 16, 32 or 64 (got {cell_size})"
                 ));
             }
-            let (src, meta) = crate::import::obj::import_obj_sheet(rgba, width, height, cell_size);
+            let (src, meta) = crate::import::obj::import_obj_sheet(
+                rgba,
+                width,
+                height,
+                cell_size,
+                &remap_options(opts)?,
+            );
             Ok((SourcePayload::Obj(src), meta))
         }
     }

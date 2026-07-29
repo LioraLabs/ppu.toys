@@ -2,7 +2,7 @@ import type { SourceKind, SourceMeta } from "../../ppu/core";
 import { bgCell, decodeSourcePayload, quantizedRgba } from "./payload";
 import { sourceReportView } from "./report";
 
-export interface CellLabel { top: string; bot: string }
+export interface CellLabel { top: string; bot: string; pal?: number }
 export interface PreviewImage { pixels: Uint8ClampedArray; width: number; height: number }
 export interface PreviewModel {
   cols: number;
@@ -12,6 +12,7 @@ export interface PreviewModel {
   height: number;
   cells: CellLabel[];  // row-major, cols*rows
   image: PreviewImage | null; // quantized RGBA, or null when undecodable
+  palettes: number[][]; // resulting sub-palettes (BGR555 rows; m7 = one flat row)
   budget: string[];
   warns: string[];
 }
@@ -27,12 +28,12 @@ export function buildPreviewModel(kind: SourceKind, meta: SourceMeta, payload: U
   if (kind === "obj" && meta.cells && meta.cells.length) {
     for (let i = 0; i < cols * rows; i++) {
       const c = meta.cells[i];
-      cells.push(c ? { top: `t${c.tile}`, bot: `p${c.pal}` } : { top: "—", bot: "" });
+      cells.push(c ? { top: `t${c.tile}`, bot: `p${c.pal}`, pal: c.pal } : { top: "—", bot: "" });
     }
   } else if (kind === "bg" && decoded?.kind === "bg") {
     for (let ty = 0; ty < rows; ty++) for (let tx = 0; tx < cols; tx++) {
       const c = bgCell(decoded, cols, rows, tx, ty);
-      cells.push({ top: `t${c.tile}`, bot: `p${c.pal}` });
+      cells.push({ top: `t${c.tile}`, bot: `p${c.pal}`, pal: c.pal });
     }
   } else if (kind === "m7" && decoded?.kind === "m7") {
     for (let i = 0; i < cols * rows; i++) cells.push({ top: `t${decoded.map[i] ?? 0}`, bot: "" });
@@ -42,5 +43,6 @@ export function buildPreviewModel(kind: SourceKind, meta: SourceMeta, payload: U
   }
 
   const image = decoded ? quantizedRgba(decoded, meta.width, meta.height) : null;
-  return { cols, rows, cellPx, width: meta.width, height: meta.height, cells, image, budget: view.budget, warns: view.warns };
+  const palettes = !decoded ? [] : decoded.kind === "m7" ? [decoded.palette] : decoded.palettes;
+  return { cols, rows, cellPx, width: meta.width, height: meta.height, cells, image, palettes, budget: view.budget, warns: view.warns };
 }

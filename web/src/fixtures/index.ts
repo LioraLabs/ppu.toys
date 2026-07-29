@@ -370,6 +370,57 @@ export const sourcePayloadM7: Uint8Array = (() => {
   return new Uint8Array(bytes);
 })();
 
+/** A valid v1 tile-BG source payload (16×8px, two sub-palettes) so
+ *  SourcePreview renders sub-palette swatches + the palette tint overlay with
+ *  no wasm. Byte layout mirrors payload.ts `decodeSourcePayload` (kind 0). */
+export const sourcePayloadBg: Uint8Array = (() => {
+  const bytes: number[] = [];
+  const u8 = (v: number) => bytes.push(v & 0xff);
+  const u16 = (v: number) => bytes.push(v & 0xff, (v >> 8) & 0xff); // little-endian
+  u8(1); // version
+  u8(0); // kind = bg
+  u8(4); // bit depth
+  u8(8); // tile size
+  // two sub-palettes: warm row / cool row
+  const p0 = [0x001f, 0x021f, 0x03ff]; // red, orange, yellow
+  const p1 = [0x7c00, 0x7e60, 0x7fe0]; // blue, teal-ish, cyan
+  u8(2);
+  u8(p0.length);
+  p0.forEach(u16);
+  u8(p1.length);
+  p1.forEach(u16);
+  // tiles: 0 blank, 1 solid index 1, 2 left-half idx 1 / right-half idx 2
+  u16(3);
+  const words = new Array<number>(3 * 16).fill(0);
+  for (let r = 0; r < 8; r++) {
+    words[16 + r] = 0x00ff; // tile 1: plane 0 full rows
+    words[32 + r] = 0x00f0 | 0x0f00; // tile 2: plane 0 left, plane 1 right
+  }
+  words.forEach(u16);
+  u8(0); // screen size 32x32
+  const map = new Array<number>(0x400).fill(0);
+  map[0] = 0x0001; // tile 1, palette 0
+  map[1] = 0x0002 | (1 << 10); // tile 2, palette 1
+  map.forEach(u16);
+  return new Uint8Array(bytes);
+})();
+
+export const sourceMetaBg: SourceMeta = {
+  width: 16,
+  height: 8,
+  report: {
+    mode: "tile",
+    report: {
+      colors_used: 6,
+      palettes_used: 2,
+      tile_cells: 2,
+      unique_tiles: 2,
+      vram_words: 48 + 0x400,
+      overflows: [],
+    },
+  },
+};
+
 export function makeSourceMeta(overrides?: Partial<SourceMeta>): SourceMeta {
   return {
     width: 16,

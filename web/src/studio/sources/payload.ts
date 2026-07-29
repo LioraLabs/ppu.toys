@@ -103,7 +103,7 @@ export function decodeSourcePayload(bytes: Uint8Array): Decoded | null {
   }
 }
 
-function rgbaFrom555(c: number): [number, number, number] {
+export function rgbaFrom555(c: number): [number, number, number] {
   const x = (v: number) => (v << 3) | (v >> 2); // 5-bit -> 8-bit, matches cgram15ToCss
   return [x(c & 0x1f), x((c >> 5) & 0x1f), x((c >> 10) & 0x1f)];
 }

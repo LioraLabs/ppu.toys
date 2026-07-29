@@ -74,11 +74,17 @@ export type SourceKind = "bg" | "m7" | "obj";
 
 /** Format-commit options for convertSource. bg: bit_depth (default 4);
  *  obj: cell_size — the OBJ size one obj[i].tile addresses (default 8);
- *  m7: none in v1 (the payload's options block is extensible for a later 7bpp+priority variant). */
+ *  m7: none in v1 (the payload's options block is extensible for a later 7bpp+priority variant).
+ *  dither/dither_strength/alpha_threshold shape the remap stage (bg + obj;
+ *  ignored for m7): bayer = ordered 8x8 (position-stable, dedup-friendly),
+ *  diffusion = serpentine Floyd-Steinberg (smoothest, breaks tile dedup). */
 export interface ConvertSourceOptions {
   bit_depth?: 2 | 4 | 8;
   tile_size?: 8;
   cell_size?: 8 | 16 | 32 | 64;
+  dither?: "none" | "bayer" | "diffusion";
+  dither_strength?: number; // 0-100, default 50
+  alpha_threshold?: number; // 0-255, default 128
 }
 
 /** One source cell's resolved OBJ attributes (obj sources). */
