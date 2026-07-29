@@ -4,7 +4,6 @@ import { clockToScrub, integerScale } from "./clock";
 import { transport, useTransport } from "../transport/transport";
 import { Presenter } from "./presenter";
 import { loadFx, saveFx, type PresentFx } from "./fx";
-import { DropZoneWired } from "./DropZoneWired";
 
 /** Right-column Output: presents the SHARED core's framebuffer through a WebGL
  *  present pass (integer upscale + toggleable CRT/scanline/pixel-grid FX) and
@@ -13,7 +12,7 @@ import { DropZoneWired } from "./DropZoneWired";
  *  No story (wired): owns the rAF present loop and reads live transport frames
  *  (the wasm rasterizer's framebuffer) onto a real WebGL/Canvas2D surface — a
  *  wasm-free story would render an empty canvas, so faking pixels here would be
- *  dishonest. Its presentational leaf, DropZone, is storied instead. */
+ *  dishonest. The StudioLayout fixture rebuilds the arrangement wasm-free. */
 export function OutputCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const displayRef = useRef<HTMLDivElement>(null);
@@ -93,58 +92,53 @@ export function OutputCanvas() {
         <span className="pill">MODE 1</span>
         <span className="pill">256×224</span>
       </div>
-      <div className="output-row">
-        <div className="display" ref={displayRef}>
-          <canvas
-            ref={canvasRef}
-            // key flips on WebGL failure to mount a pristine canvas for Canvas2D
-            // (a canvas that once held a webgl context can't yield a 2D one).
-            key={forceCanvas2d ? "canvas2d" : "webgl"}
-            className="display-canvas"
-            width={WIDTH}
-            height={HEIGHT}
+      <div className="display" ref={displayRef}>
+        <canvas
+          ref={canvasRef}
+          // key flips on WebGL failure to mount a pristine canvas for Canvas2D
+          // (a canvas that once held a webgl context can't yield a 2D one).
+          key={forceCanvas2d ? "canvas2d" : "webgl"}
+          className="display-canvas"
+          width={WIDTH}
+          height={HEIGHT}
+        />
+        <span className="display-badge">
+          {(forceCanvas2d ? "canvas" : "webgl") + " · wasm-ppu"}
+        </span>
+      </div>
+      <div className="transport">
+        <button
+          className="play-btn"
+          aria-label={playing ? "Pause" : "Play"}
+          onClick={() => transport.toggle()}
+        >
+          {playing ? "⏸" : "▶"}
+        </button>
+        <div className="scrubber">
+          <div className="scrubber-fill" style={{ width: `${scrub * 100}%` }} />
+          <div className="scrubber-handle" style={{ left: `${scrub * 100}%` }} />
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.001}
+            value={scrub}
+            onChange={(e) => transport.scrub(Number(e.target.value))}
+            aria-label="Timeline scrubber"
+            style={{
+              position: "absolute",
+              inset: 0,
+              width: "100%",
+              margin: 0,
+              opacity: 0,
+              cursor: "pointer",
+            }}
           />
-          <span className="display-badge">
-            {(forceCanvas2d ? "canvas" : "webgl") + " · wasm-ppu"}
-          </span>
         </div>
-        <div className="output-side">
-          <div className="transport">
-            <button
-              className="play-btn"
-              aria-label={playing ? "Pause" : "Play"}
-              onClick={() => transport.toggle()}
-            >
-              {playing ? "⏸" : "▶"}
-            </button>
-            <div className="scrubber">
-              <div className="scrubber-fill" style={{ width: `${scrub * 100}%` }} />
-              <div className="scrubber-handle" style={{ left: `${scrub * 100}%` }} />
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.001}
-                value={scrub}
-                onChange={(e) => transport.scrub(Number(e.target.value))}
-                aria-label="Timeline scrubber"
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  width: "100%",
-                  margin: 0,
-                  opacity: 0,
-                  cursor: "pointer",
-                }}
-              />
-            </div>
-          </div>
-          <div className="readout">
-            <span>t={t.toFixed(1)}s</span>
-            <span>frame {f}</span>
-            <span>{fps}fps</span>
-          </div>
-          <DropZoneWired />
+        <div className="readout">
+          <span>t={t.toFixed(1)}s</span>
+          <span>frame {f}</span>
+          <span>{fps}fps</span>
         </div>
       </div>
     </div>

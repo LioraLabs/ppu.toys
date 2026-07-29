@@ -299,13 +299,15 @@
 .output {
   padding: 12px 14px;
   flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
   border-bottom: 1px solid var(--line2);
 }
 .output-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
 }
 .output-title {
   font-family: var(--font-mono);
@@ -341,15 +343,9 @@
   border-color: var(--orange);
 }
 
-.output-row {
-  display: flex;
-  align-items: stretch;
-  gap: 14px;
-}
 .display {
   position: relative;
-  width: 340px;
-  flex: none;
+  width: 100%;
   aspect-ratio: 8 / 7;
   background: #05060a;
   border: 1px solid var(--line2);
@@ -372,13 +368,6 @@
   background: rgba(0, 0, 0, 0.35);
   padding: 2px 5px;
   border-radius: 3px;
-}
-.output-side {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
 }
 .transport {
   display: flex;
@@ -425,38 +414,23 @@
 .readout {
   display: flex;
   gap: 10px;
+  margin-left: auto;
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--dim2);
 }
-.drop-zone {
-  flex: 1;
-  min-height: 44px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  padding: 8px;
-  text-align: center;
-  border: 1px dashed var(--line);
-  border-radius: 7px;
-  background: var(--sunken);
-  cursor: pointer;
+
+/* Drag handle between the editor and the right column. */
+.pane-splitter {
+  width: 5px;
+  flex: none;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.12s;
 }
-.drop-zone:hover,
-.drop-zone--over {
-  border-color: var(--orange);
-}
-.drop-main {
-  font-family: var(--font-sans);
-  font-size: 12px;
-  color: var(--mid);
-}
-.drop-sub {
-  font-family: var(--font-mono);
-  font-size: 9px;
-  color: var(--dim2);
+.pane-splitter:hover,
+.pane-splitter:active {
+  background: color-mix(in srgb, var(--orange) 40%, transparent);
 }
 .drop-sub--error {
   color: var(--red);

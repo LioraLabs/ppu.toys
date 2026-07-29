@@ -8,7 +8,6 @@ import { Toolbar } from "./Toolbar";
 import { ActivityRail } from "./ActivityRail";
 import { FileTabs } from "./editor/FileTabs";
 import { CodeEditor } from "./editor/CodeEditor";
-import { DropZone } from "./output/DropZone";
 import { Inspector } from "./inspector/Inspector";
 import { InspectorFrameProvider } from "./inspector/useInspectorFrame";
 import type { OverlayId, TabId } from "./inspector/tabs";
@@ -203,33 +202,28 @@ function OutputMock({ f }: { f: FrameResult }) {
         <span className="pill">MODE 1</span>
         <span className="pill">256×224</span>
       </div>
-      <div className="output-row">
-        <div className="display">
-          <BlitCanvas
-            className="display-canvas"
-            pixels={f.framebuffer}
-            width={WIDTH}
-            height={HEIGHT}
-            title="fixture framebuffer"
-          />
-          <span className="display-badge">fixture · no core</span>
+      <div className="display">
+        <BlitCanvas
+          className="display-canvas"
+          pixels={f.framebuffer}
+          width={WIDTH}
+          height={HEIGHT}
+          title="fixture framebuffer"
+        />
+        <span className="display-badge">fixture · no core</span>
+      </div>
+      <div className="transport">
+        <button className="play-btn" aria-label="Play">
+          ▶
+        </button>
+        <div className="scrubber">
+          <div className="scrubber-fill" style={{ width: "35%" }} />
+          <div className="scrubber-handle" style={{ left: "35%" }} />
         </div>
-        <div className="output-side">
-          <div className="transport">
-            <button className="play-btn" aria-label="Play">
-              ▶
-            </button>
-            <div className="scrubber">
-              <div className="scrubber-fill" style={{ width: "35%" }} />
-              <div className="scrubber-handle" style={{ left: "35%" }} />
-            </div>
-          </div>
-          <div className="readout">
-            <span>t=2.1s</span>
-            <span>frame 126</span>
-            <span>60fps</span>
-          </div>
-          <DropZone error={null} onFiles={() => {}} />
+        <div className="readout">
+          <span>t=2.1s</span>
+          <span>frame 126</span>
+          <span>60fps</span>
         </div>
       </div>
     </div>

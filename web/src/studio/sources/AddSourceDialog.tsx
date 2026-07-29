@@ -80,7 +80,7 @@ export function AddSourceDialog({ onClose }: { onClose: () => void }) {
       return;
     }
     // record into the open toy too — engine registration alone does not
-    // survive a reload (the drop-zone path in useAssets does the same pair)
+    // survive a reload
     openSketchStore.addSource({
       name: trimmed,
       kind,
