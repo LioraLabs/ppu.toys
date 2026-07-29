@@ -1,8 +1,14 @@
 name: Deploy
 
+# Main-branch deploys are GATED ON GREEN CI: this fires from CI's completion
+# (workflow_run), not from the push itself. Tag pushes and manual dispatch
+# deploy directly (CI does not run on tags; dispatch is a deliberate override).
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
+  push:
     tags: ['v*']
   workflow_dispatch:
 
@@ -17,12 +23,18 @@ concurrency:
 #     'sudo cp -a /opt/ppu/ppu-server.prev /opt/ppu/ppu-server && sudo systemctl restart ppu-server'
 jobs:
   deploy:
+    # Skip when the triggering CI run failed; tag/dispatch events pass through.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     # Match the production box's Ubuntu 24.04 glibc with a native GNU build.
     name: build x86_64 + ship to box
     runs-on: ubuntu-24.04
     environment: production
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Deploy exactly the commit CI validated — workflow_run's default
+          # github.sha is the default-branch tip, which may have moved.
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.ref }}
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
