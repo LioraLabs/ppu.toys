@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { INSPECTOR_TABS, overlayForTab } from "./tabs";
+import { INSPECTOR_TABS } from "./tabs";
 
 describe("inspector tab model", () => {
   it("lists the four Workspace tabs first, aux tabs appended", () => {
@@ -17,21 +17,5 @@ describe("inspector tab model", () => {
       "sprites",
       "vram",
     ]);
-  });
-
-  it("Expand routes Trace/Memory to the Memory & Layers overlay", () => {
-    expect(overlayForTab("trace")).toBe("memory-layers");
-    expect(overlayForTab("memory")).toBe("memory-layers");
-  });
-
-  it("Expand routes Compose/Windows to the Compositor overlay", () => {
-    expect(overlayForTab("compose")).toBe("compositor");
-    expect(overlayForTab("windows")).toBe("compositor");
-  });
-
-  it("aux tabs have no overlay", () => {
-    expect(overlayForTab("registers")).toBeNull();
-    expect(overlayForTab("sprites")).toBeNull();
-    expect(overlayForTab("vram")).toBeNull();
   });
 });

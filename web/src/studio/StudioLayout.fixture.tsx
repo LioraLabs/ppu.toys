@@ -10,7 +10,7 @@ import { FileTabs } from "./editor/FileTabs";
 import { CodeEditor } from "./editor/CodeEditor";
 import { Inspector } from "./inspector/Inspector";
 import { InspectorFrameProvider } from "./inspector/useInspectorFrame";
-import type { OverlayId, TabId } from "./inspector/tabs";
+import type { TabId } from "./inspector/tabs";
 import { ModeBadge, PlaneSeg, TraceCaption } from "./inspector/tracemem/TraceChain";
 import { MemoryTab } from "./inspector/MemoryTab";
 import { ComposeTab } from "./inspector/ComposeTab";
@@ -18,8 +18,6 @@ import { WindowsTab } from "./inspector/WindowsTab";
 import { RegistersTab } from "./inspector/RegistersTab";
 import { SpritesTab } from "./inspector/SpritesTab";
 import { VramTab } from "./inspector/VramTab";
-import { MemoryLayersOverlay } from "./inspector/MemoryLayersOverlay";
-import { CompositorOverlay } from "./inspector/CompositorOverlay";
 import { BlitCanvas } from "./inspector/BlitCanvas";
 import { makeFixtureCompositor } from "./inspector/compose/storyCompositor";
 import {
@@ -111,20 +109,6 @@ function fixtureTab(tab: TabId, f: FrameResult): ReactNode {
     case "vram":
       return <VramTab frame={f} vram={frameVram} reports={frameImportReports} />;
   }
-}
-
-function fixtureOverlay(overlay: OverlayId, f: FrameResult, onCollapse: () => void): ReactNode {
-  return overlay === "memory-layers" ? (
-    <MemoryLayersOverlay
-      onCollapse={onCollapse}
-      frame={f}
-      vram={frameVram}
-      reports={frameImportReports}
-      chain={() => <CoreNote what="The resolution chain" />}
-    />
-  ) : (
-    <CompositorOverlay onCollapse={onCollapse} c={compositor} screens={frameScreens} />
-  );
 }
 
 // ── editor slot: real FileTabs + CodeEditor over story-local file state ──────
@@ -250,7 +234,7 @@ function ComposedShell() {
         }
         rail={<ActivityRail active="layers" />}
         editor={<EditorMock />}
-        dock={<Inspector renderTab={fixtureTab} renderOverlay={fixtureOverlay} />}
+        dock={<Inspector renderTab={fixtureTab} />}
         right={
           <aside className="right">
             <OutputMock f={frame} />

@@ -1,6 +1,6 @@
 import { type ReactNode } from "react";
 
-export type RailItemId = "assets" | "layers" | "palette" | "sprites" | "settings";
+export type RailItemId = "assets" | "layers" | "sprites" | "settings";
 
 export interface ActivityRailProps {
   /** Item shown selected (inset-indicator); none when absent. */
@@ -11,7 +11,7 @@ export interface ActivityRailProps {
   assetsOpen?: boolean;
   /** Same toggle treatment for the Settings flyout. */
   settingsOpen?: boolean;
-  /** Rail actions: assets/settings toggle their flyouts, layers/palette/sprites
+  /** Rail actions: assets/settings toggle their flyouts, layers/sprites
    *  jump to the matching inspector view (wired wrapper). No-op when absent. */
   onSelect?: (id: RailItemId) => void;
 }
@@ -96,24 +96,6 @@ export function ActivityRail({
         >
           <path d="M9 2 16 6 9 10 2 6Z" />
           <path d="M2 10 9 14 16 10" />
-        </svg>
-      </RailItem>
-
-      <RailItem id="palette" label="Palette" active={active === "palette"} onSelect={onSelect}>
-        <svg
-          width="18"
-          height="18"
-          viewBox="0 0 18 18"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={1.4}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <rect x="3" y="3" width="5" height="5" rx="1" fill="currentColor" />
-          <rect x="10" y="3" width="5" height="5" rx="1" />
-          <rect x="3" y="10" width="5" height="5" rx="1" />
-          <rect x="10" y="10" width="5" height="5" rx="1" fill="currentColor" />
         </svg>
       </RailItem>
 

@@ -10,8 +10,6 @@ const Default = () => <ActivityRail active="layers" />;
 // active view) — the exact production state when the assets flyout is open.
 const AssetsOpen = () => <ActivityRail active="layers" assetsOpen />;
 
-const Palette = () => <ActivityRail active="palette" />;
-
 const Sprites = () => <ActivityRail active="sprites" />;
 
 const Settings = () => <ActivityRail active="settings" />;
@@ -19,7 +17,6 @@ const Settings = () => <ActivityRail active="settings" />;
 export default {
   Default,
   AssetsOpen,
-  Palette,
   Sprites,
   Settings,
 };

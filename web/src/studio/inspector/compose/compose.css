@@ -1,6 +1,6 @@
 /* Compose + Windows tabs & the Compositor overlay. Own file so the
    parallel inspector tickets don't collide in inspector.css. Prefixes:
-   cmp- (compose / shared), winp- (windows tab), cmpo- (overlay layout). */
+   cmp- (compose / shared), winp- (windows tab). */
 
 /* ── dialect toggle ──────────────────────────────────────────────────────── */
 .cmp-dialect {
@@ -517,53 +517,6 @@
 }
 
 /* ── compositor overlay (3 panes) ───────────────────────────────────────── */
-.cmpo-body {
-  display: flex;
-}
-.cmpo-left {
-  width: 296px;
-  flex: none;
-  background: var(--panel);
-  border-right: 1px solid var(--line);
-  overflow: auto;
-  padding: 14px;
-}
-.cmpo-center {
-  flex: 1;
-  min-width: 0;
-  overflow: auto;
-  padding: 16px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-.cmpo-right {
-  width: 300px;
-  flex: none;
-  background: var(--panel);
-  border-left: 1px solid var(--line);
-  overflow: auto;
-  padding: 14px;
-}
-.cmpo-h {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.13em;
-  color: var(--dim);
-  margin: 0 0 10px;
-}
-.cmpo-h--gap {
-  margin-top: 16px;
-}
-.cmpo-hint {
-  color: var(--faint);
-  letter-spacing: 0;
-  margin-left: 8px;
-}
-.cmpo-divider {
-  border-top: 1px solid var(--line2);
-  padding-top: 16px;
-}
 .cmp-previews--lg {
   align-items: center;
 }
@@ -580,21 +533,9 @@
   font-size: 12px;
   padding: 8px 12px;
 }
-.cmpo-winrow {
-  display: flex;
-  gap: 18px;
-  align-items: flex-start;
-}
-.cmpo-winleft {
-  flex: none;
-  width: 360px;
-}
-.cmpo-winleft .winp-bounds {
-  margin: 10px 0 0;
-}
-.cmpo-winright {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
+
+/* The windows tab's controls were designed for a ~570px column; in the wide
+   dock they cap here instead of smearing edge to edge. */
+.winp-wrap {
+  max-width: 620px;
 }

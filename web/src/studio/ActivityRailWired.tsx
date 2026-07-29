@@ -6,13 +6,12 @@ import { inspectorStore, useInspectorView } from "./inspector/inspectorStore";
 import { editorSettings, useVimMode } from "./editor/editorSettings";
 import { useTheme } from "./theme";
 
-/** Which rail item the current inspector view corresponds to (layers/palette/
- *  sprites are shortcuts into inspector views, so they highlight from the same
- *  store they drive). */
+/** Which rail item the current inspector view corresponds to (layers/sprites
+ *  are shortcuts into inspector dock tabs, so they highlight from the same
+ *  store they drive — only while the dock is actually visible). */
 function railActive(view: ReturnType<typeof useInspectorView>): RailItemId | undefined {
-  if (view.overlay === "memory-layers") return "layers";
-  if (view.overlay) return undefined;
-  if (view.tab === "memory") return "palette";
+  if (!view.dockOpen) return undefined;
+  if (view.tab === "memory") return "layers";
   if (view.tab === "sprites") return "sprites";
   return undefined;
 }
@@ -32,16 +31,13 @@ export function ActivityRailWired() {
         setOpen((v) => (v === id ? null : id));
         break;
       case "layers":
-        // The rail's "Memory & layers" is the full overlay view; clicking it
-        // again collapses back to the tabs.
-        if (view.overlay === "memory-layers") inspectorStore.collapse();
-        else inspectorStore.openOverlay("memory-layers");
-        break;
-      case "palette":
-        inspectorStore.setTab("memory"); // CGRAM ownership leads the Memory tab
+        // Memory tab hosts VRAM/CGRAM + the layer stack; re-click hides the dock.
+        if (view.dockOpen && view.tab === "memory") inspectorStore.toggleDock();
+        else inspectorStore.setTab("memory");
         break;
       case "sprites":
-        inspectorStore.setTab("sprites");
+        if (view.dockOpen && view.tab === "sprites") inspectorStore.toggleDock();
+        else inspectorStore.setTab("sprites");
         break;
     }
   };

@@ -14,15 +14,17 @@ export function WindowsTab() {
   const c = useCompositor();
   return (
     <div className="insp-scroll">
-      <WindowPreview c={c} />
-      <div className="winp-caption">
-        orange = W1 edges · cyan = W2 edges · click preview to drag nearest edge
+      <div className="winp-wrap">
+        <WindowPreview c={c} />
+        <div className="winp-caption">
+          orange = W1 edges · cyan = W2 edges · click preview to drag nearest edge
+        </div>
+        <WindowControls c={c} />
+        <BoundCards c={c} />
+        <div className="cmp-ctl-label">PER-LAYER WINDOW MASK</div>
+        <LayerMaskRows c={c} />
+        <WindowReadout c={c} />
       </div>
-      <WindowControls c={c} />
-      <BoundCards c={c} />
-      <div className="cmp-ctl-label">PER-LAYER WINDOW MASK</div>
-      <LayerMaskRows c={c} />
-      <WindowReadout c={c} />
     </div>
   );
 }

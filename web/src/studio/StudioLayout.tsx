@@ -14,9 +14,13 @@ export interface StudioLayoutProps {
   /** Right column — expected to render `<aside className="right">`
    *  (RightColumn in the app). */
   right: ReactNode;
-  /** Bottom dock under the editor (Inspector in the app). Collapsible via the
-   *  dock bar; height drags. Omit the slot and the bar disappears too. */
+  /** Bottom dock under the editor (Inspector in the app). Height drags on the
+   *  dock bar; visibility is the caller's (dockOpen/onDockToggle — the app
+   *  wires the shared inspector store so the rail can reveal the dock too).
+   *  Omit the slot and the bar disappears with it. */
   dock?: ReactNode;
+  dockOpen?: boolean;
+  onDockToggle?: () => void;
 }
 
 const RIGHT_W_KEY = "ppu.rightPaneW";
@@ -24,7 +28,6 @@ const MIN_RIGHT = 380; // narrower and the output/tab chrome wraps unusably
 const MIN_EDITOR = 380; // keep a workable editor no matter how far the drag goes
 
 const DOCK_H_KEY = "ppu.dockH";
-const DOCK_OPEN_KEY = "ppu.dockOpen";
 const MIN_DOCK = 140;
 const MIN_EDITOR_H = 160;
 /** Movement below this is a click (toggle), not a drag (resize). */
@@ -38,10 +41,6 @@ function loadDockH(): number {
   const v = Number(localStorage.getItem(DOCK_H_KEY));
   return Number.isFinite(v) && v >= MIN_DOCK ? v : 280;
 }
-function loadDockOpen(): boolean {
-  return localStorage.getItem(DOCK_OPEN_KEY) !== "0";
-}
-
 /** Presentational studio arrangement: the toolbar-over-three-columns grid that
  *  studio.css hangs off, with every region injected as a slot. Studio fills the
  *  slots with the wired app; the shell fixture (StudioLayout.fixture) fills them
@@ -51,12 +50,19 @@ function loadDockOpen(): boolean {
  *  Two persisted user splits: the editor|right divider drags the right
  *  column's width (--right-w inline), and the dock bar under the editor is a
  *  click-to-toggle, drag-to-resize handle for the bottom dock. */
-export function StudioLayout({ toolbar, rail, editor, right, dock }: StudioLayoutProps) {
+export function StudioLayout({
+  toolbar,
+  rail,
+  editor,
+  right,
+  dock,
+  dockOpen = true,
+  onDockToggle,
+}: StudioLayoutProps) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const centerRef = useRef<HTMLDivElement>(null);
   const [rightW, setRightW] = useState(loadRightW);
   const [dockH, setDockH] = useState(loadDockH);
-  const [dockOpen, setDockOpen] = useState(loadDockOpen);
 
   const startRightDrag = (e: ReactPointerEvent) => {
     e.preventDefault();
@@ -100,14 +106,8 @@ export function StudioLayout({ toolbar, rail, editor, right, dock }: StudioLayou
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      if (dragged) {
-        localStorage.setItem(DOCK_H_KEY, String(latest));
-      } else {
-        setDockOpen((o) => {
-          localStorage.setItem(DOCK_OPEN_KEY, o ? "0" : "1");
-          return !o;
-        });
-      }
+      if (dragged) localStorage.setItem(DOCK_H_KEY, String(latest));
+      else onDockToggle?.();
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);

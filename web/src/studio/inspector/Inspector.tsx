@@ -2,13 +2,11 @@ import { type ReactNode } from "react";
 import type { FrameResult } from "../../ppu/core";
 import { useInspectorFrame } from "./useInspectorFrame";
 import { inspectorStore, useInspectorView } from "./inspectorStore";
-import { INSPECTOR_TABS, overlayForTab, type OverlayId, type TabId } from "./tabs";
+import { INSPECTOR_TABS, type TabId } from "./tabs";
 import { TraceTab } from "./TraceTab";
 import { MemoryTabWired } from "./MemoryTabWired";
 import { ComposeTabWired } from "./ComposeTabWired";
 import { WindowsTab } from "./WindowsTab";
-import { MemoryLayersOverlayWired } from "./MemoryLayersOverlayWired";
-import { CompositorOverlayWired } from "./CompositorOverlayWired";
 import { RegistersTab } from "./RegistersTab";
 import { SpritesTab } from "./SpritesTab";
 import { VramTabWired } from "./VramTabWired";
@@ -20,8 +18,6 @@ export interface InspectorProps {
    *  with fixture-fed presentational tabs so the inspector chrome + tab
    *  switching render wasm-free (see StudioLayout.fixture). */
   renderTab?: (tab: TabId, frame: FrameResult) => ReactNode;
-  /** Same seam for the ⤢ Expand overlays (both wired defaults are core-bound). */
-  renderOverlay?: (overlay: OverlayId, frame: FrameResult, onCollapse: () => void) => ReactNode;
 }
 
 function wiredTab(tab: TabId, frame: FrameResult): ReactNode {
@@ -43,23 +39,11 @@ function wiredTab(tab: TabId, frame: FrameResult): ReactNode {
   }
 }
 
-function wiredOverlay(overlay: OverlayId, _frame: FrameResult, onCollapse: () => void): ReactNode {
-  return overlay === "memory-layers" ? (
-    <MemoryLayersOverlayWired onCollapse={onCollapse} />
-  ) : (
-    <CompositorOverlayWired onCollapse={onCollapse} />
-  );
-}
-
-export function Inspector({
-  renderTab = wiredTab,
-  renderOverlay = wiredOverlay,
-}: InspectorProps = {}) {
+export function Inspector({ renderTab = wiredTab }: InspectorProps = {}) {
   // Shared store, not local state: the ActivityRail drives these too.
-  const { tab, overlay } = useInspectorView();
+  const { tab } = useInspectorView();
   const setTab = inspectorStore.setTab;
   const frame = useInspectorFrame();
-  const expandTarget = overlayForTab(tab);
   return (
     <div className="inspector">
       <div className="insp-tabs">
@@ -73,19 +57,8 @@ export function Inspector({
             {t.label}
           </button>
         ))}
-        <div className="tb-spacer" />
-        {expandTarget && (
-          <button
-            type="button"
-            className="btn-ghost insp-expand"
-            onClick={() => inspectorStore.openOverlay(expandTarget)}
-          >
-            ⤢ Expand
-          </button>
-        )}
       </div>
       {renderTab(tab, frame)}
-      {overlay && renderOverlay(overlay, frame, inspectorStore.collapse)}
     </div>
   );
 }

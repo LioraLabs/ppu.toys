@@ -5,6 +5,7 @@ import { ActivityRailWired } from "./ActivityRailWired";
 import { EditorPane } from "./EditorPane";
 import { RightColumn } from "./RightColumn";
 import { Inspector } from "./inspector/Inspector";
+import { inspectorStore, useInspectorView } from "./inspector/inspectorStore";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { transport } from "./transport/transport";
 import { useOpenSketch, openContextLabel } from "./sketches/openSketch";
@@ -18,6 +19,7 @@ import { useDocumentTitle } from "../routes/useDocumentTitle";
  *  available there too as the opt-in `CoreStage` live fixture. */
 export function Studio() {
   const state = useOpenSketch();
+  const view = useInspectorView();
   const { dirty } = state;
   const sketchName = openContextLabel(state);
   useDocumentTitle(`${sketchName} · Studio`);
@@ -45,6 +47,8 @@ export function Studio() {
           <Inspector />
         </ErrorBoundary>
       }
+      dockOpen={view.dockOpen}
+      onDockToggle={inspectorStore.toggleDock}
       right={<RightColumn />}
     />
   );

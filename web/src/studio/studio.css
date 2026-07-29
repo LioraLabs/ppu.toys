@@ -512,50 +512,9 @@
   color: var(--txt);
   border-bottom-color: var(--orange);
 }
-.insp-expand {
-  height: 26px;
-  padding: 0 9px;
-  align-self: center;
-  margin-bottom: 4px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-}
 
 /* Full-screen overlay chrome (Memory & Layers / Compositor). Bodies land in
    the inspector tickets — only the scaffold is styled here. */
-.insp-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 400; /* above CM6 panels (.cm-panels is z-index 300) */
-  display: flex;
-  flex-direction: column;
-  background: var(--bg);
-}
-.insp-overlay-bar {
-  height: 48px;
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 14px;
-  background: var(--panel2);
-  border-bottom: 1px solid var(--line);
-}
-.insp-overlay-title {
-  font-family: var(--font-mono);
-  font-size: 13px;
-  color: var(--txt);
-}
-.insp-overlay-sub {
-  font-family: var(--font-sans);
-  font-size: 11px;
-  color: var(--dim);
-}
-.insp-overlay-body {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-}
 .reg-list {
   flex: 1;
   min-height: 0;
