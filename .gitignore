@@ -1,6 +1,7 @@
 # Build outputs and dependencies
 /target
 **/node_modules/
+/cook_modules/
 /web/dist/
 /web/build/
 /web/src/wasm/pkg/

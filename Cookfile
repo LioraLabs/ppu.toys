@@ -5,12 +5,19 @@
 # plus the site backend, a single axum binary (crates/ppu-server) imported as the
 # `server` module below.
 #
+# DOGFOOD: the web/ pipeline runs through the blessed `cook_pnpm` module (pinned in
+# cook.toml, installed to cook_modules/ via `cook modules install`). The repo is a
+# one-package pnpm workspace (pnpm-workspace.yaml at the root, package `web`);
+# cook_pnpm mints `web:<task>` recipes from web/package.json scripts and keys every
+# unit on the pnpm-lock.yaml install probe — node_modules is no longer a cached
+# directory output (the old npm `deps` recipe is gone).
+#
 #   ── build ──────────────────────────────────────────────────────────────────
 #   cook             full build (default): WASM module + web/dist + server
 #   cook build       same as above
 #   cook wasm        (re)build the WASM module into web/src/wasm/pkg
-#   cook web         production web build -> web/dist
-#   cook deps        install web/node_modules
+#   cook "web:build" production web build -> web/dist   (minted by cook_pnpm.task)
+#   cook install     pnpm install --frozen-lockfile (cached by lockfile hash)
 #   cook server.build  compile the axum backend (crates/ppu-server)
 #
 #   ── run ──────────────────────────────────────────────────────────────────────
@@ -19,46 +26,38 @@
 #
 #   ── component workflow (Cosmos tree + fixtures + MSW) ────────────────────────
 #   cook cosmos      Cosmos component tree — dev server, drill into compositions
-#                    isolation (no backend, no wasm boot for presentational stories)
-#   cook catalog     static catalog build -> web/build (cached directory output)
-#   cook shoot       screenshot one story -> web/.shots (STORY=<story-id>, e.g.
-#                    STORY=components--toycard--default cook shoot). Needs a one-time
-#                    `cd web && npx playwright install chromium`.
-#   cook dev-offline Vite dev with the whole app mocked by MSW — no backend running
-#                    (VITE_MSW=1). Pages populate from web/src/mocks handlers.
+#   cook "web:catalog"  static catalog build -> web/build (cached, minted)
+#   cook shoot       screenshot one story -> web/.shots (STORY=<story-id>)
+#   cook dev-offline Vite dev with the whole app mocked by MSW (VITE_MSW=1)
 #
 #   ── deploy/ops (production operations) ────────────────────────────────────
-#   cook deploy.ship      trigger the CI deploy (gh workflow run deploy.yml)
-#   cook deploy.rollback  swap back to the previous binary (needs DEPLOY_HOST/USER)
-#   cook deploy.health    curl the live /api/health (PPU_BASE_URL override)
-#   cook deploy.logs      follow the server journal on the box (DEPLOY_HOST/USER)
+#   cook deploy.ship / rollback / health / logs
 #
 #   ── verify ─────────────────────────────────────────────────────────────────
 #   cook test-core   cargo test (core unit + golden framebuffer compare)
-#   cook test-web    vitest
+#   cook test-web    vitest (cached recipe "web:test" underneath)
 #   cook server.test cargo test -p ppu-server (backend suites)
-#   cook typecheck   tsc --noEmit over the web app
+#   cook typecheck   tsc --noEmit (cached recipe "web:typecheck" underneath)
 #   cook check       typecheck + all three test suites (pre-commit umbrella)
 #   cook fmt         cargo fmt
 #
 #   ── housekeeping ─────────────────────────────────────────────────────────────
 #   cook clean       remove build artifacts (target, dist, wasm pkg, .cook cache)
-#   cook distclean   clean + remove web/node_modules
+#   cook distclean   clean + remove node_modules trees
 #
-# Caching: all three generated artifacts are content-cached recipes, so a no-op
-# `cook build` is ~0s and `clean` + rebuild restores from cache.
-#   - `wasm`  declares its files explicitly (its pkg lives inside web's source tree,
-#             so a globbed directory output would collide with web's `web/src/**`
-#             ingredient globs).
-#   - `deps`, `web`, and `catalog` use DIRECTORY outputs (trailing `/`). Safe now that
-#             cook preserves symlinks + file modes on restore: node_modules'
-#             `.bin/*` relative symlinks and Vite's content-hashed dist both round-trip
-#             faithfully. Trade-off: a `deps` cache MISS (lockfile changed) empties
-#             node_modules and does a full `npm install`; a cache HIT restores the tree
-#             from the store. deps for THIS repo is npm (relative, in-tree symlinks) —
-#             a pnpm repo (global-store hardlinks) would not be portable; keep it local.
+# Caching notes:
+#   - `wasm` declares its files explicitly (its pkg lives inside web's source tree,
+#     so a globbed directory output would collide with web:* `src/**` input globs).
+#   - web:* recipes are minted by cook_pnpm.task: inputs are package-relative globs
+#     expanded at register time, outputs are post-execute-resolved globs (CS-0085),
+#     and each unit seals the pnpm:install:<lockfile-hash> probe — lockfile drift
+#     invalidates every web unit; source-only edits invalidate only web:*.
+#   - node_modules is owned by the install probe (pnpm install --frozen-lockfile,
+#     once per lockfile hash), not restored from the artifact store.
 #
 # Cook gotcha: one command per line; a multi-step shell line needs `sh -c "a && b"`.
+
+use cook_pnpm
 
 # ── MODULES: the axum backend lives in its own imported Cookfile, referenced
 #    as server.build / server.test / server.run. The deploy/ production operations
@@ -66,9 +65,32 @@
 import server ./crates/ppu-server
 import deploy ./deploy
 
+# ── PNPM WORKSPACE: one call parses pnpm-workspace.yaml + web/package.json,
+#    registers the toolchain + install probes, and mints the web:* recipes.
+#    - requires = {"wasm"}: every minted task reads the wasm pkg under web/src/
+#      (path equality creates no ordering edge in cook — name the producer).
+#    - build/catalog declare outputs -> cached cook units, restored on hit.
+#    - test/typecheck are auto-minted checks (engine test units): content-
+#      fingerprinted, pass results replayed, run by `cook test`.
+#    - inputs default to web/'s file tree minus node_modules + declared outputs.
+#    Recipe names carry a colon, so they are quoted when referenced below.
+register
+    cook_pnpm.workspace({
+        node     = ">=18",
+        pm       = "pnpm@10",       -- mirrors root package.json "packageManager"
+        requires = { "wasm" },
+        install  = "install",       -- `cook install` = explicit CI staging
+        tasks    = {
+            -- web:build — tsc + vite build -> web/dist
+            build   = { outputs = { "dist/**" } },
+            -- web:catalog — static Cosmos export -> web/build
+            catalog = { outputs = { "build/**" } },
+        },
+    })
+
 # ── WASM: rebuild the module only when the Rust core or its manifests change. The
-#    files Vite + tsc consume are declared explicitly (so web forms file-level edges
-#    to them). wasm-pack's --out-dir is relative to the crate dir.
+#    files Vite + tsc consume are declared explicitly (so web:* recipes form
+#    file-level edges to them). wasm-pack's --out-dir is relative to the crate dir.
 recipe wasm
     ingredients "crates/ppu-core/src/**/*.rs" "crates/ppu-core/Cargo.toml" "Cargo.toml" "Cargo.lock"
     cook "web/src/wasm/pkg/ppu_core.js"
@@ -78,42 +100,9 @@ recipe wasm
         wasm-pack build crates/ppu-core --target web --out-dir ../../web/src/wasm/pkg
     }
 
-# ── DEPS: install node_modules as a cached directory output, keyed on the manifest
-#    + lockfile. Relative `.bin/*` symlinks and exec bits round-trip.
-recipe deps
-    ingredients "web/package.json" "web/package-lock.json"
-    cook "web/node_modules/" {
-        npm --prefix web install --no-audit --no-fund
-    }
-
-# ── WEB: production bundle -> web/dist (cached directory output). Inputs are web's
-#    sources/config, the lockfile (so a dep bump reaches the bundle), and the two
-#    wasm pkg files Vite bundles (so a Rust change does too). cook owns the wasm
-#    rebuild via the dep edge, so `build:app` (tsc + vite build) skips it.
-recipe web: wasm deps
-    ingredients "web/src/**/*.ts" "web/src/**/*.tsx" "web/index.html"
-                "web/vite.config.ts" "web/tsconfig.json" "web/tsconfig.node.json"
-                "web/package.json" "web/package-lock.json"
-                "web/src/wasm/pkg/ppu_core.js" "web/src/wasm/pkg/ppu_core_bg.wasm"
-    cook "web/dist/" {
-        npm --prefix web run build:app
-    }
-
-# ── CATALOG: the Cosmos component tree as a static, cached bundle -> web/build.
-#    Same input surface as `web` (stories/fixtures/mocks live under web/src, so the
-#    src globs already cover them) plus the Cosmos config and `public/` (the MSW
-#    worker Cosmos serves). Depends on `wasm` because a fixture that imports Studio
-#    transport transitively imports the wasm pkg module — Vite must resolve that file
-#    even though presentational stories never call initCore(). `shoot` reuses this.
-recipe catalog: wasm deps
-    ingredients "web/src/**/*.ts" "web/src/**/*.tsx"
-                "web/cosmos.config.json" "web/public/**/*"
-                "web/vite.config.ts" "web/tsconfig.json" "web/tsconfig.node.json"
-                "web/package.json" "web/package-lock.json"
-                "web/src/wasm/pkg/ppu_core.js" "web/src/wasm/pkg/ppu_core_bg.wasm"
-    cook "web/build/" {
-        npm --prefix web run cosmos:export
-    }
+# ── WEB alias: `cook web` still works — wasm first (file-edge ordered), then the
+#    minted pnpm build.
+recipe web: wasm "web:build"
 
 # ── BUILD: the default target — the whole stack. server.build is an order-only
 #    fence (it produces nothing the web build reads) kept so `cook build` compiles
@@ -122,36 +111,31 @@ recipe build: web server.build
 
 # ── DEV SERVER: long-running, interactive. Builds the WASM core first — the app
 #    has no mock fallback, so it can't render without it.
-chore dev: wasm deps
-    npm --prefix web run dev
+chore dev: wasm install
+    pnpm --filter web run dev
 
 # ── DEV (OFFLINE): the same Vite dev server, but MSW intercepts every API call so
 #    the whole app boots with no backend — handlers in web/src/mocks serve fixtures.
-chore dev-offline: wasm deps
-    sh -c 'VITE_MSW=1 npm --prefix web run dev'
+chore dev-offline: wasm install
+    sh -c 'VITE_MSW=1 pnpm --filter web run dev'
 
 # ── COMPONENT WORKFLOW: Cosmos tree (long-running, interactive, hot-reloads).
-#    Iterate any component in isolation from a fixture; wasm-free for presentational
-#    fixtures (deps on `wasm` so live-core compositions use the real engine).
-chore cosmos: wasm deps
-    npm --prefix web run cosmos
+chore cosmos: wasm install
+    pnpm --filter web run cosmos
 
 # ── SHOOT: render one fixture to a PNG under web/.shots for a tight agent visual
 #    loop. STORY is required (env-driven, like the deploy chores); the shoot script
-#    screenshots the cached `catalog` build headlessly via Playwright. One-time host
-#    setup: `cd web && npx playwright install chromium`.
-chore shoot: catalog
-    sh -c 'npm --prefix web run shoot -- "${STORY:?set STORY=<component-path#variant>, e.g. components/ToyCard#Default}"'
+#    screenshots the cached `web:catalog` build headlessly via Playwright.
+chore shoot: "web:catalog"
+    sh -c 'pnpm --filter web run shoot "${STORY:?set STORY=<component-path#variant>, e.g. components/ToyCard#Default}"'
 
 # ── TESTS ────────────────────────────────────────────────────────────────────
 chore test-core
     cargo test
 
-chore test-web: deps
-    npm --prefix web test
+chore test-web: "web:test"
 
-chore typecheck: deps
-    npm --prefix web run typecheck
+chore typecheck: "web:typecheck"
 
 # Pre-commit umbrella: types + all three suites (core, web, backend).
 chore check: typecheck test-core test-web server.test
@@ -164,4 +148,4 @@ chore clean
     rm -rf target web/dist web/build web/.shots web/src/wasm/pkg .cook
 
 chore distclean: clean
-    rm -rf web/node_modules
+    rm -rf node_modules web/node_modules

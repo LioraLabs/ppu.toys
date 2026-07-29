@@ -1,0 +1,15 @@
+schema = 1
+
+[[module]]
+name = "cook_pnpm"
+version = "0.4.0-1"
+source = "git+https://github.com/lioralabs/cook-modules.git"
+integrity = "sha256-unknown"
+direct = true
+
+[[module]]
+name = "lua-cjson"
+version = "2.1.0.10-1"
+source = "git+https://github.com/openresty/lua-cjson"
+integrity = "sha256-unknown"
+direct = false

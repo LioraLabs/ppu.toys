@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { resolveFixtureRef } from "./fixture-ref.mjs";
 
@@ -43,10 +43,22 @@ function fixtureDirs(dir) {
 }
 
 for (const dir of fixtureDirs(resolve("src"))) {
+  if (dir === resolve("src")) continue;
   const branch = dir.slice(resolve("src").length + 1);
-  test(`${branch} is expandable and exposes its site composition as a child`, () => {
-    assert.equal(existsSync(resolve(dir, "__COMPOSITION.fixture.tsx")), true);
+  test(`${branch} is an expandable, selectable site composition`, () => {
+    assert.equal(existsSync(`${dir}.fixture.tsx`), true);
+    assert.equal(existsSync(resolve(dir, "__COMPOSITION.fixture.tsx")), false);
     assert.equal(existsSync(resolve(dir, "Composition.fixture.tsx")), false);
-    assert.equal(existsSync(resolve("src", `${branch}.fixture.tsx`)), false);
+  });
+}
+
+for (const fixture of [
+  "studio/sources.fixture.tsx",
+  "studio/sources/AddSourceButton.fixture.tsx",
+  "studio/sources/AddSourceDialog.fixture.tsx",
+]) {
+  test(`${fixture} boots the real core before interactive source conversion`, () => {
+    const source = readFileSync(resolve("src", fixture), "utf8");
+    assert.match(source, /<CoreStage>/);
   });
 }

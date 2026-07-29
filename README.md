@@ -10,10 +10,10 @@ The studio provides a multi-file Lua editor, live output, register and memory in
 
 ## Quick start
 
-You need Rust, Node.js/npm, `wasm-pack`, and [Cook](https://github.com/alexandru/cook) available on your path.
+You need Rust, Node.js/pnpm, `wasm-pack`, and [Cook](https://github.com/alexandru/cook) available on your path. The web app is a one-package pnpm workspace rooted at the repo top level; Cook drives it through the `cook_pnpm` module (`cook modules install` realises the pin in `cook.toml`).
 
 ```sh
-npm --prefix web install
+pnpm install
 cook wasm
 cook dev-wasm
 ```
@@ -23,9 +23,9 @@ The final command starts Vite with the real WASM core. For a production build, r
 Without Cook, the equivalent web workflow is:
 
 ```sh
-npm --prefix web install
-npm --prefix web run build:wasm
-npm --prefix web run dev
+pnpm install
+pnpm --filter web run build:wasm
+pnpm --filter web run dev
 ```
 
 The Rust crates can be built and tested directly with `cargo build --workspace` and `cargo test --workspace`.
@@ -57,9 +57,9 @@ This runs TypeScript typechecking, Vitest, and both Rust test suites. Useful dir
 
 ```sh
 cargo test --workspace
-npm --prefix web run typecheck
-npm --prefix web test
-npm --prefix web run build
+pnpm --filter web run typecheck
+pnpm --filter web test
+pnpm --filter web run build
 ```
 
 `cook build` produces the WASM package, `web/dist`, and the server binary. `cook dev-wasm` is the normal live-development loop.

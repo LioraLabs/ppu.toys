@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { frameCgram } from "../../fixtures";
-import { CgramPoke } from "./CgramPoke";
-import { HexPoke } from "./HexPoke";
-import "./pokes.css";
+import { frameCgram } from "../fixtures";
+import { CgramPoke } from "./pokes/CgramPoke";
+import { HexPoke } from "./pokes/HexPoke";
+import "./pokes/pokes.css";
 
 function PokeComposition() {
   const [color, setColor] = useState(frameCgram[0x81] ?? 0);

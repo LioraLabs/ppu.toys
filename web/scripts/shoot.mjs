@@ -44,7 +44,7 @@ function parseArgs(argv) {
     else if (!args.ref) args.ref = token;
     else fail(`Unexpected extra argument: ${token}`);
   }
-  if (!args.ref) fail("Usage: npm run shoot -- <component-path[#variant]> [--build] [--out path]");
+  if (!args.ref) fail("Usage: pnpm run shoot <component-path[#variant]> [--build] [--out path]");
   if (args.theme && !["light", "dark"].includes(args.theme)) fail(`Invalid theme: ${args.theme}`);
   if (!Number.isInteger(args.width) || !Number.isInteger(args.height)) fail("Width and height must be integers");
   return args;
@@ -52,8 +52,8 @@ function parseArgs(argv) {
 
 function runExport() {
   return new Promise((resolve, reject) => {
-    console.error("Running `npm run cosmos:export` ...");
-    const child = spawn("npm", ["run", "cosmos:export"], { cwd: webRoot, stdio: "inherit" });
+    console.error("Running `pnpm run catalog` (cosmos-export) ...");
+    const child = spawn("pnpm", ["run", "catalog"], { cwd: webRoot, stdio: "inherit" });
     child.on("error", reject);
     child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`Cosmos export exited with ${code}`))));
   });
@@ -61,7 +61,7 @@ function runExport() {
 
 async function loadManifest(forceBuild) {
   if (forceBuild || !fs.existsSync(manifestPath)) await runExport();
-  if (!fs.existsSync(manifestPath)) fail(`Missing ${manifestPath}; run npm run cosmos:export`);
+  if (!fs.existsSync(manifestPath)) fail(`Missing ${manifestPath}; run pnpm run catalog`);
   return JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 }
 

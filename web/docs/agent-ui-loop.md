@@ -4,8 +4,9 @@ React Cosmos is the component workshop. Its tree follows the fixture paths under
 `src`, so a component or composition has a stable source-shaped address:
 
 ```text
-studio/__COMPOSITION
-studio/editor/__COMPOSITION
+studio
+studio/editor
+studio/editor#CompileError
 studio/inspector/ComposeTab#Default
 components/ToyCard#LongTitle
 ```
@@ -19,8 +20,14 @@ duplicate the UI implementation.
 
 ```bash
 cook cosmos
-# or: npm --prefix web run cosmos
+# or: pnpm --filter web run cosmos
 ```
+
+PPU Toys installs the scoped LioraLabs Cosmos packages from npm. It never links
+npm directly to a Cosmos source checkout. The release workflow lives on the
+fork's `lioralabs-npm` branch; build its publishable packages with
+`npm run lioralabs:pack`, publish all three together, then update their exact
+versions here together.
 
 Cosmos builds its collapsible tree from colocated `*.fixture.tsx` files. A
 fixture's default export is an object whose keys are the states/compositions
@@ -33,30 +40,24 @@ const SignedOut = () => <ToyCard card={makeWallCard()} signedIn={false} />;
 export default { Default, SignedOut };
 ```
 
-A composition boundary is an expandable directory with a visible
-`__COMPOSITION.fixture.tsx` child. The leading underscores keep the assembled
-view visually distinct and sorted before ordinary component fixtures:
+A composition boundary is represented by a fixture beside a directory with the
+same name. The forked Cosmos navigator makes that row both selectable and
+expandable: click the label to render the composition, or the chevron to reveal
+its children.
 
 ```text
+studio.fixture.tsx          # clicking studio renders the production Studio
 studio/
-  __COMPOSITION.fixture.tsx # renders the complete production Studio
+  editor.fixture.tsx        # clicking editor renders the production EditorPane
   editor/
-    __COMPOSITION.fixture.tsx # renders the complete production EditorPane
     CodeEditor.fixture.tsx  # expanding editor exposes its children
     FileTabs.fixture.tsx
 ```
 
-Expand `studio` or `editor`, then select `__COMPOSITION` to view the children
-assembled exactly as the site assembles them. The fixture must import the real
-production composition; never duplicate its markup or maintain a fixture-only
-copy.
-
-Do not create a sibling fixture that collides with its directory, such as
-`studio/editor.fixture.tsx` beside `studio/editor/`. Cosmos treats a row as
-either a selectable fixture or an expandable directory, so that collision
-hides the children. Every directory containing fixtures must include a
-`__COMPOSITION.fixture.tsx` that assembles its real production components.
-`npm test` discovers fixture directories recursively and enforces both rules.
+Every directory containing fixtures must have this same-name sibling fixture,
+and that fixture must import the real production composition—never duplicate
+its markup or maintain a fixture-only copy. `npm test` discovers fixture
+directories recursively and enforces the convention.
 
 Shared MSW startup and global styling live in `src/cosmos.decorator.tsx`.
 `src/cosmos/FixtureStage.tsx` contains the exceptional wrappers:
@@ -80,7 +81,7 @@ const LiveCore = () => (
 ## Screenshot one composition
 
 ```bash
-npm --prefix web run shoot -- 'studio/editor/__COMPOSITION' --build
+pnpm --filter web run shoot 'studio/editor' --build
 ```
 
 The screenshot is written under `web/.shots/`. `--build` refreshes the static
@@ -99,7 +100,7 @@ Options:
 The equivalent cached Cook workflow is:
 
 ```bash
-STORY='studio/__COMPOSITION' cook shoot
+STORY='studio' cook shoot
 ```
 
 If Chromium is missing, install it once:
@@ -114,10 +115,10 @@ npx playwright install chromium
 After changing a component or fixture:
 
 ```bash
-npm --prefix web run typecheck
-npm --prefix web test
-npm --prefix web run cosmos:export
-npm --prefix web run shoot -- 'path/Component#Variant'
+pnpm --filter web run typecheck
+pnpm --filter web test
+pnpm --filter web run catalog
+pnpm --filter web run shoot 'path/Component#Variant'
 ```
 
 Open the resulting PNG and inspect it. A successful process exit alone does not

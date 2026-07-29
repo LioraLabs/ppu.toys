@@ -1,9 +1,9 @@
 import type { CSSProperties } from "react";
-import { OverlayStage } from "../../cosmos/FixtureStage";
-import { libraryOpenState, sketchMetaList } from "../../fixtures";
-import { LibraryPanel } from "./LibraryPanel";
-import { LibraryDataProvider } from "./useLibrary";
-import "./sketches.css";
+import { OverlayStage } from "../cosmos/FixtureStage";
+import { libraryOpenState, sketchMetaList } from "../fixtures";
+import { LibraryPanel } from "./sketches/LibraryPanel";
+import { LibraryDataProvider } from "./sketches/useLibrary";
+import "./sketches/sketches.css";
 
 export default (
   <OverlayStage style={{ "--rail-w": "0px", "--toolbar-h": "0px" } as CSSProperties}>

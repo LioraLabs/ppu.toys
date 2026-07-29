@@ -1,7 +1,7 @@
-import { CoreStage } from "../../cosmos/FixtureStage";
-import "../../styles/tokens.css";
-import "../studio.css";
-import { Inspector } from "./Inspector";
+import { CoreStage } from "../cosmos/FixtureStage";
+import "../styles/tokens.css";
+import "./studio.css";
+import { Inspector } from "./inspector/Inspector";
 
 // Keep this composition wired to the production Inspector, not a fixture copy.
 export default (

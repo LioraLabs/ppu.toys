@@ -2,19 +2,18 @@ import { CoreStage, OverlayStage } from "../../cosmos/FixtureStage";
 import { AddSourceDialog } from "./AddSourceDialog";
 import "./sources.css";
 
-// AddSourceDialog rendered open. The wasm core is only touched once an image is
-// dropped (ppuCore.convertSource) — in its initial empty state it renders the
-// drop zone, kind/depth controls and the preview hint with no wasm. This is the
-// documented wasm-free render surface: the convert + transport.addSource paths
-// need the real core and are exercised by AddSourceDialog.test.tsx, not here.
+// AddSourceDialog rendered open. Dropping an image calls ppuCore.convertSource,
+// so every interactive variant boots the real core before mounting the dialog.
 const noop = () => undefined;
 
 // The scrim is position:fixed; OverlayStage contains it to the story pane so it
 // bounds the fixed scrim to the fixture preview.
 const Open = () => (
-  <OverlayStage>
-    <AddSourceDialog onClose={noop} />
-  </OverlayStage>
+  <CoreStage>
+    <OverlayStage>
+      <AddSourceDialog onClose={noop} />
+    </OverlayStage>
+  </CoreStage>
 );
 
 // Live-core variant: `CoreStage` boots the REAL wasm PPU core before

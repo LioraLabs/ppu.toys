@@ -1,10 +1,14 @@
 /// <reference types="vitest" />
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { shouldBypassApiProxy } from "./src/viteProxy";
 
 export default defineConfig({
   plugins: [react()],
+  // Cosmos changes Vite's root to src. Keep the MSW worker on the renderer's
+  // origin instead of letting /mockServiceWorker.js fall through to index.html.
+  publicDir: fileURLToPath(new URL("public", import.meta.url)),
   server: {
     proxy: {
       "/api": {

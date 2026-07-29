@@ -1,0 +1,7 @@
+# Cook module pins — the web/ pipeline runs through the blessed cook_pnpm module
+# (one-call workspace surface; see the register block in the Cookfile).
+[registry]
+indexes = ["https://rocks.usecook.com"]
+
+[modules]
+cook_pnpm = "0.4.0-1"
