@@ -3,9 +3,13 @@ import type { LuaError, SourceFile } from "../ppu/core";
 import { CodeEditor } from "./editor/CodeEditor";
 import { editorSettings, useVimMode } from "./editor/editorSettings";
 import { FileTabs } from "./editor/FileTabs";
-import { routeErrorsByFile } from "./editor/diagnostics";
+import { bindWarningsByFile, routeErrorsByFile } from "./editor/diagnostics";
 import { createSourcePusher } from "./editor/sourcePush";
-import { transport, useTransportRuntimeError } from "./transport/transport";
+import {
+  transport,
+  useTransportBindMismatches,
+  useTransportRuntimeError,
+} from "./transport/transport";
 import { openSketchStore, useOpenSketch, openContextFiles } from "./sketches/openSketch";
 import { restoreOpenContext } from "./sketches/restore";
 import { POKES_FILE } from "./pokes/pokes";
@@ -114,17 +118,23 @@ export function EditorPane({ onSources }: EditorPaneProps) {
   // Memoized so the active tab's error array keeps its identity across
   // renders — CodeEditor's diagnostics effect only re-dispatches when the
   // errors (or the doc) actually change, not on every keystroke re-render.
-  const routed = useMemo(
-    () =>
-      routeErrorsByFile(
-        files.map((f) => f.name),
-        active,
-        [compileError, runtimeError],
-      ),
+  const bindMismatches = useTransportBindMismatches();
+  const routed = useMemo(() => {
+    const byFile = routeErrorsByFile(
+      files.map((f) => f.name),
+      active,
+      [compileError, runtimeError],
+    );
+    // bind-time source warnings land on the line that names the slot
+    for (const [file, warns] of bindWarningsByFile(files, bindMismatches)) {
+      const list = byFile.get(file);
+      if (list) list.push(...warns);
+      else byFile.set(file, warns);
+    }
+    return byFile;
     // files derives from context; context identity changes on every store emit
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [state.context, active, compileError, runtimeError],
-  );
+  }, [state.context, active, compileError, runtimeError, bindMismatches]);
   const errorFiles = useMemo(() => new Set(routed.keys()), [routed]);
 
   const rename = (from: string, to: string): boolean => {

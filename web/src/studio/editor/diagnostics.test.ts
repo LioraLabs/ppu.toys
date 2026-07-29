@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { EditorState } from "@codemirror/state";
-import { luaErrorToDiagnostics, luaErrorsToDiagnostics, routeErrorsByFile } from "./diagnostics";
+import {
+  bindWarningsByFile,
+  luaErrorToDiagnostics,
+  luaErrorsToDiagnostics,
+  routeErrorsByFile,
+} from "./diagnostics";
 
 const DOC = "function frame(t, f)\n  brightness = bad\nend\n";
 
@@ -79,5 +84,39 @@ describe("routeErrorsByFile", () => {
     ]);
     expect(routed.get("main.lua")!.map((e) => e.message)).toEqual(["compile", "runtime"]);
     expect(routed.size).toBe(1);
+  });
+});
+
+describe("bindWarningsByFile", () => {
+  const files = [
+    { name: "main.lua", source: 'mode = 1\nbg[1].source = "sky"\n' },
+    { name: "sprites.lua", source: "obj.sheet = 'hero'\n" },
+  ];
+
+  it("attributes a mismatch to the file+line that names the slot, as a warning", () => {
+    const out = bindWarningsByFile(files, [
+      { mode: "mismatch", layer: 0, slot: "sky", expected: "bg 4bpp", found: "bg 8bpp" },
+    ]);
+    const [w] = out.get("main.lua")!;
+    expect(w.line).toBe(2);
+    expect(w.severity).toBe("warning");
+    expect(w.message).toContain('bg[1].source "sky" not placed');
+    expect(w.message).toContain("needs bg 4bpp, found bg 8bpp");
+  });
+
+  it("matches single-quoted slots and labels obj.sheet when layer is absent", () => {
+    const out = bindWarningsByFile(files, [
+      { mode: "mismatch", slot: "hero", expected: "obj", found: "no source with this name" },
+    ]);
+    const [w] = out.get("sprites.lua")!;
+    expect(w.line).toBe(1);
+    expect(w.message).toContain('obj.sheet "hero" not placed');
+  });
+
+  it("skips a slot named in no file (runtime-built names stay inspector-only)", () => {
+    const out = bindWarningsByFile(files, [
+      { mode: "mismatch", layer: 1, slot: "dynamic", expected: "bg 4bpp", found: "obj" },
+    ]);
+    expect(out.size).toBe(0);
   });
 });

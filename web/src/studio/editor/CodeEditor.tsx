@@ -1,9 +1,10 @@
 import { useEffect, useRef } from "react";
-import { Compartment, type Extension } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { Compartment, Prec, type Extension } from "@codemirror/state";
+import { EditorView, keymap } from "@codemirror/view";
 import { StreamLanguage } from "@codemirror/language";
 import { lua } from "@codemirror/legacy-modes/mode/lua";
-import { autocompletion } from "@codemirror/autocomplete";
+import { acceptCompletion, autocompletion } from "@codemirror/autocomplete";
+import { indentWithTab } from "@codemirror/commands";
 import { lintGutter, setDiagnostics } from "@codemirror/lint";
 import { vim } from "@replit/codemirror-vim";
 import { basicSetup } from "codemirror";
@@ -64,13 +65,17 @@ export function CodeEditor({
       if (u.docChanged) onChangeRef.current(u.state.doc.toString());
     });
     const extensions: Extension[] = [
-      vimComp.current.of(vimExt(initial.current.vimMode)), // first: takes key precedence
+      // Tab accepts an open completion (falls through when the popup is
+      // closed); highest precedence so it wins over vim's insert-mode Tab.
+      Prec.highest(keymap.of([{ key: "Tab", run: acceptCompletion }])),
+      vimComp.current.of(vimExt(initial.current.vimMode)), // takes key precedence below
       basicSetup,
       StreamLanguage.define(lua),
       autocompletion({ override: [ppuCompletions] }),
       lintGutter(),
       ppuTheme,
       updateListener,
+      keymap.of([indentWithTab]), // no completion open: Tab indents
     ];
     const docs = createDocStates(extensions);
     docsRef.current = docs;

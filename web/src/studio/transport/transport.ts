@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react";
 import { ppuCore } from "../../ppu/instance";
 import type {
   FrameResult,
+  ImportReport,
   LuaError,
   PpuCore,
   SourceFile,
@@ -36,6 +37,23 @@ export interface TransportState {
   fps: number;
   frame: FrameResult;
   runtimeError?: LuaError;
+  /** Bind-time source failures from the latest frame (wrong kind/depth, or a
+   *  slot name with no registered source). Identity-stable while unchanged so
+   *  editor-diagnostic consumers can subscribe without per-frame re-renders. */
+  bindMismatches: Extract<ImportReport, { mode: "mismatch" }>[];
+}
+
+type BindMismatch = Extract<ImportReport, { mode: "mismatch" }>;
+
+function mismatchesEq(a: BindMismatch[], b: BindMismatch[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every(
+    (m, i) =>
+      m.slot === b[i].slot &&
+      m.layer === b[i].layer &&
+      m.expected === b[i].expected &&
+      m.found === b[i].found,
+  );
 }
 
 function toLuaError(e: unknown): LuaError {
@@ -64,6 +82,7 @@ export class Transport {
   private playing = true;
   private fps = 0;
   private runtimeError: LuaError | undefined;
+  private bindMismatches: BindMismatch[] = [];
   private frame: FrameResult;
   private snapshot: TransportState;
   private listeners = new Set<() => void>();
@@ -85,6 +104,12 @@ export class Transport {
     try {
       const fr = this.coreRef().frame(t, f);
       this.setRuntimeError(undefined);
+      // Bind failures ride the frame's import reports; optional-call so
+      // partial test doubles without importReports keep working.
+      const reps = (this.coreRef().importReports?.() ?? []).filter(
+        (r): r is BindMismatch => r.mode === "mismatch",
+      );
+      if (!mismatchesEq(this.bindMismatches, reps)) this.bindMismatches = reps;
       return fr;
     } catch (e) {
       this.setRuntimeError(toLuaError(e));
@@ -104,6 +129,7 @@ export class Transport {
       fps: this.fps,
       frame: this.frame,
       runtimeError: this.runtimeError,
+      bindMismatches: this.bindMismatches,
     };
   }
 
@@ -239,4 +265,10 @@ export function useTransport(): TransportState {
  *  runtimeError keeps a stable reference while unchanged). */
 export function useTransportRuntimeError(): LuaError | undefined {
   return useSyncExternalStore(transport.subscribe, () => transport.getSnapshot().runtimeError);
+}
+
+/** Subscribe only to bind-time source mismatches (identity-stable while
+ *  unchanged) — the editor turns these into inline warnings. */
+export function useTransportBindMismatches(): TransportState["bindMismatches"] {
+  return useSyncExternalStore(transport.subscribe, () => transport.getSnapshot().bindMismatches);
 }

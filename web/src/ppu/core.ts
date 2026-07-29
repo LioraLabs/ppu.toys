@@ -9,6 +9,9 @@ export interface LuaError {
   line?: number;
   /** Source file the error is attributed to (multi-file sketches). */
   file?: string;
+  /** Editor rendering hint; absent = "error". Bind-time source warnings use
+   *  "warning" (the program runs, a layer just isn't placed). */
+  severity?: "error" | "warning";
 }
 
 export interface RegisterView {
