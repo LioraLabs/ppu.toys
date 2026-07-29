@@ -5,39 +5,40 @@ import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { DockviewReact } from "dockview-react";
 import type { DockviewApi, DockviewReadyEvent } from "dockview-react";
+import { INSPECTOR_TABS, type TabId } from "./inspector/tabs";
 
-/** The four studio panels. Every layout operation speaks in these ids. */
-export type PanelId = "editor" | "assets" | "output" | "inspector";
+/** Every dockable page. The former inspector tabs are first-class panels —
+ *  "the inspector" is just whatever tab group you keep them stacked in. */
+export type PanelId = "editor" | "assets" | "output" | TabId;
 
 export type LayoutPreset = "default" | "code" | "showcase";
 
+export type DockSlots = Record<PanelId, ReactNode>;
+
 export interface StudioDockProps {
   /** Panel bodies, injected as slots (wired app or fixture mocks). */
-  editor: ReactNode;
-  assets: ReactNode;
-  output: ReactNode;
-  inspector: ReactNode;
+  slots: DockSlots;
   /** Receives the live dockview api once ready (LayoutMenu consumes it). */
   onApi?: (api: DockviewApi) => void;
 }
 
-const LAYOUT_KEY = "ppu.dockLayout.v1";
+/** v2: the single "inspector" panel exploded into one panel per page. */
+const LAYOUT_KEY = "ppu.dockLayout.v2";
+
+export const INSPECTOR_PAGES: TabId[] = INSPECTOR_TABS.map((t) => t.id);
 
 const PANEL_TITLES: Record<PanelId, string> = {
   editor: "CODE",
   assets: "ASSETS",
   output: "OUTPUT",
-  inspector: "INSPECTOR",
-};
+  ...Object.fromEntries(INSPECTOR_TABS.map((t) => [t.id, t.label.toUpperCase()])),
+} as Record<PanelId, string>;
+
+const ALL_PANELS: PanelId[] = ["editor", "assets", "output", ...INSPECTOR_PAGES];
 
 /** Slot content rides through context so the dockview component map can stay
  *  module-stable (a changing `components` prop identity would remount panels). */
-const SlotContext = createContext<Record<PanelId, ReactNode>>({
-  editor: null,
-  assets: null,
-  output: null,
-  inspector: null,
-});
+const SlotContext = createContext<Partial<DockSlots>>({});
 
 function slotPanel(id: PanelId) {
   return function SlotPanel() {
@@ -46,104 +47,88 @@ function slotPanel(id: PanelId) {
   };
 }
 
-const COMPONENTS = {
-  editor: slotPanel("editor"),
-  assets: slotPanel("assets"),
-  output: slotPanel("output"),
-  inspector: slotPanel("inspector"),
-};
+const COMPONENTS = Object.fromEntries(ALL_PANELS.map((id) => [id, slotPanel(id)]));
+
+function addPanel(
+  api: DockviewApi,
+  id: PanelId,
+  position?: Parameters<DockviewApi["addPanel"]>[0]["position"],
+) {
+  return api.addPanel({ id, component: id, title: PANEL_TITLES[id], position });
+}
 
 /** Rebuild one of the predefined arrangements from scratch. Code and assets
- *  share a tab group (the "toggle" pair); output owns the right; inspector,
- *  when present, docks under the code group. */
+ *  share a tab group (the toggle pair); output owns the right; the inspector
+ *  pages stack into one tab group under code (default preset only). */
 export function applyPreset(api: DockviewApi, preset: LayoutPreset) {
   api.clear();
-  const editor = api.addPanel({
-    id: "editor",
-    component: "editor",
-    title: PANEL_TITLES.editor,
-  });
-  api.addPanel({
-    id: "assets",
-    component: "assets",
-    title: PANEL_TITLES.assets,
-    position: { referencePanel: "editor" },
-  });
-  const output = api.addPanel({
-    id: "output",
-    component: "output",
-    title: PANEL_TITLES.output,
-    position: { referencePanel: "editor", direction: "right" },
-  });
+  const editor = addPanel(api, "editor");
+  addPanel(api, "assets", { referencePanel: "editor" });
+  const output = addPanel(api, "output", { referencePanel: "editor", direction: "right" });
   if (preset === "default") {
-    const inspector = api.addPanel({
-      id: "inspector",
-      component: "inspector",
-      title: PANEL_TITLES.inspector,
-      position: { referencePanel: "editor", direction: "below" },
-    });
-    inspector.api.setSize({ height: 280 });
+    const trace = addPanel(api, "trace", { referencePanel: "editor", direction: "below" });
+    for (const page of INSPECTOR_PAGES.filter((p) => p !== "trace")) {
+      addPanel(api, page, { referencePanel: "trace" });
+    }
+    trace.api.setActive();
+    trace.api.setSize({ height: 280 });
   }
   output.api.setSize({ width: preset === "showcase" ? Math.round(window.innerWidth * 0.6) : 620 });
   if (preset === "showcase") output.api.setActive();
   else editor.api.setActive();
 }
 
+function isInspectorPage(id: PanelId): id is TabId {
+  return (INSPECTOR_PAGES as PanelId[]).includes(id);
+}
+
 /** Re-add one closed panel at its home position (used by the layout menu). */
 export function reopenPanel(api: DockviewApi, id: PanelId) {
-  if (api.getPanel(id)) {
-    api.getPanel(id)?.api.setActive();
+  const existing = api.getPanel(id);
+  if (existing) {
+    existing.api.setActive();
     return;
   }
   const anchor = (...ids: PanelId[]) => ids.find((p) => api.getPanel(p));
-  const home: Record<PanelId, () => void> = {
-    editor: () => {
-      const tabRef = anchor("assets", "inspector");
-      const position = tabRef
-        ? { referencePanel: tabRef }
-        : api.getPanel("output")
-          ? { referencePanel: "output", direction: "left" as const }
-          : undefined;
-      api.addPanel({ id: "editor", component: "editor", title: PANEL_TITLES.editor, position });
-    },
-    assets: () => {
-      const ref = anchor("editor");
-      api.addPanel({
-        id: "assets",
-        component: "assets",
-        title: PANEL_TITLES.assets,
-        position: ref ? { referencePanel: ref } : undefined,
-      });
-    },
-    output: () => {
-      const ref = anchor("editor", "inspector", "assets");
-      const p = api.addPanel({
-        id: "output",
-        component: "output",
-        title: PANEL_TITLES.output,
-        position: ref ? { referencePanel: ref, direction: "right" } : undefined,
-      });
-      p.api.setSize({ width: 620 });
-    },
-    inspector: () => {
-      const ref = anchor("editor", "assets", "output");
-      const p = api.addPanel({
-        id: "inspector",
-        component: "inspector",
-        title: PANEL_TITLES.inspector,
-        position: ref ? { referencePanel: ref, direction: "below" } : undefined,
-      });
-      p.api.setSize({ height: 280 });
-    },
-  };
-  home[id]();
+  if (isInspectorPage(id)) {
+    // join the surviving inspector group; else open a fresh one under code
+    const sibling = INSPECTOR_PAGES.find((p) => p !== id && api.getPanel(p));
+    if (sibling) {
+      addPanel(api, id, { referencePanel: sibling });
+      return;
+    }
+    const ref = anchor("editor", "assets", "output");
+    const p = addPanel(api, id, ref ? { referencePanel: ref, direction: "below" } : undefined);
+    p.api.setSize({ height: 280 });
+    return;
+  }
+  if (id === "editor") {
+    const tabRef = anchor("assets");
+    const position = tabRef
+      ? { referencePanel: tabRef }
+      : api.getPanel("output")
+        ? { referencePanel: "output", direction: "left" as const }
+        : undefined;
+    addPanel(api, "editor", position);
+  } else if (id === "assets") {
+    const ref = anchor("editor");
+    addPanel(api, "assets", ref ? { referencePanel: ref } : undefined);
+  } else {
+    const ref = anchor("editor", "assets");
+    const p = addPanel(
+      api,
+      "output",
+      ref ? { referencePanel: ref, direction: "right" } : undefined,
+    );
+    p.api.setSize({ width: 620 });
+  }
 }
 
-/** The dockable studio shell: four movable/closable/tab-stackable panels with
- *  a persisted user layout (ppu.dockLayout.v1) and preset arrangements. This
- *  replaced StudioLayout + the ActivityRail + three bespoke splitters. */
-export function StudioDock({ editor, assets, output, inspector, onApi }: StudioDockProps) {
-  const slots = { editor, assets, output, inspector };
+/** The dockable studio shell: every page is a movable/closable/tab-stackable
+ *  panel with a persisted user layout (ppu.dockLayout.v2) and preset
+ *  arrangements. Replaced StudioLayout + the ActivityRail + the Inspector
+ *  chrome — a dockview tab group is the tab view. */
+export function StudioDock({ slots, onApi }: StudioDockProps) {
   const saveTimer = useRef<number | null>(null);
 
   const onReady = (event: DockviewReadyEvent) => {
@@ -184,7 +169,7 @@ export function StudioDock({ editor, assets, output, inspector, onApi }: StudioD
   );
 }
 
-/** Toolbar dropdown: preset arrangements + reopen/focus for each panel. */
+/** Toolbar dropdown: preset arrangements + reopen/focus for every panel. */
 export function LayoutMenu({ api }: { api: DockviewApi }) {
   const [open, setOpen] = useState(false);
   const [, bump] = useState(0);
@@ -192,7 +177,17 @@ export function LayoutMenu({ api }: { api: DockviewApi }) {
     const d = api.onDidLayoutChange(() => bump((n) => n + 1));
     return () => d.dispose();
   }, [api]);
-  const panels: PanelId[] = ["editor", "assets", "output", "inspector"];
+  const item = (id: PanelId) => (
+    <button
+      key={id}
+      type="button"
+      className="layout-menu-item"
+      onClick={() => reopenPanel(api, id)}
+    >
+      <span className="layout-menu-tick">{api.getPanel(id) ? "✓" : ""}</span>
+      {PANEL_TITLES[id]}
+    </button>
+  );
   return (
     <div className="layout-menu">
       <button type="button" className="btn-ghost" onClick={() => setOpen((o) => !o)}>
@@ -217,20 +212,9 @@ export function LayoutMenu({ api }: { api: DockviewApi }) {
               </button>
             ))}
             <div className="layout-menu-head">PANELS</div>
-            {panels.map((id) => {
-              const openNow = !!api.getPanel(id);
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  className="layout-menu-item"
-                  onClick={() => reopenPanel(api, id)}
-                >
-                  <span className="layout-menu-tick">{openNow ? "✓" : ""}</span>
-                  {PANEL_TITLES[id]}
-                </button>
-              );
-            })}
+            {(["editor", "assets", "output"] as PanelId[]).map(item)}
+            <div className="layout-menu-head">INSPECTOR</div>
+            {INSPECTOR_PAGES.map(item)}
           </div>
         </>
       )}

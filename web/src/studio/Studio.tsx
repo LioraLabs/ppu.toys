@@ -1,21 +1,22 @@
 import { useEffect, useState } from "react";
 import type { DockviewApi } from "dockview-react";
-import { StudioDock, LayoutMenu } from "./StudioDock";
+import { StudioDock, LayoutMenu, INSPECTOR_PAGES } from "./StudioDock";
+import type { DockSlots } from "./StudioDock";
 import { ToolbarWired } from "./ToolbarWired";
 import { EditorPane } from "./EditorPane";
 import { OutputCanvas } from "./output/OutputCanvas";
-import { Inspector } from "./inspector/Inspector";
+import { WIRED_INSPECTOR_PANELS } from "./inspector/panels";
 import { AssetsPanel } from "./sources/AssetsPanel";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { transport } from "./transport/transport";
 import { useOpenSketch, openContextLabel } from "./sketches/openSketch";
 import { useDocumentTitle } from "../routes/useDocumentTitle";
 
-/** The wired studio: a toolbar over the dockable shell (StudioDock) — four
- *  panels the user arranges freely: CODE (EditorPane), ASSETS, OUTPUT (the
- *  transport-driven live demo) and INSPECTOR. The composition is available
- *  wasm-free via StudioDock.fixture (fixture-fed slots); this wired shell is
- *  available there too as the opt-in `CoreStage` live fixture. */
+/** The wired studio: a toolbar over the dockable shell (StudioDock). Every
+ *  page — CODE, ASSETS, OUTPUT and each inspector page — is its own panel the
+ *  user arranges freely. The composition is available wasm-free via
+ *  StudioDock.fixture (fixture-fed slots); this wired shell is available there
+ *  too as the opt-in `CoreStage` live fixture. */
 export function Studio() {
   const state = useOpenSketch();
   const { dirty } = state;
@@ -36,6 +37,25 @@ export function Studio() {
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, []);
+
+  const slots: DockSlots = {
+    editor: <EditorPane onSources={transport.setSources} />,
+    assets: <AssetsPanel />,
+    output: (
+      <ErrorBoundary label="Output">
+        <OutputCanvas />
+      </ErrorBoundary>
+    ),
+    ...Object.fromEntries(
+      INSPECTOR_PAGES.map((id) => [
+        id,
+        <ErrorBoundary key={id} label={id}>
+          {WIRED_INSPECTOR_PANELS[id]()}
+        </ErrorBoundary>,
+      ]),
+    ),
+  } as DockSlots;
+
   return (
     <div className="studio">
       <ToolbarWired
@@ -43,21 +63,7 @@ export function Studio() {
         dirty={dirty}
         layoutSlot={dockApi ? <LayoutMenu api={dockApi} /> : null}
       />
-      <StudioDock
-        editor={<EditorPane onSources={transport.setSources} />}
-        assets={<AssetsPanel />}
-        output={
-          <ErrorBoundary label="Output">
-            <OutputCanvas />
-          </ErrorBoundary>
-        }
-        inspector={
-          <ErrorBoundary label="Inspector">
-            <Inspector />
-          </ErrorBoundary>
-        }
-        onApi={setDockApi}
-      />
+      <StudioDock slots={slots} onApi={setDockApi} />
     </div>
   );
 }

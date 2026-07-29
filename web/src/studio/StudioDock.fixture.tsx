@@ -8,7 +8,6 @@ import { Toolbar } from "./Toolbar";
 import { AssetsPanel } from "./sources/AssetsPanel";
 import { FileTabs } from "./editor/FileTabs";
 import { CodeEditor } from "./editor/CodeEditor";
-import { Inspector } from "./inspector/Inspector";
 import { InspectorFrameProvider } from "./inspector/useInspectorFrame";
 import type { TabId } from "./inspector/tabs";
 import { ModeBadge, PlaneSeg, TraceCaption } from "./inspector/tracemem/TraceChain";
@@ -81,34 +80,28 @@ function CoreNote({ what }: { what: string }) {
   );
 }
 
-function fixtureTab(tab: TabId, f: FrameResult): ReactNode {
-  switch (tab) {
-    case "trace":
-      return (
-        <div className="insp-scroll">
-          <div className="tm-controls">
-            <PlaneSeg />
-            <ModeBadge frame={f} />
-          </div>
-          <TraceCaption frame={f} />
-          <CoreNote what="The Stage 1–5 resolution chain" />
+/** Fixture bodies for the inspector pages (one dock panel each). */
+function fixturePages(f: FrameResult): Record<TabId, ReactNode> {
+  return {
+    trace: (
+      <div className="insp-scroll">
+        <div className="tm-controls">
+          <PlaneSeg />
+          <ModeBadge frame={f} />
         </div>
-      );
-    case "memory":
-      return <MemoryTab frame={f} vram={frameVram} />;
-    case "compose":
-      return <ComposeTab c={compositor} screens={frameScreens} />;
-    case "windows":
-      // WindowsTab's compositor sits on injectable seams (inspector frame +
-      // poke store), so the real tab renders wasm-free under the provider.
-      return <WindowsTab />;
-    case "registers":
-      return <RegistersTab frame={f} />;
-    case "sprites":
-      return <SpritesTab frame={f} />;
-    case "vram":
-      return <VramTab frame={f} vram={frameVram} reports={frameImportReports} />;
-  }
+        <TraceCaption frame={f} />
+        <CoreNote what="The Stage 1–5 resolution chain" />
+      </div>
+    ),
+    memory: <MemoryTab frame={f} vram={frameVram} />,
+    compose: <ComposeTab c={compositor} screens={frameScreens} />,
+    // WindowsTab's compositor sits on injectable seams (inspector frame +
+    // poke store), so the real tab renders wasm-free under the provider.
+    windows: <WindowsTab />,
+    registers: <RegistersTab frame={f} />,
+    sprites: <SpritesTab frame={f} />,
+    vram: <VramTab frame={f} vram={frameVram} reports={frameImportReports} />,
+  };
 }
 
 // ── editor slot: real FileTabs + CodeEditor over story-local file state ──────
@@ -225,10 +218,12 @@ function ComposedShell() {
     <div className="studio" style={{ position: "relative", height: "100vh" }}>
       <Toolbar sketchName={sketchName} dirty theme="dark" workspaceSlot={toolbarWorkspaceSlot} />
       <StudioDock
-        editor={<EditorMock />}
-        assets={<AssetsPanel />}
-        output={<OutputMock f={frame} />}
-        inspector={<Inspector renderTab={fixtureTab} />}
+        slots={{
+          editor: <EditorMock />,
+          assets: <AssetsPanel />,
+          output: <OutputMock f={frame} />,
+          ...fixturePages(frame),
+        }}
       />
     </div>
   );
