@@ -487,9 +487,30 @@ fn demo_engine_files(files: &[(&str, &str)]) -> LuaEngine {
     add_obj(&mut e, "hero", hero(), 64, 8);
     add_m7(&mut e, "track", track(), 1024, 1024);
     add_bg(&mut e, "ribbons", ribbons(), WIDTH as u32, HEIGHT as u32, 4);
-    add_bg(&mut e, "gradient", gradient(), WIDTH as u32, HEIGHT as u32, 8);
-    add_bg(&mut e, "mode0_bg1", mode0_bg1(), WIDTH as u32, HEIGHT as u32, 2);
-    add_bg(&mut e, "mode0_bg2", mode0_bg2(), WIDTH as u32, HEIGHT as u32, 2);
+    add_bg(
+        &mut e,
+        "gradient",
+        gradient(),
+        WIDTH as u32,
+        HEIGHT as u32,
+        8,
+    );
+    add_bg(
+        &mut e,
+        "mode0_bg1",
+        mode0_bg1(),
+        WIDTH as u32,
+        HEIGHT as u32,
+        2,
+    );
+    add_bg(
+        &mut e,
+        "mode0_bg2",
+        mode0_bg2(),
+        WIDTH as u32,
+        HEIGHT as u32,
+        2,
+    );
     add_bg(&mut e, "panel", panel(), WIDTH as u32, HEIGHT as u32, 4);
     add_bg(&mut e, "ramp", ramp(), WIDTH as u32, HEIGHT as u32, 8);
     let mut chunks = Vec::with_capacity(files.len() + 1);

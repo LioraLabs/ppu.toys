@@ -224,18 +224,8 @@ impl LuaEngine {
             l.enter(|ctx| {
                 self.memory.vram = [0u16; 0x8000];
                 self.memory.cgram = [0u16; 256];
-                place_bg_sources(
-                    ctx,
-                    &self.source_store,
-                    &mut self.reports,
-                    &mut self.memory,
-                );
-                place_obj_source(
-                    ctx,
-                    &self.source_store,
-                    &mut self.reports,
-                    &mut self.memory,
-                );
+                place_bg_sources(ctx, &self.source_store, &mut self.reports, &mut self.memory);
+                place_obj_source(ctx, &self.source_store, &mut self.reports, &mut self.memory);
                 read_memory(ctx, &mut self.memory);
                 read_state(ctx)
             })
