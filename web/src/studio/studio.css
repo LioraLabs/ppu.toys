@@ -24,13 +24,11 @@
   border-bottom: 1px solid var(--line);
 }
 .logo-mark {
-  width: 22px; height: 22px; border-radius: 5px;
-  background: linear-gradient(135deg, var(--orange), var(--magenta));
-  display: grid; place-items: center;
-  font-family: var(--font-mono); font-weight: 700; font-size: 12px;
-  color: #15171e;
+  width: 26px; height: 26px; flex: none;
+  background: url("../brand/ppu-chipmark.svg") center / contain no-repeat;
 }
-.wordmark { font-family: var(--font-mono); font-weight: 600; font-size: 15px; color: var(--txt); }
+[data-theme="light"] .logo-mark { background-image: url("../brand/ppu-chipmark-light.svg"); }
+.wordmark { font-family: var(--font-display); font-weight: 600; font-size: 17px; color: var(--txt); }
 .wordmark .dot { color: var(--orange); }
 .tb-divider { width: 1px; height: 18px; background: var(--line); }
 .project { display: flex; align-items: center; gap: 7px; }

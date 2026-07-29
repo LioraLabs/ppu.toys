@@ -111,7 +111,7 @@ export function Toolbar({
   return (
     <header className="toolbar">
       <a className="tb-home" href="/" title="Back to the wall">
-        <div className="logo-mark">p</div>
+        <span className="logo-mark" aria-hidden="true" />
         <div className="wordmark">
           ppu<span className="dot">.</span>toys
         </div>

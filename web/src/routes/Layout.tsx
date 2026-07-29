@@ -16,7 +16,10 @@ export function Layout() {
   return (
     <div className="site">
       <header className="site-header">
-        <Link to="/" className="brand">ppu.toys</Link>
+        <Link to="/" className="brand">
+          <span className="brand-mark" aria-hidden="true" />
+          <span>ppu<span className="brand-dot">.</span>toys</span>
+        </Link>
         <nav className="site-nav">
           <Link to="/studio">Studio</Link>
           {!loading && user && (

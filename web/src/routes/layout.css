@@ -5,7 +5,17 @@
   background: var(--panel2); color: var(--txt);
   font-family: var(--font-sans);
 }
-.site-header .brand { font-weight: 700; font-size: 1.1rem; color: var(--txt); text-decoration: none; }
+.site-header .brand {
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--font-display); font-weight: 600; font-size: 1.15rem;
+  color: var(--txt); text-decoration: none;
+}
+.brand-mark {
+  width: 24px; height: 24px; flex: none;
+  background: url("../brand/ppu-chipmark.svg") center / contain no-repeat;
+}
+[data-theme="light"] .brand-mark { background-image: url("../brand/ppu-chipmark-light.svg"); }
+.brand-dot { color: var(--orange); }
 .site-nav { margin-left: auto; display: flex; align-items: center; gap: 1rem; }
 .site-nav a, .site-nav .linklike {
   color: var(--txt2); text-decoration: none; background: none; border: none;
