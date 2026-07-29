@@ -22,8 +22,11 @@ export interface StudioDockProps {
   onApi?: (api: DockviewApi) => void;
 }
 
-/** v2: the single "inspector" panel exploded into one panel per page. */
-const LAYOUT_KEY = "ppu.dockLayout.v2";
+/** v3: envelope { layout, known } — `known` records which panels existed
+ *  when the layout was saved, so a panel added in a later release auto-joins
+ *  a restored layout instead of silently not existing (a closed panel stays
+ *  closed: it IS in `known`). v2 and earlier raw layouts are discarded. */
+const LAYOUT_KEY = "ppu.dockLayout.v3";
 
 export const INSPECTOR_PAGES: TabId[] = INSPECTOR_TABS.map((t) => t.id);
 
@@ -137,7 +140,14 @@ export function StudioDock({ slots, onApi }: StudioDockProps) {
     const saved = localStorage.getItem(LAYOUT_KEY);
     if (saved) {
       try {
-        api.fromJSON(JSON.parse(saved));
+        const env = JSON.parse(saved) as { layout: unknown; known?: string[] };
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        api.fromJSON(env.layout as any);
+        // panels shipped since this layout was saved join at their home spot
+        const known = new Set(env.known ?? []);
+        for (const id of ALL_PANELS) {
+          if (!known.has(id)) reopenPanel(api, id);
+        }
         restored = true;
       } catch {
         localStorage.removeItem(LAYOUT_KEY);
@@ -147,7 +157,10 @@ export function StudioDock({ slots, onApi }: StudioDockProps) {
     api.onDidLayoutChange(() => {
       if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
       saveTimer.current = window.setTimeout(() => {
-        localStorage.setItem(LAYOUT_KEY, JSON.stringify(api.toJSON()));
+        localStorage.setItem(
+          LAYOUT_KEY,
+          JSON.stringify({ layout: api.toJSON(), known: ALL_PANELS }),
+        );
       }, 300);
     });
     onApi?.(api);
