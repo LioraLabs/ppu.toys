@@ -4,6 +4,8 @@ import { ToolbarWired } from "./ToolbarWired";
 import { ActivityRailWired } from "./ActivityRailWired";
 import { EditorPane } from "./EditorPane";
 import { RightColumn } from "./RightColumn";
+import { Inspector } from "./inspector/Inspector";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { transport } from "./transport/transport";
 import { useOpenSketch, openContextLabel } from "./sketches/openSketch";
 import { useDocumentTitle } from "../routes/useDocumentTitle";
@@ -38,6 +40,11 @@ export function Studio() {
       toolbar={<ToolbarWired sketchName={sketchName} dirty={dirty} />}
       rail={<ActivityRailWired />}
       editor={<EditorPane onSources={transport.setSources} />}
+      dock={
+        <ErrorBoundary label="Inspector">
+          <Inspector />
+        </ErrorBoundary>
+      }
       right={<RightColumn />}
     />
   );

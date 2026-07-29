@@ -267,13 +267,20 @@
   text-transform: uppercase;
 }
 
-.editor {
+.center-col {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: var(--editor);
   border-right: 1px solid var(--line);
+}
+.editor {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--editor);
 }
 .poke-filebar {
   display: flex;
@@ -418,6 +425,45 @@
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--dim2);
+}
+
+/* Click-to-toggle / drag-to-resize bar for the bottom dock. */
+.dock-bar {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: none;
+  border-top: 1px solid var(--line);
+  background: var(--panel2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.13em;
+  color: var(--dim);
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+}
+.dock-bar[data-open="true"] {
+  cursor: row-resize;
+}
+.dock-bar:hover {
+  color: var(--mid);
+  background: var(--hover);
+}
+.dock-bar-chev {
+  color: var(--orange);
+}
+.dock {
+  flex: none;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
 }
 
 /* Drag handle between the editor and the right column. */

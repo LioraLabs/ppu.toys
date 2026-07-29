@@ -14,15 +14,32 @@ export interface StudioLayoutProps {
   /** Right column — expected to render `<aside className="right">`
    *  (RightColumn in the app). */
   right: ReactNode;
+  /** Bottom dock under the editor (Inspector in the app). Collapsible via the
+   *  dock bar; height drags. Omit the slot and the bar disappears too. */
+  dock?: ReactNode;
 }
 
 const RIGHT_W_KEY = "ppu.rightPaneW";
-const MIN_RIGHT = 380; // narrower and the inspector tabs wrap unusably
+const MIN_RIGHT = 380; // narrower and the output/tab chrome wraps unusably
 const MIN_EDITOR = 380; // keep a workable editor no matter how far the drag goes
+
+const DOCK_H_KEY = "ppu.dockH";
+const DOCK_OPEN_KEY = "ppu.dockOpen";
+const MIN_DOCK = 140;
+const MIN_EDITOR_H = 160;
+/** Movement below this is a click (toggle), not a drag (resize). */
+const DRAG_SLOP = 4;
 
 function loadRightW(): number {
   const v = Number(localStorage.getItem(RIGHT_W_KEY));
   return Number.isFinite(v) && v >= MIN_RIGHT ? v : 600;
+}
+function loadDockH(): number {
+  const v = Number(localStorage.getItem(DOCK_H_KEY));
+  return Number.isFinite(v) && v >= MIN_DOCK ? v : 280;
+}
+function loadDockOpen(): boolean {
+  return localStorage.getItem(DOCK_OPEN_KEY) !== "0";
 }
 
 /** Presentational studio arrangement: the toolbar-over-three-columns grid that
@@ -31,13 +48,17 @@ function loadRightW(): number {
  *  with fixture-fed presentational pieces so the whole composition renders
  *  wasm-free. Owns the tokens/studio css imports so both fillers get styled.
  *
- *  The editor|right divider is a drag handle: the right column's width
- *  overrides --right-w inline and persists across sessions. */
-export function StudioLayout({ toolbar, rail, editor, right }: StudioLayoutProps) {
+ *  Two persisted user splits: the editor|right divider drags the right
+ *  column's width (--right-w inline), and the dock bar under the editor is a
+ *  click-to-toggle, drag-to-resize handle for the bottom dock. */
+export function StudioLayout({ toolbar, rail, editor, right, dock }: StudioLayoutProps) {
   const bodyRef = useRef<HTMLDivElement>(null);
+  const centerRef = useRef<HTMLDivElement>(null);
   const [rightW, setRightW] = useState(loadRightW);
+  const [dockH, setDockH] = useState(loadDockH);
+  const [dockOpen, setDockOpen] = useState(loadDockOpen);
 
-  const startDrag = (e: ReactPointerEvent) => {
+  const startRightDrag = (e: ReactPointerEvent) => {
     e.preventDefault();
     const body = bodyRef.current;
     if (!body) return;
@@ -58,6 +79,40 @@ export function StudioLayout({ toolbar, rail, editor, right }: StudioLayoutProps
     window.addEventListener("pointerup", up);
   };
 
+  // One bar, two gestures: a clean click toggles the dock; any real vertical
+  // drag (while open) resizes it.
+  const startDockDrag = (e: ReactPointerEvent) => {
+    e.preventDefault();
+    const center = centerRef.current;
+    if (!center) return;
+    const rect = center.getBoundingClientRect();
+    const max = Math.max(MIN_DOCK, rect.height - MIN_EDITOR_H);
+    const startY = e.clientY;
+    let latest = dockH;
+    let dragged = false;
+    const move = (ev: PointerEvent) => {
+      if (!dockOpen) return; // closed: the bar is a plain button
+      if (!dragged && Math.abs(ev.clientY - startY) < DRAG_SLOP) return;
+      dragged = true;
+      latest = Math.round(Math.min(max, Math.max(MIN_DOCK, rect.bottom - ev.clientY)));
+      setDockH(latest);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      if (dragged) {
+        localStorage.setItem(DOCK_H_KEY, String(latest));
+      } else {
+        setDockOpen((o) => {
+          localStorage.setItem(DOCK_OPEN_KEY, o ? "0" : "1");
+          return !o;
+        });
+      }
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
   return (
     <div className="studio">
       {toolbar}
@@ -67,13 +122,35 @@ export function StudioLayout({ toolbar, rail, editor, right }: StudioLayoutProps
         style={{ "--right-w": `${rightW}px` } as CSSProperties}
       >
         {rail}
-        {editor}
+        <div className="center-col" ref={centerRef}>
+          {editor}
+          {dock !== undefined && (
+            <>
+              <button
+                type="button"
+                className="dock-bar"
+                data-open={dockOpen}
+                aria-expanded={dockOpen}
+                aria-label={dockOpen ? "Hide inspector (drag to resize)" : "Show inspector"}
+                onPointerDown={startDockDrag}
+              >
+                <span className="dock-bar-chev">{dockOpen ? "▾" : "▴"}</span>
+                INSPECTOR
+              </button>
+              {dockOpen && (
+                <div className="dock" style={{ height: dockH }}>
+                  {dock}
+                </div>
+              )}
+            </>
+          )}
+        </div>
         <div
           className="pane-splitter"
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize output column"
-          onPointerDown={startDrag}
+          onPointerDown={startRightDrag}
         />
         {right}
       </div>

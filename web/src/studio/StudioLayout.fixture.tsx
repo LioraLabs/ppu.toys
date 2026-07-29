@@ -250,10 +250,10 @@ function ComposedShell() {
         }
         rail={<ActivityRail active="layers" />}
         editor={<EditorMock />}
+        dock={<Inspector renderTab={fixtureTab} renderOverlay={fixtureOverlay} />}
         right={
           <aside className="right">
             <OutputMock f={frame} />
-            <Inspector renderTab={fixtureTab} renderOverlay={fixtureOverlay} />
           </aside>
         }
       />
