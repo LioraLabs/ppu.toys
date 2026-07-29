@@ -228,11 +228,6 @@ function OutputMock({ f }: { f: FrameResult }) {
   );
 }
 
-const toolbarSourceSlot = (
-  <button type="button" className="btn-ghost">
-    + Source
-  </button>
-);
 const toolbarWorkspaceSlot = (
   <button type="button" className="btn-ghost">
     Save
@@ -248,7 +243,6 @@ function ComposedShell() {
             sketchName={sketchName}
             dirty
             theme="dark"
-            sourceSlot={toolbarSourceSlot}
             workspaceSlot={toolbarWorkspaceSlot}
           />
         }

@@ -46,7 +46,7 @@ export function FileTabs(props: FileTabsProps) {
   };
 
   return (
-    <div className="ftabs" role="tablist" aria-label="Sketch files">
+    <div className="ftabs" role="tablist" aria-label="Toy files">
       {files.map((name, i) => {
         const isGenerated = generated.has(name);
         return (

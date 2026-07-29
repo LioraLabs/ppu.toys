@@ -45,6 +45,7 @@ export interface WasmCoreLike {
   traceObj(index: number): unknown;
   convertSource(kind: SourceKind, options: ConvertSourceOptions, imageData: ImageData): unknown;
   addSource(name: string, payload: Uint8Array): unknown;
+  removeSource(name: string): boolean;
 }
 
 /** Adapt a wasm-bindgen core to the PpuCore seam. Pure (no wasm load) so it can be
@@ -103,6 +104,9 @@ export function wrapWasmCore(core: WasmCoreLike): PpuCore {
     },
     addSource(name: string, payload: Uint8Array) {
       return core.addSource(name, payload) as { ok: boolean; error?: string };
+    },
+    removeSource(name: string) {
+      return core.removeSource(name);
     },
   };
 }

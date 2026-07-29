@@ -46,6 +46,22 @@ export function Permalink() {
   const toy = load.toy;
   const activeFile = toy.files[active] ?? toy.files[0];
 
+  /** Owner path: reopen this toy in the Studio bound to the SAME cloud id, so
+   *  Save/Publish update it in place instead of minting a fork. */
+  async function edit() {
+    if (load.status !== "ok") return;
+    setForking(true);
+    setForkFailed(false);
+    try {
+      await openCloudToy(load.toy);
+      navigate("/studio");
+    } catch {
+      setForkFailed(true);
+    } finally {
+      setForking(false);
+    }
+  }
+
   async function fork() {
     if (!id) return;
     if (!user) {
@@ -85,14 +101,25 @@ export function Permalink() {
         </header>
         <div className="permalink-actions">
           <HeartButton id={toy.id} heartCount={toy.heartCount} hearted={toy.hearted} signedIn={!!user} />
-          <button
-            className="fork-btn"
-            onClick={() => void fork()}
-            disabled={forking}
-            title={user ? "Fork into your Studio" : "Sign in with Discord to fork this toy"}
-          >
-            {forking ? "Forking…" : "Fork"}
-          </button>
+          {user && user.id === toy.author.id ? (
+            <button
+              className="fork-btn"
+              onClick={() => void edit()}
+              disabled={forking}
+              title="Open your toy in the Studio"
+            >
+              {forking ? "Opening…" : "Edit"}
+            </button>
+          ) : (
+            <button
+              className="fork-btn"
+              onClick={() => void fork()}
+              disabled={forking}
+              title={user ? "Fork into your Studio" : "Sign in with Discord to fork this toy"}
+            >
+              {forking ? "Forking…" : "Fork"}
+            </button>
+          )}
           {forkFailed && <span className="fork-error" role="alert">Fork failed — try again.</span>}
         </div>
         <div className="code-view">

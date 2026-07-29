@@ -36,6 +36,7 @@ function fakeCore(over: Partial<WasmCoreLike> = {}): WasmCoreLike {
       },
     }),
     addSource: () => ({ ok: true }),
+    removeSource: () => true,
     ...over,
   };
 }

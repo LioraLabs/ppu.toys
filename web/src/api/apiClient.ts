@@ -41,9 +41,13 @@ export interface ToyFull {
   author: { id: string; handle: string; avatar: string | null };
 }
 
+export interface DraftInfo { id: string; title: string; createdAt: number }
+
 export interface Profile {
   user: { id: string; handle: string; avatar: string | null };
   toys: WallCard[];
+  /** Present ONLY when the viewer is this profile's owner. */
+  drafts?: DraftInfo[];
 }
 
 export type WallSort = "recent" | "popular";

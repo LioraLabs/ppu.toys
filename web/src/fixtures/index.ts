@@ -14,7 +14,7 @@ import type {
 } from "../ppu/core";
 import { HEIGHT, WIDTH } from "../ppu/core";
 import type { OpenContext, OpenSketchState } from "../studio/sketches/openSketch";
-import type { Sketch, SketchMeta } from "../studio/sketches/sketchStore";
+import type { Sketch, SketchMeta, SketchSource } from "../studio/sketches/sketchStore";
 
 export function makeWallCard(overrides?: Partial<WallCard>): WallCard {
   return {
@@ -390,6 +390,12 @@ export function makeSourceMeta(overrides?: Partial<SourceMeta>): SourceMeta {
 }
 
 export const sourceMetaM7: SourceMeta = makeSourceMeta();
+
+/** A recorded toy source (assets-panel row): the M7 fixture payload under a
+ *  given name — decodable by SourcePreview, valid for transport.addSource. */
+export function makeSketchSource(name: string): SketchSource {
+  return { name, kind: "m7", options: {}, payload: sourcePayloadM7, meta: sourceMetaM7 };
+}
 
 /** Ensure-saved stub for PublishDialog's `save` prop: resolves to a toy id
  *  without touching the cloud, so the dialog stories run offline. */

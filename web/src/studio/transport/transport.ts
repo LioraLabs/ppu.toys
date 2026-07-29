@@ -209,6 +209,13 @@ export class Transport {
     this.renderOnce(); // registered source shows on the next rendered frame
     return res;
   };
+
+  /** Forget a registered source (the assets panel's remove). */
+  removeSource = (name: string): boolean => {
+    const res = this.coreRef().removeSource(name);
+    this.renderOnce();
+    return res;
+  };
 }
 
 export const transport = new Transport();

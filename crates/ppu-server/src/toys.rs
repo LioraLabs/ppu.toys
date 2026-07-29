@@ -254,7 +254,19 @@ async fn profile(State(state): State<AppState>, maybe: Option<AuthUser>, Path(ha
         let hearted = match &viewer { Some(v) => sqlx::query_as::<_,(i64,)>("SELECT 1 FROM hearts WHERE user_id=? AND toy_id=?").bind(v).bind(&id).fetch_optional(&state.pool).await?.is_some(), None => false };
         cards.push(wall_card(&id,&title,&uid,&handle,&avatar,hc,hearted));
     }
-    Ok(Json(serde_json::json!({ "user": { "id": uid, "handle": handle, "avatar": avatar }, "toys": cards })).into_response())
+    // Owner-only: unpublished drafts, so the creator page is the one place a
+    // user finds ALL their toys. Never present for other viewers.
+    let drafts = if viewer.as_deref() == Some(uid.as_str()) {
+        let rows: Vec<(String,String,i64)> = sqlx::query_as(
+            "SELECT id,title,created_at FROM toys WHERE author_id=? AND state='draft' ORDER BY created_at DESC")
+            .bind(&uid).fetch_all(&state.pool).await?;
+        Some(rows.into_iter()
+            .map(|(id,title,created)| serde_json::json!({ "id": id, "title": title, "createdAt": created }))
+            .collect::<Vec<_>>())
+    } else { None };
+    let mut body = serde_json::json!({ "user": { "id": uid, "handle": handle, "avatar": avatar }, "toys": cards });
+    if let Some(d) = drafts { body["drafts"] = serde_json::Value::Array(d); }
+    Ok(Json(body).into_response())
 }
 
 pub fn routes() -> Router<AppState> {

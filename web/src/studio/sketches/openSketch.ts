@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { DEMOS, demoFiles } from "../demos/demos";
+import { demoById, demoFiles, STARTER } from "../demos/demos";
 import { POKES_FILE, EMPTY_POKES } from "../pokes/pokes";
 import {
   newSketchObject,
@@ -14,7 +14,7 @@ import {
 /** Debounce window between the last change and the autosave write. */
 export const AUTOSAVE_MS = 800;
 
-export const NEW_SKETCH_SOURCE = `-- ppu.toys sketch — flat SNES PPU globals, Lua 5.4
+export const NEW_SKETCH_SOURCE = `-- ppu.toys — flat SNES PPU globals, Lua 5.4
 -- registers: mode, brightness, bg[1..4], cgram[], obj[], m7, vram[]
 -- helpers: rgb(r,g,b), hsl(h,s,l), hdma(y0,y1,fn), sin/cos/floor, t, f
 function frame(t, f)
@@ -49,7 +49,7 @@ export interface OpenSketchState {
   session: number;
 }
 
-let context: OpenContext = { kind: "demo", demoId: DEMOS[0].id };
+let context: OpenContext = { kind: "demo", demoId: STARTER.id };
 let dirty = false;
 let session = 0;
 /** Mutation counter: lets an in-flight flush detect edits that raced it. */
@@ -106,7 +106,7 @@ function mutateSketch(update: (s: Sketch) => Sketch) {
  *  a brand-new in-memory fork ("<label> (copy)", pristine files, no sources). */
 function sketchToMutate(ctx: OpenContext): Sketch {
   if (ctx.kind === "sketch") return ctx.sketch;
-  const label = DEMOS.find((d) => d.id === ctx.demoId)?.label ?? ctx.demoId;
+  const label = demoById(ctx.demoId)?.label ?? ctx.demoId;
   return newSketchObject(`${label} (copy)`, filesOf(ctx), [], ctx.demoId);
 }
 
@@ -132,7 +132,7 @@ function mutateOpen(update: (s: Sketch) => Sketch) {
  *  that guarantees it regardless of how demos.ts is authored. */
 function filesOf(ctx: OpenContext): SketchFile[] {
   if (ctx.kind === "sketch") return ctx.sketch.files;
-  const demo = DEMOS.find((d) => d.id === ctx.demoId);
+  const demo = demoById(ctx.demoId);
   return ensurePokesFirst(demo ? demoFiles(demo) : [{ name: "main.lua", source: "" }]);
 }
 
@@ -183,7 +183,7 @@ export const openSketchStore = {
   /** Create a blank sketch and open it. */
   async newSketch(): Promise<void> {
     await flush();
-    const sketch = await createSketch("untitled", [
+    const sketch = await createSketch("untitled toy", [
       { name: POKES_FILE, source: EMPTY_POKES },
       { name: "main.lua", source: NEW_SKETCH_SOURCE },
     ]);
@@ -269,6 +269,18 @@ export const openSketchStore = {
     }));
   },
 
+  /** Drop a recorded source from the open sketch (a remove IS an edit, so a
+   *  demo forks first). Returns whether the name was present. The caller owns
+   *  the engine side (transport.removeSource) — same split as addSource. */
+  removeSource(name: string): boolean {
+    let found = false;
+    mutateOpen((s) => {
+      found = s.sources.some((x) => x.name === name);
+      return found ? { ...s, sources: s.sources.filter((x) => x.name !== name) } : s;
+    });
+    return found;
+  },
+
   /** Rename the OPEN sketch through the live context (renaming it directly in
    *  the store would be reverted by the next autosave flush, which puts the
    *  stale in-memory name back). No-op on a demo context. */
@@ -285,7 +297,7 @@ export const openSketchStore = {
       clearTimeout(timer);
       timer = null;
     }
-    context = { kind: "demo", demoId: DEMOS[0].id };
+    context = { kind: "demo", demoId: STARTER.id };
     dirty = false;
     session = 0;
     gen++;
@@ -302,7 +314,7 @@ export function openContextLabel(s: OpenSketchState): string {
   const ctx = s.context;
   return ctx.kind === "sketch"
     ? ctx.sketch.name
-    : DEMOS.find((d) => d.id === ctx.demoId)?.label ?? ctx.demoId;
+    : demoById(ctx.demoId)?.label ?? ctx.demoId;
 }
 
 /** Ordered files of the open context — the editor's tab list. A single-file

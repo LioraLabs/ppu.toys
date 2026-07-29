@@ -3,6 +3,7 @@ import type { ChangeEvent } from "react";
 import type { ConvertSourceOptions, SourceKind } from "../../ppu/core";
 import { ppuCore } from "../../ppu/instance";
 import { transport } from "../transport/transport";
+import { openSketchStore } from "../sketches/openSketch";
 import { decodeImageFile, pngFiles } from "../assets/decode";
 import { SourcePreview } from "./SourcePreview";
 import "./sources.css";
@@ -46,8 +47,22 @@ export function AddSourceDialog({ onClose }: { onClose: () => void }) {
 
   const add = () => {
     if (!converted || "error" in converted) return;
-    const res = transport.addSource(name.trim(), converted.payload);
-    if (res.ok) onClose(); else setError(res.error ?? "addSource failed");
+    const trimmed = name.trim();
+    const res = transport.addSource(trimmed, converted.payload);
+    if (!res.ok) {
+      setError(res.error ?? "addSource failed");
+      return;
+    }
+    // record into the open toy too — engine registration alone does not
+    // survive a reload (the drop-zone path in useAssets does the same pair)
+    openSketchStore.addSource({
+      name: trimmed,
+      kind,
+      options,
+      payload: converted.payload,
+      meta: converted.meta,
+    });
+    onClose();
   };
 
   const ok = !!image && !!converted && !("error" in converted) && name.trim().length > 0;

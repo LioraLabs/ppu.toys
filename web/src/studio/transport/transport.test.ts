@@ -99,6 +99,7 @@ function makeCore(state: { throwing: boolean }): PpuCore {
       },
     }),
     addSource: () => ({ ok: true }),
+    removeSource: () => true,
   };
 }
 

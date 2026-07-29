@@ -24,10 +24,8 @@ export interface ToolbarProps {
   onToggleTheme?: () => void;
   /** Account-menu sign out. */
   onSignOut?: () => void;
-  /** Injected wired "+ Source" control (AddSourceButton in production). Kept as
-   *  a slot because it transitively imports transport/ppuCore, which the
-   *  presentational toolbar must not. */
-  sourceSlot?: ReactNode;
+  /** Account-menu "New toy" (opens a fresh starter in the studio). */
+  onNewToy?: () => void;
   /** Injected wired cloud actions (WorkspaceActions in production). Slot for the
    *  same reason — it reads the session/network. */
   workspaceSlot?: ReactNode;
@@ -36,7 +34,7 @@ export interface ToolbarProps {
 /** Account avatar + dropdown. Plain anchors, not router Links — the toolbar
  *  renders router-less in fixtures, and leaving the studio is a real page
  *  navigation anyway. */
-function AccountMenu({ user, onSignOut }: { user: ToolbarUser; onSignOut?: () => void }) {
+function AccountMenu({ user, onSignOut, onNewToy }: { user: ToolbarUser; onSignOut?: () => void; onNewToy?: () => void }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -73,6 +71,17 @@ function AccountMenu({ user, onSignOut }: { user: ToolbarUser; onSignOut?: () =>
           <a className="tb-menu-item" role="menuitem" href={`/u/${user.handle}`}>
             {user.handle}
           </a>
+          <button
+            type="button"
+            className="tb-menu-item"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onNewToy?.();
+            }}
+          >
+            New toy
+          </button>
           <a className="tb-menu-item" role="menuitem" href="/">
             Wall
           </a>
@@ -87,7 +96,7 @@ function AccountMenu({ user, onSignOut }: { user: ToolbarUser; onSignOut?: () =>
 
 /** Presentational toolbar: a pure function of props + injected action slots. No
  *  transport, theme store, or wired children imported here — ToolbarWired
- *  supplies the handlers and the AddSourceButton/WorkspaceActions slots. */
+ *  supplies the handlers and the WorkspaceActions slot. */
 export function Toolbar({
   sketchName = "dusk-parallax",
   dirty = false,
@@ -96,7 +105,7 @@ export function Toolbar({
   onRun,
   onToggleTheme,
   onSignOut,
-  sourceSlot,
+  onNewToy,
   workspaceSlot,
 }: ToolbarProps) {
   return (
@@ -116,12 +125,11 @@ export function Toolbar({
       <button type="button" className="btn-solid" onClick={() => onRun?.()} title="Restart from t=0 (Ctrl+Enter)">
         ▶ Run
       </button>
-      {sourceSlot}
       <button type="button" className="btn-ghost" onClick={() => onToggleTheme?.()} aria-label="Toggle color theme">
         {theme === "dark" ? "Light" : "Dark"}
       </button>
       {workspaceSlot}
-      {user && <AccountMenu user={user} onSignOut={onSignOut} />}
+      {user && <AccountMenu user={user} onSignOut={onSignOut} onNewToy={onNewToy} />}
     </header>
   );
 }

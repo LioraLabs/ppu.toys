@@ -1,5 +1,5 @@
 import { openContextFiles, type OpenSketchState } from "../sketches/openSketch";
-import { DEMOS } from "../demos/demos";
+import { demoById } from "../demos/demos";
 import { transport } from "../transport/transport";
 import { encodeBase64 } from "../../api/base64";
 import type { ToyFile, ToySource } from "../../api/apiClient";
@@ -35,7 +35,7 @@ export function serializeWorkspace(
   const byName = new Map<string, ToySource>();
 
   const demoId = underlyingDemoId(state);
-  const demo = demoId ? DEMOS.find((d) => d.id === demoId) : undefined;
+  const demo = demoId ? demoById(demoId) : undefined;
   if (demo) {
     for (const a of demo.assets) {
       const { payload, meta } = convert(a);

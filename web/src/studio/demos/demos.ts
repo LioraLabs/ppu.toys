@@ -452,3 +452,34 @@ export const DEMOS: Demo[] = [
   demo("mode7-extbg", "mode7-extbg", [{ name: "main.lua", source: EXTBG_SRC }], []),
   demo("direct-color", "direct-color", [{ name: "main.lua", source: DIRECT_SRC }], []),
 ];
+
+// ── first-run starter ────────────────────────────────────────────────────────
+// The template a brand-new visitor boots into. NOT in DEMOS: demos ship to the
+// wall as published toys by the official account; this exists only as the
+// studio's lazily-forked first-open context. Asset-free on purpose — it must
+// render (and animate) with nothing uploaded, while touching the core DSL
+// ideas: frame(t,f), per-scanline hdma, cgram, hsl.
+const STARTER_SRC = `-- my first toy — you're driving a real SNES picture chip.
+-- frame(t, f) runs every frame: t = seconds, f = frame number.
+-- Edits re-run live. Fork any toy on the wall to see more tricks.
+function frame(t, f)
+  apply_pokes()          -- inspector tweaks land here (see pokes.lua)
+  mode = 0
+  cgram[0] = hsl((t * 24) % 360, 0.55, 0.32)   -- backdrop colour, drifting
+  -- hdma runs your function once per scanline: fade to black at the bottom
+  hdma(0, 223, function(y)
+    brightness = 15 - floor(y / 24)            -- 15 at the top -> 6 low
+  end)
+  -- Try: swap 0.55 for 1, speed up the 24, or flip it: floor((223-y)/24)
+end
+`;
+
+export const STARTER: Demo = demo("starter", "my first toy", [
+  { name: "main.lua", source: STARTER_SRC },
+], []);
+
+/** Resolve a demo-context id: the bundled DEMOS plus the starter template. */
+export function demoById(id: string): Demo | undefined {
+  if (id === STARTER.id) return STARTER;
+  return DEMOS.find((d) => d.id === id);
+}

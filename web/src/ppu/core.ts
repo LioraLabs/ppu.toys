@@ -218,6 +218,10 @@ export interface PpuCore {
   convertSource(kind: SourceKind, options: ConvertSourceOptions, imageData: ImageData): ConvertSourceResult;
   /** Decode + register a payload for rendering under `name` (source-store stub, M10). */
   addSource(name: string, payload: Uint8Array): { ok: boolean; error?: string };
+  /** Forget a registered source; returns whether the name existed. VRAM words
+   *  already placed by a bind stay (memory cannot be un-written) — a later
+   *  bind by this name fails loudly instead. */
+  removeSource(name: string): boolean;
 }
 
 export const WIDTH = 256;

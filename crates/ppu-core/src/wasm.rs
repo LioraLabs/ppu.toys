@@ -309,6 +309,12 @@ impl PpuCore {
         };
         serde_wasm_bindgen::to_value(&res).map_err(Into::into)
     }
+
+    /// Forget a registered source. Returns whether the name existed.
+    #[wasm_bindgen(js_name = removeSource)]
+    pub fn remove_source(&mut self, name: &str) -> bool {
+        self.engine.remove_source(name)
+    }
 }
 
 impl Default for PpuCore {

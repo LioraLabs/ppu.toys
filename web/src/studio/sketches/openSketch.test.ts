@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { IDBFactory } from "fake-indexeddb";
-import { DEMOS, demoFiles } from "../demos/demos";
+import { DEMOS, demoFiles, STARTER } from "../demos/demos";
 import {
   openSketchStore,
   AUTOSAVE_MS,
@@ -32,10 +32,13 @@ function openSketch() {
   return ctx.sketch;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   (globalThis as { indexedDB: IDBFactory }).indexedDB = new IDBFactory();
   _resetSketchStoreForTests();
   openSketchStore._resetForTests();
+  // most suites below exercise multi-file demo behavior — open the flagship
+  // demo explicitly (the BOOT context is the starter template, tested below)
+  await openSketchStore.openDemo(demo.id);
   // fake ONLY setTimeout/clearTimeout: the debounce is ours, but fake-indexeddb
   // needs real setImmediate to complete its transactions under await.
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -46,11 +49,12 @@ afterEach(() => {
 });
 
 describe("initial state", () => {
-  it("starts on the first demo, clean", () => {
+  it("boots on the starter template after reset, clean", () => {
+    openSketchStore._resetForTests();
     const s = openSketchStore.state();
-    expect(s.context).toEqual({ kind: "demo", demoId: demo.id });
+    expect(s.context).toEqual({ kind: "demo", demoId: STARTER.id });
     expect(s.dirty).toBe(false);
-    expect(openContextLabel(s)).toBe(demo.label);
+    expect(openContextLabel(s)).toBe(STARTER.label);
   });
 });
 

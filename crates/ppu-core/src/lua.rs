@@ -116,6 +116,13 @@ impl LuaEngine {
         Ok(())
     }
 
+    /// Forget the source registered under `name` (the `removeSource` core).
+    /// VRAM words already placed by a bind stay put (memory is authentic and
+    /// cannot be un-written); a later bind by this name fails loudly instead.
+    pub fn remove_source(&mut self, name: &str) -> bool {
+        self.source_store.remove(name).is_some()
+    }
+
     /// Per-layer import budgets from the most recent `frame()` (m4/inspector).
     pub fn import_reports(&self) -> &[ImportBudget] {
         &self.reports

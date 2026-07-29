@@ -1,17 +1,17 @@
 import { type ReactNode } from "react";
 
-export type RailItemId = "files" | "layers" | "palette" | "sprites" | "settings";
+export type RailItemId = "assets" | "layers" | "palette" | "sprites" | "settings";
 
 export interface ActivityRailProps {
   /** Item shown selected (inset-indicator); none when absent. */
   active?: RailItemId;
-  /** Whether the Files panel is open — drives the Files button's pressed/active
-   *  appearance independently of `active` (the file library is a toggle, not a
+  /** Whether the Assets panel is open — drives that button's pressed/active
+   *  appearance independently of `active` (the flyout is a toggle, not a
    *  persistent view selection). Owned by the wired wrapper. */
-  filesOpen?: boolean;
+  assetsOpen?: boolean;
   /** Same toggle treatment for the Settings flyout. */
   settingsOpen?: boolean;
-  /** Rail actions: files/settings toggle their flyouts, layers/palette/sprites
+  /** Rail actions: assets/settings toggle their flyouts, layers/palette/sprites
    *  jump to the matching inspector view (wired wrapper). No-op when absent. */
   onSelect?: (id: RailItemId) => void;
 }
@@ -46,11 +46,11 @@ function RailItem({
 
 /** Presentational left nav: a pure function of its props. Renders no panels
  *  and reads no store — the wired wrapper (ActivityRailWired) owns the flyout
- *  state and mounts LibraryPanel / SettingsPanel. */
-export function ActivityRail({ active, filesOpen = false, settingsOpen = false, onSelect }: ActivityRailProps) {
+ *  state and mounts AssetsPanel / SettingsPanel. */
+export function ActivityRail({ active, assetsOpen = false, settingsOpen = false, onSelect }: ActivityRailProps) {
   return (
     <nav className="rail">
-      <RailItem id="files" label="Files" active={filesOpen || active === "files"} onSelect={onSelect}>
+      <RailItem id="assets" label="Assets" active={assetsOpen || active === "assets"} onSelect={onSelect}>
         <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth={1.4} strokeLinecap="round" strokeLinejoin="round">
           <rect x="3" y="2.5" width="12" height="13" rx="2"/>
           <line x1="3" y1="6" x2="15" y2="6"/>

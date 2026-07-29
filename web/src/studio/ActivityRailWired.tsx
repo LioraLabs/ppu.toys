@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ActivityRail, type RailItemId } from "./ActivityRail";
-import { LibraryPanel } from "./sketches/LibraryPanel";
+import { AssetsPanel } from "./sources/AssetsPanel";
 import { SettingsPanel } from "./SettingsPanel";
 import { inspectorStore, useInspectorView } from "./inspector/inspectorStore";
 import { editorSettings, useVimMode } from "./editor/editorSettings";
@@ -17,17 +17,17 @@ function railActive(view: ReturnType<typeof useInspectorView>): RailItemId | und
   return undefined;
 }
 
-/** Wired container: owns the Files/Settings flyout state and routes the
+/** Wired container: owns the Assets/Settings flyout state and routes the
  *  view-shortcut items (layers/palette/sprites) into the inspector store. */
 export function ActivityRailWired() {
-  const [open, setOpen] = useState<"files" | "settings" | null>(null);
+  const [open, setOpen] = useState<"assets" | "settings" | null>(null);
   const view = useInspectorView();
   const vimMode = useVimMode();
   const { theme, toggleTheme } = useTheme();
 
   const select = (id: RailItemId) => {
     switch (id) {
-      case "files":
+      case "assets":
       case "settings":
         setOpen((v) => (v === id ? null : id));
         break;
@@ -50,11 +50,11 @@ export function ActivityRailWired() {
     <>
       <ActivityRail
         active={railActive(view)}
-        filesOpen={open === "files"}
+        assetsOpen={open === "assets"}
         settingsOpen={open === "settings"}
         onSelect={select}
       />
-      {open === "files" && <LibraryPanel onClose={() => setOpen(null)} />}
+      {open === "assets" && <AssetsPanel onClose={() => setOpen(null)} />}
       {open === "settings" && (
         <SettingsPanel
           theme={theme}

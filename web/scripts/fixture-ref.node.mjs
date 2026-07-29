@@ -54,7 +54,6 @@ for (const dir of fixtureDirs(resolve("src"))) {
 
 for (const fixture of [
   "studio/sources.fixture.tsx",
-  "studio/sources/AddSourceButton.fixture.tsx",
   "studio/sources/AddSourceDialog.fixture.tsx",
 ]) {
   test(`${fixture} boots the real core before interactive source conversion`, () => {

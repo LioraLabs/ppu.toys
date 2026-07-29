@@ -2,8 +2,8 @@ import { Toolbar } from "./Toolbar";
 import { transport } from "./transport/transport";
 import { useTheme } from "./theme";
 import { useSession, sessionStore } from "../api/session";
-import { AddSourceButton } from "./sources/AddSourceButton";
 import { WorkspaceActions } from "./cloud/WorkspaceActions";
+import { openSketchStore } from "./sketches/openSketch";
 
 export interface ToolbarWiredProps {
   /** Open-sketch name (from the sketch store via Studio). */
@@ -29,7 +29,7 @@ export function ToolbarWired({ sketchName, dirty }: ToolbarWiredProps) {
       onRun={() => transport.restart()}
       onToggleTheme={toggleTheme}
       onSignOut={() => void sessionStore.signOut()}
-      sourceSlot={<AddSourceButton />}
+      onNewToy={() => void openSketchStore.newSketch()}
       workspaceSlot={<WorkspaceActions />}
     />
   );

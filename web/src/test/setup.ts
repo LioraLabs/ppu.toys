@@ -72,6 +72,7 @@ class StubPpuCore implements PpuCore {
     };
   }
   addSource() { return { ok: true }; }
+  removeSource() { return true; }
 }
 
 setPpuCore(new StubPpuCore());

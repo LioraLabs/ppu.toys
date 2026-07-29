@@ -2,16 +2,10 @@ import { Toolbar } from "./Toolbar";
 import { sketchName } from "../fixtures";
 import "./studio.css";
 
-// Toolbar is presentational: sketch name / dirty / theme / handlers as props,
-// with the wired AddSourceButton + WorkspaceActions injected as slots. Stories
-// fill the slots with inert placeholder buttons so no wired child (transport /
-// network) mounts — nothing touches the wasm core. Both themes render via
-// Cosmos's root decorator sets the default theme on <html>.
-const sourceSlot = (
-  <button type="button" className="btn-ghost">
-    + Source
-  </button>
-);
+// Toolbar is presentational: toy name / dirty / theme / handlers as props,
+// with the wired WorkspaceActions injected as a slot. Stories fill the slot
+// with an inert placeholder button so no wired child (transport / network)
+// mounts — nothing touches the wasm core.
 const workspaceSlot = (
   <button type="button" className="btn-ghost">
     Save
@@ -19,11 +13,11 @@ const workspaceSlot = (
 );
 
 const Clean = () => (
-  <Toolbar sketchName={sketchName} dirty={false} theme="dark" sourceSlot={sourceSlot} workspaceSlot={workspaceSlot} />
+  <Toolbar sketchName={sketchName} dirty={false} theme="dark" workspaceSlot={workspaceSlot} />
 );
 
 const Dirty = () => (
-  <Toolbar sketchName={sketchName} dirty theme="dark" sourceSlot={sourceSlot} workspaceSlot={workspaceSlot} />
+  <Toolbar sketchName={sketchName} dirty theme="dark" workspaceSlot={workspaceSlot} />
 );
 
 // Signed in: the account avatar renders (letter tile — no Discord hash in
@@ -33,7 +27,7 @@ const SignedIn = () => (
     sketchName={sketchName}
     theme="dark"
     user={{ id: "1", handle: "ada", avatar: null }}
-    sourceSlot={sourceSlot}
+   
     workspaceSlot={workspaceSlot}
   />
 );
