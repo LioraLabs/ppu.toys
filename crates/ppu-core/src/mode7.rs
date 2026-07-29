@@ -190,6 +190,60 @@ pub fn render_mode7(lt: &LineTable, mem: &Memory, width: usize, height: usize) -
     fb
 }
 
+/// Render the ENTIRE 1024x1024 Mode-7 plane (map LOW bytes -> char HIGH
+/// bytes -> flat CGRAM) as RGBA; palette index 0 is transparent. This is the
+/// M7 editor panel's base image — register-free on purpose (no flips, no
+/// repeat, no brightness): it shows the plane as authored, and the panel's
+/// scanline fan shows how the registers sample it.
+pub fn render_mode7_map(mem: &Memory) -> Vec<u8> {
+    let mut out = vec![0u8; 1024 * 1024 * 4];
+    for ty in 0..128usize {
+        for tx in 0..128usize {
+            let tile = (mem.vram[ty * 128 + tx] & 0x00ff) as usize;
+            for fy in 0..8usize {
+                for fx in 0..8usize {
+                    let index = (mem.vram[tile * 64 + fy * 8 + fx] >> 8) as u8;
+                    if index == 0 {
+                        continue; // transparent
+                    }
+                    let rgba = unpack_rgb15(mem.cgram[index as usize]);
+                    let o = ((ty * 8 + fy) * 1024 + tx * 8 + fx) * 4;
+                    out[o..o + 4].copy_from_slice(&rgba);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Per-scanline sampling segments in UNWRAPPED map space, for the M7 editor's
+/// frustum-fan view: for each screen row, the map coords sampled by screen
+/// x = 0 and x = width-1 (after the raster path's screen flips, before repeat
+/// wrapping — wrapping would shred the fan into jumps). Layout: 4 f32 per row
+/// [u0, v0, u1, v1]; a row not rendered in mode 7 carries NaN.
+pub fn mode7_scanline_segments(lt: &LineTable, width: usize, height: usize) -> Vec<f32> {
+    let mut out = Vec::with_capacity(height * 4);
+    for y in 0..height.min(lt.rows.len()) {
+        let row = &lt.rows[y];
+        if row.mode != 7 {
+            out.extend_from_slice(&[f32::NAN; 4]);
+            continue;
+        }
+        let m7 = &row.m7;
+        let bg = &row.bg[0];
+        let sy = if m7.flip_y { 255 - y as i32 } else { y as i32 };
+        let mut end = |x: i32| {
+            let sx = if m7.flip_x { 255 - x } else { x };
+            let (u, v) = mode7_texel(m7, bg.scroll_x, bg.scroll_y, sx, sy);
+            out.push(u as f32);
+            out.push(v as f32);
+        };
+        end(0);
+        end(width as i32 - 1);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -535,5 +589,34 @@ mod tests {
         assert!(!lo.prio); // bit7 clear -> low priority
         assert_eq!(lo.rgba, unpack_rgb15(rgb15(0, 255, 0))); // color 3
         assert!(px[2].is_none()); // masked color 0 is transparent even with bit7
+    }
+
+    #[test]
+    fn map_view_renders_map_low_byte_through_char_high_byte() {
+        let mut mem = Memory::new();
+        mem.cgram[5] = rgb15(255, 0, 0);
+        set_map(&mut mem, 2, 1, 7); // cell (2,1) -> tile 7
+        set_char(&mut mem, 7, 3, 4, 5); // tile 7 pixel (3,4) -> palette index 5
+        let out = render_mode7_map(&mem);
+        assert_eq!(out.len(), 1024 * 1024 * 4);
+        // plane pixel (2*8+3, 1*8+4) = the poked texel
+        let o = ((1 * 8 + 4) * 1024 + 2 * 8 + 3) * 4;
+        assert_eq!(&out[o..o + 4], &unpack_rgb15(rgb15(255, 0, 0)));
+        // untouched texels resolve palette index 0 -> transparent
+        assert_eq!(out[3], 0);
+    }
+
+    #[test]
+    fn scanline_segments_identity_and_non_m7_rows() {
+        use crate::linetable::LineTableBuilder;
+        let mut b = LineTableBuilder::new(LineTableRow::default());
+        b.hdma(0, 99, |_, r| r.mode = 7);
+        let lt = b.build(224);
+        let seg = mode7_scanline_segments(&lt, 256, 224);
+        assert_eq!(seg.len(), 224 * 4);
+        // row 10 (mode 7, identity): x=0 -> (0, 10), x=255 -> (255, 10)
+        assert_eq!(&seg[40..44], &[0.0, 10.0, 255.0, 10.0]);
+        // row 200 stayed in the default mode -> NaN sentinel
+        assert!(seg[200 * 4].is_nan());
     }
 }

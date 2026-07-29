@@ -6,6 +6,7 @@ import { StudioDock } from "./StudioDock";
 import { Studio } from "./Studio";
 import { Toolbar } from "./Toolbar";
 import { AssetsPanel } from "./sources/AssetsPanel";
+import { Mode7Panel } from "./inspector/Mode7Panel";
 import { FileTabs } from "./editor/FileTabs";
 import { CodeEditor } from "./editor/CodeEditor";
 import { InspectorFrameProvider } from "./inspector/useInspectorFrame";
@@ -20,6 +21,7 @@ import { VramTab } from "./inspector/VramTab";
 import { BlitCanvas } from "./inspector/BlitCanvas";
 import { makeFixtureCompositor } from "./inspector/compose/storyCompositor";
 import {
+  makeM7ViewData,
   sketchName,
   sketchFiles,
   makeFrameResult,
@@ -69,6 +71,7 @@ function syntheticFramebuffer(): Uint8ClampedArray {
 
 const frame: FrameResult = makeFrameResult({ framebuffer: syntheticFramebuffer() });
 const compositor = makeFixtureCompositor(frame);
+const m7ViewData = makeM7ViewData();
 
 // ── fixture inspector slots ──────────────────────────────────────────────────
 function CoreNote({ what }: { what: string }) {
@@ -98,6 +101,7 @@ function fixturePages(f: FrameResult): Record<TabId, ReactNode> {
     // WindowsTab's compositor sits on injectable seams (inspector frame +
     // poke store), so the real tab renders wasm-free under the provider.
     windows: <WindowsTab />,
+    m7: <Mode7Panel data={m7ViewData} onPoke={() => {}} onClearPokes={() => {}} />,
     registers: <RegistersTab frame={f} />,
     sprites: <SpritesTab frame={f} />,
     vram: <VramTab frame={f} vram={frameVram} reports={frameImportReports} />,

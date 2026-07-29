@@ -24,6 +24,8 @@ function fakeCore(over: Partial<WasmCoreLike> = {}): WasmCoreLike {
     traceBgPixel: () => null,
     traceBgTile: () => null,
     traceObj: () => null,
+    m7Scanlines: () => new Float32Array(0),
+    m7MapView: () => new Uint8Array(0),
     convertSource: () => ({
       payload: new Uint8Array(),
       meta: {

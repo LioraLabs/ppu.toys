@@ -276,3 +276,75 @@
 .oam-maxline {
   color: var(--text-dim2);
 }
+
+/* ── Mode 7 editor panel ────────────────────────────────────────────────── */
+.m7-cols {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.m7-map {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 512px;
+}
+.m7-canvas {
+  width: 100%;
+  max-width: 512px;
+  aspect-ratio: 1;
+  border: 1px solid var(--line2);
+  border-radius: 6px;
+  image-rendering: pixelated;
+}
+.m7-side {
+  flex: 1;
+  min-width: 240px;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.m7-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px 10px;
+}
+.m7-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--dim);
+}
+.m7-field input[type="number"] {
+  padding: 4px 6px;
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--txt);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.m7-field--wide {
+  width: 100%;
+}
+.m7-actions {
+  display: flex;
+  gap: 8px;
+}
+.m7-snippet {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--txt2);
+  overflow-x: auto;
+  white-space: pre;
+}

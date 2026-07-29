@@ -43,6 +43,8 @@ export interface WasmCoreLike {
   traceBgPixel(layer: number, x: number, y: number): unknown;
   traceBgTile(layer: number, tx: number, ty: number, y: number): unknown;
   traceObj(index: number): unknown;
+  m7Scanlines(): ArrayLike<number>;
+  m7MapView(): ArrayLike<number>;
   convertSource(kind: SourceKind, options: ConvertSourceOptions, imageData: ImageData): unknown;
   addSource(name: string, payload: Uint8Array): unknown;
   removeSource(name: string): boolean;
@@ -98,6 +100,12 @@ export function wrapWasmCore(core: WasmCoreLike): PpuCore {
     },
     traceObj(index: number): ObjTrace | null {
       return (core.traceObj(index) as ObjTrace | null | undefined) ?? null;
+    },
+    m7Scanlines(): Float32Array {
+      return new Float32Array(core.m7Scanlines());
+    },
+    m7MapView(): Uint8ClampedArray {
+      return new Uint8ClampedArray(core.m7MapView());
     },
     convertSource(
       kind: SourceKind,

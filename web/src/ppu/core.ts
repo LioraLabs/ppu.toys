@@ -227,6 +227,12 @@ export interface PpuCore {
   traceBgTile(layer: number, tx: number, ty: number, y: number): BgTrace | null;
   /** Trace OAM sprite index (0..127). */
   traceObj(index: number): ObjTrace | null;
+  /** Per-scanline Mode-7 sampling segments from the latest frame: 4 floats per
+   *  row [u0, v0, u1, v1] in map px (NaN row = not mode 7). Empty before the
+   *  first frame. */
+  m7Scanlines(): Float32Array;
+  /** The full 1024x1024 Mode-7 plane as RGBA (register-free base image). */
+  m7MapView(): Uint8ClampedArray;
   /** Pure quantize+pack: image -> versioned source payload + meta. No engine mutation. */
   convertSource(
     kind: SourceKind,

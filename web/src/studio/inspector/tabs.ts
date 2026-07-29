@@ -1,4 +1,5 @@
-export type TabId = "trace" | "memory" | "compose" | "windows" | "registers" | "sprites" | "vram";
+export type TabId =
+  "trace" | "memory" | "compose" | "windows" | "m7" | "registers" | "sprites" | "vram";
 
 /** M9 done-gate decision: the full set is permanent.
  *  Trace/Memory/Compose/Windows are the workspace tabs; Registers/Sprites/VRAM
@@ -13,6 +14,7 @@ export const INSPECTOR_TABS: { id: TabId; label: string; aux?: boolean }[] = [
   { id: "memory", label: "Memory" },
   { id: "compose", label: "Compose" },
   { id: "windows", label: "Windows" },
+  { id: "m7", label: "Mode 7" },
   { id: "registers", label: "Registers", aux: true },
   { id: "sprites", label: "Sprites", aux: true },
   { id: "vram", label: "VRAM", aux: true },

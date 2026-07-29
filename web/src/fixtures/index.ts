@@ -511,6 +511,57 @@ export const sourceMetaObj: SourceMeta = {
   ],
 };
 
+/** Synthetic Mode-7 editor feed: a sea/continent-ish 1024x1024 plane and a
+ *  perspective scanline fan computed with the REAL no-rotation transform
+ *  (a = d = s(y), horizon at 96) so the fixture fan looks like the wired one. */
+export function makeM7ViewData(): {
+  map: Uint8ClampedArray;
+  segments: Float32Array;
+} {
+  const N = 1024;
+  const map = new Uint8ClampedArray(N * N * 4);
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const o = (y * N + x) * 4;
+      // blobby "continent" mask over sea, plus an 8px tile grid shade
+      const land =
+        Math.sin(x / 97) + Math.cos(y / 71) + Math.sin((x + y) / 149) + Math.cos(x / 31) * 0.4 >
+        0.9;
+      const grid = (x >> 3) % 2 === (y >> 3) % 2 ? 8 : 0;
+      if (land) {
+        map[o] = 52 + grid;
+        map[o + 1] = 118 + grid;
+        map[o + 2] = 58;
+      } else {
+        map[o] = 28;
+        map[o + 1] = 48 + grid;
+        map[o + 2] = 130 + grid;
+      }
+      map[o + 3] = 255;
+    }
+  }
+  const segments = new Float32Array(224 * 4).fill(NaN);
+  const H = 96;
+  const S = 56;
+  const cx = 480;
+  const cy = 760;
+  const th = -0.9; // camera yaw, so the fan sweeps the map like the FF shot
+  const cos = Math.cos(th);
+  const sin = Math.sin(th);
+  for (let y = H + 1; y < 224; y++) {
+    const s = S / (y - H);
+    const at = (x: number, i: number) => {
+      const px = x - cx;
+      const py = y - cy;
+      segments[y * 4 + i] = s * (cos * px + sin * py) + cx;
+      segments[y * 4 + i + 1] = s * (-sin * px + cos * py) + cy;
+    };
+    at(0, 0);
+    at(255, 2);
+  }
+  return { map, segments };
+}
+
 export function makeSourceMeta(overrides?: Partial<SourceMeta>): SourceMeta {
   return {
     width: 16,

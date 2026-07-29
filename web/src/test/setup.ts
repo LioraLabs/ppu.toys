@@ -87,6 +87,12 @@ class StubPpuCore implements PpuCore {
   traceObj() {
     return null;
   }
+  m7Scanlines() {
+    return new Float32Array(0);
+  }
+  m7MapView() {
+    return new Uint8ClampedArray(1024 * 1024 * 4);
+  }
   convertSource(
     _kind: SourceKind,
     _options: ConvertSourceOptions,

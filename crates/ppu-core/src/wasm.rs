@@ -195,6 +195,23 @@ impl PpuCore {
         }
     }
 
+    /// Per-scanline Mode-7 sampling segments ([u0,v0,u1,v1] f32 per row, NaN =
+    /// row not in mode 7) from the most recent frame — the M7 editor's fan.
+    #[wasm_bindgen(js_name = m7Scanlines)]
+    pub fn m7_scanlines(&self) -> Vec<f32> {
+        match &self.last_lt {
+            Some(lt) => crate::mode7_scanline_segments(lt, WIDTH, HEIGHT),
+            None => vec![],
+        }
+    }
+
+    /// The full 1024x1024 Mode-7 plane as RGBA (register-free base image for
+    /// the M7 editor panel).
+    #[wasm_bindgen(js_name = m7MapView)]
+    pub fn m7_map_view(&self) -> Vec<u8> {
+        crate::render_mode7_map(self.engine.memory())
+    }
+
     /// Trace a BG plane (1..=4) at screen pixel (x, y). null when out of range,
     /// before the first frame, or when the layer is absent in that row's mode.
     #[wasm_bindgen(js_name = traceBgPixel)]
