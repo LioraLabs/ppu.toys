@@ -13,6 +13,17 @@ pub type IndexTile = [u8; 64];
 /// Split RGBA into row-major 8x8 [`PixelTile`]s, quantizing to BGR555 and
 /// padding the right/bottom edges with transparent. Returns (tiles, cols, rows).
 pub fn split_tiles(rgba: &[u8], width: usize, height: usize) -> (Vec<PixelTile>, usize, usize) {
+    split_tiles_at(rgba, width, height, 128)
+}
+
+/// [`split_tiles`] with a caller-chosen opacity cutoff (source alpha >= it is
+/// opaque) — must match the remap stage's `RemapOptions::alpha_threshold`.
+pub fn split_tiles_at(
+    rgba: &[u8],
+    width: usize,
+    height: usize,
+    alpha_threshold: u8,
+) -> (Vec<PixelTile>, usize, usize) {
     let cols = width.div_ceil(8);
     let rows = height.div_ceil(8);
     let mut tiles = Vec::with_capacity(cols * rows);
@@ -26,7 +37,7 @@ pub fn split_tiles(rgba: &[u8], width: usize, height: usize) -> (Vec<PixelTile>,
                         continue;
                     }
                     let i = (y * width + x) * 4;
-                    if rgba[i + 3] >= 128 {
+                    if rgba[i + 3] >= alpha_threshold {
                         t[py * 8 + px] = Some(rgb15(rgba[i], rgba[i + 1], rgba[i + 2]));
                     }
                 }

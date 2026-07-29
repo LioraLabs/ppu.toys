@@ -7,8 +7,9 @@
 
 use std::collections::BTreeMap;
 
-use super::quantize::{median_cut, nearest, region_fit};
-use super::tiles::{pack_planar, split_tiles, IndexTile, PixelTile, TileSet};
+use super::dither::{remap_image, RemapOptions};
+use super::quantize::{fit_palettes, nearest, reduce_palette};
+use super::tiles::{pack_planar, split_tiles_at, IndexTile, PixelTile, TileSet};
 use super::{BudgetReport, Overflow};
 
 /// OBJ 4bpp: 15 colors/sub-palette (index 0 transparent), 8 palettes, 16
@@ -39,10 +40,11 @@ pub fn import_obj_sheet(
     width: u32,
     height: u32,
     cell_size: u8,
+    remap: &RemapOptions,
 ) -> (crate::source::ObjSource, crate::source::SourceMeta) {
     match cell_size {
-        16 | 32 | 64 => import_obj_blocks(rgba, width, height, cell_size),
-        _ => import_obj_cells8(rgba, width, height),
+        16 | 32 | 64 => import_obj_blocks(rgba, width, height, cell_size, remap),
+        _ => import_obj_cells8(rgba, width, height, remap),
     }
 }
 
@@ -60,7 +62,7 @@ fn global_remap(ptiles: &[PixelTile]) -> (impl Fn(u16) -> u16, Option<Overflow>)
     let (global, overflow) = if hist.len() > budget {
         let hv: Vec<(u16, u32)> = hist.iter().map(|(&c, &n)| (c, n)).collect();
         (
-            Some(median_cut(&hv, budget)),
+            Some(reduce_palette(&hv, budget)),
             Some(Overflow::Colors {
                 unique: hist.len(),
                 budget,
@@ -82,36 +84,36 @@ fn import_obj_cells8(
     rgba: &[u8],
     width: u32,
     height: u32,
+    remap: &RemapOptions,
 ) -> (crate::source::ObjSource, crate::source::SourceMeta) {
     let mut overflows = Vec::new();
     let (w, h) = (width as usize, height as usize);
-    let (ptiles, cols, rows) = split_tiles(rgba, w, h);
+    let (ptiles, cols, rows) = split_tiles_at(rgba, w, h, remap.alpha_threshold);
 
     let (map_color, color_overflow) = global_remap(&ptiles);
     overflows.extend(color_overflow);
 
-    let tile_pals: Vec<Vec<u16>> = ptiles
+    let tile_hists: Vec<Vec<(u16, u32)>> = ptiles
         .iter()
         .map(|t| {
-            let mut cs: Vec<u16> = t.iter().flatten().map(|&c| map_color(c)).collect();
-            cs.sort_unstable();
-            cs.dedup();
-            if cs.len() > CAP {
-                let hv: Vec<(u16, u32)> = cs.iter().map(|&c| (c, 1)).collect();
-                median_cut(&hv, CAP)
-            } else {
-                cs
+            let mut m: BTreeMap<u16, u32> = BTreeMap::new();
+            for c in t.iter().flatten() {
+                *m.entry(map_color(*c)).or_default() += 1;
             }
+            m.into_iter().collect()
         })
         .collect();
 
-    let fit = region_fit(&tile_pals, 8, CAP);
+    let fit = fit_palettes(&tile_hists, 8, CAP);
     if fit.palettes_needed > 8 {
-        let remapped = tile_pals
+        let remapped = tile_hists
             .iter()
             .zip(&fit.assignment)
-            .filter(|(tp, &a)| {
-                !tp.is_empty() && tp.iter().any(|c| !fit.palettes[a as usize].contains(c))
+            .filter(|(th, &a)| {
+                !th.is_empty()
+                    && th
+                        .iter()
+                        .any(|(c, _)| !fit.palettes[a as usize].contains(c))
             })
             .count();
         overflows.push(Overflow::Palettes {
@@ -120,21 +122,22 @@ fn import_obj_cells8(
         });
     }
 
+    let grids = remap_image(
+        rgba,
+        w,
+        h,
+        &fit.palettes,
+        &fit.assignment,
+        cols,
+        rows,
+        remap,
+    );
     let max_tiles = (0x8000usize / WORDS_PER_TILE).min(512); // OBJ name table = 9-bit tile#
     let mut set = TileSet::new(true);
     set.insert([0u8; 64]);
-    let mut cells: Vec<ObjCell> = Vec::with_capacity(ptiles.len());
-    for (pt, &pal) in ptiles.iter().zip(&fit.assignment) {
-        let palette: &[u16] = fit
-            .palettes
-            .get(pal as usize)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
-        let grid: IndexTile = std::array::from_fn(|i| match pt[i] {
-            Some(c) if !palette.is_empty() => nearest(palette, map_color(c)) as u8 + 1,
-            _ => 0,
-        });
-        let (n, hf, vf) = set.insert(grid);
+    let mut cells: Vec<ObjCell> = Vec::with_capacity(grids.len());
+    for (grid, &pal) in grids.iter().zip(&fit.assignment) {
+        let (n, hf, vf) = set.insert(*grid);
         let tile = if (n as usize) >= max_tiles { 0 } else { n };
         cells.push(ObjCell {
             tile,
@@ -189,11 +192,13 @@ fn import_obj_blocks(
     width: u32,
     height: u32,
     cell_size: u8,
+    remap: &RemapOptions,
 ) -> (crate::source::ObjSource, crate::source::SourceMeta) {
     let mut overflows = Vec::new();
     let n = (cell_size / 8) as usize; // tiles per cell edge: 2/4/8
     let per_row = 16 / n; // cells per 16-wide name-table band: 8/4/2
-    let (ptiles, cols, rows) = split_tiles(rgba, width as usize, height as usize);
+    let (ptiles, cols, rows) =
+        split_tiles_at(rgba, width as usize, height as usize, remap.alpha_threshold);
     let big_cols = cols.div_ceil(n);
     let big_rows = rows.div_ceil(n);
     let ncells = big_cols * big_rows;
@@ -207,39 +212,35 @@ fn import_obj_blocks(
     let (map_color, color_overflow) = global_remap(&ptiles);
     overflows.extend(color_overflow);
 
-    // Per-CELL palettes: one OAM entry = one palette, so all subtiles of a
-    // cell must share it.
-    let cell_pals: Vec<Vec<u16>> = (0..ncells)
+    // Per-CELL weighted histograms: one OAM entry = one palette, so all
+    // subtiles of a cell must share it.
+    let cell_hists: Vec<Vec<(u16, u32)>> = (0..ncells)
         .map(|k| {
             let (cy, cx) = (k / big_cols, k % big_cols);
-            let mut cs: Vec<u16> = Vec::new();
+            let mut m: BTreeMap<u16, u32> = BTreeMap::new();
             for sy in 0..n {
                 for sx in 0..n {
                     if let Some(t) = subtile(cy, cx, sy, sx) {
                         for c in t.iter().flatten() {
-                            cs.push(map_color(*c));
+                            *m.entry(map_color(*c)).or_default() += 1;
                         }
                     }
                 }
             }
-            cs.sort_unstable();
-            cs.dedup();
-            if cs.len() > CAP {
-                let hv: Vec<(u16, u32)> = cs.iter().map(|&c| (c, 1)).collect();
-                median_cut(&hv, CAP)
-            } else {
-                cs
-            }
+            m.into_iter().collect()
         })
         .collect();
 
-    let fit = region_fit(&cell_pals, 8, CAP);
+    let fit = fit_palettes(&cell_hists, 8, CAP);
     if fit.palettes_needed > 8 {
-        let remapped = cell_pals
+        let remapped = cell_hists
             .iter()
             .zip(&fit.assignment)
-            .filter(|(cp, &a)| {
-                !cp.is_empty() && cp.iter().any(|c| !fit.palettes[a as usize].contains(c))
+            .filter(|(ch, &a)| {
+                !ch.is_empty()
+                    && ch
+                        .iter()
+                        .any(|(c, _)| !fit.palettes[a as usize].contains(c))
             })
             .count();
         overflows.push(Overflow::Palettes {
@@ -247,6 +248,25 @@ fn import_obj_blocks(
             remapped_tiles: remapped,
         });
     }
+
+    // Dither-aware remap over the whole sheet: every 8x8 tile inherits its
+    // cell's palette assignment.
+    let tile_assignment: Vec<u8> = (0..rows * cols)
+        .map(|t| {
+            let (gy, gx) = (t / cols, t % cols);
+            fit.assignment[(gy / n) * big_cols + gx / n]
+        })
+        .collect();
+    let grids = remap_image(
+        rgba,
+        width as usize,
+        height as usize,
+        &fit.palettes,
+        &tile_assignment,
+        cols,
+        rows,
+        remap,
+    );
 
     // Name table = 512 8x8 tiles; each cell consumes n*n of them.
     let max_cells = 512 / (n * n);
@@ -269,20 +289,14 @@ fn import_obj_blocks(
     let mut char_words = vec![0u16; tile_rows * 16 * WORDS_PER_TILE];
     for k in 0..kept_cells {
         let (cy, cx) = (k / big_cols, k % big_cols);
-        let palette: &[u16] = fit
-            .palettes
-            .get(fit.assignment[k] as usize)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
         let base = base_of(k) as usize;
         for sy in 0..n {
             for sx in 0..n {
-                let grid: IndexTile = match subtile(cy, cx, sy, sx) {
-                    Some(pt) => std::array::from_fn(|i| match pt[i] {
-                        Some(c) if !palette.is_empty() => nearest(palette, map_color(c)) as u8 + 1,
-                        _ => 0,
-                    }),
-                    None => [0u8; 64],
+                let (gy, gx) = (cy * n + sy, cx * n + sx);
+                let grid: IndexTile = if gy < rows && gx < cols {
+                    grids[gy * cols + gx]
+                } else {
+                    [0u8; 64] // off-sheet subtile: transparent
                 };
                 let words = pack_planar(&grid, 4);
                 let slot = base + sy * 16 + sx;
@@ -346,7 +360,7 @@ mod tests {
 
     #[test]
     fn imports_two_obj_tiles_into_palette_8() {
-        let (src, meta) = import_obj_sheet(&two_tile_rgba(), 16, 8, 8);
+        let (src, meta) = import_obj_sheet(&two_tile_rgba(), 16, 8, 8, &RemapOptions::default());
         assert_eq!(src.palettes, vec![vec![0x001f, 0x7c00]]);
         assert_eq!(src.char_words.len(), 3 * 16);
         assert_eq!(&src.char_words[0..16], &[0u16; 16]);
@@ -382,7 +396,7 @@ mod tests {
 
     #[test]
     fn place_obj_writes_char_words_and_obj_cgram() {
-        let (src, _meta) = import_obj_sheet(&two_tile_rgba(), 16, 8, 8);
+        let (src, _meta) = import_obj_sheet(&two_tile_rgba(), 16, 8, 8, &RemapOptions::default());
         let mut mem = Memory::new();
         crate::source::place_obj(&src, &mut mem, 0x2000);
         assert_eq!(mem.vram[0x2000 + 16], 0x00ff);
@@ -404,7 +418,7 @@ mod tests {
                 }
             }
         }
-        let (_src, meta) = import_obj_sheet(&v, 16, 8, 8);
+        let (_src, meta) = import_obj_sheet(&v, 16, 8, 8, &RemapOptions::default());
         let crate::source::SourceReport::Obj { report } = &meta.report else {
             panic!("expected obj report");
         };
@@ -437,14 +451,19 @@ mod tests {
                 });
             }
         }
-        let (src, meta) = import_obj_sheet(&rgba, 16, 16, 8);
+        let (src, meta) = import_obj_sheet(&rgba, 16, 16, 8, &RemapOptions::default());
         assert_eq!(src.cell_size, 8);
         assert_eq!(meta.cells.as_ref().unwrap().len(), 4); // 4 source cells
                                                            // Every emitted tile is exactly 16 words (one 8x8 4bpp tile) — no size coupling.
         assert_eq!(src.char_words.len() % WORDS_PER_TILE, 0);
-        // The import signature takes (rgba, w, h, cell_size) and returns a source + meta pair.
-        let _f: fn(&[u8], u32, u32, u8) -> (crate::source::ObjSource, crate::source::SourceMeta) =
-            import_obj_sheet;
+        // The import signature takes (rgba, w, h, cell_size, remap) and returns a source + meta pair.
+        let _f: fn(
+            &[u8],
+            u32,
+            u32,
+            u8,
+            &RemapOptions,
+        ) -> (crate::source::ObjSource, crate::source::SourceMeta) = import_obj_sheet;
     }
 
     #[test]
@@ -458,7 +477,7 @@ mod tests {
                 rgba.extend_from_slice(&[q[0], q[1], q[2], 255]);
             }
         }
-        let (src, meta) = import_obj_sheet(&rgba, 16, 16, 16);
+        let (src, meta) = import_obj_sheet(&rgba, 16, 16, 16, &RemapOptions::default());
         assert_eq!(src.cell_size, 16);
         let cells = meta.cells.as_ref().unwrap();
         assert_eq!(cells.len(), 1);
@@ -490,7 +509,7 @@ mod tests {
                 rgba.extend_from_slice(&c);
             }
         }
-        let (_src, meta) = import_obj_sheet(&rgba, 32, 16, 16);
+        let (_src, meta) = import_obj_sheet(&rgba, 32, 16, 16, &RemapOptions::default());
         let cells = meta.cells.as_ref().unwrap();
         assert_eq!(cells.len(), 2);
         assert_eq!(cells[0].tile, 0);
@@ -509,7 +528,7 @@ mod tests {
                 rgba.extend_from_slice(&[q[0], q[1], q[2], 255]);
             }
         }
-        let (src, meta) = import_obj_sheet(&rgba, 16, 16, 16);
+        let (src, meta) = import_obj_sheet(&rgba, 16, 16, 16, &RemapOptions::default());
         assert_eq!(meta.cells.as_ref().unwrap()[0].pal, 0);
         assert_eq!(src.palettes.len(), 1);
         assert_eq!(src.palettes[0].len(), 4);
@@ -525,7 +544,7 @@ mod tests {
                 rgba.extend_from_slice(&[v, 255 - v, 128, 255]);
             }
         }
-        let (_src, meta) = import_obj_sheet(&rgba, 576, 64, 64);
+        let (_src, meta) = import_obj_sheet(&rgba, 576, 64, 64, &RemapOptions::default());
         let cells = meta.cells.as_ref().unwrap();
         assert_eq!(cells.len(), 9);
         assert_eq!(cells[8].tile, 0); // over budget -> honest fallback
@@ -540,7 +559,8 @@ mod tests {
 
     #[test]
     fn fully_transparent_sheet_is_blank() {
-        let (src, meta) = import_obj_sheet(&vec![0u8; 8 * 8 * 4], 8, 8, 8);
+        let (src, meta) =
+            import_obj_sheet(&vec![0u8; 8 * 8 * 4], 8, 8, 8, &RemapOptions::default());
         assert!(src.palettes.iter().all(|p| p.is_empty()));
         let crate::source::SourceReport::Obj { report } = &meta.report else {
             panic!("expected obj report");

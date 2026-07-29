@@ -94,20 +94,27 @@ fn overbudget_png_reports_palette_overflow_honestly() {
     assert_eq!(report.palettes_used, 8); // hard cap respected
     assert_eq!(
         report.overflows,
+        // The cluster-and-refine fit rebuilds sub-palettes toward least total
+        // error, so the 9th cell's colors spread across TWO palettes' worth of
+        // approximation instead of one exact-membership miss.
         vec![Overflow::Palettes {
             needed: 9,
-            remapped_tiles: 1
+            remapped_tiles: 2
         }]
     );
-    // every tile has the same index-grid relative to its own sorted palette,
-    // so char dedup collapses all 9 cells onto one stored tile
-    assert_eq!(report.unique_tiles, 1);
-    // cells 0..8 use palettes 0..7 then fall back to best-overlap palette 0
+    // Two cells share the rebuilt palette 0 (their grids differ once colors
+    // approximate: tiles 1 and 2); the other seven keep exact palettes and
+    // collapse onto one shared stored tile (3).
+    assert_eq!(report.unique_tiles, 3);
     for k in 0..9usize {
         let (ty, tx) = (k / 3, k % 3);
         let word = src.tilemap_words[ty * 32 + tx];
-        let pal = if k < 8 { k as u16 } else { 0 };
-        assert_eq!(word & 0x03ff, 1, "cell {k} tile#");
+        let (tile, pal) = match k {
+            0 => (1, 0),
+            1 => (2, 0),
+            _ => (3, k as u16 - 1),
+        };
+        assert_eq!(word & 0x03ff, tile, "cell {k} tile#");
         assert_eq!((word >> 10) & 7, pal, "cell {k} palette");
     }
     // sub-palettes stay within the 15-color capacity

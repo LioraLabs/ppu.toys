@@ -2,6 +2,7 @@
 //! `quantize`/`tiles` are the shared primitives Mode-7 and OBJ import reuse;
 //! this module's own surface is the tile-BG importer.
 
+pub mod dither;
 pub mod obj;
 pub mod quantize;
 pub mod tiles;
@@ -10,8 +11,9 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-use self::quantize::{median_cut, nearest, region_fit};
-use self::tiles::{pack_planar, split_tiles, IndexTile, TileSet};
+use self::dither::{remap_image, RemapOptions};
+use self::quantize::{fit_palettes, reduce_palette};
+use self::tiles::{pack_planar, split_tiles_at, TileSet};
 
 /// Importer input format. `bit_depth` comes from the target layer's slot in
 /// the mode table (`modes::mode_info`) — the BGMODE value itself is omitted
@@ -29,6 +31,8 @@ pub struct ImportOptions {
     /// Tile edge in px. Only 8 is packed today; 16 falls back to 8 and is
     /// reported as `Overflow::TileSize16`.
     pub tile_size: u8,
+    /// Remap-stage look: dither mode/strength + opacity cutoff.
+    pub remap: RemapOptions,
 }
 
 impl Default for ImportOptions {
@@ -36,6 +40,7 @@ impl Default for ImportOptions {
         ImportOptions {
             bit_depth: 4,
             tile_size: 8,
+            remap: RemapOptions::default(),
         }
     }
 }
@@ -117,9 +122,9 @@ pub fn import_tile_bg(
     };
 
     // 2. tile split (BGR555 + transparency happen here)
-    let (ptiles, cols, rows) = split_tiles(&cropped, w, h);
+    let (ptiles, cols, rows) = split_tiles_at(&cropped, w, h, opts.remap.alpha_threshold);
 
-    // 3. global color budget: sub-palettes x cap colors
+    // 3. global color budget: sub-palettes x cap colors (median-cut + k-means)
     let mut hist: BTreeMap<u16, u32> = BTreeMap::new();
     for t in &ptiles {
         for c in t.iter().flatten() {
@@ -133,36 +138,35 @@ pub fn import_tile_bg(
             budget,
         });
         let hv: Vec<(u16, u32)> = hist.iter().map(|(&c, &n)| (c, n)).collect();
-        Some(median_cut(&hv, budget))
+        Some(reduce_palette(&hv, budget))
     } else {
         None
     };
-    let map_color = |c: u16| global.as_ref().map_or(c, |g| g[nearest(g, c)]);
+    let map_color = |c: u16| global.as_ref().map_or(c, |g| g[quantize::nearest(g, c)]);
 
-    // 4. per-tile palettes (sorted unique; median-cut any single tile over cap)
-    let tile_pals: Vec<Vec<u16>> = ptiles
+    // 4. per-tile weighted histograms of budgeted colors (sorted by color)
+    let tile_hists: Vec<Vec<(u16, u32)>> = ptiles
         .iter()
         .map(|t| {
-            let mut cs: Vec<u16> = t.iter().flatten().map(|&c| map_color(c)).collect();
-            cs.sort_unstable();
-            cs.dedup();
-            if cs.len() > cap {
-                let hv: Vec<(u16, u32)> = cs.iter().map(|&c| (c, 1)).collect();
-                median_cut(&hv, cap)
-            } else {
-                cs
+            let mut m: BTreeMap<u16, u32> = BTreeMap::new();
+            for c in t.iter().flatten() {
+                *m.entry(map_color(*c)).or_default() += 1;
             }
+            m.into_iter().collect()
         })
         .collect();
 
-    // 5. region fit into the target sub-palette count
-    let fit = region_fit(&tile_pals, palette_count, cap);
+    // 5. cluster-and-refine fit into the target sub-palette count
+    let fit = fit_palettes(&tile_hists, palette_count, cap);
     if fit.palettes_needed > palette_count {
-        let remapped = tile_pals
+        let remapped = tile_hists
             .iter()
             .zip(&fit.assignment)
-            .filter(|(tp, &a)| {
-                !tp.is_empty() && tp.iter().any(|c| !fit.palettes[a as usize].contains(c))
+            .filter(|(th, &a)| {
+                !th.is_empty()
+                    && th
+                        .iter()
+                        .any(|(c, _)| !fit.palettes[a as usize].contains(c))
             })
             .count();
         overflows.push(Overflow::Palettes {
@@ -171,24 +175,26 @@ pub fn import_tile_bg(
         });
     }
 
-    // 6. index remap + flip-aware dedup; tile 0 reserved blank so padding and
-    //    dropped cells are honestly transparent
+    // 6. dither-aware index remap (against the ORIGINAL 8-bit pixels) +
+    //    flip-aware dedup; tile 0 reserved blank so padding and dropped cells
+    //    are honestly transparent
+    let grids = remap_image(
+        &cropped,
+        w,
+        h,
+        &fit.palettes,
+        &fit.assignment,
+        cols,
+        rows,
+        &opts.remap,
+    );
     let words_per_tile = bpp as usize * 4;
     let max_tiles = 1024usize; // 10-bit tilemap tile field — placement-fit is a bind-time concern
     let mut set = TileSet::new(true);
     set.insert([0u8; 64]);
-    let mut cells: Vec<u16> = Vec::with_capacity(ptiles.len());
-    for (pt, &pal) in ptiles.iter().zip(&fit.assignment) {
-        let palette: &[u16] = fit
-            .palettes
-            .get(pal as usize)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
-        let grid: IndexTile = std::array::from_fn(|i| match pt[i] {
-            Some(c) if !palette.is_empty() => nearest(palette, map_color(c)) as u8 + 1,
-            _ => 0,
-        });
-        let (n, hf, vf) = set.insert(grid);
+    let mut cells: Vec<u16> = Vec::with_capacity(grids.len());
+    for (grid, &pal) in grids.iter().zip(&fit.assignment) {
+        let (n, hf, vf) = set.insert(*grid);
         let word = if (n as usize) >= max_tiles {
             0 // over char budget: blank cell (reported below, never mangled)
         } else {
