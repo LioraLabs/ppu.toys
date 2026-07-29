@@ -15,7 +15,10 @@ import { addHeart, goToSignIn, removeHeart } from "../api/apiClient";
 
 const card = makeWallCard();
 
-afterEach(() => { cleanup(); vi.clearAllMocks(); });
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
 
 function renderCard(props = {}) {
   return render(
@@ -51,14 +54,20 @@ describe("ToyCard", () => {
 
   it("un-hearts an already-hearted card", async () => {
     render(
-      <MemoryRouter><ToyCard card={makeWallCard({ hearted: true })} signedIn /></MemoryRouter>,
+      <MemoryRouter>
+        <ToyCard card={makeWallCard({ hearted: true })} signedIn />
+      </MemoryRouter>,
     );
     fireEvent.click(screen.getByRole("button", { name: /heart/i }));
     expect(removeHeart).toHaveBeenCalledWith("abc123");
   });
 
   it("routes a signed-out heart to sign-in instead of mutating", () => {
-    render(<MemoryRouter><ToyCard card={card} signedIn={false} /></MemoryRouter>);
+    render(
+      <MemoryRouter>
+        <ToyCard card={card} signedIn={false} />
+      </MemoryRouter>,
+    );
     fireEvent.click(screen.getByRole("button", { name: /sign in to heart/i }));
     expect(goToSignIn).toHaveBeenCalled();
     expect(addHeart).not.toHaveBeenCalled();

@@ -22,7 +22,12 @@ export default defineConfig({
         target,
         changeOrigin: true,
         configure: cookie
-          ? (proxy: { on: (ev: string, cb: (proxyReq: { setHeader: (k: string, v: string) => void }) => void) => void }) => {
+          ? (proxy: {
+              on: (
+                ev: string,
+                cb: (proxyReq: { setHeader: (k: string, v: string) => void }) => void,
+              ) => void;
+            }) => {
               proxy.on("proxyReq", (proxyReq) => proxyReq.setHeader("cookie", cookie));
             }
           : undefined,

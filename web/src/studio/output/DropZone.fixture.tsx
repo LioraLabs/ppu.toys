@@ -6,7 +6,10 @@ import "../studio.css";
 // no asset pipeline on the render path. The drag-over highlight is local UI
 // state; the convert/register work lives in DropZoneWired (see OutputCanvas).
 const log = (files: FileList | File[]) =>
-  console.log("DropZone onFiles:", Array.from(files).map((f) => f.name));
+  console.log(
+    "DropZone onFiles:",
+    Array.from(files).map((f) => f.name),
+  );
 
 const Default = () => (
   <div style={{ display: "flex", width: 260 }}>

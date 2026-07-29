@@ -59,9 +59,27 @@ describe("ppuCompletions", () => {
 describe("M8 DSL audit", () => {
   it("offers window/color-math/screen registers and vram as globals", () => {
     const labels = complete("W")!.options.map((o) => o.label);
-    for (const g of ["TM", "TS", "WH0", "WH1", "WH2", "WH3", "W12SEL", "W34SEL",
-      "WOBJSEL", "WBGLOG", "WOBJLOG", "TMW", "TSW", "CGWSEL", "CGADSUB", "COLDATA",
-      "coldata", "m7pixel", "vram"]) {
+    for (const g of [
+      "TM",
+      "TS",
+      "WH0",
+      "WH1",
+      "WH2",
+      "WH3",
+      "W12SEL",
+      "W34SEL",
+      "WOBJSEL",
+      "WBGLOG",
+      "WOBJLOG",
+      "TMW",
+      "TSW",
+      "CGWSEL",
+      "CGADSUB",
+      "COLDATA",
+      "coldata",
+      "m7pixel",
+      "vram",
+    ]) {
       expect(labels).toContain(g);
     }
   });
@@ -77,8 +95,17 @@ describe("M8 DSL audit", () => {
 
   it("offers bg[n]. layer members", () => {
     const labels = complete("bg[1].")!.options.map((o) => o.label);
-    for (const m of ["scroll", "source", "visible", "tile_size", "map_base",
-      "screen_size", "char_base", "mosaic", "map"]) {
+    for (const m of [
+      "scroll",
+      "source",
+      "visible",
+      "tile_size",
+      "map_base",
+      "screen_size",
+      "char_base",
+      "mosaic",
+      "map",
+    ]) {
       expect(labels).toContain(m);
     }
     expect(labels).not.toContain("brightness");

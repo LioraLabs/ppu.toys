@@ -25,17 +25,27 @@ export function CoreStage({ children }: { children: ReactNode }) {
     let live = true;
     (corePromise ??= initCore())
       .then(() => live && setReady(true))
-      .catch((reason) => live && setError(reason instanceof Error ? reason.message : String(reason)));
+      .catch(
+        (reason) => live && setError(reason instanceof Error ? reason.message : String(reason)),
+      );
     return () => {
       live = false;
     };
   }, []);
 
   if (error) {
-    return <div style={{ padding: 16, fontFamily: "system-ui", color: "#ff5d6a" }}>PPU core failed to load: {error}</div>;
+    return (
+      <div style={{ padding: 16, fontFamily: "system-ui", color: "#ff5d6a" }}>
+        PPU core failed to load: {error}
+      </div>
+    );
   }
   if (!ready) {
-    return <div style={{ padding: 16, fontFamily: "system-ui", color: "var(--mid, #9aa1ae)" }}>Booting the PPU core…</div>;
+    return (
+      <div style={{ padding: 16, fontFamily: "system-ui", color: "var(--mid, #9aa1ae)" }}>
+        Booting the PPU core…
+      </div>
+    );
   }
   return <>{children}</>;
 }

@@ -9,7 +9,13 @@ const pct = (words: number) => `${(words / 0x8000) * 100}%`;
 /** Full-width VRAM address-space bar: char regions on the top lane, map regions
  *  on the bottom (live-derived regions may overlap — two lanes keep both
  *  readable). Hover outlines; click copies the region's base address. */
-export function VramBar({ regions, onCopy }: { regions: VramRegion[]; onCopy: (label: string) => void }) {
+export function VramBar({
+  regions,
+  onCopy,
+}: {
+  regions: VramRegion[];
+  onCopy: (label: string) => void;
+}) {
   return (
     <div className="tm-vrambar">
       {regions.map((r) => (
@@ -20,7 +26,11 @@ export function VramBar({ regions, onCopy }: { regions: VramRegion[]; onCopy: (l
             "tm-vramregion" +
             (r.id === "m7" ? " tm-vramregion--full" : r.kind === "map" ? " tm-vramregion--map" : "")
           }
-          style={{ left: pct(r.start), width: pct(Math.max(r.end - r.start, 64)), background: r.color }}
+          style={{
+            left: pct(r.start),
+            width: pct(Math.max(r.end - r.start, 64)),
+            background: r.color,
+          }}
           title={`${r.label} ${formatAddr(r.start)}–${formatAddr(Math.max(r.end - 1, r.start))} · ${r.usage}`}
           onClick={() => onCopy(formatAddr(r.start))}
         />
@@ -30,7 +40,13 @@ export function VramBar({ regions, onCopy }: { regions: VramRegion[]; onCopy: (l
 }
 
 /** Wrapping legend; each row copies its region's base address. */
-export function VramLegend({ regions, onCopy }: { regions: VramRegion[]; onCopy: (label: string) => void }) {
+export function VramLegend({
+  regions,
+  onCopy,
+}: {
+  regions: VramRegion[];
+  onCopy: (label: string) => void;
+}) {
   return (
     <div className="tm-legend">
       {regions.map((r) => (
@@ -76,7 +92,10 @@ function CgramRow({
 }) {
   return (
     <>
-      <span className={"tm-cgowner" + (owner.used ? "" : " tm-cgowner--unused")} title={owner.label}>
+      <span
+        className={"tm-cgowner" + (owner.used ? "" : " tm-cgowner--unused")}
+        title={owner.label}
+      >
         {owner.label}
       </span>
       {Array.from({ length: 16 }, (_, col) => {
@@ -90,7 +109,9 @@ function CgramRow({
               title={cgLabel(i)}
               onClick={() => onOpen(i)}
             />
-            {open === i && <CgramPoke index={i} current={cgram[i] ?? 0} onClose={() => onOpen(null)} />}
+            {open === i && (
+              <CgramPoke index={i} current={cgram[i] ?? 0} onClose={() => onOpen(null)} />
+            )}
           </span>
         );
       })}

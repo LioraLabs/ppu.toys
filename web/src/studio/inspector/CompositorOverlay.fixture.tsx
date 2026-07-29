@@ -11,7 +11,11 @@ import "../pokes/pokes.css";
 // path. makeFixtureCompositor derives a Compositor from a fixture FrameResult
 // via the pure liveReg reader; writes are inert no-ops. Renders wasm-free.
 const Default = () => (
-  <CompositorOverlay onCollapse={() => {}} c={makeFixtureCompositor(frameResult)} screens={frameScreens} />
+  <CompositorOverlay
+    onCollapse={() => {}}
+    c={makeFixtureCompositor(frameResult)}
+    screens={frameScreens}
+  />
 );
 
 export default {

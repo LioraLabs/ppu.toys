@@ -99,7 +99,11 @@ export function wrapWasmCore(core: WasmCoreLike): PpuCore {
     traceObj(index: number): ObjTrace | null {
       return (core.traceObj(index) as ObjTrace | null | undefined) ?? null;
     },
-    convertSource(kind: SourceKind, options: ConvertSourceOptions, imageData: ImageData): ConvertSourceResult {
+    convertSource(
+      kind: SourceKind,
+      options: ConvertSourceOptions,
+      imageData: ImageData,
+    ): ConvertSourceResult {
       return core.convertSource(kind, options, imageData) as ConvertSourceResult;
     },
     addSource(name: string, payload: Uint8Array) {

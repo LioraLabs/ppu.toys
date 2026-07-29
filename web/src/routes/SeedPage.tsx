@@ -12,11 +12,11 @@ const BLURBS: Record<string, string> = {
   "mode7-floor": "The namesake: a per-scanline affine Mode 7 floor.",
   "offset-per-tile": "Mode 2 offset-per-tile — BG3's table drives per-column scroll.",
   "mode3-gradient": "Mode 3's 8bpp 256-colour BG in one smooth gradient.",
-  "translucency": "Half-add colour math: a glass panel over a scrolling BG.",
-  "spotlight": "Window masking as a moving spotlight iris.",
-  "glow": "Additive colour math bloom.",
+  translucency: "Half-add colour math: a glass panel over a scrolling BG.",
+  spotlight: "Window masking as a moving spotlight iris.",
+  glow: "Additive colour math bloom.",
   "sprite-storm": "128 sprites vs the real per-line limits — authentic flicker.",
-  "mosaic": "The $2106 mosaic effect, per-BG.",
+  mosaic: "The $2106 mosaic effect, per-BG.",
   "mode7-extbg": "Mode 7 EXTBG: per-pixel priority splits the plane in two.",
   "direct-color": "8bpp direct colour — BGR233 straight from the pixel byte.",
 };
@@ -77,9 +77,18 @@ export function SeedPage() {
       <Studio />
       <div
         style={{
-          position: "fixed", top: 60, right: 12, zIndex: 100, width: 340,
-          background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 8,
-          padding: 12, fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--txt2)",
+          position: "fixed",
+          top: 60,
+          right: 12,
+          zIndex: 100,
+          width: 340,
+          background: "var(--panel)",
+          border: "1px solid var(--line)",
+          borderRadius: 8,
+          padding: 12,
+          fontFamily: "var(--font-mono)",
+          fontSize: 11,
+          color: "var(--txt2)",
         }}
       >
         <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>

@@ -106,14 +106,19 @@ describe("poke wiring", () => {
   it("the HexPoke path (poke + regPoke) evicts too — hex-editing a register wins over stale fields", () => {
     poke(fieldPoke(toggleDesignation("screen.main.bg3", REG.TM, 0x1f, 2)));
     poke(regPoke(REG.TM, 0x13)); // what HexPoke commits
-    expect(currentPokes(openSketchStore.state())).toEqual([{ lvalue: "TM", expr: "0x13", note: "$212C" }]);
+    expect(currentPokes(openSketchStore.state())).toEqual([
+      { lvalue: "TM", expr: "0x13", note: "$212C" },
+    ]);
   });
 
   it("unmapped lvalues (cgram[...]) survive eviction on any register", () => {
     poke({ lvalue: "cgram[0x41]", expr: "0x7fff" });
     poke(regPoke(REG.CGADSUB, 0x80));
     // parsed back in file order — the codepoint sort puts uppercase mnemonics first
-    expect(currentPokes(openSketchStore.state()).map((p) => p.lvalue)).toEqual(["CGADSUB", "cgram[0x41]"]);
+    expect(currentPokes(openSketchStore.state()).map((p) => p.lvalue)).toEqual([
+      "CGADSUB",
+      "cgram[0x41]",
+    ]);
   });
 
   it("the persisted setting picks the emission dialect: default friendly", () => {
@@ -134,7 +139,9 @@ describe("poke wiring", () => {
     compositorWrite([setMathOp("add", 0x00)]); // friendly (default)
     pokeDialect.set("raw");
     compositorWrite([setMathOp("sub", 0x00)]);
-    expect(currentPokes(openSketchStore.state())).toEqual([{ lvalue: "CGADSUB", expr: "0x80", note: "$2131" }]);
+    expect(currentPokes(openSketchStore.state())).toEqual([
+      { lvalue: "CGADSUB", expr: "0x80", note: "$2131" },
+    ]);
   });
 });
 
@@ -158,6 +165,8 @@ describe("pokeMatchesLive (solid/hollow marker decision)", () => {
 
   it("friendly field poke: solid against the power-on default, hollow after a script override", () => {
     expect(pokeMatchesLive({ lvalue: "screen.main.bg3", expr: "true" }, [])).toBe(true); // TM=0x1f
-    expect(pokeMatchesLive({ lvalue: "screen.main.bg3", expr: "true" }, [rv(REG.TM, "TM", 0x1b)])).toBe(false);
+    expect(
+      pokeMatchesLive({ lvalue: "screen.main.bg3", expr: "true" }, [rv(REG.TM, "TM", 0x1b)]),
+    ).toBe(false);
   });
 });

@@ -52,7 +52,10 @@
   overflow-y: auto;
   flex: 1;
 }
-.library-list--demos { flex: none; max-height: 45%; }
+.library-list--demos {
+  flex: none;
+  max-height: 45%;
+}
 .library-section {
   padding: 10px 12px 2px;
   font-family: var(--font-mono);

@@ -2,7 +2,16 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import "fake-indexeddb/auto";
 import { openSketchStore, openContextFiles } from "../sketches/openSketch";
 import { POKES_FILE } from "./pokes";
-import { currentPokes, poke, pokeMany, unpoke, unpokeMany, clearPokes, hasApplyCall, setDialect } from "./pokeStore";
+import {
+  currentPokes,
+  poke,
+  pokeMany,
+  unpoke,
+  unpokeMany,
+  clearPokes,
+  hasApplyCall,
+  setDialect,
+} from "./pokeStore";
 import { pokeDialect } from "../inspector/compose/dialect";
 
 describe("pokeStore", () => {
@@ -10,9 +19,13 @@ describe("pokeStore", () => {
 
   it("poke writes an lvalue into pokes.lua via editFile and parses back", () => {
     poke({ lvalue: "TM", expr: "0x13", note: "$212C" });
-    const src = openContextFiles(openSketchStore.state()).find((f) => f.name === POKES_FILE)!.source;
+    const src = openContextFiles(openSketchStore.state()).find(
+      (f) => f.name === POKES_FILE,
+    )!.source;
     expect(src).toContain("  TM = 0x13 -- $212C");
-    expect(currentPokes(openSketchStore.state())).toEqual([{ lvalue: "TM", expr: "0x13", note: "$212C" }]);
+    expect(currentPokes(openSketchStore.state())).toEqual([
+      { lvalue: "TM", expr: "0x13", note: "$212C" },
+    ]);
   });
 
   it("poking keeps pokes.lua at index 0 (reservation survives editFile)", () => {

@@ -162,7 +162,10 @@ export function regeneratePokes(pokes: readonly Poke[], dialect: PokeDialect): P
     bytes.get(addr) ?? bytes.set(addr, POWER_ON.get(addr) ?? 0).get(addr)!;
   for (const p of pokes) {
     const t = pokeTarget(p);
-    if (!t) { passthrough.push(p); continue; }
+    if (!t) {
+      passthrough.push(p);
+      continue;
+    }
     if (t.raw) {
       const v = Number(p.expr);
       if (!Number.isNaN(v)) bytes.set(t.addr, v);
@@ -174,17 +177,20 @@ export function regeneratePokes(pokes: readonly Poke[], dialect: PokeDialect): P
   }
   const out: Poke[] = [];
   for (const [addr, value] of bytes) {
-    if (dialect === "raw") { out.push(regPoke(addr, value)); continue; }
-    const read: ReadReg = (a) => (a === addr ? value : POWER_ON.get(a) ?? 0);
+    if (dialect === "raw") {
+      out.push(regPoke(addr, value));
+      continue;
+    }
+    const read: ReadReg = (a) => (a === addr ? value : (POWER_ON.get(a) ?? 0));
     for (const [field, spec] of FIELD_SPECS) {
       if (spec.addr !== addr) continue;
       const decoded = spec.live(read);
       const expr =
         WH_FIELDS[addr] === field
           ? String(decoded)
-          // match setFixedColor's 4-hex-digit pad so a raw->friendly->raw
-          // round-trip via a control re-poke doesn't churn the RHS
-          : field === "color.fixed"
+          : // match setFixedColor's 4-hex-digit pad so a raw->friendly->raw
+            // round-trip via a control re-poke doesn't churn the RHS
+            field === "color.fixed"
             ? `0x${(decoded as number).toString(16).padStart(4, "0")}`
             : formatFieldValue(decoded);
       out.push({ lvalue: field, expr, note: `$${addr.toString(16).toUpperCase()}` });
@@ -228,7 +234,12 @@ export const COMPOSE_LAYERS: ComposeLayer[] = [
 export const BACKDROP_MATH_BIT = 5;
 
 /** Flip one TM/TS/CGADSUB designation bit as a friendly bool field write. */
-export function toggleDesignation(field: string, addr: number, current: number, bit: number): FieldWrite {
+export function toggleDesignation(
+  field: string,
+  addr: number,
+  current: number,
+  bit: number,
+): FieldWrite {
   const on = (current & (1 << bit)) === 0;
   return { field, expr: bool(on), addr, value: current ^ (1 << bit) };
 }
@@ -268,11 +279,21 @@ export function setMathOp(op: MathOp, cgadsub: number): FieldWrite {
 }
 
 export function setMathHalf(half: boolean, cgadsub: number): FieldWrite {
-  return { field: "color.half", expr: bool(half), addr: REG.CGADSUB, value: withMathHalf(cgadsub, half) };
+  return {
+    field: "color.half",
+    expr: bool(half),
+    addr: REG.CGADSUB,
+    value: withMathHalf(cgadsub, half),
+  };
 }
 
 export function setMathAddend(addend: MathAddend, cgwsel: number): FieldWrite {
-  return { field: "color.addend", expr: str(addend), addr: REG.CGWSEL, value: withMathAddend(cgwsel, addend) };
+  return {
+    field: "color.addend",
+    expr: str(addend),
+    addr: REG.CGWSEL,
+    value: withMathAddend(cgwsel, addend),
+  };
 }
 
 export function setFixedColor(bgr555: number): FieldWrite {
@@ -343,7 +364,12 @@ const WH_FIELDS: Readonly<Record<number, string>> = {
 /** Friendly window-layer geometry — mirrors the Rust core's WIN_LAYERS
  *  (includes bg4, which has registers but no UI row). */
 const WIN_FIELD_LAYERS: {
-  id: string; selAddr: number; shift: 0 | 4; logAddr: number; logShift: number; tmwBit?: number;
+  id: string;
+  selAddr: number;
+  shift: 0 | 4;
+  logAddr: number;
+  logShift: number;
+  tmwBit?: number;
 }[] = [
   { id: "bg1", selAddr: REG.W12SEL, shift: 0, logAddr: REG.WBGLOG, logShift: 0, tmwBit: 0 },
   { id: "bg2", selAddr: REG.W12SEL, shift: 4, logAddr: REG.WBGLOG, logShift: 2, tmwBit: 1 },
@@ -412,14 +438,16 @@ export function toggleWindowEnable(layer: WindowLayer, read: ReadReg): FieldWrit
 /** Toggle a row's invert (both windows' invert bits at once). */
 export function toggleWindowInvert(layer: WindowLayer, read: ReadReg): FieldWrite[] {
   const on = !windowRow(layer, read).inverted;
-  return [{
-    // lossy on purpose: the friendly field drives BOTH invert bits, exactly
-    // like this control always has; a lone invert bit stays raw-only
-    field: `win.${layer.id}.invert`,
-    expr: bool(on),
-    addr: layer.selAddr,
-    value: withNibbleBits(read(layer.selAddr), layer.shift, INVERT_BITS, on),
-  }];
+  return [
+    {
+      // lossy on purpose: the friendly field drives BOTH invert bits, exactly
+      // like this control always has; a lone invert bit stays raw-only
+      field: `win.${layer.id}.invert`,
+      expr: bool(on),
+      addr: layer.selAddr,
+      value: withNibbleBits(read(layer.selAddr), layer.shift, INVERT_BITS, on),
+    },
+  ];
 }
 
 // ── Combine + area segmenteds ────────────────────────────────────────────────
@@ -486,7 +514,10 @@ export function setWindowEdge(addr: number, x: number): FieldWrite {
 /** Field groups the section-header PokeDots key on. */
 export const SCREEN_MAIN_FIELDS = COMPOSE_LAYERS.map((l) => `screen.main.${l.id}`);
 export const SCREEN_SUB_FIELDS = COMPOSE_LAYERS.map((l) => `screen.sub.${l.id}`);
-export const MATH_ENABLE_FIELDS = [...COMPOSE_LAYERS.map((l) => `color.on.${l.id}`), "color.on.backdrop"];
+export const MATH_ENABLE_FIELDS = [
+  ...COMPOSE_LAYERS.map((l) => `color.on.${l.id}`),
+  "color.on.backdrop",
+];
 export const OPERATION_FIELDS = ["color.op", "color.half"];
 export const ADDEND_FIELDS = ["color.addend"];
 export const FIXED_FIELDS = ["color.fixed"];
@@ -521,16 +552,31 @@ type FieldValue = string | number | boolean;
  *  never owns CGWSEL; the color window has no TMW/TSW bit). */
 export const FIELD_SPECS: ReadonlyMap<
   string,
-  { addr: number; live: (read: ReadReg) => FieldValue; encode: (cur: number, v: FieldValue) => number }
+  {
+    addr: number;
+    live: (read: ReadReg) => FieldValue;
+    encode: (cur: number, v: FieldValue) => number;
+  }
 > = buildFieldSpecs();
 
 function buildFieldSpecs() {
   const m = new Map<
     string,
-    { addr: number; live: (read: ReadReg) => FieldValue; encode: (cur: number, v: FieldValue) => number }
+    {
+      addr: number;
+      live: (read: ReadReg) => FieldValue;
+      encode: (cur: number, v: FieldValue) => number;
+    }
   >();
-  const setBit = (cur: number, bit: number, on: boolean) => (on ? cur | (1 << bit) : cur & ~(1 << bit));
-  const layerBits: [string, number][] = [["bg1", 0], ["bg2", 1], ["bg3", 2], ["bg4", 3], ["obj", 4]];
+  const setBit = (cur: number, bit: number, on: boolean) =>
+    on ? cur | (1 << bit) : cur & ~(1 << bit);
+  const layerBits: [string, number][] = [
+    ["bg1", 0],
+    ["bg2", 1],
+    ["bg3", 2],
+    ["bg4", 3],
+    ["obj", 4],
+  ];
   for (const [id, bit] of layerBits) {
     m.set(`screen.main.${id}`, {
       addr: REG.TM,
@@ -591,18 +637,21 @@ function buildFieldSpecs() {
     m.set(`win.${l.id}.w1`, {
       addr: l.selAddr,
       live: (r) => (nib(r) & W1_ENABLE) !== 0,
-      encode: (cur, v) => (cur & ~(W1_ENABLE << l.shift)) | ((v as boolean) ? W1_ENABLE << l.shift : 0),
+      encode: (cur, v) =>
+        (cur & ~(W1_ENABLE << l.shift)) | ((v as boolean) ? W1_ENABLE << l.shift : 0),
     });
     m.set(`win.${l.id}.w2`, {
       addr: l.selAddr,
       live: (r) => (nib(r) & W2_ENABLE) !== 0,
-      encode: (cur, v) => (cur & ~(W2_ENABLE << l.shift)) | ((v as boolean) ? W2_ENABLE << l.shift : 0),
+      encode: (cur, v) =>
+        (cur & ~(W2_ENABLE << l.shift)) | ((v as boolean) ? W2_ENABLE << l.shift : 0),
     });
     // lossy shared decode, mirrors the core: true if EITHER invert bit is set
     m.set(`win.${l.id}.invert`, {
       addr: l.selAddr,
       live: (r) => (nib(r) & INVERT_BITS) !== 0,
-      encode: (cur, v) => (cur & ~(INVERT_BITS << l.shift)) | ((v as boolean) ? INVERT_BITS << l.shift : 0),
+      encode: (cur, v) =>
+        (cur & ~(INVERT_BITS << l.shift)) | ((v as boolean) ? INVERT_BITS << l.shift : 0),
     });
     m.set(`win.${l.id}.combine`, {
       addr: l.logAddr,

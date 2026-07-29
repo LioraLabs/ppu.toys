@@ -26,13 +26,12 @@ function ResolutionChainNote() {
   return (
     <div className="tm-chain">
       <div className="tm-note">
-        The Stage 1–5 resolution-chain canvases (SOURCE minimap, CHAR tile,
-        SUB-PALETTE, CGRAM COLOR, OUTPUT) are produced by the live
-        rasterizer — ppuCore.layerView / traceBgPixel / traceObj — for the
-        selected pixel/sprite. They can't be rendered from a static fixture
-        without mocking the whole PpuCore (a spec non-goal), so the chain is
-        exercised in-app rather than storied. The controls above
-        (plane/mode/caption) are the wasm-free chrome and are storied here.
+        The Stage 1–5 resolution-chain canvases (SOURCE minimap, CHAR tile, SUB-PALETTE, CGRAM
+        COLOR, OUTPUT) are produced by the live rasterizer — ppuCore.layerView / traceBgPixel /
+        traceObj — for the selected pixel/sprite. They can't be rendered from a static fixture
+        without mocking the whole PpuCore (a spec non-goal), so the chain is exercised in-app rather
+        than storied. The controls above (plane/mode/caption) are the wasm-free chrome and are
+        storied here.
       </div>
     </div>
   );

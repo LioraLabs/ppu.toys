@@ -66,26 +66,47 @@ export function PublishDialog({ onClose, save }: PublishDialogProps) {
 
   return (
     <div className="cloud-scrim" onClick={close}>
-      <div className="cloud-dialog" role="dialog" aria-label="Publish" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="cloud-dialog"
+        role="dialog"
+        aria-label="Publish"
+        onClick={(e) => e.stopPropagation()}
+      >
         <header className="cloud-head">
           <span className="cloud-title">Publish</span>
-          <button type="button" className="btn-ghost" onClick={close} disabled={busy} aria-label="Close">
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={close}
+            disabled={busy}
+            aria-label="Close"
+          >
             ×
           </button>
         </header>
 
         <div className="cloud-body">
           <p className="cloud-explainer">
-            Publishing records a short loop clip of your toy and puts it on the
-            public wall, playable by anyone at its own link.
+            Publishing records a short loop clip of your toy and puts it on the public wall,
+            playable by anyone at its own link.
           </p>
           <label className="cloud-field">
             Title
-            <input type="text" value={title} disabled={busy} onChange={(e) => setTitle(e.target.value)} />
+            <input
+              type="text"
+              value={title}
+              disabled={busy}
+              onChange={(e) => setTitle(e.target.value)}
+            />
           </label>
           <label className="cloud-field">
             Description
-            <textarea value={description} disabled={busy} rows={3} onChange={(e) => setDescription(e.target.value)} />
+            <textarea
+              value={description}
+              disabled={busy}
+              rows={3}
+              onChange={(e) => setDescription(e.target.value)}
+            />
           </label>
 
           {error && <div className="cloud-error">{error}</div>}
@@ -95,7 +116,12 @@ export function PublishDialog({ onClose, save }: PublishDialogProps) {
             <button type="button" className="btn-ghost" onClick={close} disabled={busy}>
               Cancel
             </button>
-            <button type="button" className="btn-solid" disabled={busy || !title.trim()} onClick={() => void publish()}>
+            <button
+              type="button"
+              className="btn-solid"
+              disabled={busy || !title.trim()}
+              onClick={() => void publish()}
+            >
               {PHASE_LABEL[phase]}
             </button>
           </div>

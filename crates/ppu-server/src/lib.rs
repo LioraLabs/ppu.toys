@@ -1,12 +1,12 @@
+pub mod admin;
+pub mod auth;
+pub mod blobs;
 pub mod config;
 pub mod db;
 pub mod error;
-pub mod state;
-pub mod blobs;
-pub mod auth;
-pub mod toys;
 pub mod hearts;
-pub mod admin;
+pub mod state;
+pub mod toys;
 pub mod web;
 
 use axum::extract::DefaultBodyLimit;
@@ -16,7 +16,10 @@ use state::AppState;
 
 pub fn build_router(state: AppState) -> Router {
     let api = Router::new()
-        .route("/health", get(|| async { axum::Json(serde_json::json!({ "ok": true })) }))
+        .route(
+            "/health",
+            get(|| async { axum::Json(serde_json::json!({ "ok": true })) }),
+        )
         .merge(auth::routes())
         .merge(toys::routes())
         .merge(hearts::routes())

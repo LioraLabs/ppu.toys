@@ -1,5 +1,12 @@
 .player {
-  width: 100%; aspect-ratio: 256 / 224; background: #000;
-  display: flex; align-items: center; justify-content: center; overflow: hidden;
+  width: 100%;
+  aspect-ratio: 256 / 224;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
 }
-.player-canvas { image-rendering: pixelated; }
+.player-canvas {
+  image-rendering: pixelated;
+}

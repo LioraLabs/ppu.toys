@@ -13,7 +13,9 @@ describe("objOverflowBadges", () => {
     ).toEqual(["RANGE OVER"]);
   });
   it("emits nothing when clear or undefined", () => {
-    expect(objOverflowBadges({ rangeOver: false, timeOver: false, maxSprites: 5, maxTiles: 5 })).toEqual([]);
+    expect(
+      objOverflowBadges({ rangeOver: false, timeOver: false, maxSprites: 5, maxTiles: 5 }),
+    ).toEqual([]);
     expect(objOverflowBadges(undefined)).toEqual([]);
   });
 });

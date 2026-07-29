@@ -15,10 +15,25 @@ import type { SketchSource } from "./sketchStore";
 
 function src(name: string, byte = 1): SketchSource {
   return {
-    name, kind: "bg", options: { bit_depth: 4 }, payload: new Uint8Array([byte]),
-    meta: { width: 8, height: 8, report: { mode: "tile", report: {
-      colors_used: 0, palettes_used: 0, tile_cells: 0, unique_tiles: 0, vram_words: 0, overflows: [],
-    } } },
+    name,
+    kind: "bg",
+    options: { bit_depth: 4 },
+    payload: new Uint8Array([byte]),
+    meta: {
+      width: 8,
+      height: 8,
+      report: {
+        mode: "tile",
+        report: {
+          colors_used: 0,
+          palettes_used: 0,
+          tile_cells: 0,
+          unique_tiles: 0,
+          vram_words: 0,
+          overflows: [],
+        },
+      },
+    },
   };
 }
 
@@ -37,11 +52,7 @@ afterEach(() => {
 
 describe("sketchStore CRUD", () => {
   it("creates and loads a sketch, round-tripping files and source bytes", async () => {
-    const made = await createSketch(
-      "dusk",
-      [{ name: "main.lua", source: "-- hi" }],
-      [src("sky")],
-    );
+    const made = await createSketch("dusk", [{ name: "main.lua", source: "-- hi" }], [src("sky")]);
     const loaded = await loadSketch(made.id);
     expect(loaded).toBeDefined();
     expect(loaded!.name).toBe("dusk");
@@ -99,7 +110,8 @@ describe("sketchStore CRUD", () => {
     const made = await createSketch("legacy", [{ name: "main.lua", source: "-- x" }]);
     // simulate a pre-M10 record: put back a shape carrying `assets`, no `sources`
     await saveSketch({
-      ...made, sources: undefined as never,
+      ...made,
+      sources: undefined as never,
       assets: [{ name: "sky.png", png: new Uint8Array([1, 2, 3]) }],
     } as never);
     const loaded = await loadSketch(made.id);

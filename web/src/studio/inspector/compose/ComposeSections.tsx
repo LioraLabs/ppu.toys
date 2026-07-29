@@ -51,12 +51,22 @@ export function ScreenPreviews({
     <div className={"cmp-previews" + (large ? " cmp-previews--lg" : "")}>
       <div className="cmp-preview">
         <div className="cmp-preview-label">MAIN · $212C</div>
-        <BlitCanvas pixels={screens.main} width={WIDTH} height={HEIGHT} title="main-screen composite (pre-math, pre-brightness)" />
+        <BlitCanvas
+          pixels={screens.main}
+          width={WIDTH}
+          height={HEIGHT}
+          title="main-screen composite (pre-math, pre-brightness)"
+        />
       </div>
       <div className="cmp-opglyph">{op === "sub" ? "−" : "+"}</div>
       <div className="cmp-preview">
         <div className="cmp-preview-label">SUB · $212D</div>
-        <BlitCanvas pixels={screens.sub} width={WIDTH} height={HEIGHT} title="sub-screen composite (pre-math, pre-brightness)" />
+        <BlitCanvas
+          pixels={screens.sub}
+          width={WIDTH}
+          height={HEIGHT}
+          title="sub-screen composite (pre-math, pre-brightness)"
+        />
       </div>
       <div className="cmp-opglyph cmp-opglyph--eq">=</div>
       <div className="cmp-preview cmp-preview--result">
@@ -143,8 +153,18 @@ export function AssignmentMatrix({ c }: { c: Compositor }) {
             <span className="cmp-ldot" style={{ background: l.color }} />
             {l.label}
           </span>
-          <MatrixCell layer={l.label} kind="main" on={(tm & (1 << l.bit)) !== 0} onToggle={() => toggle(`screen.main.${l.id}`, REG.TM, tm, l.bit)} />
-          <MatrixCell layer={l.label} kind="sub" on={(ts & (1 << l.bit)) !== 0} onToggle={() => toggle(`screen.sub.${l.id}`, REG.TS, ts, l.bit)} />
+          <MatrixCell
+            layer={l.label}
+            kind="main"
+            on={(tm & (1 << l.bit)) !== 0}
+            onToggle={() => toggle(`screen.main.${l.id}`, REG.TM, tm, l.bit)}
+          />
+          <MatrixCell
+            layer={l.label}
+            kind="sub"
+            on={(ts & (1 << l.bit)) !== 0}
+            onToggle={() => toggle(`screen.sub.${l.id}`, REG.TS, ts, l.bit)}
+          />
           <MatrixCell
             layer={l.label}
             kind="math"
@@ -155,7 +175,10 @@ export function AssignmentMatrix({ c }: { c: Compositor }) {
       ))}
       <div className="cmp-matrix-row">
         <span className="cmp-lname">
-          <span className="cmp-ldot cmp-ldot--backdrop" style={{ background: cgram15ToCss(c.frame.cgram[0]) }} />
+          <span
+            className="cmp-ldot cmp-ldot--backdrop"
+            style={{ background: cgram15ToCss(c.frame.cgram[0]) }}
+          />
           Backdrop
         </span>
         <span className="cmp-cellwrap cmp-fixed">—</span>
@@ -273,7 +296,13 @@ export function ComposeReadout({ c, flat }: { c: Compositor; flat?: boolean }) {
         note={(mathOp(adsub) === "sub" ? "sub" : "add") + (mathHalf(adsub) ? " · ½" : "")}
       />
       <RegRow c={c} addr={REG.CGWSEL} name="CGWSEL" note="math region" />
-      <RegRow c={c} addr={REG.COLDATA} name="COLDATA" note="fixed color" swatch={cgram15ToCss(c.read(REG.COLDATA))} />
+      <RegRow
+        c={c}
+        addr={REG.COLDATA}
+        name="COLDATA"
+        note="fixed color"
+        swatch={cgram15ToCss(c.read(REG.COLDATA))}
+      />
     </div>
   );
 }

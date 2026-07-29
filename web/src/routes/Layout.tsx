@@ -18,7 +18,9 @@ export function Layout() {
       <header className="site-header">
         <Link to="/" className="brand">
           <span className="brand-mark" aria-hidden="true" />
-          <span>ppu<span className="brand-dot">.</span>toys</span>
+          <span>
+            ppu<span className="brand-dot">.</span>toys
+          </span>
         </Link>
         <nav className="site-nav">
           <Link to="/studio">Studio</Link>
@@ -34,7 +36,9 @@ export function Layout() {
             </>
           )}
           {!loading && !user && (
-            <a className="btn-discord" href={SIGN_IN_URL}>Sign in with Discord</a>
+            <a className="btn-discord" href={SIGN_IN_URL}>
+              Sign in with Discord
+            </a>
           )}
         </nav>
       </header>

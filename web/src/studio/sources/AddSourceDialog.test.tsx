@@ -7,12 +7,21 @@ import { transport } from "../transport/transport";
 import * as decode from "../assets/decode";
 
 function fakeImageData(w = 16, h = 8): ImageData {
-  return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4), colorSpace: "srgb" } as ImageData;
+  return {
+    width: w,
+    height: h,
+    data: new Uint8ClampedArray(w * h * 4),
+    colorSpace: "srgb",
+  } as ImageData;
 }
 
 describe("AddSourceDialog", () => {
   beforeEach(() => {
-    vi.spyOn(decode, "decodeImageFile").mockResolvedValue({ name: "track.png", imageData: fakeImageData(), preview: "" });
+    vi.spyOn(decode, "decodeImageFile").mockResolvedValue({
+      name: "track.png",
+      imageData: fakeImageData(),
+      preview: "",
+    });
   });
 
   afterEach(() => cleanup());

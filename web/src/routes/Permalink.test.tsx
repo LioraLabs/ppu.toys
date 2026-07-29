@@ -11,7 +11,9 @@ vi.mock("react-router-dom", async (orig) => ({
   useNavigate: () => navigate,
 }));
 vi.mock("../api/apiClient", () => ({ getToy: vi.fn(), forkToy: vi.fn() }));
-vi.mock("../api/session", () => ({ useSession: () => ({ user: { id: "1", handle: "ada" }, loading: false }) }));
+vi.mock("../api/session", () => ({
+  useSession: () => ({ user: { id: "1", handle: "ada" }, loading: false }),
+}));
 // Player wiring is covered by its own test; stub it here.
 vi.mock("../components/ReadOnlyPlayer", () => ({ ReadOnlyPlayer: () => <div>player</div> }));
 // openCloudToy touches IndexedDB (via createSketch/openSketchStore); it has
@@ -21,25 +23,36 @@ import { getToy, forkToy } from "../api/apiClient";
 import { openCloudToy } from "../studio/cloud/openCloudToy";
 
 const toy = makeToyFull({
-  id: "abc", description: "a toy", heartCount: 2,
+  id: "abc",
+  description: "a toy",
+  heartCount: 2,
   files: [{ name: "main.lua", source: "-- code here" }],
   author: { id: "9", handle: "ada", avatar: null },
 });
 const fork1 = makeToyFull({
-  id: "fork1", title: "Dusk (fork)", description: "a toy", state: "draft",
+  id: "fork1",
+  title: "Dusk (fork)",
+  description: "a toy",
+  state: "draft",
   files: [{ name: "main.lua", source: "-- code here" }],
-  heartCount: 0, forkedFrom: "abc",
+  heartCount: 0,
+  forkedFrom: "abc",
 });
 const mockGetToy = getToy as ReturnType<typeof vi.fn>;
 const mockFork = forkToy as ReturnType<typeof vi.fn>;
 const mockOpenCloudToy = openCloudToy as ReturnType<typeof vi.fn>;
-afterEach(() => { cleanup(); vi.clearAllMocks(); });
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
 
 import { Permalink } from "./Permalink";
 function renderAt(id = "abc") {
   return render(
     <MemoryRouter initialEntries={[`/t/${id}`]}>
-      <Routes><Route path="/t/:id" element={<Permalink />} /></Routes>
+      <Routes>
+        <Route path="/t/:id" element={<Permalink />} />
+      </Routes>
     </MemoryRouter>,
   );
 }
@@ -79,7 +92,9 @@ describe("Permalink", () => {
 
     // Ordering matters: clone → load → open → navigate.
     const forkOrder = mockFork.mock.invocationCallOrder[0];
-    const getForkOrder = mockGetToy.mock.invocationCallOrder.find((_, i) => mockGetToy.mock.calls[i][0] === "fork1")!;
+    const getForkOrder = mockGetToy.mock.invocationCallOrder.find(
+      (_, i) => mockGetToy.mock.calls[i][0] === "fork1",
+    )!;
     const openOrder = mockOpenCloudToy.mock.invocationCallOrder[0];
     expect(forkOrder).toBeLessThan(getForkOrder);
     expect(getForkOrder).toBeLessThan(openOrder);

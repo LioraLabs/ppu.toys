@@ -4,14 +4,38 @@ import { cgram15ToCss } from "./format";
 // Authentic OBSEL size-pair table (mirrors ppu-core sprite.rs OBJ_SIZE_PAIRS):
 // size_sel -> [small [w,h], large [w,h]].
 const OBJ_SIZE_PAIRS: [[number, number], [number, number]][] = [
-  [[8, 8], [16, 16]],
-  [[8, 8], [32, 32]],
-  [[8, 8], [64, 64]],
-  [[16, 16], [32, 32]],
-  [[16, 16], [64, 64]],
-  [[32, 32], [64, 64]],
-  [[16, 32], [32, 64]],
-  [[16, 32], [32, 32]],
+  [
+    [8, 8],
+    [16, 16],
+  ],
+  [
+    [8, 8],
+    [32, 32],
+  ],
+  [
+    [8, 8],
+    [64, 64],
+  ],
+  [
+    [16, 16],
+    [32, 32],
+  ],
+  [
+    [16, 16],
+    [64, 64],
+  ],
+  [
+    [32, 32],
+    [64, 64],
+  ],
+  [
+    [16, 32],
+    [32, 64],
+  ],
+  [
+    [16, 32],
+    [32, 32],
+  ],
 ];
 
 /** OBSEL size_sel (bits 5-7) off the $2101 register the frame carries; 0 if absent. */
@@ -41,7 +65,10 @@ export function SpritesTab({ frame }: { frame: FrameResult | null }) {
       <div className="insp-subhead">
         OAM · {active} active / {frame.oam.length}
         {ov && (
-          <span className="oam-maxline"> · max {ov.maxSprites} spr / {ov.maxTiles} til per line</span>
+          <span className="oam-maxline">
+            {" "}
+            · max {ov.maxSprites} spr / {ov.maxTiles} til per line
+          </span>
         )}
       </div>
       {badges.length > 0 && (
@@ -69,10 +96,15 @@ export function SpritesTab({ frame }: { frame: FrameResult | null }) {
               <span className="oam-field">pr{s.prio}</span>
               {(() => {
                 const [w, h] = OBJ_SIZE_PAIRS[sizeSel][s.large ? 1 : 0];
-                return <span className="oam-field">{w}×{h}</span>;
+                return (
+                  <span className="oam-field">
+                    {w}×{h}
+                  </span>
+                );
               })()}
               <span className="oam-field">
-                {s.flipX ? "↔" : ""}{s.flipY ? "↕" : ""}
+                {s.flipX ? "↔" : ""}
+                {s.flipY ? "↕" : ""}
               </span>
             </div>
           ) : null,

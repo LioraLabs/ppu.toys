@@ -5,8 +5,16 @@ import { addHeart, goToSignIn, removeHeart } from "../api/apiClient";
  *  hearting is the core social ask, so it must never read as a dead control.
  *  Reverts on API failure. */
 export function HeartButton({
-  id, heartCount, hearted, signedIn,
-}: { id: string; heartCount: number; hearted: boolean; signedIn: boolean }) {
+  id,
+  heartCount,
+  hearted,
+  signedIn,
+}: {
+  id: string;
+  heartCount: number;
+  hearted: boolean;
+  signedIn: boolean;
+}) {
   const [state, setState] = useState({ hearted, count: heartCount });
 
   async function toggle() {

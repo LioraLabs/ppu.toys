@@ -19,10 +19,10 @@ const Default = () => (
     reports={frameImportReports}
     chain={() => (
       <div className="tm-note">
-        Resolution chain omitted — the Stage 1–5 canvases are produced by the live
-        rasterizer (ppuCore.layerView / traceBgPixel / traceObj) and can't be rendered
-        from a static fixture without mocking the whole PpuCore (a spec non-goal). The
-        VRAM / CGRAM / import-health / register panels around it render wasm-free.
+        Resolution chain omitted — the Stage 1–5 canvases are produced by the live rasterizer
+        (ppuCore.layerView / traceBgPixel / traceObj) and can't be rendered from a static fixture
+        without mocking the whole PpuCore (a spec non-goal). The VRAM / CGRAM / import-health /
+        register panels around it render wasm-free.
       </div>
     )}
   />

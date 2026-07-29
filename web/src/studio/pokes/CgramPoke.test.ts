@@ -33,7 +33,9 @@ describe("cgram poke pipeline", () => {
 
   it("poking a picked color lands a cgram[] line in pokes.lua", () => {
     poke(cgramPoke(0x41, hexToBgr555("#52c4ff")));
-    const src = openContextFiles(openSketchStore.state()).find((f) => f.name === POKES_FILE)!.source;
+    const src = openContextFiles(openSketchStore.state()).find(
+      (f) => f.name === POKES_FILE,
+    )!.source;
     expect(src).toMatch(/ {2}cgram\[0x41\] = 0x[0-9a-f]{4}/);
   });
 });

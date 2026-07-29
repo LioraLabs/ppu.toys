@@ -46,7 +46,8 @@ function parseArgs(argv) {
   }
   if (!args.ref) fail("Usage: pnpm run shoot <component-path[#variant]> [--build] [--out path]");
   if (args.theme && !["light", "dark"].includes(args.theme)) fail(`Invalid theme: ${args.theme}`);
-  if (!Number.isInteger(args.width) || !Number.isInteger(args.height)) fail("Width and height must be integers");
+  if (!Number.isInteger(args.width) || !Number.isInteger(args.height))
+    fail("Width and height must be integers");
   return args;
 }
 
@@ -55,7 +56,9 @@ function runExport() {
     console.error("Running `pnpm run catalog` (cosmos-export) ...");
     const child = spawn("pnpm", ["run", "catalog"], { cwd: webRoot, stdio: "inherit" });
     child.on("error", reject);
-    child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`Cosmos export exited with ${code}`))));
+    child.on("exit", (code) =>
+      code === 0 ? resolve() : reject(new Error(`Cosmos export exited with ${code}`)),
+    );
   });
 }
 
@@ -81,7 +84,9 @@ function startStaticServer(root) {
           res.writeHead(404).end("Not found");
           return;
         }
-        res.writeHead(200, { "Content-Type": MIME_TYPES[path.extname(resolvedPath)] || "application/octet-stream" });
+        res.writeHead(200, {
+          "Content-Type": MIME_TYPES[path.extname(resolvedPath)] || "application/octet-stream",
+        });
         res.end(data);
       });
     });

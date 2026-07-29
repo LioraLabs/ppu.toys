@@ -38,7 +38,9 @@ export function ProfilePage() {
     getProfile(handle)
       .then((p) => live && setProfile(p))
       .catch(() => live && setMissing(true));
-    return () => { live = false; };
+    return () => {
+      live = false;
+    };
   }, [handle]);
 
   if (missing) return <p className="profile-msg">No such user.</p>;
@@ -68,7 +70,9 @@ export function ProfilePage() {
       </header>
       {own && profile.drafts && profile.drafts.length > 0 && (
         <section className="profile-drafts">
-          <h2>Drafts <span className="profile-drafts-note">only you see these</span></h2>
+          <h2>
+            Drafts <span className="profile-drafts-note">only you see these</span>
+          </h2>
           <ul>
             {profile.drafts.map((d) => (
               <li key={d.id}>

@@ -19,7 +19,9 @@ export function Permalink() {
   const [active, setActive] = useState(0);
   const [forking, setForking] = useState(false);
   const [forkFailed, setForkFailed] = useState(false);
-  useDocumentTitle(load.status === "ok" ? `${load.toy.title} · ${load.toy.author.handle}` : undefined);
+  useDocumentTitle(
+    load.status === "ok" ? `${load.toy.title} · ${load.toy.author.handle}` : undefined,
+  );
 
   useEffect(() => {
     if (!id) return;
@@ -28,7 +30,9 @@ export function Permalink() {
     getToy(id)
       .then((toy) => live && setLoad({ status: "ok", toy }))
       .catch(() => live && setLoad({ status: "error" }));
-    return () => { live = false; };
+    return () => {
+      live = false;
+    };
   }, [id]);
 
   // Decode M10 source payloads (base64 → bytes) for the player. Builtin
@@ -100,7 +104,12 @@ export function Permalink() {
           {toy.description && <p className="permalink-desc">{toy.description}</p>}
         </header>
         <div className="permalink-actions">
-          <HeartButton id={toy.id} heartCount={toy.heartCount} hearted={toy.hearted} signedIn={!!user} />
+          <HeartButton
+            id={toy.id}
+            heartCount={toy.heartCount}
+            hearted={toy.hearted}
+            signedIn={!!user}
+          />
           {user && user.id === toy.author.id ? (
             <button
               className="fork-btn"
@@ -120,7 +129,11 @@ export function Permalink() {
               {forking ? "Forking…" : "Fork"}
             </button>
           )}
-          {forkFailed && <span className="fork-error" role="alert">Fork failed — try again.</span>}
+          {forkFailed && (
+            <span className="fork-error" role="alert">
+              Fork failed — try again.
+            </span>
+          )}
         </div>
         <div className="code-view">
           <div className="code-tabs">
@@ -129,10 +142,14 @@ export function Permalink() {
                 key={f.name}
                 className={`code-tab${i === active ? " code-tab--on" : ""}`}
                 onClick={() => setActive(i)}
-              >{f.name}</button>
+              >
+                {f.name}
+              </button>
             ))}
           </div>
-          <pre className="code-body"><code>{activeFile?.source ?? ""}</code></pre>
+          <pre className="code-body">
+            <code>{activeFile?.source ?? ""}</code>
+          </pre>
         </div>
       </div>
     </div>

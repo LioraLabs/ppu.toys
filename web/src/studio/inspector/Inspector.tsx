@@ -51,7 +51,10 @@ function wiredOverlay(overlay: OverlayId, _frame: FrameResult, onCollapse: () =>
   );
 }
 
-export function Inspector({ renderTab = wiredTab, renderOverlay = wiredOverlay }: InspectorProps = {}) {
+export function Inspector({
+  renderTab = wiredTab,
+  renderOverlay = wiredOverlay,
+}: InspectorProps = {}) {
   // Shared store, not local state: the ActivityRail drives these too.
   const { tab, overlay } = useInspectorView();
   const setTab = inspectorStore.setTab;

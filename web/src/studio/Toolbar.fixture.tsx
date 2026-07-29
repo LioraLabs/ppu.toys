@@ -27,7 +27,7 @@ const SignedIn = () => (
     sketchName={sketchName}
     theme="dark"
     user={{ id: "1", handle: "ada", avatar: null }}
-   
+
     workspaceSlot={workspaceSlot}
   />
 );

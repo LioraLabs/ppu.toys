@@ -66,7 +66,17 @@ function tileColor(frame: FrameResult, bpp: 2 | 4, pal: number, idx: number): st
   return idx === 0 ? "transparent" : cgram15ToCss(frame.cgram[base + idx] ?? 0);
 }
 
-function TilePreview({ frame, pixels, bpp, pal }: { frame: FrameResult; pixels: number[]; bpp: 2 | 4; pal: number }) {
+function TilePreview({
+  frame,
+  pixels,
+  bpp,
+  pal,
+}: {
+  frame: FrameResult;
+  pixels: number[];
+  bpp: 2 | 4;
+  pal: number;
+}) {
   return (
     <div className="vram-tile-px" aria-hidden="true">
       {pixels.map((p, i) => (
@@ -124,7 +134,11 @@ export function VramTab({
     <div className="insp-scroll">
       <div className="vram-toolbar">
         <div className="insp-subhead">VRAM</div>
-        <select value={bg} onChange={(e) => setBg(Number(e.target.value) as BgId)} disabled={mode === 7}>
+        <select
+          value={bg}
+          onChange={(e) => setBg(Number(e.target.value) as BgId)}
+          disabled={mode === 7}
+        >
           <option value={0}>BG1</option>
           <option value={1}>BG2</option>
           <option value={2}>BG3</option>
@@ -132,7 +146,11 @@ export function VramTab({
       </div>
 
       <div className="vram-budget">
-        {reports.length === 0 ? <span>no import reports this frame</span> : reports.map((r, i) => <span key={i}>{reportLine(r)}</span>)}
+        {reports.length === 0 ? (
+          <span>no import reports this frame</span>
+        ) : (
+          reports.map((r, i) => <span key={i}>{reportLine(r)}</span>)
+        )}
       </div>
 
       <div className="vram-meta">
@@ -156,10 +174,17 @@ export function VramTab({
       <div className="insp-subhead">TILEMAP</div>
       <div className="vram-grid vram-grid--map">
         {map.map((m, i) => (
-          <div className={"vram-map-cell" + (m.prio ? " vram-map-cell--prio" : "")} key={i} title={`cell ${i}`}>
+          <div
+            className={"vram-map-cell" + (m.prio ? " vram-map-cell--prio" : "")}
+            key={i}
+            title={`cell ${i}`}
+          >
             <span>t{m.tile}</span>
             <span>p{m.pal}</span>
-            <span>{m.flipX ? "H" : ""}{m.flipY ? "V" : ""}</span>
+            <span>
+              {m.flipX ? "H" : ""}
+              {m.flipY ? "V" : ""}
+            </span>
           </div>
         ))}
       </div>
@@ -170,7 +195,11 @@ export function VramTab({
           <div className="palette-bank" key={bank}>
             <span>{bank.toString(16).toUpperCase()}</span>
             {Array.from({ length: 16 }, (_, i) => (
-              <i key={i} style={{ background: cgram15ToCss(frame.cgram[bank * 16 + i] ?? 0) }} title={`$${(bank * 16 + i).toString(16).padStart(2, "0")}`} />
+              <i
+                key={i}
+                style={{ background: cgram15ToCss(frame.cgram[bank * 16 + i] ?? 0) }}
+                title={`$${(bank * 16 + i).toString(16).padStart(2, "0")}`}
+              />
             ))}
           </div>
         ))}

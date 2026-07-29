@@ -45,7 +45,13 @@ export const resetTraceSelection = () => traceSelection.set({ ...INITIAL });
  *  route through the transport so the shared core re-renders. */
 export type LayerVis = Record<PlaneId, boolean>;
 
-export const layerVis = new Store<LayerVis>({ bg1: true, bg2: true, bg3: true, bg4: true, obj: true });
+export const layerVis = new Store<LayerVis>({
+  bg1: true,
+  bg2: true,
+  bg3: true,
+  bg4: true,
+  obj: true,
+});
 
 export const useLayerVis = () => useSyncExternalStore(layerVis.subscribe, layerVis.get);
 

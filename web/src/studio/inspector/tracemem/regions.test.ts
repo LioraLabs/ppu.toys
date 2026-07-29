@@ -3,10 +3,23 @@ import { cgramOwners, vramRegions } from "./regions";
 import type { OamSprite, RegisterView } from "../../../ppu/core";
 
 function regs(entries: Record<string, number>): RegisterView[] {
-  return Object.entries(entries).map(([name, value], i) => ({ addr: i, name, value, changed: false }));
+  return Object.entries(entries).map(([name, value], i) => ({
+    addr: i,
+    name,
+    value,
+    changed: false,
+  }));
 }
 const sprite = (over: Partial<OamSprite>): OamSprite => ({
-  x: 0, y: 0, tile: 0, pal: 0, prio: 0, large: false, flipX: false, flipY: false, on: true,
+  x: 0,
+  y: 0,
+  tile: 0,
+  pal: 0,
+  prio: 0,
+  large: false,
+  flipX: false,
+  flipY: false,
+  on: true,
   ...over,
 });
 const noOam: OamSprite[] = [];
@@ -16,7 +29,15 @@ describe("vramRegions", () => {
     const vram = new Uint16Array(0x8000);
     vram[0x1000] = 5; // BG1 map: max tile index 5 -> 6 tiles
     const r = vramRegions(
-      regs({ BGMODE: 0x01, BG1SC: 0x10, BG2SC: 0x20, BG3SC: 0x30, BG12NBA: 0x42, BG34NBA: 0x06, OBSEL: 0x00 }),
+      regs({
+        BGMODE: 0x01,
+        BG1SC: 0x10,
+        BG2SC: 0x20,
+        BG3SC: 0x30,
+        BG12NBA: 0x42,
+        BG34NBA: 0x06,
+        OBSEL: 0x00,
+      }),
       vram,
     );
     const bg1map = r.find((x) => x.id === "bg1-map")!;
@@ -67,7 +88,10 @@ describe("vramRegions", () => {
   });
 
   it("is sorted by start address", () => {
-    const r = vramRegions(regs({ BGMODE: 0x01, BG1SC: 0x40, OBSEL: 0x00 }), new Uint16Array(0x8000));
+    const r = vramRegions(
+      regs({ BGMODE: 0x01, BG1SC: 0x40, OBSEL: 0x00 }),
+      new Uint16Array(0x8000),
+    );
     const starts = r.map((x) => x.start);
     expect(starts).toEqual([...starts].sort((a, b) => a - b));
   });
@@ -77,7 +101,11 @@ describe("cgramOwners", () => {
   it("labels BG rows from live tilemap palette bits (mode 1, 4bpp)", () => {
     const vram = new Uint16Array(0x8000);
     vram[0x0000] = 2 << 10; // BG1 map at 0 uses pal 2 -> CGRAM 32..47 -> row 2
-    const o = cgramOwners(regs({ BGMODE: 0x01, BG1SC: 0x00, BG12NBA: 0x00, OBSEL: 0x00 }), vram, noOam);
+    const o = cgramOwners(
+      regs({ BGMODE: 0x01, BG1SC: 0x00, BG12NBA: 0x00, OBSEL: 0x00 }),
+      vram,
+      noOam,
+    );
     expect(o[2].label).toContain("BG1");
     expect(o[2].used).toBe(true);
     expect(o[3].label).toBe("—"); // pal 3 unused
@@ -87,14 +115,22 @@ describe("cgramOwners", () => {
   it("applies the mode-0 per-BG 32-color band", () => {
     const vram = new Uint16Array(0x8000);
     // all four maps at base 0, all entries pal 0; BG2 band = 1*32 -> row 2
-    const o = cgramOwners(regs({ BGMODE: 0x00, BG1SC: 0x00, BG2SC: 0x00, BG3SC: 0x00, BG4SC: 0x00, OBSEL: 0x00 }), vram, noOam);
+    const o = cgramOwners(
+      regs({ BGMODE: 0x00, BG1SC: 0x00, BG2SC: 0x00, BG3SC: 0x00, BG4SC: 0x00, OBSEL: 0x00 }),
+      vram,
+      noOam,
+    );
     expect(o[2].label).toContain("BG2");
     expect(o[4].label).toContain("BG3");
     expect(o[6].label).toContain("BG4");
   });
 
   it("8bpp BG1 owns the whole table", () => {
-    const o = cgramOwners(regs({ BGMODE: 0x03, BG1SC: 0x00, OBSEL: 0x00 }), new Uint16Array(0x8000), noOam);
+    const o = cgramOwners(
+      regs({ BGMODE: 0x03, BG1SC: 0x00, OBSEL: 0x00 }),
+      new Uint16Array(0x8000),
+      noOam,
+    );
     expect(o[0].label).toContain("BG1");
     expect(o[15].label).toContain("BG1"); // 8bpp reads all 256 entries
     expect(o[15].label).toContain("OBJ");
@@ -103,7 +139,11 @@ describe("cgramOwners", () => {
 
   it("OBJ rows track live OAM palette usage", () => {
     const oam = [sprite({ pal: 3, on: true }), sprite({ pal: 5, on: false })];
-    const o = cgramOwners(regs({ BGMODE: 0x01, BG1SC: 0x00, BG12NBA: 0x00, OBSEL: 0x00 }), new Uint16Array(0x8000), oam);
+    const o = cgramOwners(
+      regs({ BGMODE: 0x01, BG1SC: 0x00, BG12NBA: 0x00, OBSEL: 0x00 }),
+      new Uint16Array(0x8000),
+      oam,
+    );
     expect(o[8 + 3].used).toBe(true); // on-sprite pal 3
     expect(o[8 + 5].used).toBe(false); // that sprite is off; no BG owner up here in mode 1
   });

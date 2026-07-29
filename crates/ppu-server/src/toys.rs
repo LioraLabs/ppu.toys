@@ -1,3 +1,6 @@
+use crate::auth::AuthUser;
+use crate::error::{AppError, AppResult};
+use crate::state::AppState;
 use axum::extract::{Multipart, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -6,34 +9,53 @@ use axum::{Json, Router};
 use base64::Engine;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use crate::auth::AuthUser;
-use crate::error::{AppError, AppResult};
-use crate::state::AppState;
 
 #[derive(Serialize, Deserialize)]
-pub struct FileDto { pub name: String, pub source: String }
+pub struct FileDto {
+    pub name: String,
+    pub source: String,
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")] // write side accepts `builtinId`, matching the read side
 pub struct SourceDto {
     pub name: String,
     pub kind: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")] pub builtin_id: Option<String>,
-    #[serde(default)] pub options: serde_json::Value,
-    #[serde(default)] pub meta: serde_json::Value,
-    #[serde(default, skip_serializing_if = "Option::is_none")] pub payload: Option<String>, // base64
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builtin_id: Option<String>,
+    #[serde(default)]
+    pub options: serde_json::Value,
+    #[serde(default)]
+    pub meta: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<String>, // base64
 }
 
 #[derive(Deserialize)]
-pub struct SaveBody { pub title: String, #[serde(default)] pub description: String, pub files: Vec<FileDto>, #[serde(default)] pub sources: Vec<SourceDto> }
+pub struct SaveBody {
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    pub files: Vec<FileDto>,
+    #[serde(default)]
+    pub sources: Vec<SourceDto>,
+}
 
 fn slug() -> String {
     const ABC: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
     let mut r = rand::thread_rng();
-    (0..8).map(|_| ABC[r.gen_range(0..ABC.len())] as char).collect()
+    (0..8)
+        .map(|_| ABC[r.gen_range(0..ABC.len())] as char)
+        .collect()
 }
-fn b64(bytes: &[u8]) -> String { base64::engine::general_purpose::STANDARD.encode(bytes) }
-fn unb64(s: &str) -> AppResult<Vec<u8>> { base64::engine::general_purpose::STANDARD.decode(s).map_err(|_| AppError::status(StatusCode::BAD_REQUEST, "bad base64 payload")) }
+fn b64(bytes: &[u8]) -> String {
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+fn unb64(s: &str) -> AppResult<Vec<u8>> {
+    base64::engine::general_purpose::STANDARD
+        .decode(s)
+        .map_err(|_| AppError::status(StatusCode::BAD_REQUEST, "bad base64 payload"))
+}
 
 /// Validate a save BEFORE any row is written: per-file cap, per-source-payload cap,
 /// and the aggregate ≤1MB toy-total cap. Doing it up front means a cap violation on a
@@ -42,7 +64,10 @@ fn validate_save(files: &[FileDto], sources: &[SourceDto]) -> AppResult<()> {
     let mut total = 0usize;
     for f in files {
         if f.source.len() > crate::config::CAP_LUA_FILE {
-            return Err(AppError::status(StatusCode::PAYLOAD_TOO_LARGE, "lua file too large"));
+            return Err(AppError::status(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "lua file too large",
+            ));
         }
         total += f.source.len();
     }
@@ -50,13 +75,19 @@ fn validate_save(files: &[FileDto], sources: &[SourceDto]) -> AppResult<()> {
         if let Some(p) = &s.payload {
             let bytes = unb64(p)?;
             if bytes.len() > crate::config::CAP_SOURCE_PAYLOAD {
-                return Err(AppError::status(StatusCode::PAYLOAD_TOO_LARGE, "source payload too large"));
+                return Err(AppError::status(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "source payload too large",
+                ));
             }
             total += bytes.len();
         }
     }
     if total > crate::config::CAP_TOY_TOTAL {
-        return Err(AppError::status(StatusCode::PAYLOAD_TOO_LARGE, "toy exceeds total size cap"));
+        return Err(AppError::status(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "toy exceeds total size cap",
+        ));
     }
     Ok(())
 }
@@ -66,8 +97,18 @@ fn validate_save(files: &[FileDto], sources: &[SourceDto]) -> AppResult<()> {
 /// column NULL); blobs::store then fills it (db) or writes a file (disk).
 async fn write_sources(state: &AppState, toy_id: &str, sources: &[SourceDto]) -> AppResult<()> {
     for s in sources {
-        let payload = match &s.payload { Some(p) => Some(unb64(p)?), None => None };
-        if let Some(ref p) = payload { if p.len() > crate::config::CAP_SOURCE_PAYLOAD { return Err(AppError::status(StatusCode::PAYLOAD_TOO_LARGE, "source payload too large")); } }
+        let payload = match &s.payload {
+            Some(p) => Some(unb64(p)?),
+            None => None,
+        };
+        if let Some(ref p) = payload {
+            if p.len() > crate::config::CAP_SOURCE_PAYLOAD {
+                return Err(AppError::status(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "source payload too large",
+                ));
+            }
+        }
         sqlx::query("INSERT INTO toy_sources(toy_id,name,kind,builtin_id,options_json,payload,meta_json) VALUES(?,?,?,?,?,NULL,?)
                      ON CONFLICT(toy_id,name) DO UPDATE SET kind=excluded.kind, builtin_id=excluded.builtin_id, options_json=excluded.options_json, meta_json=excluded.meta_json, payload=NULL")
             .bind(toy_id).bind(&s.name).bind(&s.kind).bind(&s.builtin_id)
@@ -82,12 +123,26 @@ async fn write_sources(state: &AppState, toy_id: &str, sources: &[SourceDto]) ->
 
 async fn snapshot_revision(state: &AppState, toy_id: &str, files_json: &str) -> AppResult<()> {
     let now = crate::db::now();
-    let (rev,): (i64,) = sqlx::query_as("SELECT COALESCE(MAX(rev),0)+1 FROM toy_revisions WHERE toy_id=?").bind(toy_id).fetch_one(&state.pool).await?;
-    sqlx::query("INSERT INTO toy_revisions(toy_id,rev,files_json,saved_at) VALUES(?,?,?,?)").bind(toy_id).bind(rev).bind(files_json).bind(now).execute(&state.pool).await?;
+    let (rev,): (i64,) =
+        sqlx::query_as("SELECT COALESCE(MAX(rev),0)+1 FROM toy_revisions WHERE toy_id=?")
+            .bind(toy_id)
+            .fetch_one(&state.pool)
+            .await?;
+    sqlx::query("INSERT INTO toy_revisions(toy_id,rev,files_json,saved_at) VALUES(?,?,?,?)")
+        .bind(toy_id)
+        .bind(rev)
+        .bind(files_json)
+        .bind(now)
+        .execute(&state.pool)
+        .await?;
     Ok(())
 }
 
-async fn create(State(state): State<AppState>, user: AuthUser, Json(body): Json<SaveBody>) -> AppResult<Response> {
+async fn create(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(body): Json<SaveBody>,
+) -> AppResult<Response> {
     validate_save(&body.files, &body.sources)?;
     let id = slug();
     let files_json = serde_json::to_string(&body.files)?;
@@ -99,34 +154,83 @@ async fn create(State(state): State<AppState>, user: AuthUser, Json(body): Json<
     Ok(Json(serde_json::json!({ "id": id })).into_response())
 }
 
-async fn update(State(state): State<AppState>, user: AuthUser, Path(id): Path<String>, Json(body): Json<SaveBody>) -> AppResult<Response> {
+async fn update(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    Json(body): Json<SaveBody>,
+) -> AppResult<Response> {
     // ~1/min throttle applies to re-saves (autosave/edit), not the one-shot create
-    if !state.limiter.check_save(&user.id) { return Err(AppError::status(StatusCode::TOO_MANY_REQUESTS, "save rate limit")); }
-    let author: Option<(String,)> = sqlx::query_as("SELECT author_id FROM toys WHERE id=?").bind(&id).fetch_optional(&state.pool).await?;
-    let author = author.ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such toy"))?.0;
-    if author != user.id { return Err(AppError::status(StatusCode::FORBIDDEN, "not your toy")); }
+    if !state.limiter.check_save(&user.id) {
+        return Err(AppError::status(
+            StatusCode::TOO_MANY_REQUESTS,
+            "save rate limit",
+        ));
+    }
+    let author: Option<(String,)> = sqlx::query_as("SELECT author_id FROM toys WHERE id=?")
+        .bind(&id)
+        .fetch_optional(&state.pool)
+        .await?;
+    let author = author
+        .ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such toy"))?
+        .0;
+    if author != user.id {
+        return Err(AppError::status(StatusCode::FORBIDDEN, "not your toy"));
+    }
     validate_save(&body.files, &body.sources)?;
     let files_json = serde_json::to_string(&body.files)?;
-    sqlx::query("UPDATE toys SET title=?, description=?, files_json=? WHERE id=?").bind(&body.title).bind(&body.description).bind(&files_json).bind(&id).execute(&state.pool).await?;
+    sqlx::query("UPDATE toys SET title=?, description=?, files_json=? WHERE id=?")
+        .bind(&body.title)
+        .bind(&body.description)
+        .bind(&files_json)
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
     // PUT replaces the whole source set: drop rows that are gone, then upsert the
     // current set (db mode; disk-mode orphan files are the known escape-hatch limit).
-    sqlx::query("DELETE FROM toy_sources WHERE toy_id=?").bind(&id).execute(&state.pool).await?;
+    sqlx::query("DELETE FROM toy_sources WHERE toy_id=?")
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
     write_sources(&state, &id, &body.sources).await?;
     snapshot_revision(&state, &id, &files_json).await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-async fn get_toy(State(state): State<AppState>, maybe: Option<AuthUser>, Path(id): Path<String>) -> AppResult<Response> {
+async fn get_toy(
+    State(state): State<AppState>,
+    maybe: Option<AuthUser>,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
     let row: Option<(String,String,String,String,Option<String>,i64,String,String,Option<String>)> = sqlx::query_as(
         "SELECT t.title,t.description,t.files_json,t.state,t.forked_from,t.heart_count,u.handle,u.id,u.avatar_hash
          FROM toys t JOIN users u ON u.id=t.author_id WHERE t.id=?").bind(&id).fetch_optional(&state.pool).await?;
-    let (title,description,files_json,tstate,forked_from,heart_count,handle,author_id,avatar) =
-        row.ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such toy"))?;
+    let (
+        title,
+        description,
+        files_json,
+        tstate,
+        forked_from,
+        heart_count,
+        handle,
+        author_id,
+        avatar,
+    ) = row.ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such toy"))?;
     let files: serde_json::Value = serde_json::from_str(&files_json)?;
-    let src_rows: Vec<(String,String,Option<String>,Option<String>,Option<String>)> = sqlx::query_as(
-        "SELECT name,kind,builtin_id,options_json,meta_json FROM toy_sources WHERE toy_id=?").bind(&id).fetch_all(&state.pool).await?;
+    let src_rows: Vec<(
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    )> = sqlx::query_as(
+        "SELECT name,kind,builtin_id,options_json,meta_json FROM toy_sources WHERE toy_id=?",
+    )
+    .bind(&id)
+    .fetch_all(&state.pool)
+    .await?;
     let mut sources = Vec::new();
-    for (name,kind,bid,opts,meta) in src_rows {
+    for (name, kind, bid, opts, meta) in src_rows {
         let payload = crate::blobs::load(&state, crate::blobs::BlobKey::Source(&id, &name)).await?;
         sources.push(serde_json::json!({
             "name": name, "kind": kind, "builtinId": bid,
@@ -136,8 +240,15 @@ async fn get_toy(State(state): State<AppState>, maybe: Option<AuthUser>, Path(id
         }));
     }
     let hearted = if let Some(u) = &maybe {
-        sqlx::query_as::<_,(i64,)>("SELECT 1 FROM hearts WHERE user_id=? AND toy_id=?").bind(&u.id).bind(&id).fetch_optional(&state.pool).await?.is_some()
-    } else { false };
+        sqlx::query_as::<_, (i64,)>("SELECT 1 FROM hearts WHERE user_id=? AND toy_id=?")
+            .bind(&u.id)
+            .bind(&id)
+            .fetch_optional(&state.pool)
+            .await?
+            .is_some()
+    } else {
+        false
+    };
     Ok(Json(serde_json::json!({
         "id": id, "title": title, "description": description, "state": tstate,
         "files": files, "sources": sources, "heartCount": heart_count, "hearted": hearted, "forkedFrom": forked_from,
@@ -149,9 +260,18 @@ async fn get_toy(State(state): State<AppState>, maybe: Option<AuthUser>, Path(id
 /// plus all toy_sources rows (payloads included, via INSERT...SELECT — this only
 /// copies the payload column, so in disk blob mode the on-disk blob itself is not
 /// duplicated; out of scope here, S1 default is db mode).
-async fn fork(State(state): State<AppState>, user: AuthUser, Path(id): Path<String>) -> AppResult<Response> {
-    let src: Option<(String,String,String)> = sqlx::query_as("SELECT title,description,files_json FROM toys WHERE id=?").bind(&id).fetch_optional(&state.pool).await?;
-    let (title, description, files_json) = src.ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such toy"))?;
+async fn fork(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    let src: Option<(String, String, String)> =
+        sqlx::query_as("SELECT title,description,files_json FROM toys WHERE id=?")
+            .bind(&id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let (title, description, files_json) =
+        src.ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such toy"))?;
     let nid = slug();
     let now = crate::db::now();
     sqlx::query("INSERT INTO toys(id,author_id,title,description,files_json,state,forked_from,created_at) VALUES(?,?,?,?,?, 'draft', ?, ?)")
@@ -167,34 +287,97 @@ async fn fork(State(state): State<AppState>, user: AuthUser, Path(id): Path<Stri
 /// state, and (if configured) fires the Discord announce webhook in the
 /// background — a webhook failure only logs a warning and never fails the
 /// publish response itself.
-async fn publish(State(state): State<AppState>, user: AuthUser, Path(id): Path<String>, mut mp: Multipart) -> AppResult<Response> {
-    if !state.limiter.check_publish(&user.id) { return Err(AppError::status(StatusCode::TOO_MANY_REQUESTS, "publish rate limit")); }
-    let author: Option<(String,)> = sqlx::query_as("SELECT author_id FROM toys WHERE id=?").bind(&id).fetch_optional(&state.pool).await?;
-    let author = author.ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such toy"))?.0;
-    if author != user.id { return Err(AppError::status(StatusCode::FORBIDDEN, "not your toy")); }
+async fn publish(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    mut mp: Multipart,
+) -> AppResult<Response> {
+    if !state.limiter.check_publish(&user.id) {
+        return Err(AppError::status(
+            StatusCode::TOO_MANY_REQUESTS,
+            "publish rate limit",
+        ));
+    }
+    let author: Option<(String,)> = sqlx::query_as("SELECT author_id FROM toys WHERE id=?")
+        .bind(&id)
+        .fetch_optional(&state.pool)
+        .await?;
+    let author = author
+        .ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such toy"))?
+        .0;
+    if author != user.id {
+        return Err(AppError::status(StatusCode::FORBIDDEN, "not your toy"));
+    }
 
     let mut clip: Option<Vec<u8>> = None;
     let mut thumb: Option<Vec<u8>> = None;
     let mut meta_title: Option<String> = None;
-    while let Some(field) = mp.next_field().await.map_err(|e| AppError::status(StatusCode::BAD_REQUEST, format!("bad multipart: {e}")))? {
+    while let Some(field) = mp
+        .next_field()
+        .await
+        .map_err(|e| AppError::status(StatusCode::BAD_REQUEST, format!("bad multipart: {e}")))?
+    {
         match field.name().unwrap_or("").to_string().as_str() {
-            "meta" => { let t = field.text().await.unwrap_or_default();
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) { meta_title = v["title"].as_str().map(|s| s.to_string()); } }
-            "clip" => clip = Some(field.bytes().await.map_err(|e| AppError::status(StatusCode::BAD_REQUEST, format!("{e}")))?.to_vec()),
-            "thumb" => thumb = Some(field.bytes().await.map_err(|e| AppError::status(StatusCode::BAD_REQUEST, format!("{e}")))?.to_vec()),
-            _ => { let _ = field.bytes().await; }
+            "meta" => {
+                let t = field.text().await.unwrap_or_default();
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) {
+                    meta_title = v["title"].as_str().map(|s| s.to_string());
+                }
+            }
+            "clip" => {
+                clip = Some(
+                    field
+                        .bytes()
+                        .await
+                        .map_err(|e| AppError::status(StatusCode::BAD_REQUEST, format!("{e}")))?
+                        .to_vec(),
+                )
+            }
+            "thumb" => {
+                thumb = Some(
+                    field
+                        .bytes()
+                        .await
+                        .map_err(|e| AppError::status(StatusCode::BAD_REQUEST, format!("{e}")))?
+                        .to_vec(),
+                )
+            }
+            _ => {
+                let _ = field.bytes().await;
+            }
         }
     }
     let clip = clip.ok_or_else(|| AppError::status(StatusCode::BAD_REQUEST, "missing clip"))?;
     let thumb = thumb.ok_or_else(|| AppError::status(StatusCode::BAD_REQUEST, "missing thumb"))?;
-    if clip.len() > crate::config::CAP_CLIP { return Err(AppError::status(StatusCode::PAYLOAD_TOO_LARGE, "clip too large")); }
-    if thumb.len() > crate::config::CAP_THUMB { return Err(AppError::status(StatusCode::PAYLOAD_TOO_LARGE, "thumb too large")); }
+    if clip.len() > crate::config::CAP_CLIP {
+        return Err(AppError::status(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "clip too large",
+        ));
+    }
+    if thumb.len() > crate::config::CAP_THUMB {
+        return Err(AppError::status(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "thumb too large",
+        ));
+    }
 
     crate::blobs::store(&state, crate::blobs::BlobKey::Clip(&id), &clip).await?;
     crate::blobs::store(&state, crate::blobs::BlobKey::Thumb(&id), &thumb).await?;
     let now = crate::db::now();
-    if let Some(t) = &meta_title { sqlx::query("UPDATE toys SET title=? WHERE id=?").bind(t).bind(&id).execute(&state.pool).await?; }
-    sqlx::query("UPDATE toys SET state='published', published_at=? WHERE id=?").bind(now).bind(&id).execute(&state.pool).await?;
+    if let Some(t) = &meta_title {
+        sqlx::query("UPDATE toys SET title=? WHERE id=?")
+            .bind(t)
+            .bind(&id)
+            .execute(&state.pool)
+            .await?;
+    }
+    sqlx::query("UPDATE toys SET state='published', published_at=? WHERE id=?")
+        .bind(now)
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
 
     if let Some(d) = state.cfg.discord.as_ref() {
         if let Some(url) = d.webhook_url.clone() {
@@ -204,8 +387,16 @@ async fn publish(State(state): State<AppState>, user: AuthUser, Path(id): Path<S
             tokio::spawn(async move {
                 let form = reqwest::multipart::Form::new()
                     .text("content", format!("New toy: {title}\n{permalink}"))
-                    .part("files[0]", reqwest::multipart::Part::bytes(clip).file_name("clip.webm").mime_str("video/webm").unwrap());
-                if let Err(e) = http.post(&url).multipart(form).send().await { tracing::warn!(error=%e, "discord webhook failed"); }
+                    .part(
+                        "files[0]",
+                        reqwest::multipart::Part::bytes(clip)
+                            .file_name("clip.webm")
+                            .mime_str("video/webm")
+                            .unwrap(),
+                    );
+                if let Err(e) = http.post(&url).multipart(form).send().await {
+                    tracing::warn!(error=%e, "discord webhook failed");
+                }
             });
         }
     }
@@ -213,11 +404,24 @@ async fn publish(State(state): State<AppState>, user: AuthUser, Path(id): Path<S
 }
 
 #[derive(Deserialize)]
-pub struct WallQuery { #[serde(default)] sort: Option<String>, #[serde(default)] page: Option<i64> }
+pub struct WallQuery {
+    #[serde(default)]
+    sort: Option<String>,
+    #[serde(default)]
+    page: Option<i64>,
+}
 
 const PAGE_SIZE: i64 = 24;
 
-fn wall_card(id: &str, title: &str, author_id: &str, handle: &str, avatar: &Option<String>, heart_count: i64, hearted: bool) -> serde_json::Value {
+fn wall_card(
+    id: &str,
+    title: &str,
+    author_id: &str,
+    handle: &str,
+    avatar: &Option<String>,
+    heart_count: i64,
+    hearted: bool,
+) -> serde_json::Value {
     serde_json::json!({
         "id": id, "title": title,
         "author": { "id": author_id, "handle": handle, "avatar": avatar },
@@ -227,32 +431,73 @@ fn wall_card(id: &str, title: &str, author_id: &str, handle: &str, avatar: &Opti
     })
 }
 
-async fn wall(State(state): State<AppState>, maybe: Option<AuthUser>, Query(q): Query<WallQuery>) -> AppResult<Response> {
+async fn wall(
+    State(state): State<AppState>,
+    maybe: Option<AuthUser>,
+    Query(q): Query<WallQuery>,
+) -> AppResult<Response> {
     let page = q.page.unwrap_or(0).max(0);
-    let order = match q.sort.as_deref() { Some("popular") => "t.heart_count DESC, t.created_at DESC", _ => "t.created_at DESC" };
+    let order = match q.sort.as_deref() {
+        Some("popular") => "t.heart_count DESC, t.created_at DESC",
+        _ => "t.created_at DESC",
+    };
     let sql = format!("SELECT t.id,t.title,t.heart_count,u.id,u.handle,u.avatar_hash FROM toys t JOIN users u ON u.id=t.author_id
                        WHERE t.state='published' ORDER BY {order} LIMIT ? OFFSET ?");
-    let rows: Vec<(String,String,i64,String,String,Option<String>)> = sqlx::query_as(&sql)
-        .bind(PAGE_SIZE + 1).bind(page * PAGE_SIZE).fetch_all(&state.pool).await?;
+    let rows: Vec<(String, String, i64, String, String, Option<String>)> = sqlx::query_as(&sql)
+        .bind(PAGE_SIZE + 1)
+        .bind(page * PAGE_SIZE)
+        .fetch_all(&state.pool)
+        .await?;
     let uid = maybe.as_ref().map(|u| u.id.clone());
     let has_more = rows.len() as i64 > PAGE_SIZE;
     let mut cards = Vec::new();
-    for (id,title,hc,author_id,handle,avatar) in rows.into_iter().take(PAGE_SIZE as usize) {
-        let hearted = match &uid { Some(u) => sqlx::query_as::<_,(i64,)>("SELECT 1 FROM hearts WHERE user_id=? AND toy_id=?").bind(u).bind(&id).fetch_optional(&state.pool).await?.is_some(), None => false };
-        cards.push(wall_card(&id,&title,&author_id,&handle,&avatar,hc,hearted));
+    for (id, title, hc, author_id, handle, avatar) in rows.into_iter().take(PAGE_SIZE as usize) {
+        let hearted = match &uid {
+            Some(u) => {
+                sqlx::query_as::<_, (i64,)>("SELECT 1 FROM hearts WHERE user_id=? AND toy_id=?")
+                    .bind(u)
+                    .bind(&id)
+                    .fetch_optional(&state.pool)
+                    .await?
+                    .is_some()
+            }
+            None => false,
+        };
+        cards.push(wall_card(
+            &id, &title, &author_id, &handle, &avatar, hc, hearted,
+        ));
     }
     Ok(Json(serde_json::json!({ "toys": cards, "nextPage": if has_more { Some(page+1) } else { None } })).into_response())
 }
 
-async fn profile(State(state): State<AppState>, maybe: Option<AuthUser>, Path(handle): Path<String>) -> AppResult<Response> {
-    let u: Option<(String,String,Option<String>)> = sqlx::query_as("SELECT id,handle,avatar_hash FROM users WHERE handle=?").bind(&handle).fetch_optional(&state.pool).await?;
-    let (uid, handle, avatar) = u.ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such user"))?;
+async fn profile(
+    State(state): State<AppState>,
+    maybe: Option<AuthUser>,
+    Path(handle): Path<String>,
+) -> AppResult<Response> {
+    let u: Option<(String, String, Option<String>)> =
+        sqlx::query_as("SELECT id,handle,avatar_hash FROM users WHERE handle=?")
+            .bind(&handle)
+            .fetch_optional(&state.pool)
+            .await?;
+    let (uid, handle, avatar) =
+        u.ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such user"))?;
     let rows: Vec<(String,String,i64)> = sqlx::query_as("SELECT id,title,heart_count FROM toys WHERE author_id=? AND state='published' ORDER BY created_at DESC").bind(&uid).fetch_all(&state.pool).await?;
     let viewer = maybe.as_ref().map(|x| x.id.clone());
     let mut cards = Vec::new();
-    for (id,title,hc) in rows {
-        let hearted = match &viewer { Some(v) => sqlx::query_as::<_,(i64,)>("SELECT 1 FROM hearts WHERE user_id=? AND toy_id=?").bind(v).bind(&id).fetch_optional(&state.pool).await?.is_some(), None => false };
-        cards.push(wall_card(&id,&title,&uid,&handle,&avatar,hc,hearted));
+    for (id, title, hc) in rows {
+        let hearted = match &viewer {
+            Some(v) => {
+                sqlx::query_as::<_, (i64,)>("SELECT 1 FROM hearts WHERE user_id=? AND toy_id=?")
+                    .bind(v)
+                    .bind(&id)
+                    .fetch_optional(&state.pool)
+                    .await?
+                    .is_some()
+            }
+            None => false,
+        };
+        cards.push(wall_card(&id, &title, &uid, &handle, &avatar, hc, hearted));
     }
     // Owner-only: unpublished drafts, so the creator page is the one place a
     // user finds ALL their toys. Never present for other viewers.
@@ -263,9 +508,13 @@ async fn profile(State(state): State<AppState>, maybe: Option<AuthUser>, Path(ha
         Some(rows.into_iter()
             .map(|(id,title,created)| serde_json::json!({ "id": id, "title": title, "createdAt": created }))
             .collect::<Vec<_>>())
-    } else { None };
+    } else {
+        None
+    };
     let mut body = serde_json::json!({ "user": { "id": uid, "handle": handle, "avatar": avatar }, "toys": cards });
-    if let Some(d) = drafts { body["drafts"] = serde_json::Value::Array(d); }
+    if let Some(d) = drafts {
+        body["drafts"] = serde_json::Value::Array(d);
+    }
     Ok(Json(body).into_response())
 }
 

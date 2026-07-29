@@ -141,12 +141,62 @@ function makeOamSprite(overrides?: Partial<OamSprite>): OamSprite {
 
 const frameOam: OamSprite[] = Array.from({ length: 128 }, (_, i) => {
   const activeSprites: OamSprite[] = [
-    { x: 24, y: 40, tile: 0x00, pal: 0, prio: 2, large: false, flipX: false, flipY: false, on: true },
+    {
+      x: 24,
+      y: 40,
+      tile: 0x00,
+      pal: 0,
+      prio: 2,
+      large: false,
+      flipX: false,
+      flipY: false,
+      on: true,
+    },
     { x: 96, y: 64, tile: 0x04, pal: 1, prio: 1, large: true, flipX: true, flipY: false, on: true },
-    { x: 160, y: 40, tile: 0x08, pal: 2, prio: 3, large: false, flipX: false, flipY: true, on: true },
-    { x: 200, y: 120, tile: 0x0c, pal: 3, prio: 0, large: true, flipX: true, flipY: true, on: true },
-    { x: 40, y: 160, tile: 0x10, pal: 4, prio: 2, large: false, flipX: false, flipY: false, on: true },
-    { x: 120, y: 180, tile: 0x14, pal: 5, prio: 1, large: false, flipX: true, flipY: false, on: true },
+    {
+      x: 160,
+      y: 40,
+      tile: 0x08,
+      pal: 2,
+      prio: 3,
+      large: false,
+      flipX: false,
+      flipY: true,
+      on: true,
+    },
+    {
+      x: 200,
+      y: 120,
+      tile: 0x0c,
+      pal: 3,
+      prio: 0,
+      large: true,
+      flipX: true,
+      flipY: true,
+      on: true,
+    },
+    {
+      x: 40,
+      y: 160,
+      tile: 0x10,
+      pal: 4,
+      prio: 2,
+      large: false,
+      flipX: false,
+      flipY: false,
+      on: true,
+    },
+    {
+      x: 120,
+      y: 180,
+      tile: 0x14,
+      pal: 5,
+      prio: 1,
+      large: false,
+      flipX: true,
+      flipY: false,
+      on: true,
+    },
   ];
   return i < activeSprites.length ? activeSprites[i] : makeOamSprite();
 });
@@ -361,7 +411,7 @@ export const sourcePayloadM7: Uint8Array = (() => {
   for (let t = 0; t < tileCount; t++) {
     for (let p = 0; p < 64; p++) {
       // deterministic per-tile pattern across indices 0..15 (0 = transparent)
-      u8(((p + t * 5) % 16));
+      u8((p + t * 5) % 16);
     }
   }
   u8(2); // tilesW
@@ -450,5 +500,7 @@ export function makeSketchSource(name: string): SketchSource {
 
 /** Ensure-saved stub for PublishDialog's `save` prop: resolves to a toy id
  *  without touching the cloud, so the dialog stories run offline. */
-export const publishSave = async (_meta?: { title?: string; description?: string }): Promise<string> =>
-  "toy-fixture-123";
+export const publishSave = async (_meta?: {
+  title?: string;
+  description?: string;
+}): Promise<string> => "toy-fixture-123";

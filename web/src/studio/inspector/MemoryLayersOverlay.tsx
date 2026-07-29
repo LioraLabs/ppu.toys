@@ -20,21 +20,32 @@ const LAYERS: { id: PlaneId; name: string; color: string }[] = [
 function layerTag(id: PlaneId, mode: number): { tag: string; absent: boolean } {
   if (id === "obj") return { tag: "4bpp sprites", absent: false };
   const bpp = (MODE_BPP[mode] ?? MODE_BPP[1])[Number(id[2]) - 1];
-  return bpp ? { tag: `${bpp}bpp tiles`, absent: false } : { tag: `absent in mode ${mode}`, absent: true };
+  return bpp
+    ? { tag: `${bpp}bpp tiles`, absent: false }
+    : { tag: `absent in mode ${mode}`, absent: true };
 }
 
 function healthLine(r: ImportReport): { name: string; stats: string[]; warns: string[] } {
   if (r.mode === "m7") {
     return {
       name: `M7 BG${r.layer + 1}`,
-      stats: [`${r.report.colors} col`, `${r.report.unique_tiles}/${r.report.tile_capacity} tiles`, `${r.report.map_tiles_w}×${r.report.map_tiles_h} map`],
+      stats: [
+        `${r.report.colors} col`,
+        `${r.report.unique_tiles}/${r.report.tile_capacity} tiles`,
+        `${r.report.map_tiles_w}×${r.report.map_tiles_h} map`,
+      ],
       warns: r.report.overflow_tiles > 0 ? [`${r.report.overflow_tiles} tiles over capacity`] : [],
     };
   }
   const name = r.mode === "obj" ? "OBJ" : `BG${r.layer + 1}`;
   return {
     name,
-    stats: [`${r.report.colors_used} col`, `${r.report.palettes_used} pal`, `${r.report.unique_tiles} tiles`, `${r.report.vram_words} words`],
+    stats: [
+      `${r.report.colors_used} col`,
+      `${r.report.palettes_used} pal`,
+      `${r.report.unique_tiles} tiles`,
+      `${r.report.vram_words} words`,
+    ],
     warns: r.report.overflows.map((o) => o.kind),
   };
 }
@@ -82,7 +93,10 @@ export function MemoryLayersOverlay({
               {LAYERS.map((l) => {
                 const { tag, absent } = layerTag(l.id, mode);
                 return (
-                  <div key={l.id} className={"tm-layerrow" + (absent ? " tm-layerrow--absent" : "")}>
+                  <div
+                    key={l.id}
+                    className={"tm-layerrow" + (absent ? " tm-layerrow--absent" : "")}
+                  >
                     <i style={{ background: l.color }} />
                     <div className="tm-layername">
                       <div>{l.name}</div>
@@ -100,7 +114,9 @@ export function MemoryLayersOverlay({
               })}
             </div>
             <div className="tm-ov-head">Import health</div>
-            {reports.length === 0 && <div className="tm-health tm-faint">no imports this frame</div>}
+            {reports.length === 0 && (
+              <div className="tm-health tm-faint">no imports this frame</div>
+            )}
             {reports.map((r, i) => {
               const h = healthLine(r);
               return (
@@ -139,7 +155,12 @@ export function MemoryLayersOverlay({
           </main>
           <aside className="tm-ov-right">
             <div className="tm-ov-head">Live output</div>
-            <BlitCanvas pixels={frame.framebuffer} width={WIDTH} height={HEIGHT} className="tm-outcanvas" />
+            <BlitCanvas
+              pixels={frame.framebuffer}
+              width={WIDTH}
+              height={HEIGHT}
+              className="tm-outcanvas"
+            />
             <div className="tm-ov-head">Registers</div>
             <div className="tm-regrows">
               {frame.registers.map((r) => (

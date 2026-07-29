@@ -14,10 +14,25 @@ import { POKES_FILE, EMPTY_POKES } from "../pokes/pokes";
 
 function src(name: string, byte = 1): SketchSource {
   return {
-    name, kind: "bg", options: { bit_depth: 4 }, payload: new Uint8Array([byte]),
-    meta: { width: 8, height: 8, report: { mode: "tile", report: {
-      colors_used: 0, palettes_used: 0, tile_cells: 0, unique_tiles: 0, vram_words: 0, overflows: [],
-    } } },
+    name,
+    kind: "bg",
+    options: { bit_depth: 4 },
+    payload: new Uint8Array([byte]),
+    meta: {
+      width: 8,
+      height: 8,
+      report: {
+        mode: "tile",
+        report: {
+          colors_used: 0,
+          palettes_used: 0,
+          tile_cells: 0,
+          unique_tiles: 0,
+          vram_words: 0,
+          overflows: [],
+        },
+      },
+    },
   };
 }
 
@@ -304,13 +319,19 @@ describe("file operations", () => {
     openSketchStore.addFile(); // file3.lua
     openSketchStore.moveFile(3, 1); // pokes.lua stays pinned at 0
     expect(openSketch().files.map((f) => f.name)).toEqual([
-      POKES_FILE, "file3.lua", "main.lua", "file2.lua",
+      POKES_FILE,
+      "file3.lua",
+      "main.lua",
+      "file2.lua",
     ]);
     await openSketchStore.flush();
     const list = await listSketches();
     const loaded = await loadSketch(list[0].id);
     expect(loaded!.files.map((f) => f.name)).toEqual([
-      POKES_FILE, "file3.lua", "main.lua", "file2.lua",
+      POKES_FILE,
+      "file3.lua",
+      "main.lua",
+      "file2.lua",
     ]);
   });
 

@@ -20,6 +20,12 @@ export function restoreOpenContext(ctx: OpenContext): void {
   if (from) loadDemo(from);
   for (const s of ctx.sketch.sources) {
     transport.addSource(s.name, s.payload);
-    assetStore.set({ id: s.name, name: s.name, width: s.meta.width, height: s.meta.height, preview: "" });
+    assetStore.set({
+      id: s.name,
+      name: s.name,
+      width: s.meta.width,
+      height: s.meta.height,
+      preview: "",
+    });
   }
 }

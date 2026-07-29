@@ -31,7 +31,11 @@ export function Copyable({
   cyan?: boolean;
 }) {
   return (
-    <button type="button" className={"tm-copy" + (cyan ? " tm-copy--cyan" : "")} onClick={() => onCopy(label)}>
+    <button
+      type="button"
+      className={"tm-copy" + (cyan ? " tm-copy--cyan" : "")}
+      onClick={() => onCopy(label)}
+    >
       {label}
     </button>
   );

@@ -25,7 +25,13 @@ const scaleStyle = `.blitcanvas-story { width: 256px; height: 256px; image-rende
 const Gradient = () => (
   <>
     <style>{scaleStyle}</style>
-    <BlitCanvas className="blitcanvas-story" pixels={px} width={W} height={H} title="synthetic gradient" />
+    <BlitCanvas
+      className="blitcanvas-story"
+      pixels={px}
+      width={W}
+      height={H}
+      title="synthetic gradient"
+    />
   </>
 );
 

@@ -2,9 +2,17 @@ import { makeWallCard } from "../fixtures";
 import { ToyCard } from "./ToyCard";
 import { RouterStage } from "../cosmos/FixtureStage";
 
-const Default = () => <RouterStage><ToyCard card={makeWallCard()} signedIn /></RouterStage>;
+const Default = () => (
+  <RouterStage>
+    <ToyCard card={makeWallCard()} signedIn />
+  </RouterStage>
+);
 
-const SignedOut = () => <RouterStage><ToyCard card={makeWallCard()} signedIn={false} /></RouterStage>;
+const SignedOut = () => (
+  <RouterStage>
+    <ToyCard card={makeWallCard()} signedIn={false} />
+  </RouterStage>
+);
 
 const LongTitle = () => (
   <RouterStage>
@@ -19,7 +27,9 @@ const LongTitle = () => (
 );
 
 const HighHeartCount = () => (
-  <RouterStage><ToyCard card={makeWallCard({ heartCount: 12345, hearted: true })} signedIn /></RouterStage>
+  <RouterStage>
+    <ToyCard card={makeWallCard({ heartCount: 12345, hearted: true })} signedIn />
+  </RouterStage>
 );
 
 export default {

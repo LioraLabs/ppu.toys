@@ -25,6 +25,12 @@ export function loadDemo(demo: Demo): void {
     const image = toImageData(a);
     const { payload, meta } = transport.convertSource(a.kind, a.options, image);
     transport.addSource(a.id, payload);
-    assetStore.set({ id: a.id, name: `${a.id} · demo`, width: meta.width, height: meta.height, preview: preview(image) });
+    assetStore.set({
+      id: a.id,
+      name: `${a.id} · demo`,
+      width: meta.width,
+      height: meta.height,
+      preview: preview(image),
+    });
   }
 }

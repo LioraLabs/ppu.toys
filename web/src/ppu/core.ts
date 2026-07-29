@@ -221,7 +221,11 @@ export interface PpuCore {
   /** Trace OAM sprite index (0..127). */
   traceObj(index: number): ObjTrace | null;
   /** Pure quantize+pack: image -> versioned source payload + meta. No engine mutation. */
-  convertSource(kind: SourceKind, options: ConvertSourceOptions, imageData: ImageData): ConvertSourceResult;
+  convertSource(
+    kind: SourceKind,
+    options: ConvertSourceOptions,
+    imageData: ImageData,
+  ): ConvertSourceResult;
   /** Decode + register a payload for rendering under `name` (source-store stub, M10). */
   addSource(name: string, payload: Uint8Array): { ok: boolean; error?: string };
   /** Forget a registered source; returns whether the name existed. VRAM words

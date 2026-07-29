@@ -47,7 +47,19 @@ export function TraceCaption({ frame }: { frame: FrameResult }) {
   return <div className="tm-caption">{traceCaption(sel.plane, bgMode(frame.registers))}</div>;
 }
 
-function Stage({ n, title, cls, children, overlay }: { n: number; title: string; cls: string; children: ReactNode; overlay: boolean }) {
+function Stage({
+  n,
+  title,
+  cls,
+  children,
+  overlay,
+}: {
+  n: number;
+  title: string;
+  cls: string;
+  children: ReactNode;
+  overlay: boolean;
+}) {
   return (
     <div className={`tm-stage ${cls}`}>
       <div className="tm-stage-title">{overlay ? `${n} · ${title}` : title}</div>
@@ -58,7 +70,15 @@ function Stage({ n, title, cls, children, overlay }: { n: number; title: string;
 
 const Arrow = () => <div className="tm-arrow">→</div>;
 
-export function TraceChain({ frame, copy, variant }: { frame: FrameResult; copy: (label: string) => void; variant: "tab" | "overlay" }) {
+export function TraceChain({
+  frame,
+  copy,
+  variant,
+}: {
+  frame: FrameResult;
+  copy: (label: string) => void;
+  variant: "tab" | "overlay";
+}) {
   const sel = useTraceSelection();
   const overlay = variant === "overlay";
   const isObj = sel.plane === "obj";
@@ -73,11 +93,18 @@ export function TraceChain({ frame, copy, variant }: { frame: FrameResult; copy:
     () => (isObj ? null : ppuCore.traceBgPixel(layer, sel.x, sel.y)),
     [frame, isObj, layer, sel.x, sel.y],
   );
-  const obj = useMemo(() => (isObj ? ppuCore.traceObj(sel.objIndex) : null), [frame, isObj, sel.objIndex]);
+  const obj = useMemo(
+    () => (isObj ? ppuCore.traceObj(sel.objIndex) : null),
+    [frame, isObj, sel.objIndex],
+  );
 
   const mode = bgMode(frame.registers);
   if (!isObj && !bg) {
-    return <div className="tm-note">BG{layer} does not exist in mode {mode} — pick another plane.</div>;
+    return (
+      <div className="tm-note">
+        BG{layer} does not exist in mode {mode} — pick another plane.
+      </div>
+    );
   }
   if (isObj && !obj) return <div className="tm-note">no sprite at OAM #{sel.objIndex}</div>;
 
@@ -96,10 +123,10 @@ export function TraceChain({ frame, copy, variant }: { frame: FrameResult; copy:
   // Effective palette pick: explicit strip pick, else the traced pixel; the
   // core's exact resolution (bgr555/cgramIndex) wins when it applies.
   const exact = !isObj && sel.pickedIdx === null ? bg!.pixel : null;
-  const pickIdx = sel.pickedIdx ?? (isObj ? 0 : bg!.pixel?.index ?? 0);
+  const pickIdx = sel.pickedIdx ?? (isObj ? 0 : (bg!.pixel?.index ?? 0));
   const resolved = resolvePaletteEntry(pickIdx, paletteBase, frame.cgram, directColor);
   const bgr = exact ? exact.bgr555 : resolved.bgr555;
-  const cgAddr = exact ? exact.cgramIndex ?? null : directColor ? null : resolved.cgAddr;
+  const cgAddr = exact ? (exact.cgramIndex ?? null) : directColor ? null : resolved.cgAddr;
 
   // Source rows
   const srcRows: [string, ReactNode][] = isObj
@@ -143,7 +170,11 @@ export function TraceChain({ frame, copy, variant }: { frame: FrameResult; copy:
           className="tm-swatch tm-swatch--btn"
           style={{ backgroundColor: bgr555ToHex(bgr) }}
           disabled={cgAddr === null}
-          title={cgAddr === null ? "direct color — CGRAM bypassed, nothing to poke" : `poke ${cgLabel(cgAddr)}`}
+          title={
+            cgAddr === null
+              ? "direct color — CGRAM bypassed, nothing to poke"
+              : `poke ${cgLabel(cgAddr)}`
+          }
           onClick={() => setSwatchPokeOpen(true)}
         />
         {swatchPokeOpen && cgAddr !== null && (
@@ -174,7 +205,12 @@ export function TraceChain({ frame, copy, variant }: { frame: FrameResult; copy:
   return (
     <>
       <div className="tm-chain">
-        <Stage n={1} title={isObj ? "SOURCE (OAM)" : "SOURCE (TILEMAP)"} cls="tm-stage--source" overlay={overlay}>
+        <Stage
+          n={1}
+          title={isObj ? "SOURCE (OAM)" : "SOURCE (TILEMAP)"}
+          cls="tm-stage--source"
+          overlay={overlay}
+        >
           <div className="tm-minimap-wrap">
             <BlitCanvas
               pixels={minimap}
@@ -193,7 +229,10 @@ export function TraceChain({ frame, copy, variant }: { frame: FrameResult; copy:
               onHover={setHover}
             />
             {hover && !isObj && (
-              <div className="tm-hoverbox" style={boxStyle(hover.x - (hover.x % ts), hover.y - (hover.y % ts), ts, ts)} />
+              <div
+                className="tm-hoverbox"
+                style={boxStyle(hover.x - (hover.x % ts), hover.y - (hover.y % ts), ts, ts)}
+              />
             )}
             <div className="tm-selbox" style={boxStyle(selX, selY, selW, selH)} />
           </div>
@@ -249,7 +288,9 @@ export function TraceChain({ frame, copy, variant }: { frame: FrameResult; copy:
                 <button
                   key={i}
                   type="button"
-                  className={(usedIdx.has(i) ? "tm-pal--used " : "") + (i === pickIdx ? "tm-pal--sel" : "")}
+                  className={
+                    (usedIdx.has(i) ? "tm-pal--used " : "") + (i === pickIdx ? "tm-pal--sel" : "")
+                  }
                   style={{ backgroundColor: bgr555ToHex(e.bgr555) }}
                   title={directColor ? `direct ${i}` : cgLabel(paletteBase + i)}
                   onClick={() => pickPaletteIdx(i)}
@@ -273,7 +314,12 @@ export function TraceChain({ frame, copy, variant }: { frame: FrameResult; copy:
             </Stage>
             <Arrow />
             <Stage n={5} title="OUTPUT" cls="tm-stage--out" overlay>
-              <BlitCanvas pixels={frame.framebuffer} width={WIDTH} height={HEIGHT} className="tm-outcanvas" />
+              <BlitCanvas
+                pixels={frame.framebuffer}
+                width={WIDTH}
+                height={HEIGHT}
+                className="tm-outcanvas"
+              />
               <div className="tm-meta">
                 lands at screen{" "}
                 <span className="tm-strong">
@@ -284,8 +330,14 @@ export function TraceChain({ frame, copy, variant }: { frame: FrameResult; copy:
           </>
         )}
       </div>
-      {directColor && <div className="tm-note">direct color — CGRAM bypassed; the 8-bit index maps straight to BGR555</div>}
-      {!isObj && !bg!.regs.visible && <div className="tm-note">layer hidden (visibility toggle in Memory &amp; Layers)</div>}
+      {directColor && (
+        <div className="tm-note">
+          direct color — CGRAM bypassed; the 8-bit index maps straight to BGR555
+        </div>
+      )}
+      {!isObj && !bg!.regs.visible && (
+        <div className="tm-note">layer hidden (visibility toggle in Memory &amp; Layers)</div>
+      )}
     </>
   );
 }

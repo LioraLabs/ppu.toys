@@ -29,15 +29,16 @@ end
  *  file — every point where files enter or are read from the open context
  *  normalizes through this. */
 function ensurePokesFirst(files: SketchFile[]): SketchFile[] {
-  const pokes = files.find((f) => f.name === POKES_FILE) ?? { name: POKES_FILE, source: EMPTY_POKES };
+  const pokes = files.find((f) => f.name === POKES_FILE) ?? {
+    name: POKES_FILE,
+    source: EMPTY_POKES,
+  };
   return [pokes, ...files.filter((f) => f.name !== POKES_FILE)];
 }
 
 /** What the editor is looking at: a read-only bundled demo, or a stored
  *  sketch. Demos become sketches lazily — see editFile/addSource. */
-export type OpenContext =
-  | { kind: "demo"; demoId: string }
-  | { kind: "sketch"; sketch: Sketch };
+export type OpenContext = { kind: "demo"; demoId: string } | { kind: "sketch"; sketch: Sketch };
 
 export interface OpenSketchState {
   context: OpenContext;
@@ -312,9 +313,7 @@ export function useOpenSketch(): OpenSketchState {
 /** Display name of the open context — the toolbar seam for the Workspace shell. */
 export function openContextLabel(s: OpenSketchState): string {
   const ctx = s.context;
-  return ctx.kind === "sketch"
-    ? ctx.sketch.name
-    : demoById(ctx.demoId)?.label ?? ctx.demoId;
+  return ctx.kind === "sketch" ? ctx.sketch.name : (demoById(ctx.demoId)?.label ?? ctx.demoId);
 }
 
 /** Ordered files of the open context — the editor's tab list. A single-file

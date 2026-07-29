@@ -155,7 +155,9 @@ describe("write endpoints", () => {
     title: "My Toy",
     description: "desc",
     files: [{ name: "main.lua", source: "-- code" }],
-    sources: [{ name: "s1", kind: "builtin", builtinId: "b1", options: {}, meta: {}, payload: "YmFzZTY0" }],
+    sources: [
+      { name: "s1", kind: "builtin", builtinId: "b1", options: {}, meta: {}, payload: "YmFzZTY0" },
+    ],
   };
 
   it("createToy POSTs /api/toys with CSRF, JSON content-type, and body; returns id", async () => {

@@ -27,7 +27,5 @@ export const handlers = [
 
   http.put("/api/toys/:id", () => new HttpResponse(null, { status: 204 })),
 
-  http.post("/api/toys/:id/publish", () =>
-    HttpResponse.json({ id: "abc123", state: "published" }),
-  ),
+  http.post("/api/toys/:id/publish", () => HttpResponse.json({ id: "abc123", state: "published" })),
 ];

@@ -30,7 +30,9 @@ export function Wall() {
       setNextPage(p.nextPage);
       setLoading(false);
     });
-    return () => { live = false; };
+    return () => {
+      live = false;
+    };
   }, [sort]);
 
   async function loadMore() {
@@ -56,8 +58,8 @@ export function Wall() {
         <div className="wall-hero">
           <h1>Toys for the SNES picture chip.</h1>
           <p>
-            Watch them run, then <Link to="/studio">open the Studio</Link> and make your own —
-            live Lua on an authentic PPU.
+            Watch them run, then <Link to="/studio">open the Studio</Link> and make your own — live
+            Lua on an authentic PPU.
           </p>
         </div>
       )}
@@ -65,11 +67,15 @@ export function Wall() {
         <button
           className={`sort-tab${sort === "recent" ? " sort-tab--on" : ""}`}
           onClick={() => setSort("recent")}
-        >Recent</button>
+        >
+          Recent
+        </button>
         <button
           className={`sort-tab${sort === "popular" ? " sort-tab--on" : ""}`}
           onClick={() => setSort("popular")}
-        >Popular</button>
+        >
+          Popular
+        </button>
       </div>
       {!loading && cards.length === 0 && (
         <p className="wall-empty">No toys yet — be the first to publish one.</p>

@@ -37,24 +37,39 @@ export function AddSourceDialog({ onClose }: { onClose: () => void }) {
   const options: ConvertSourceOptions = useMemo(() => {
     if (kind === "m7") return {}; // fixed pipeline, no remap options
     const remap = { dither, dither_strength: strength, alpha_threshold: alphaT };
-    return kind === "bg" ? { bit_depth: bitDepth, tile_size: 8, ...remap } : { cell_size: cellSize, ...remap };
+    return kind === "bg"
+      ? { bit_depth: bitDepth, tile_size: 8, ...remap }
+      : { cell_size: cellSize, ...remap };
   }, [kind, bitDepth, cellSize, dither, strength, alphaT]);
 
   const converted = useMemo(() => {
     if (!image) return null;
-    try { return ppuCore.convertSource(kind, options, image); }
-    catch (e) { return { error: String((e as Error)?.message ?? e) } as const; }
+    try {
+      return ppuCore.convertSource(kind, options, image);
+    } catch (e) {
+      return { error: String((e as Error)?.message ?? e) } as const;
+    }
   }, [image, kind, options]);
 
-  const take = useCallback(async (files: FileList) => {
-    const png = pngFiles(files)[0];
-    if (!png) { setError("drop a PNG"); return; }
-    try {
-      const d = await decodeImageFile(png);
-      setImage(d.imageData); setFileName(d.name); setError(null);
-      if (!name) setName(d.name.replace(/\.png$/i, ""));
-    } catch { setError("could not decode image"); }
-  }, [name]);
+  const take = useCallback(
+    async (files: FileList) => {
+      const png = pngFiles(files)[0];
+      if (!png) {
+        setError("drop a PNG");
+        return;
+      }
+      try {
+        const d = await decodeImageFile(png);
+        setImage(d.imageData);
+        setFileName(d.name);
+        setError(null);
+        if (!name) setName(d.name.replace(/\.png$/i, ""));
+      } catch {
+        setError("could not decode image");
+      }
+    },
+    [name],
+  );
 
   const add = () => {
     if (!converted || "error" in converted) return;
@@ -80,35 +95,69 @@ export function AddSourceDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="srcdlg-scrim" onClick={onClose}>
-      <div className="srcdlg" role="dialog" aria-label="Add source" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="srcdlg"
+        role="dialog"
+        aria-label="Add source"
+        onClick={(e) => e.stopPropagation()}
+      >
         <header className="srcdlg-head">
           <span className="srcdlg-title">Add Source</span>
-          <button type="button" className="btn-ghost" onClick={onClose} aria-label="Close">×</button>
+          <button type="button" className="btn-ghost" onClick={onClose} aria-label="Close">
+            ×
+          </button>
         </header>
 
         <div className="srcdlg-body">
           <div className="srcdlg-left">
             <div
               className="srcdlg-drop"
-              role="button" tabIndex={0}
+              role="button"
+              tabIndex={0}
               onClick={() => inputRef.current?.click()}
-              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); inputRef.current?.click(); } }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  inputRef.current?.click();
+                }
+              }}
               onDragOver={(e) => e.preventDefault()}
-              onDrop={(e) => { e.preventDefault(); if (e.dataTransfer.files.length) void take(e.dataTransfer.files); }}
+              onDrop={(e) => {
+                e.preventDefault();
+                if (e.dataTransfer.files.length) void take(e.dataTransfer.files);
+              }}
             >
               {image ? `${fileName} · ${image.width}×${image.height}` : "drop PNG or click to pick"}
-              <input ref={inputRef} type="file" accept="image/png" hidden onChange={(e: ChangeEvent<HTMLInputElement>) => { if (e.target.files) void take(e.target.files); e.target.value = ""; }} />
+              <input
+                ref={inputRef}
+                type="file"
+                accept="image/png"
+                hidden
+                onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                  if (e.target.files) void take(e.target.files);
+                  e.target.value = "";
+                }}
+              />
             </div>
 
-            <label className="srcdlg-field">kind
+            <label className="srcdlg-field">
+              kind
               <select value={kind} onChange={(e) => setKind(e.target.value as SourceKind)}>
-                {KINDS.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
+                {KINDS.map((k) => (
+                  <option key={k.id} value={k.id}>
+                    {k.label}
+                  </option>
+                ))}
               </select>
             </label>
 
             {kind === "bg" && (
-              <label className="srcdlg-field">bit depth
-                <select value={bitDepth} onChange={(e) => setBitDepth(Number(e.target.value) as 2 | 4 | 8)}>
+              <label className="srcdlg-field">
+                bit depth
+                <select
+                  value={bitDepth}
+                  onChange={(e) => setBitDepth(Number(e.target.value) as 2 | 4 | 8)}
+                >
                   <option value={2}>2bpp · 4 colors</option>
                   <option value={4}>4bpp · 16 colors</option>
                   <option value={8}>8bpp · 256 colors</option>
@@ -118,50 +167,111 @@ export function AddSourceDialog({ onClose }: { onClose: () => void }) {
             {kind === "bg" && <div className="srcpv-note">tile size fixed at 8px.</div>}
 
             {kind === "obj" && (
-              <label className="srcdlg-field">cell / sprite size
-                <select value={cellSize} onChange={(e) => setCellSize(Number(e.target.value) as 8 | 16 | 32 | 64)}>
-                  {[8, 16, 32, 64].map((s) => <option key={s} value={s}>{s}px = obj[i].size</option>)}
+              <label className="srcdlg-field">
+                cell / sprite size
+                <select
+                  value={cellSize}
+                  onChange={(e) => setCellSize(Number(e.target.value) as 8 | 16 | 32 | 64)}
+                >
+                  {[8, 16, 32, 64].map((s) => (
+                    <option key={s} value={s}>
+                      {s}px = obj[i].size
+                    </option>
+                  ))}
                 </select>
               </label>
             )}
-            {kind === "obj" && <div className="srcpv-note">Uniform grid, no margins — one cell = OBJ size. Pre-crop irregular/marginned downloaded sheets; we quantize what's given (no slicer/reflow).</div>}
-            {kind === "m7" && <div className="srcpv-note">Fixed: 8bpp chunky, ≤256 tiles, flat palette. No options.</div>}
+            {kind === "obj" && (
+              <div className="srcpv-note">
+                Uniform grid, no margins — one cell = OBJ size. Pre-crop irregular/marginned
+                downloaded sheets; we quantize what's given (no slicer/reflow).
+              </div>
+            )}
+            {kind === "m7" && (
+              <div className="srcpv-note">
+                Fixed: 8bpp chunky, ≤256 tiles, flat palette. No options.
+              </div>
+            )}
 
             {kind !== "m7" && (
               <>
-                <label className="srcdlg-field">dither
+                <label className="srcdlg-field">
+                  dither
                   <select value={dither} onChange={(e) => setDither(e.target.value as Dither)}>
-                    {DITHERS.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
+                    {DITHERS.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.label}
+                      </option>
+                    ))}
                   </select>
                 </label>
-                {dither === "diffusion" && <div className="srcpv-note">Smoothest gradients, but the noise defeats tile dedup — expect a much higher unique-tile count.</div>}
+                {dither === "diffusion" && (
+                  <div className="srcpv-note">
+                    Smoothest gradients, but the noise defeats tile dedup — expect a much higher
+                    unique-tile count.
+                  </div>
+                )}
                 {dither !== "none" && (
-                  <label className="srcdlg-field">dither strength · {strength}%
-                    <input type="range" min={0} max={100} value={strength} onChange={(e) => setStrength(Number(e.target.value))} />
+                  <label className="srcdlg-field">
+                    dither strength · {strength}%
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={strength}
+                      onChange={(e) => setStrength(Number(e.target.value))}
+                    />
                   </label>
                 )}
-                <label className="srcdlg-field">alpha threshold · {alphaT}
-                  <input type="range" min={0} max={255} value={alphaT} onChange={(e) => setAlphaT(Number(e.target.value))} />
+                <label className="srcdlg-field">
+                  alpha threshold · {alphaT}
+                  <input
+                    type="range"
+                    min={0}
+                    max={255}
+                    value={alphaT}
+                    onChange={(e) => setAlphaT(Number(e.target.value))}
+                  />
                 </label>
               </>
             )}
 
-            <label className="srcdlg-field">name
-              <input type="text" value={name} placeholder="track" onChange={(e) => setName(e.target.value)} />
+            <label className="srcdlg-field">
+              name
+              <input
+                type="text"
+                value={name}
+                placeholder="track"
+                onChange={(e) => setName(e.target.value)}
+              />
             </label>
 
             {error && <div className="srcdlg-error">{error}</div>}
             <div className="srcdlg-actions">
-              <button type="button" className="btn-ghost" onClick={onClose}>Cancel</button>
-              <button type="button" className="btn-solid" disabled={!ok} onClick={add}>Add source</button>
+              <button type="button" className="btn-ghost" onClick={onClose}>
+                Cancel
+              </button>
+              <button type="button" className="btn-solid" disabled={!ok} onClick={add}>
+                Add source
+              </button>
             </div>
           </div>
 
           <div className="srcdlg-right">
-            {!image && <div className="srcdlg-hint">Preview appears here after you drop an image.</div>}
-            {image && converted && "error" in converted && <div className="srcdlg-error">{converted.error}</div>}
+            {!image && (
+              <div className="srcdlg-hint">Preview appears here after you drop an image.</div>
+            )}
+            {image && converted && "error" in converted && (
+              <div className="srcdlg-error">{converted.error}</div>
+            )}
             {image && converted && !("error" in converted) && (
-              <SourcePreview kind={kind} meta={converted.meta} payload={converted.payload} cellSize={kind === "obj" ? cellSize : undefined} sourceImage={image} />
+              <SourcePreview
+                kind={kind}
+                meta={converted.meta}
+                payload={converted.payload}
+                cellSize={kind === "obj" ? cellSize : undefined}
+                sourceImage={image}
+              />
             )}
           </div>
         </div>

@@ -70,9 +70,7 @@ export function EditorPane({ onSources }: EditorPaneProps) {
   // Defaults to the first NON-generated file — pokes.lua is always index 0,
   // so without this every sketch would open staring at the generated tab.
   const [activeName, setActiveName] = useState(() => defaultActive(files));
-  const active = files.some((f) => f.name === activeName)
-    ? activeName
-    : defaultActive(files);
+  const active = files.some((f) => f.name === activeName) ? activeName : defaultActive(files);
   useEffect(() => {
     setActiveName(defaultActive(openContextFiles(openSketchStore.state())));
   }, [session]);
@@ -91,9 +89,9 @@ export function EditorPane({ onSources }: EditorPaneProps) {
   };
 
   // ── debounced whole-program push (error grace lives in the engine)
-  const sinkRef = useRef<(fs: SourceFile[]) => { ok: boolean; error?: LuaError }>(
-    () => ({ ok: true }),
-  );
+  const sinkRef = useRef<(fs: SourceFile[]) => { ok: boolean; error?: LuaError }>(() => ({
+    ok: true,
+  }));
   sinkRef.current = (fs) => (onSources ? onSources(fs) : transport.setSources(fs));
   const pusher = useMemo(
     () => createSourcePusher((fs) => sinkRef.current(fs), setCompileError),

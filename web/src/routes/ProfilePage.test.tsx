@@ -14,12 +14,17 @@ const profile = makeProfile({
   toys: [makeWallCard({ id: "a", title: "Toy a", heartCount: 1 })],
 });
 const mockGetProfile = getProfile as ReturnType<typeof vi.fn>;
-afterEach(() => { cleanup(); vi.clearAllMocks(); });
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
 
 function renderAt(handle = "ada") {
   return render(
     <MemoryRouter initialEntries={[`/u/${handle}`]}>
-      <Routes><Route path="/u/:handle" element={<ProfilePage />} /></Routes>
+      <Routes>
+        <Route path="/u/:handle" element={<ProfilePage />} />
+      </Routes>
     </MemoryRouter>,
   );
 }

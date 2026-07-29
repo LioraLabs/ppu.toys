@@ -30,7 +30,7 @@ describe("editorSettings", () => {
     expect(calls).toBe(1);
   });
 
-  it("parseVim treats anything but \"1\" as off", () => {
+  it('parseVim treats anything but "1" as off', () => {
     expect(parseVim("1")).toBe(true);
     expect(parseVim("0")).toBe(false);
     expect(parseVim(null)).toBe(false);

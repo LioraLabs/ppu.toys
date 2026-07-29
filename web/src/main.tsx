@@ -19,7 +19,7 @@ initCore()
     createRoot(root).render(
       <StrictMode>
         <App />
-      </StrictMode>
+      </StrictMode>,
     );
   })
   .catch((err) => {

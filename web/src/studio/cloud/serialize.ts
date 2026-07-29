@@ -13,7 +13,11 @@ export type ConvertAsset = (asset: DemoAsset) => ConvertSourceResult;
 
 /** Browser-only: ImageData exists at runtime, not in the vitest env. */
 const defaultConvert: ConvertAsset = (a) =>
-  transport.convertSource(a.kind, a.options, new ImageData(new Uint8ClampedArray(a.data), a.width, a.height));
+  transport.convertSource(
+    a.kind,
+    a.options,
+    new ImageData(new Uint8ClampedArray(a.data), a.width, a.height),
+  );
 
 /** The demo whose built-in art this workspace renders, if any: a demo context
  *  directly, or a sketch lazily forked from a demo (forkedFrom = demo id). A
@@ -39,13 +43,27 @@ export function serializeWorkspace(
   if (demo) {
     for (const a of demo.assets) {
       const { payload, meta } = convert(a);
-      byName.set(a.id, { name: a.id, kind: a.kind, builtinId: null, options: a.options, meta, payload: encodeBase64(payload) });
+      byName.set(a.id, {
+        name: a.id,
+        kind: a.kind,
+        builtinId: null,
+        options: a.options,
+        meta,
+        payload: encodeBase64(payload),
+      });
     }
   }
   // user-added sources win over a same-named demo asset
   const userSources = state.context.kind === "sketch" ? state.context.sketch.sources : [];
   for (const s of userSources) {
-    byName.set(s.name, { name: s.name, kind: s.kind, builtinId: null, options: s.options, meta: s.meta, payload: encodeBase64(s.payload) });
+    byName.set(s.name, {
+      name: s.name,
+      kind: s.kind,
+      builtinId: null,
+      options: s.options,
+      meta: s.meta,
+      payload: encodeBase64(s.payload),
+    });
   }
   return { files, sources: [...byName.values()] };
 }

@@ -1,11 +1,4 @@
-export type TabId =
-  | "trace"
-  | "memory"
-  | "compose"
-  | "windows"
-  | "registers"
-  | "sprites"
-  | "vram";
+export type TabId = "trace" | "memory" | "compose" | "windows" | "registers" | "sprites" | "vram";
 
 export type OverlayId = "memory-layers" | "compositor";
 

@@ -1,5 +1,11 @@
 import { SourcePreview } from "./SourcePreview";
-import { sourceMetaBg, sourceMetaM7, sourcePayloadBg, sourcePayloadM7, makeSourceMeta } from "../../fixtures";
+import {
+  sourceMetaBg,
+  sourceMetaM7,
+  sourcePayloadBg,
+  sourcePayloadM7,
+  makeSourceMeta,
+} from "../../fixtures";
 import "./sources.css";
 
 // SourcePreview is already pure props: given a source kind + meta + payload it

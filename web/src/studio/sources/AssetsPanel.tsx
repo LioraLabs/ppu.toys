@@ -26,7 +26,7 @@ export function AssetsPanel({ onClose }: { onClose: () => void }) {
   const sources: SketchSource[] = ctx.kind === "sketch" ? ctx.sketch.sources : [];
   // A demo/starter context's assets are procedural (regenerated on restore) —
   // shown as fixed rows; editing them means forking via a real add/remove.
-  const templateAssets = ctx.kind === "demo" ? demoById(ctx.demoId)?.assets ?? [] : [];
+  const templateAssets = ctx.kind === "demo" ? (demoById(ctx.demoId)?.assets ?? []) : [];
 
   const remove = (name: string) => {
     if (!window.confirm(`Remove "${name}" from this toy?`)) return;
@@ -49,9 +49,8 @@ export function AssetsPanel({ onClose }: { onClose: () => void }) {
       <ul className="library-list">
         {sources.length === 0 && templateAssets.length === 0 && (
           <li className="library-empty">
-            No assets yet. Add a PNG and it becomes real SNES graphics — tiles,
-            palettes and a tilemap — usable from Lua as{" "}
-            <code>bg[n].source</code> / <code>obj.sheet</code>.
+            No assets yet. Add a PNG and it becomes real SNES graphics — tiles, palettes and a
+            tilemap — usable from Lua as <code>bg[n].source</code> / <code>obj.sheet</code>.
           </li>
         )}
         {templateAssets.map((a) => (
@@ -66,7 +65,10 @@ export function AssetsPanel({ onClose }: { onClose: () => void }) {
           </li>
         ))}
         {sources.map((s) => (
-          <li key={s.name} className={"library-row" + (openRow === s.name ? " library-row--open" : "")}>
+          <li
+            key={s.name}
+            className={"library-row" + (openRow === s.name ? " library-row--open" : "")}
+          >
             <button
               type="button"
               className="library-open asset-row"
@@ -84,19 +86,20 @@ export function AssetsPanel({ onClose }: { onClose: () => void }) {
           </li>
         ))}
       </ul>
-      {openRow && (() => {
-        const s = sources.find((x) => x.name === openRow);
-        return s ? (
-          <div className="asset-preview">
-            <SourcePreview
-              kind={s.kind}
-              meta={s.meta}
-              payload={s.payload}
-              cellSize={s.kind === "obj" ? s.options.cell_size : undefined}
-            />
-          </div>
-        ) : null;
-      })()}
+      {openRow &&
+        (() => {
+          const s = sources.find((x) => x.name === openRow);
+          return s ? (
+            <div className="asset-preview">
+              <SourcePreview
+                kind={s.kind}
+                meta={s.meta}
+                payload={s.payload}
+                cellSize={s.kind === "obj" ? s.options.cell_size : undefined}
+              />
+            </div>
+          ) : null;
+        })()}
       {adding && <AddSourceDialog onClose={() => setAdding(false)} />}
     </aside>
   );

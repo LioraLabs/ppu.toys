@@ -1,0 +1,11 @@
+# generated / vendored — never hand-formatted
+node_modules
+target
+build
+web/dist
+web/.shots
+web/src/wasm/pkg
+cook_modules
+pnpm-lock.yaml
+Cargo.lock
+cook.lock

@@ -5,7 +5,10 @@ import { Presenter } from "./presenter";
  *  Canvas2D fallback constructs. */
 class FakeImageData {
   data: Uint8ClampedArray;
-  constructor(public width: number, public height: number) {
+  constructor(
+    public width: number,
+    public height: number,
+  ) {
     this.data = new Uint8ClampedArray(width * height * 4);
   }
 }
@@ -75,7 +78,13 @@ function workingGl(): WebGLRenderingContext & { _lost: boolean } {
     deleteBuffer: () => {},
     deleteTexture: () => {},
     getExtension: (name: string) =>
-      name === "WEBGL_lose_context" ? { loseContext: () => { gl._lost = true; } } : null,
+      name === "WEBGL_lose_context"
+        ? {
+            loseContext: () => {
+              gl._lost = true;
+            },
+          }
+        : null,
   };
   return gl as unknown as WebGLRenderingContext & { _lost: boolean };
 }
@@ -84,8 +93,7 @@ function workingGl(): WebGLRenderingContext & { _lost: boolean } {
  *  real canvas does (its context is created once and reused). */
 function reusableGlCanvas(gl: WebGLRenderingContext): HTMLCanvasElement {
   return {
-    getContext: (kind: string) =>
-      kind === "webgl" || kind === "experimental-webgl" ? gl : null,
+    getContext: (kind: string) => (kind === "webgl" || kind === "experimental-webgl" ? gl : null),
   } as unknown as HTMLCanvasElement;
 }
 
@@ -93,11 +101,7 @@ function fakeCanvas(gl: WebGLRenderingContext): HTMLCanvasElement {
   const ctx2d = { putImageData: () => {} };
   return {
     getContext: (kind: string) =>
-      kind === "webgl" || kind === "experimental-webgl"
-        ? gl
-        : kind === "2d"
-          ? ctx2d
-          : null,
+      kind === "webgl" || kind === "experimental-webgl" ? gl : kind === "2d" ? ctx2d : null,
   } as unknown as HTMLCanvasElement;
 }
 
@@ -170,8 +174,6 @@ describe("Presenter — a WebGL failure is non-fatal", () => {
       true,
     );
     const fb = new Uint8ClampedArray(256 * 224 * 4);
-    expect(() =>
-      p.render(fb, { crt: false, scanline: false, pixelGrid: false }),
-    ).not.toThrow();
+    expect(() => p.render(fb, { crt: false, scanline: false, pixelGrid: false })).not.toThrow();
   });
 });

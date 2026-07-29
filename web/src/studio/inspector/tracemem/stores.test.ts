@@ -14,7 +14,13 @@ beforeEach(() => resetTraceSelection());
 
 describe("traceSelection store", () => {
   it("starts at the screen center on BG1", () => {
-    expect(traceSelection.get()).toEqual({ plane: "bg1", x: 128, y: 112, objIndex: 0, pickedIdx: null });
+    expect(traceSelection.get()).toEqual({
+      plane: "bg1",
+      x: 128,
+      y: 112,
+      objIndex: 0,
+      pickedIdx: null,
+    });
   });
   it("selecting a plane/pixel/sprite clears the palette pick", () => {
     pickPaletteIdx(7);

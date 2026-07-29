@@ -16,7 +16,13 @@ function Anchor({ children }: { children: React.ReactNode }) {
       <div style={{ position: "relative", display: "inline-block" }}>
         <span
           aria-hidden
-          style={{ display: "inline-block", width: 24, height: 24, background: "#c86432", borderRadius: 4 }}
+          style={{
+            display: "inline-block",
+            width: 24,
+            height: 24,
+            background: "#c86432",
+            borderRadius: 4,
+          }}
         />
         {children}
       </div>

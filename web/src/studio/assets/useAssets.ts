@@ -26,11 +26,30 @@ export function useAssets() {
     for (const file of pngs) {
       try {
         const decoded = await decodeImageFile(file);
-        const name = assetId(file.name, assetStore.list().map((a) => a.id));
-        const { payload, meta } = transport.convertSource(DEFAULT_KIND, DEFAULT_OPTIONS, decoded.imageData);
+        const name = assetId(
+          file.name,
+          assetStore.list().map((a) => a.id),
+        );
+        const { payload, meta } = transport.convertSource(
+          DEFAULT_KIND,
+          DEFAULT_OPTIONS,
+          decoded.imageData,
+        );
         transport.addSource(name, payload);
-        assetStore.set({ id: name, name, width: meta.width, height: meta.height, preview: decoded.preview });
-        openSketchStore.addSource({ name, kind: DEFAULT_KIND, options: DEFAULT_OPTIONS, payload, meta });
+        assetStore.set({
+          id: name,
+          name,
+          width: meta.width,
+          height: meta.height,
+          preview: decoded.preview,
+        });
+        openSketchStore.addSource({
+          name,
+          kind: DEFAULT_KIND,
+          options: DEFAULT_OPTIONS,
+          payload,
+          meta,
+        });
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to decode image");
       }

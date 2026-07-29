@@ -34,7 +34,9 @@ describe("HexPoke store pipeline", () => {
 
   it("committing a parsed hex value pokes the whole register", () => {
     poke(regPoke(0x212c, parseHexPoke(0x212c, "1f")!));
-    const src = openContextFiles(openSketchStore.state()).find((f) => f.name === POKES_FILE)!.source;
+    const src = openContextFiles(openSketchStore.state()).find(
+      (f) => f.name === POKES_FILE,
+    )!.source;
     expect(src).toContain("  TM = 0x1f -- $212C");
   });
 });

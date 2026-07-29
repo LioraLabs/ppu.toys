@@ -15,12 +15,19 @@ function card(id: string): WallCard {
   return makeWallCard({ id, title: `Toy ${id}`, heartCount: 0 });
 }
 const mockGetWall = getWall as ReturnType<typeof vi.fn>;
-afterEach(() => { cleanup(); vi.clearAllMocks(); });
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
 
 describe("Wall", () => {
   it("loads recent toys on mount and renders the grid", async () => {
     mockGetWall.mockResolvedValue({ toys: [card("a"), card("b")], nextPage: null });
-    render(<MemoryRouter><Wall /></MemoryRouter>);
+    render(
+      <MemoryRouter>
+        <Wall />
+      </MemoryRouter>,
+    );
     expect(await screen.findByText("Toy a")).toBeInTheDocument();
     expect(screen.getByText("Toy b")).toBeInTheDocument();
     expect(mockGetWall).toHaveBeenCalledWith("recent", 0);
@@ -28,7 +35,11 @@ describe("Wall", () => {
 
   it("switching to popular refetches with sort=popular", async () => {
     mockGetWall.mockResolvedValue({ toys: [card("a")], nextPage: null });
-    render(<MemoryRouter><Wall /></MemoryRouter>);
+    render(
+      <MemoryRouter>
+        <Wall />
+      </MemoryRouter>,
+    );
     await screen.findByText("Toy a");
     fireEvent.click(screen.getByRole("button", { name: /popular/i }));
     await waitFor(() => expect(mockGetWall).toHaveBeenCalledWith("popular", 0));
@@ -38,7 +49,11 @@ describe("Wall", () => {
     mockGetWall
       .mockResolvedValueOnce({ toys: [card("a")], nextPage: 1 })
       .mockResolvedValueOnce({ toys: [card("b")], nextPage: null });
-    render(<MemoryRouter><Wall /></MemoryRouter>);
+    render(
+      <MemoryRouter>
+        <Wall />
+      </MemoryRouter>,
+    );
     await screen.findByText("Toy a");
     fireEvent.click(screen.getByRole("button", { name: /load more/i }));
     expect(await screen.findByText("Toy b")).toBeInTheDocument();
@@ -50,7 +65,11 @@ describe("Wall", () => {
 
   it("shows an empty state when there are no toys", async () => {
     mockGetWall.mockResolvedValue({ toys: [], nextPage: null });
-    render(<MemoryRouter><Wall /></MemoryRouter>);
+    render(
+      <MemoryRouter>
+        <Wall />
+      </MemoryRouter>,
+    );
     expect(await screen.findByText(/no toys yet/i)).toBeInTheDocument();
   });
 
@@ -58,12 +77,17 @@ describe("Wall", () => {
     // First page resolves; the load-more fetch hangs so we can observe the
     // pending guard.
     let releaseSecond: (v: { toys: WallCard[]; nextPage: number | null }) => void = () => {};
-    mockGetWall
-      .mockResolvedValueOnce({ toys: [card("a")], nextPage: 1 })
-      .mockImplementationOnce(
-        () => new Promise((resolve) => { releaseSecond = resolve; }),
-      );
-    render(<MemoryRouter><Wall /></MemoryRouter>);
+    mockGetWall.mockResolvedValueOnce({ toys: [card("a")], nextPage: 1 }).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseSecond = resolve;
+        }),
+    );
+    render(
+      <MemoryRouter>
+        <Wall />
+      </MemoryRouter>,
+    );
     await screen.findByText("Toy a");
 
     const btn = screen.getByRole("button", { name: /load more/i });

@@ -1,8 +1,13 @@
 import { useSyncExternalStore } from "react";
 import { ppuCore } from "../../ppu/instance";
 import type {
-  FrameResult, LuaError, PpuCore, SourceFile,
-  SourceKind, ConvertSourceOptions, ConvertSourceResult,
+  FrameResult,
+  LuaError,
+  PpuCore,
+  SourceFile,
+  SourceKind,
+  ConvertSourceOptions,
+  ConvertSourceResult,
 } from "../../ppu/core";
 import { advanceClock, scrubToClock, type Clock } from "../output/clock";
 import { WIDTH, HEIGHT } from "../../ppu/core";
@@ -199,7 +204,11 @@ export class Transport {
 
   /** Pure quantize+pack (no engine mutation) — the Add Source dialog and
    *  the drop path use this to produce a payload. */
-  convertSource = (kind: SourceKind, options: ConvertSourceOptions, image: ImageData): ConvertSourceResult => {
+  convertSource = (
+    kind: SourceKind,
+    options: ConvertSourceOptions,
+    image: ImageData,
+  ): ConvertSourceResult => {
     return this.coreRef().convertSource(kind, options, image);
   };
 

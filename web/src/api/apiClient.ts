@@ -3,7 +3,12 @@
  *  `X-PPU-CSRF: 1` header the server requires. URLs are relative — Vite proxies
  *  /api + /blobs to ppu-server in dev, and prod is same-origin. */
 
-export interface Me { id: string; handle: string; avatar: string | null; isAdmin: boolean }
+export interface Me {
+  id: string;
+  handle: string;
+  avatar: string | null;
+  isAdmin: boolean;
+}
 
 export interface WallCard {
   id: string;
@@ -15,9 +20,15 @@ export interface WallCard {
   hearted: boolean;
 }
 
-export interface WallPage { toys: WallCard[]; nextPage: number | null }
+export interface WallPage {
+  toys: WallCard[];
+  nextPage: number | null;
+}
 
-export interface ToyFile { name: string; source: string }
+export interface ToyFile {
+  name: string;
+  source: string;
+}
 
 export interface ToySource {
   name: string;
@@ -41,7 +52,11 @@ export interface ToyFull {
   author: { id: string; handle: string; avatar: string | null };
 }
 
-export interface DraftInfo { id: string; title: string; createdAt: number }
+export interface DraftInfo {
+  id: string;
+  title: string;
+  createdAt: number;
+}
 
 export interface Profile {
   user: { id: string; handle: string; avatar: string | null };

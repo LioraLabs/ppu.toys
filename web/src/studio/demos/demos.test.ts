@@ -92,7 +92,8 @@ describe("DEMOS", () => {
 
   it("track fills the full Mode 7 field with a repeating tile pattern", () => {
     const track = DEMOS[1].assets[0];
-    const rgbAt = (x: number, y: number) => Array.from(track.data.slice((y * track.width + x) * 4, (y * track.width + x) * 4 + 4));
+    const rgbAt = (x: number, y: number) =>
+      Array.from(track.data.slice((y * track.width + x) * 4, (y * track.width + x) * 4 + 4));
     expect(rgbAt(0, 0)).toEqual([0, 0, 0, 255]);
     expect(rgbAt(8, 0)).toEqual([32, 0, 255, 255]);
     expect(rgbAt(64, 0)).toEqual([0, 0, 0, 255]);

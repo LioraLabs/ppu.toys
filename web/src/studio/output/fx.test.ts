@@ -8,12 +8,16 @@ describe("parseFx", () => {
     expect(DEFAULT_FX).toEqual({ crt: false, scanline: false, pixelGrid: false });
   });
   it("keeps known boolean flags and ignores extra keys", () => {
-    expect(parseFx(JSON.stringify({ crt: true, scanline: false, pixelGrid: true, junk: 9 })))
-      .toEqual({ crt: true, scanline: false, pixelGrid: true });
+    expect(
+      parseFx(JSON.stringify({ crt: true, scanline: false, pixelGrid: true, junk: 9 })),
+    ).toEqual({ crt: true, scanline: false, pixelGrid: true });
   });
   it("coerces missing/non-boolean flags to false", () => {
-    expect(parseFx(JSON.stringify({ crt: 1, scanline: "yes" })))
-      .toEqual({ crt: false, scanline: false, pixelGrid: false });
+    expect(parseFx(JSON.stringify({ crt: 1, scanline: "yes" }))).toEqual({
+      crt: false,
+      scanline: false,
+      pixelGrid: false,
+    });
   });
 });
 

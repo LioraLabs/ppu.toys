@@ -13,7 +13,12 @@ import {
 } from "./format";
 import type { RegisterView } from "../../ppu/core";
 
-const reg = (name: string, value: number): RegisterView => ({ addr: 0, name, value, changed: false });
+const reg = (name: string, value: number): RegisterView => ({
+  addr: 0,
+  name,
+  value,
+  changed: false,
+});
 
 describe("inspector format", () => {
   it("formats register addr as $XXXX uppercase 4-digit", () => {

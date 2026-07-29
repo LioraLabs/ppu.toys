@@ -133,9 +133,8 @@ function normalize(raw: Sketch & { assets?: unknown }): Sketch {
 }
 
 export async function loadSketch(id: string): Promise<Sketch | undefined> {
-  const raw = await withStore<(Sketch & { assets?: unknown }) | undefined>(
-    "readonly",
-    (s) => s.get(id),
+  const raw = await withStore<(Sketch & { assets?: unknown }) | undefined>("readonly", (s) =>
+    s.get(id),
   );
   return raw ? normalize(raw) : undefined;
 }

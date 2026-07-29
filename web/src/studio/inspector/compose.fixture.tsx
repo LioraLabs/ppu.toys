@@ -6,6 +6,4 @@ import "./inspector.css";
 import "../pokes/pokes.css";
 
 // ComposeTab is the production assembly of every compose section.
-export default (
-  <ComposeTab c={makeFixtureCompositor(frameResult)} screens={frameScreens} />
-);
+export default <ComposeTab c={makeFixtureCompositor(frameResult)} screens={frameScreens} />;

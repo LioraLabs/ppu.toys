@@ -20,11 +20,23 @@ import { usePokeDialect } from "./dialect";
  *  frame(), so the script wins). Renders nothing while unpoked. `fields`
  *  scopes the marker to a control's friendly fields; without it the marker
  *  is register-centric (any poke living in `addr`). */
-export function PokeDot({ c, addr, fields }: { c: Compositor; addr: number; fields?: readonly string[] }) {
+export function PokeDot({
+  c,
+  addr,
+  fields,
+}: {
+  c: Compositor;
+  addr: number;
+  fields?: readonly string[];
+}) {
   const ps = c.pokedAt(addr, fields);
   if (ps.length === 0) return null;
   const matches = ps.map((p) => pokeMatchesLive(p, c.frame.registers));
-  const match = matches.some((m) => m === false) ? false : matches.every((m) => m === true) ? true : null;
+  const match = matches.some((m) => m === false)
+    ? false
+    : matches.every((m) => m === true)
+      ? true
+      : null;
   const state =
     match === null
       ? "poked"

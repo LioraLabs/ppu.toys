@@ -83,13 +83,12 @@ export function FileTabs(props: FileTabsProps) {
               if (!isGenerated) setEditing(name);
             }}
           >
-            {isGenerated && (
-              props.pokedFiles?.has(name) ? (
+            {isGenerated &&
+              (props.pokedFiles?.has(name) ? (
                 <span className="ftab-gen ftab-gen--poked">⚡</span>
               ) : (
                 <span className="ftab-gen">⚙</span>
-              )
-            )}
+              ))}
             {name === active && <span className="ftab-dot" />}
             {name !== active && errorFiles.has(name) && <span className="ftab-err" />}
             {editing === name ? (
@@ -132,7 +131,11 @@ export function FileTabs(props: FileTabsProps) {
         type="button"
         className={"ftab-vim" + (props.vimMode ? " ftab-vim--on" : "")}
         aria-pressed={!!props.vimMode}
-        title={props.vimMode ? "Vim keybindings on — click to switch to plain" : "Vim keybindings off — click to enable"}
+        title={
+          props.vimMode
+            ? "Vim keybindings on — click to switch to plain"
+            : "Vim keybindings off — click to enable"
+        }
         onClick={() => props.onToggleVim?.()}
       >
         <span className="ftab-status-dot" /> vim {props.vimMode ? "on" : "off"}

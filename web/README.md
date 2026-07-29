@@ -40,7 +40,7 @@ Editing is live with error grace, not edit-then-recompile:
 - A successful recompile builds a fresh Lua VM and re-executes all chunks
   (fresh globals each time — `Lua::core()` is rebuilt on every `set_sources`
   call), but the clock is untouched: `Transport.setSources` re-renders at the
-  *current* `t`/`f` (`web/src/studio/transport/transport.ts`: "recompile never
+  _current_ `t`/`f` (`web/src/studio/transport/transport.ts`: "recompile never
   resets t/f"). Pokes (see below) live in the ordinary `pokes.lua` file, so a
   recompile carries them along like any other edit — there is no separate
   override layer to invalidate.
@@ -77,7 +77,7 @@ Multi-file sketches follow PICO-8 scoping: `LuaEngine::set_sources`
 (`crates/ppu-core/src/lua.rs`) loads each `(name, source)` pair **in list
 order** as a chunk named after its file, executing all of them into one shared
 global environment. `frame` (and `init`, run once per successful compile if
-present) are resolved only *after* every chunk has run, so any file can
+present) are resolved only _after_ every chunk has run, so any file can
 reference globals defined in another file regardless of naming — `main.lua` is
 a UI convention, not a special-cased entry point. Errors carry
 `{file, line?, message}` attributed to the chunk that raised them.

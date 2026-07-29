@@ -25,16 +25,33 @@ import { server } from "../mocks/server";
 
 function emptyOam(): OamSprite[] {
   return Array.from({ length: 128 }, () => ({
-    x: 0, y: 0, tile: 0, pal: 0, prio: 0, large: false, flipX: false, flipY: false, on: false,
+    x: 0,
+    y: 0,
+    tile: 0,
+    pal: 0,
+    prio: 0,
+    large: false,
+    flipX: false,
+    flipY: false,
+    on: false,
   }));
 }
 
-const noObjOverflow: ObjOverflow = { rangeOver: false, timeOver: false, maxSprites: 0, maxTiles: 0 };
+const noObjOverflow: ObjOverflow = {
+  rangeOver: false,
+  timeOver: false,
+  maxSprites: 0,
+  maxTiles: 0,
+};
 
 /** A do-nothing PpuCore for tests: zeroed buffers of the exact PPU dimensions. */
 class StubPpuCore implements PpuCore {
-  setSource() { return { ok: true }; }
-  setSources() { return { ok: true }; }
+  setSource() {
+    return { ok: true };
+  }
+  setSources() {
+    return { ok: true };
+  }
   frame(): FrameResult {
     return {
       framebuffer: new Uint8ClampedArray(WIDTH * HEIGHT * 4),
@@ -45,8 +62,12 @@ class StubPpuCore implements PpuCore {
     };
   }
   setLayerVisible() {}
-  vram() { return new Uint16Array(0x8000); }
-  importReports() { return []; }
+  vram() {
+    return new Uint16Array(0x8000);
+  }
+  importReports() {
+    return [];
+  }
   screens(): CompositorScreens {
     return {
       main: new Uint8ClampedArray(WIDTH * HEIGHT * 4),
@@ -54,11 +75,23 @@ class StubPpuCore implements PpuCore {
       mathMask: new Uint8Array(WIDTH * HEIGHT),
     };
   }
-  layerView(_plane: PlaneId) { return new Uint8ClampedArray(WIDTH * HEIGHT * 4); }
-  traceBgPixel() { return null; }
-  traceBgTile() { return null; }
-  traceObj() { return null; }
-  convertSource(_kind: SourceKind, _options: ConvertSourceOptions, imageData: ImageData): ConvertSourceResult {
+  layerView(_plane: PlaneId) {
+    return new Uint8ClampedArray(WIDTH * HEIGHT * 4);
+  }
+  traceBgPixel() {
+    return null;
+  }
+  traceBgTile() {
+    return null;
+  }
+  traceObj() {
+    return null;
+  }
+  convertSource(
+    _kind: SourceKind,
+    _options: ConvertSourceOptions,
+    imageData: ImageData,
+  ): ConvertSourceResult {
     return {
       payload: new Uint8Array(),
       meta: {
@@ -66,13 +99,24 @@ class StubPpuCore implements PpuCore {
         height: imageData.height,
         report: {
           mode: "tile",
-          report: { colors_used: 0, palettes_used: 0, tile_cells: 0, unique_tiles: 0, vram_words: 0, overflows: [] },
+          report: {
+            colors_used: 0,
+            palettes_used: 0,
+            tile_cells: 0,
+            unique_tiles: 0,
+            vram_words: 0,
+            overflows: [],
+          },
         },
       },
     };
   }
-  addSource() { return { ok: true }; }
-  removeSource() { return true; }
+  addSource() {
+    return { ok: true };
+  }
+  removeSource() {
+    return true;
+  }
 }
 
 setPpuCore(new StubPpuCore());

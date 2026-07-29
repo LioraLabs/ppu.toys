@@ -1,5 +1,10 @@
 import { useMemo } from "react";
-import { openSketchStore, openContextFiles, useOpenSketch, type OpenSketchState } from "../sketches/openSketch";
+import {
+  openSketchStore,
+  openContextFiles,
+  useOpenSketch,
+  type OpenSketchState,
+} from "../sketches/openSketch";
 import type { SketchFile } from "../sketches/sketchStore";
 import { POKES_FILE, parsePokes, pokesToLua, upsertPoke, type Poke } from "./pokes";
 import { evictCrossDialect, regeneratePokes, type PokeDialect } from "../inspector/compose/model";

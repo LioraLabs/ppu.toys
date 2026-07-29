@@ -44,13 +44,17 @@ export function demoFiles(d: Demo): DemoFile[] {
 // a 64x64 sky would repeat ~3.5x down the frame (banding). The Rust engine's
 // vertical wrap is exercised independently by crates/ppu-core/tests/golden_demos.rs;
 // these are tuned for how the flagship demo looks, not byte-identity with it.
-const SCREEN_W = 256, SCREEN_H = 224;
+const SCREEN_W = 256,
+  SCREEN_H = 224;
 const HORIZON = 140; // sky opaque above; transparent below so hills (bg2) show
 
 function sky(): DemoAsset {
-  const w = SCREEN_W, h = SCREEN_H;
+  const w = SCREEN_W,
+    h = SCREEN_H;
   const data = new Uint8ClampedArray(w * h * 4);
-  const sunX = 192, sunY = 50, sunR = 20;
+  const sunX = 192,
+    sunY = 50,
+    sunR = 20;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i = (y * w + x) * 4;
@@ -58,9 +62,13 @@ function sky(): DemoAsset {
         data[i + 3] = 0; // below the horizon -> transparent, hills show through
         continue;
       }
-      const dx = x - sunX, dy = y - sunY;
+      const dx = x - sunX,
+        dy = y - sunY;
       if (dx * dx + dy * dy < sunR * sunR) {
-        data[i] = 255; data[i + 1] = 226; data[i + 2] = 168; data[i + 3] = 255; // sun
+        data[i] = 255;
+        data[i + 1] = 226;
+        data[i + 2] = 168;
+        data[i + 3] = 255; // sun
         continue;
       }
       // dusk vertical gradient: deep indigo up top -> warm pink at the horizon
@@ -75,7 +83,8 @@ function sky(): DemoAsset {
 }
 
 function hills(): DemoAsset {
-  const w = SCREEN_W, h = SCREEN_H;
+  const w = SCREEN_W,
+    h = SCREEN_H;
   const data = new Uint8ClampedArray(w * h * 4);
   const top = HORIZON - 2; // slight overlap (hidden behind sky) avoids a seam
   for (let y = 0; y < h; y++) {
@@ -97,7 +106,8 @@ function hills(): DemoAsset {
 }
 
 function hero(): DemoAsset {
-  const w = 64, h = 8;
+  const w = 64,
+    h = 8;
   const data = new Uint8ClampedArray(w * h * 4);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -113,7 +123,8 @@ function hero(): DemoAsset {
 }
 
 function track(): DemoAsset {
-  const w = 1024, h = 1024;
+  const w = 1024,
+    h = 1024;
   const data = new Uint8ClampedArray(w * h * 4);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -130,7 +141,8 @@ function track(): DemoAsset {
 }
 
 function ribbons(): DemoAsset {
-  const w = SCREEN_W, h = SCREEN_H;
+  const w = SCREEN_W,
+    h = SCREEN_H;
   const data = new Uint8ClampedArray(w * h * 4);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -146,20 +158,27 @@ function ribbons(): DemoAsset {
 }
 
 function panel(): DemoAsset {
-  const w = SCREEN_W, h = SCREEN_H;
+  const w = SCREEN_W,
+    h = SCREEN_H;
   const data = new Uint8ClampedArray(w * h * 4);
   for (let y = 0; y < h; y++) {
     const opaque = y >= 80 && y < 160;
     for (let x = 0; x < w; x++) {
       const i = (y * w + x) * 4;
-      if (opaque) { data[i] = 80; data[i + 1] = 230; data[i + 2] = 255; data[i + 3] = 255; }
+      if (opaque) {
+        data[i] = 80;
+        data[i + 1] = 230;
+        data[i + 2] = 255;
+        data[i + 3] = 255;
+      }
     }
   }
   return { id: "panel", width: w, height: h, data, kind: "bg", options: { bit_depth: 4 } };
 }
 
 function gradient(): DemoAsset {
-  const w = SCREEN_W, h = SCREEN_H;
+  const w = SCREEN_W,
+    h = SCREEN_H;
   const data = new Uint8ClampedArray(w * h * 4);
   for (let y = 0; y < h; y++) {
     // top->bottom hue sweep, constant across x (matches golden_demos.rs gradient()).
@@ -179,7 +198,8 @@ function gradient(): DemoAsset {
 function ramp(): DemoAsset {
   // 32px-period sawtooth in x AND y (mirrors golden_demos.rs ramp()): fine sub-8px
   // detail that mosaic flattens into flat blocks. Only 16 unique 8x8 tiles.
-  const w = SCREEN_W, h = SCREEN_H;
+  const w = SCREEN_W,
+    h = SCREEN_H;
   const data = new Uint8ClampedArray(w * h * 4);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -437,7 +457,12 @@ export const DEMOS: Demo[] = [
     [sky(), hills(), hero()],
   ),
   demo("mode7-floor", "mode7-floor", [{ name: "main.lua", source: MODE7_SRC }], [track()]),
-  demo("offset-per-tile", "offset-per-tile", [{ name: "main.lua", source: OFFSET_SRC }], [ribbons()]),
+  demo(
+    "offset-per-tile",
+    "offset-per-tile",
+    [{ name: "main.lua", source: OFFSET_SRC }],
+    [ribbons()],
+  ),
   demo("mode3-gradient", "mode3-gradient", [{ name: "main.lua", source: MODE3_SRC }], [gradient()]),
   demo(
     "translucency",
@@ -474,9 +499,12 @@ function frame(t, f)
 end
 `;
 
-export const STARTER: Demo = demo("starter", "my first toy", [
-  { name: "main.lua", source: STARTER_SRC },
-], []);
+export const STARTER: Demo = demo(
+  "starter",
+  "my first toy",
+  [{ name: "main.lua", source: STARTER_SRC }],
+  [],
+);
 
 /** Resolve a demo-context id: the bundled DEMOS plus the starter template. */
 export function demoById(id: string): Demo | undefined {

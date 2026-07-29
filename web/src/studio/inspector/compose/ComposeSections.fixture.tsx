@@ -13,9 +13,7 @@ const c = makeFixtureCompositor(frameResult);
 
 const ScreenPreviews = () => <Sections.ScreenPreviews c={c} screens={frameScreens} />;
 
-const ScreenPreviewsLarge = () => (
-  <Sections.ScreenPreviews c={c} screens={frameScreens} large />
-);
+const ScreenPreviewsLarge = () => <Sections.ScreenPreviews c={c} screens={frameScreens} large />;
 
 const EquationChip = () => <Sections.EquationChip c={c} />;
 

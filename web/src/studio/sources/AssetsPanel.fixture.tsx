@@ -16,7 +16,11 @@ function Seeded({ names }: { names: string[] }) {
     return true;
   });
   useOpenSketch(); // re-render with the seeded store
-  return ready ? <OverlayStage><AssetsPanel onClose={() => {}} /></OverlayStage> : null;
+  return ready ? (
+    <OverlayStage>
+      <AssetsPanel onClose={() => {}} />
+    </OverlayStage>
+  ) : null;
 }
 
 // Starter context: no assets yet — the teaching empty state.
@@ -25,7 +29,11 @@ const Empty = () => {
     openSketchStore._resetForTests();
     return true;
   });
-  return ready ? <OverlayStage><AssetsPanel onClose={() => {}} /></OverlayStage> : null;
+  return ready ? (
+    <OverlayStage>
+      <AssetsPanel onClose={() => {}} />
+    </OverlayStage>
+  ) : null;
 };
 
 const WithAssets = () => <Seeded names={["sky", "hills", "hero"]} />;

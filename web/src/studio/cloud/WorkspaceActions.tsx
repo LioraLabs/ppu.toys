@@ -90,10 +90,20 @@ export function WorkspaceActions() {
     <div className="workspace-actions">
       {status && <span className="cloud-status">{status}</span>}
       {draftId && <span className="cloud-draft-dot" title="Saved to a cloud draft" />}
-      <button type="button" className="btn-ghost" disabled={busy || showPublish} onClick={() => void handleSave()}>
+      <button
+        type="button"
+        className="btn-ghost"
+        disabled={busy || showPublish}
+        onClick={() => void handleSave()}
+      >
         Save
       </button>
-      <button type="button" className="btn-solid" disabled={busy} onClick={() => setShowPublish(true)}>
+      <button
+        type="button"
+        className="btn-solid"
+        disabled={busy}
+        onClick={() => setShowPublish(true)}
+      >
         Publish…
       </button>
       {showPublish && <PublishDialog onClose={() => setShowPublish(false)} save={save} />}

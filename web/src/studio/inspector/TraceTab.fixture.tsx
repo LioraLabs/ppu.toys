@@ -25,14 +25,12 @@ function FullTabNote() {
   return (
     <div className="insp-scroll">
       <div className="tm-note">
-        The full TraceTab embeds TraceChain, which resolves the selected
-        pixel/sprite through the live rasterizer (ppuCore.layerView /
-        traceBgPixel / traceObj) to render its Stage 1–5 resolution-chain
-        canvases. That's a spec non-goal to fake with a PpuCore mock, so it's
+        The full TraceTab embeds TraceChain, which resolves the selected pixel/sprite through the
+        live rasterizer (ppuCore.layerView / traceBgPixel / traceObj) to render its Stage 1–5
+        resolution-chain canvases. That's a spec non-goal to fake with a PpuCore mock, so it's
         verified in-app rather than isolated — see TraceChain.fixture.tsx's
-        ResolutionChainRequiresCore story. The Chrome story above is
-        TraceTab's wasm-free surface: the plane/mode controls and caption
-        rendered exactly as TraceTab arranges them.
+        ResolutionChainRequiresCore story. The Chrome story above is TraceTab's wasm-free surface:
+        the plane/mode controls and caption rendered exactly as TraceTab arranges them.
       </div>
     </div>
   );

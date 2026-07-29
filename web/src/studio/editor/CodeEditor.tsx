@@ -35,7 +35,14 @@ export interface CodeEditorProps {
 /** ONE CodeMirror view for the whole pane; per-file EditorStates swap through
  *  it so tab switches preserve undo history (docStates). Source pushing and
  *  error routing live in EditorPane — this component only edits and displays. */
-export function CodeEditor({ docKey, doc, generated = false, vimMode = false, onChange, errors }: CodeEditorProps) {
+export function CodeEditor({
+  docKey,
+  doc,
+  generated = false,
+  vimMode = false,
+  onChange,
+  errors,
+}: CodeEditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const docsRef = useRef<DocStates | null>(null);

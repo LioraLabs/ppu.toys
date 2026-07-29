@@ -142,6 +142,7 @@ chore check: typecheck test-core test-web server.test
 
 chore fmt
     cargo fmt
+    pnpm exec prettier --write --log-level warn .
 
 # ── HOUSEKEEPING ─────────────────────────────────────────────────────────────
 chore clean

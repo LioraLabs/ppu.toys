@@ -2,7 +2,9 @@
    insp / reg classes. Lives here so studio.css stays untouched. */
 
 /* additive: existing .insp-tab is defined in studio.css */
-.insp-tab { user-select: none; }
+.insp-tab {
+  user-select: none;
+}
 
 .insp-empty {
   padding: 12px;
@@ -11,7 +13,12 @@
   color: var(--text-dim2);
 }
 
-.insp-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 8px; }
+.insp-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+}
 
 .insp-note {
   margin: 0 0 10px;
@@ -62,7 +69,11 @@
 }
 
 /* OAM active-sprite list */
-.oam-list { display: flex; flex-direction: column; gap: 3px; }
+.oam-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
 .oam-row {
   display: flex;
   align-items: center;
@@ -74,14 +85,18 @@
   font-family: var(--font-mono);
   font-size: 10px;
 }
-.oam-field { color: var(--text-dim2); }
+.oam-field {
+  color: var(--text-dim2);
+}
 
 .vram-toolbar {
   display: flex;
   align-items: center;
   gap: 8px;
 }
-.vram-toolbar .insp-subhead { flex: 1; }
+.vram-toolbar .insp-subhead {
+  flex: 1;
+}
 .vram-toolbar select {
   height: 24px;
   border: 1px solid var(--border-subtle);
@@ -108,9 +123,16 @@
   background: var(--bg-grid);
   color: var(--text-dim2);
 }
-.vram-grid { display: grid; gap: 4px; }
-.vram-grid--tiles { grid-template-columns: repeat(8, minmax(0, 1fr)); }
-.vram-grid--map { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.vram-grid {
+  display: grid;
+  gap: 4px;
+}
+.vram-grid--tiles {
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+}
+.vram-grid--map {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
 .vram-tile {
   display: grid;
   gap: 2px;
@@ -130,7 +152,10 @@
   gap: 0;
   image-rendering: pixelated;
 }
-.vram-tile-px span { width: 3px; height: 3px; }
+.vram-tile-px span {
+  width: 3px;
+  height: 3px;
+}
 .vram-map-cell {
   min-height: 32px;
   display: grid;
@@ -145,7 +170,10 @@
   font-size: 9px;
   color: var(--text-dim2);
 }
-.vram-map-cell--prio { border-color: var(--accent); color: var(--text-main); }
+.vram-map-cell--prio {
+  border-color: var(--accent);
+  color: var(--text-main);
+}
 .palette-banks {
   display: grid;
   grid-template-columns: 1fr;
@@ -200,7 +228,9 @@
   letter-spacing: 0.1em;
   color: var(--text-dim2);
 }
-.reg-m6-val { color: var(--text-main); }
+.reg-m6-val {
+  color: var(--text-main);
+}
 .reg-winbar {
   position: relative;
   height: 8px;
@@ -216,14 +246,33 @@
   bottom: 0;
   display: block;
 }
-.reg-winband--1 { background: color-mix(in srgb, var(--accent-cyan) 70%, transparent); }
-.reg-winband--2 { background: color-mix(in srgb, var(--accent-magenta) 45%, transparent); }
-
-.oam-badges { display: flex; gap: 4px; margin: 2px 0 4px; }
-.oam-badge {
-  font-family: var(--font-mono); font-size: 9px; padding: 1px 5px;
-  border-radius: 3px; letter-spacing: .04em;
+.reg-winband--1 {
+  background: color-mix(in srgb, var(--accent-cyan) 70%, transparent);
 }
-.oam-badge.range { background: rgba(255, 120, 60, .22); color: #ffb488; }
-.oam-badge.time { background: rgba(120, 140, 255, .22); color: #9fb0ff; }
-.oam-maxline { color: var(--text-dim2); }
+.reg-winband--2 {
+  background: color-mix(in srgb, var(--accent-magenta) 45%, transparent);
+}
+
+.oam-badges {
+  display: flex;
+  gap: 4px;
+  margin: 2px 0 4px;
+}
+.oam-badge {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  letter-spacing: 0.04em;
+}
+.oam-badge.range {
+  background: rgba(255, 120, 60, 0.22);
+  color: #ffb488;
+}
+.oam-badge.time {
+  background: rgba(120, 140, 255, 0.22);
+  color: #9fb0ff;
+}
+.oam-maxline {
+  color: var(--text-dim2);
+}

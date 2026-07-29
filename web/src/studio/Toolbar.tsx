@@ -34,7 +34,15 @@ export interface ToolbarProps {
 /** Account avatar + dropdown. Plain anchors, not router Links — the toolbar
  *  renders router-less in fixtures, and leaving the studio is a real page
  *  navigation anyway. */
-function AccountMenu({ user, onSignOut, onNewToy }: { user: ToolbarUser; onSignOut?: () => void; onNewToy?: () => void }) {
+function AccountMenu({
+  user,
+  onSignOut,
+  onNewToy,
+}: {
+  user: ToolbarUser;
+  onSignOut?: () => void;
+  onNewToy?: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -85,7 +93,12 @@ function AccountMenu({ user, onSignOut, onNewToy }: { user: ToolbarUser; onSignO
           <a className="tb-menu-item" role="menuitem" href="/">
             Wall
           </a>
-          <button type="button" className="tb-menu-item" role="menuitem" onClick={() => onSignOut?.()}>
+          <button
+            type="button"
+            className="tb-menu-item"
+            role="menuitem"
+            onClick={() => onSignOut?.()}
+          >
             Sign out
           </button>
         </div>
@@ -122,10 +135,20 @@ export function Toolbar({
         {dirty && <span className="unsaved-dot" />}
       </div>
       <div className="tb-spacer" />
-      <button type="button" className="btn-solid" onClick={() => onRun?.()} title="Restart from t=0 (Ctrl+Enter)">
+      <button
+        type="button"
+        className="btn-solid"
+        onClick={() => onRun?.()}
+        title="Restart from t=0 (Ctrl+Enter)"
+      >
         ▶ Run
       </button>
-      <button type="button" className="btn-ghost" onClick={() => onToggleTheme?.()} aria-label="Toggle color theme">
+      <button
+        type="button"
+        className="btn-ghost"
+        onClick={() => onToggleTheme?.()}
+        aria-label="Toggle color theme"
+      >
         {theme === "dark" ? "Light" : "Dark"}
       </button>
       {workspaceSlot}

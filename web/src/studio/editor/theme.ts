@@ -57,7 +57,10 @@ const ppuEditorTheme = EditorView.theme(
 
 const ppuHighlight = HighlightStyle.define([
   { tag: t.comment, color: "#5b616e", fontStyle: "italic" },
-  { tag: [t.keyword, t.controlKeyword, t.definitionKeyword, t.modifier, t.operatorKeyword], color: "var(--magenta)" },
+  {
+    tag: [t.keyword, t.controlKeyword, t.definitionKeyword, t.modifier, t.operatorKeyword],
+    color: "var(--magenta)",
+  },
   { tag: [t.number, t.integer, t.float], color: "var(--orange)" },
   { tag: [t.string, t.special(t.string)], color: "#7ddc8b" },
   { tag: [t.function(t.variableName), t.function(t.propertyName)], color: "var(--yellow)" },

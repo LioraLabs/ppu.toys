@@ -108,8 +108,8 @@ export class Presenter {
     this.canvas = canvas;
     if (!forceCanvas2d) {
       const opts: WebGLContextAttributes = { antialias: false, alpha: false };
-      const gl = (canvas.getContext("webgl", opts)
-        ?? canvas.getContext("experimental-webgl", opts)) as WebGLRenderingContext | null;
+      const gl = (canvas.getContext("webgl", opts) ??
+        canvas.getContext("experimental-webgl", opts)) as WebGLRenderingContext | null;
       if (gl) {
         try {
           this.setupGl(gl);
@@ -222,8 +222,17 @@ export class Presenter {
     }
     try {
       gl.bindTexture(gl.TEXTURE_2D, this.tex);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, WIDTH, HEIGHT, 0, gl.RGBA,
-        gl.UNSIGNED_BYTE, new Uint8Array(framebuffer.buffer, framebuffer.byteOffset, framebuffer.length));
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        WIDTH,
+        HEIGHT,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        new Uint8Array(framebuffer.buffer, framebuffer.byteOffset, framebuffer.length),
+      );
       const un = fxUniforms(fx);
       gl.uniform1f(this.u.uCrt, un.uCrt);
       gl.uniform1f(this.u.uScanline, un.uScanline);

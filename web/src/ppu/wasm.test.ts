@@ -31,7 +31,14 @@ function fakeCore(over: Partial<WasmCoreLike> = {}): WasmCoreLike {
         height: 0,
         report: {
           mode: "tile",
-          report: { colors_used: 0, palettes_used: 0, tile_cells: 0, unique_tiles: 0, vram_words: 0, overflows: [] },
+          report: {
+            colors_used: 0,
+            palettes_used: 0,
+            tile_cells: 0,
+            unique_tiles: 0,
+            vram_words: 0,
+            overflows: [],
+          },
         },
       },
     }),
@@ -163,7 +170,14 @@ describe("wrapWasmCore view seams", () => {
         height: 1,
         report: {
           mode: "tile",
-          report: { colors_used: 0, palettes_used: 0, tile_cells: 0, unique_tiles: 0, vram_words: 0, overflows: [] },
+          report: {
+            colors_used: 0,
+            palettes_used: 0,
+            tile_cells: 0,
+            unique_tiles: 0,
+            vram_words: 0,
+            overflows: [],
+          },
         },
       },
     };

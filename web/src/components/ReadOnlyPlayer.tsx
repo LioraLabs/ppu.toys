@@ -7,7 +7,10 @@ import { integerScale } from "../studio/output/clock";
 import type { PresentFx } from "../studio/output/fx";
 import "./player.css";
 
-export interface PlayerSource { name: string; payload: Uint8Array }
+export interface PlayerSource {
+  name: string;
+  payload: Uint8Array;
+}
 
 /** Read-only live player: pushes a published toy's program into the SHARED
  *  transport/core and presents its framebuffer through the same WebGL Presenter
@@ -15,8 +18,12 @@ export interface PlayerSource { name: string; payload: Uint8Array }
  *  /studio and this route drive the single shared core; each pushes its program
  *  on mount, so navigating between them re-establishes the right render state. */
 export function ReadOnlyPlayer({
-  files, sources,
-}: { files: { name: string; source: string }[]; sources: PlayerSource[] }) {
+  files,
+  sources,
+}: {
+  files: { name: string; source: string }[];
+  sources: PlayerSource[];
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const displayRef = useRef<HTMLDivElement>(null);
   const [forceCanvas2d, setForceCanvas2d] = useState(false);

@@ -78,8 +78,8 @@ const compositor = makeFixtureCompositor(frame);
 function CoreNote({ what }: { what: string }) {
   return (
     <div className="tm-note">
-      {what} is produced by the live rasterizer (ppuCore) and can't render from
-      a static fixture — open the LiveCore story for the real thing.
+      {what} is produced by the live rasterizer (ppuCore) and can't render from a static fixture —
+      open the LiveCore story for the real thing.
     </div>
   );
 }
@@ -191,9 +191,15 @@ function OutputMock({ f }: { f: FrameResult }) {
       <div className="output-header">
         <span className="output-title">LIVE OUTPUT</span>
         <div className="tb-spacer" />
-        <button type="button" className="fx-toggle">CRT</button>
-        <button type="button" className="fx-toggle">SCAN</button>
-        <button type="button" className="fx-toggle">GRID</button>
+        <button type="button" className="fx-toggle">
+          CRT
+        </button>
+        <button type="button" className="fx-toggle">
+          SCAN
+        </button>
+        <button type="button" className="fx-toggle">
+          GRID
+        </button>
         <span className="pill">MODE 1</span>
         <span className="pill">256×224</span>
       </div>
@@ -210,7 +216,9 @@ function OutputMock({ f }: { f: FrameResult }) {
         </div>
         <div className="output-side">
           <div className="transport">
-            <button className="play-btn" aria-label="Play">▶</button>
+            <button className="play-btn" aria-label="Play">
+              ▶
+            </button>
             <div className="scrubber">
               <div className="scrubber-fill" style={{ width: "35%" }} />
               <div className="scrubber-handle" style={{ left: "35%" }} />

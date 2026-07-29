@@ -18,9 +18,7 @@ const c = makeFixtureCompositor(frameResult);
 const DialectToggleStory = () => <DialectToggle />;
 DialectToggleStory.storyName = "DialectToggle";
 
-const RegRowStory = () => (
-  <RegRow c={c} addr={REG.CGADSUB} name="CGADSUB" note="add" />
-);
+const RegRowStory = () => <RegRow c={c} addr={REG.CGADSUB} name="CGADSUB" note="add" />;
 RegRowStory.storyName = "RegRow";
 
 // PokeDot is the marker a poked control wears; it returns null when nothing is
@@ -54,12 +52,7 @@ const PokeBarEmpty = () => <EmptyPokeBar />;
 // unmount so the seeded pokes don't leak into other stories/sessions.
 function PopulatedPokeBar() {
   useEffect(() => {
-    pokeMany(
-      writesToPokes(
-        [setMathOp("sub", 0x00), setMathHalf(true, 0x00)],
-        "friendly",
-      ),
-    );
+    pokeMany(writesToPokes([setMathOp("sub", 0x00), setMathHalf(true, 0x00)], "friendly"));
     return () => clearPokes();
   }, []);
   return <PokeBar />;

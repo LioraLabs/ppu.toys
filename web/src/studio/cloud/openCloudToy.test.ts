@@ -33,8 +33,12 @@ function toy(): ToyFull {
           report: {
             mode: "tile",
             report: {
-              colors_used: 0, palettes_used: 0, tile_cells: 0, unique_tiles: 0,
-              vram_words: 0, overflows: [],
+              colors_used: 0,
+              palettes_used: 0,
+              tile_cells: 0,
+              unique_tiles: 0,
+              vram_words: 0,
+              overflows: [],
             },
           },
         },

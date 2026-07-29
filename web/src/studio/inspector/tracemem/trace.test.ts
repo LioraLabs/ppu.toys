@@ -92,13 +92,60 @@ describe("traceCaption", () => {
 
 describe("spriteAt", () => {
   const sprite = (over: Partial<OamSprite>): OamSprite => ({
-    x: 0, y: 0, tile: 0, pal: 0, prio: 0, large: false, flipX: false, flipY: false, on: true,
+    x: 0,
+    y: 0,
+    tile: 0,
+    pal: 0,
+    prio: 0,
+    large: false,
+    flipX: false,
+    flipY: false,
+    on: true,
     ...over,
   });
   const traced = new Map<number, ObjTrace>([
-    [1, { index: 1, oam: sprite({ x: 10, y: 10 }), charBase: 0, charAddr: 0, width: 16, height: 16, pixels: [], paletteBase: 128, palette: [] }],
-    [2, { index: 2, oam: sprite({ x: 12, y: 12 }), charBase: 0, charAddr: 0, width: 16, height: 16, pixels: [], paletteBase: 128, palette: [] }],
-    [3, { index: 3, oam: sprite({ x: 200, y: 200, on: false }), charBase: 0, charAddr: 0, width: 16, height: 16, pixels: [], paletteBase: 128, palette: [] }],
+    [
+      1,
+      {
+        index: 1,
+        oam: sprite({ x: 10, y: 10 }),
+        charBase: 0,
+        charAddr: 0,
+        width: 16,
+        height: 16,
+        pixels: [],
+        paletteBase: 128,
+        palette: [],
+      },
+    ],
+    [
+      2,
+      {
+        index: 2,
+        oam: sprite({ x: 12, y: 12 }),
+        charBase: 0,
+        charAddr: 0,
+        width: 16,
+        height: 16,
+        pixels: [],
+        paletteBase: 128,
+        palette: [],
+      },
+    ],
+    [
+      3,
+      {
+        index: 3,
+        oam: sprite({ x: 200, y: 200, on: false }),
+        charBase: 0,
+        charAddr: 0,
+        width: 16,
+        height: 16,
+        pixels: [],
+        paletteBase: 128,
+        palette: [],
+      },
+    ],
   ]);
   const core = { traceObj: (i: number) => traced.get(i) ?? null };
   it("returns the front-most (lowest OAM index) on-sprite covering the point", () => {

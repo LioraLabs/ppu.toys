@@ -72,7 +72,8 @@ function makeCore(state: { throwing: boolean }): PpuCore {
     setSource: () => ({ ok: true }),
     setSources: () => ({ ok: true }),
     frame: () => {
-      if (state.throwing) throw { message: "attempt to index a nil value", line: 3, file: "fx.lua" };
+      if (state.throwing)
+        throw { message: "attempt to index a nil value", line: 3, file: "fx.lua" };
       return fakeFrame();
     },
     setLayerVisible: () => {},
@@ -94,7 +95,14 @@ function makeCore(state: { throwing: boolean }): PpuCore {
         height: 0,
         report: {
           mode: "tile",
-          report: { colors_used: 0, palettes_used: 0, tile_cells: 0, unique_tiles: 0, vram_words: 0, overflows: [] },
+          report: {
+            colors_used: 0,
+            palettes_used: 0,
+            tile_cells: 0,
+            unique_tiles: 0,
+            vram_words: 0,
+            overflows: [],
+          },
         },
       },
     }),

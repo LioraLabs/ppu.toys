@@ -1,12 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  FPS,
-  LOOP_SECONDS,
-  advanceClock,
-  scrubToClock,
-  clockToScrub,
-  integerScale,
-} from "./clock";
+import { FPS, LOOP_SECONDS, advanceClock, scrubToClock, clockToScrub, integerScale } from "./clock";
 import { WIDTH, HEIGHT } from "../../ppu/core";
 
 describe("advanceClock", () => {

@@ -24,9 +24,16 @@ export function ToyCard({ card, signedIn }: { card: WallCard; signedIn: boolean 
       </Link>
       <div className="toy-card-meta">
         <div className="toy-card-text">
-          <Link to={`/t/${card.id}`} className="toy-card-title">{card.title}</Link>
+          <Link to={`/t/${card.id}`} className="toy-card-title">
+            {card.title}
+          </Link>
           <Link to={`/u/${card.author.handle}`} className="toy-card-author">
-            <Avatar handle={card.author.handle} id={card.author.id} avatar={card.author.avatar} size={16} />
+            <Avatar
+              handle={card.author.handle}
+              id={card.author.id}
+              avatar={card.author.avatar}
+              size={16}
+            />
             {card.author.handle}
           </Link>
         </div>

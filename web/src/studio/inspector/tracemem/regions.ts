@@ -26,11 +26,16 @@ export interface VramRegion {
 
 /** Region hues — handoff's palette, reused as fixed per-plane colors. */
 export const REGION_COLORS: Record<string, string> = {
-  "bg1-char": "#4a4f92", "bg1-map": "#3a4a8c",
-  "bg2-char": "#a074c8", "bg2-map": "#7d55a6",
-  "bg3-char": "#ff9ac0", "bg3-map": "#c86a92",
-  "bg4-char": "#6ec9a8", "bg4-map": "#3f8f6f",
-  "obj-a": "#ff9540", "obj-b": "#d97b2f",
+  "bg1-char": "#4a4f92",
+  "bg1-map": "#3a4a8c",
+  "bg2-char": "#a074c8",
+  "bg2-map": "#7d55a6",
+  "bg3-char": "#ff9ac0",
+  "bg3-map": "#c86a92",
+  "bg4-char": "#6ec9a8",
+  "bg4-map": "#3f8f6f",
+  "obj-a": "#ff9540",
+  "obj-b": "#d97b2f",
   m7: "#4a4f92",
 };
 
@@ -58,7 +63,15 @@ export function vramRegions(registers: RegisterView[], vram: Uint16Array): VramR
   const out: VramRegion[] = [];
 
   if (mode === 7) {
-    out.push({ id: "m7", label: "M7 map+char", kind: "char", start: 0, end: 0x4000, color: REGION_COLORS.m7, usage: "interleaved map+char" });
+    out.push({
+      id: "m7",
+      label: "M7 map+char",
+      kind: "char",
+      start: 0,
+      end: 0x4000,
+      color: REGION_COLORS.m7,
+      usage: "interleaved map+char",
+    });
   } else {
     for (let i = 0; i < 4; i++) {
       if (!bpp[i]) continue;
@@ -72,14 +85,22 @@ export function vramRegions(registers: RegisterView[], vram: Uint16Array): VramR
       if ((bgmode >> (4 + i)) & 1) maxTile = Math.min(maxTile + 17, 0x3ff); // 16px tiles span +17 names
       const tiles = maxTile + 1;
       out.push({
-        id: `bg${i + 1}-char`, label: `BG${i + 1} char`, kind: "char",
-        start: charBase, end: Math.min(charBase + tiles * bpp[i] * 4, 0x8000),
-        color: REGION_COLORS[`bg${i + 1}-char`], usage: `${tiles} tiles`,
+        id: `bg${i + 1}-char`,
+        label: `BG${i + 1} char`,
+        kind: "char",
+        start: charBase,
+        end: Math.min(charBase + tiles * bpp[i] * 4, 0x8000),
+        color: REGION_COLORS[`bg${i + 1}-char`],
+        usage: `${tiles} tiles`,
       });
       out.push({
-        id: `bg${i + 1}-map`, label: `BG${i + 1} map`, kind: "map",
-        start: mapBase, end: Math.min(mapBase + mapWords, 0x8000),
-        color: REGION_COLORS[`bg${i + 1}-map`], usage: `${MAP_DIMS[sizeBits]} map`,
+        id: `bg${i + 1}-map`,
+        label: `BG${i + 1} map`,
+        kind: "map",
+        start: mapBase,
+        end: Math.min(mapBase + mapWords, 0x8000),
+        color: REGION_COLORS[`bg${i + 1}-map`],
+        usage: `${MAP_DIMS[sizeBits]} map`,
       });
     }
   }
@@ -91,8 +112,24 @@ export function vramRegions(registers: RegisterView[], vram: Uint16Array): VramR
   const obsel = reg(registers, "OBSEL");
   const objBase = (obsel & 7) << 13;
   const gap = (((obsel >> 3) & 3) + 1) << 12;
-  out.push({ id: "obj-a", label: "OBJ char A", kind: "char", start: clampW(objBase), end: clampW(objBase + 0x1000), color: REGION_COLORS["obj-a"], usage: "tiles 0–255" });
-  out.push({ id: "obj-b", label: "OBJ char B", kind: "char", start: clampW(objBase + gap), end: clampW(objBase + gap + 0x1000), color: REGION_COLORS["obj-b"], usage: "tiles 256–511" });
+  out.push({
+    id: "obj-a",
+    label: "OBJ char A",
+    kind: "char",
+    start: clampW(objBase),
+    end: clampW(objBase + 0x1000),
+    color: REGION_COLORS["obj-a"],
+    usage: "tiles 0–255",
+  });
+  out.push({
+    id: "obj-b",
+    label: "OBJ char B",
+    kind: "char",
+    start: clampW(objBase + gap),
+    end: clampW(objBase + gap + 0x1000),
+    color: REGION_COLORS["obj-b"],
+    usage: "tiles 256–511",
+  });
 
   return out.sort((a, b) => a.start - b.start || a.end - b.end);
 }
@@ -107,7 +144,11 @@ export interface CgramOwner {
  *  (mode-0 2bpp band = bgIndex*32 — trace.rs). OBJ rows (8-15): always OBJ;
  *  `used` = a live on-sprite uses that pal OR a BG owner reaches the row.
  *  8bpp BG1 (modes 3/4/7) owns all 256 entries. */
-export function cgramOwners(registers: RegisterView[], vram: Uint16Array, oam: OamSprite[]): CgramOwner[] {
+export function cgramOwners(
+  registers: RegisterView[],
+  vram: Uint16Array,
+  oam: OamSprite[],
+): CgramOwner[] {
   const owners: Set<string>[] = Array.from({ length: 16 }, () => new Set<string>());
   const bgmode = reg(registers, "BGMODE");
   const mode = bgmode & 7;
@@ -128,7 +169,8 @@ export function cgramOwners(registers: RegisterView[], vram: Uint16Array, oam: O
       const span = 1 << bpp[i];
       for (const p of pals) {
         const base = band + p * span;
-        for (let row = base >> 4; row <= (base + span - 1) >> 4 && row < 16; row++) owners[row].add(`BG${i + 1}`);
+        for (let row = base >> 4; row <= (base + span - 1) >> 4 && row < 16; row++)
+          owners[row].add(`BG${i + 1}`);
       }
     }
   }

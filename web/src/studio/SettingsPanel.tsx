@@ -60,7 +60,13 @@ function Segment<T extends string>({
 
 /** Settings flyout, mounted off the rail's gear item. Presentational — the
  *  wired wrapper (ActivityRailWired) supplies the theme + editor stores. */
-export function SettingsPanel({ theme, onToggleTheme, vimMode, onToggleVim, onClose }: SettingsPanelProps) {
+export function SettingsPanel({
+  theme,
+  onToggleTheme,
+  vimMode,
+  onToggleVim,
+  onClose,
+}: SettingsPanelProps) {
   return (
     <aside className="settings-panel" aria-label="Settings">
       <header className="library-head">

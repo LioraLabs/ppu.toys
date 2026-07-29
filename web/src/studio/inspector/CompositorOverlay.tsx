@@ -57,7 +57,8 @@ export function CompositorOverlay({
           </section>
           <section className="cmpo-divider">
             <div className="cmpo-h">
-              WINDOW MASK <span className="cmpo-hint">click the preview to drag the nearest edge</span>
+              WINDOW MASK{" "}
+              <span className="cmpo-hint">click the preview to drag the nearest edge</span>
             </div>
             <div className="cmpo-winrow">
               <div className="cmpo-winleft">

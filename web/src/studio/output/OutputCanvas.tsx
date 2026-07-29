@@ -45,8 +45,7 @@ export function OutputCanvas() {
       return;
     }
 
-    const draw = () =>
-      presenter.render(transport.getSnapshot().frame.framebuffer, fxRef.current);
+    const draw = () => presenter.render(transport.getSnapshot().frame.framebuffer, fxRef.current);
     const resize = () => {
       presenter.resize(integerScale(container.clientWidth, container.clientHeight));
       draw();
@@ -81,8 +80,16 @@ export function OutputCanvas() {
         <span className="output-title">LIVE OUTPUT</span>
         <div className="tb-spacer" />
         <FxToggle label="CRT" on={fx.crt} onClick={() => setFx((s) => ({ ...s, crt: !s.crt }))} />
-        <FxToggle label="SCAN" on={fx.scanline} onClick={() => setFx((s) => ({ ...s, scanline: !s.scanline }))} />
-        <FxToggle label="GRID" on={fx.pixelGrid} onClick={() => setFx((s) => ({ ...s, pixelGrid: !s.pixelGrid }))} />
+        <FxToggle
+          label="SCAN"
+          on={fx.scanline}
+          onClick={() => setFx((s) => ({ ...s, scanline: !s.scanline }))}
+        />
+        <FxToggle
+          label="GRID"
+          on={fx.pixelGrid}
+          onClick={() => setFx((s) => ({ ...s, pixelGrid: !s.pixelGrid }))}
+        />
         <span className="pill">MODE 1</span>
         <span className="pill">256×224</span>
       </div>

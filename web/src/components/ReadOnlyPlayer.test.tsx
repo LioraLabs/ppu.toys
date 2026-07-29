@@ -36,9 +36,19 @@ import { ReadOnlyPlayer } from "./ReadOnlyPlayer";
 
 // jsdom has no ResizeObserver; the component observes its container to
 // integer-scale the canvas on resize.
-vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
+vi.stubGlobal(
+  "ResizeObserver",
+  class {
+    observe() {}
+    disconnect() {}
+    unobserve() {}
+  },
+);
 
-afterEach(() => { cleanup(); vi.clearAllMocks(); });
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
 
 describe("ReadOnlyPlayer", () => {
   const files = [{ name: "main.lua", source: "-- toy" }];
