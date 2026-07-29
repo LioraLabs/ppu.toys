@@ -31,6 +31,9 @@ export function SourcePreview({
   );
   const [view, setView] = useState<"snes" | "source">("snes");
   const [tint, setTint] = useState(false);
+  // Label grid defaults off for big maps (an m7 1024px drop is 16k cells —
+  // unreadable and slow to mount); the chip brings it back on demand.
+  const [grid, setGrid] = useState(() => model.cells.length <= 1024);
   const src = sourceImage
     ? {
         pixels: new Uint8ClampedArray(sourceImage.data),
@@ -63,6 +66,14 @@ export function SourcePreview({
         >
           source
         </button>
+        <button
+          type="button"
+          className="srcpv-tool"
+          aria-pressed={grid}
+          onClick={() => setGrid((g) => !g)}
+        >
+          grid
+        </button>
         {canTint && (
           <button
             type="button"
@@ -74,7 +85,13 @@ export function SourcePreview({
           </button>
         )}
       </div>
-      <div className="srcpv-stage" style={{ aspectRatio: `${w} / ${h}` }}>
+      {/* Stage sizes itself from the image aspect: width shrinks so height
+          never exceeds 320px — letterbox, never stretch (a 1024x1024 m7 drop
+          used to be clamped by max-height and smeared to fill). */}
+      <div
+        className="srcpv-stage"
+        style={{ aspectRatio: `${w} / ${h}`, width: `min(100%, calc(320px * ${w / h}))` }}
+      >
         {img && (
           <BlitCanvas
             pixels={img.pixels}
@@ -83,25 +100,27 @@ export function SourcePreview({
             className="srcpv-canvas"
           />
         )}
-        <div
-          className="srcpv-grid"
-          style={{
-            gridTemplateColumns: `repeat(${model.cols}, 1fr)`,
-            gridTemplateRows: `repeat(${model.rows}, 1fr)`,
-          }}
-          aria-hidden={false}
-        >
-          {model.cells.map((c, i) => (
-            <div
-              className="srcpv-cell"
-              key={i}
-              style={tint && c.pal !== undefined ? { background: palTint(c.pal) } : undefined}
-            >
-              <span className="srcpv-cell-top">{c.top}</span>
-              {c.bot && <span className="srcpv-cell-bot">{c.bot}</span>}
-            </div>
-          ))}
-        </div>
+        {(grid || tint) && (
+          <div
+            className="srcpv-grid"
+            style={{
+              gridTemplateColumns: `repeat(${model.cols}, 1fr)`,
+              gridTemplateRows: `repeat(${model.rows}, 1fr)`,
+            }}
+            aria-hidden={false}
+          >
+            {model.cells.map((c, i) => (
+              <div
+                className="srcpv-cell"
+                key={i}
+                style={tint && c.pal !== undefined ? { background: palTint(c.pal) } : undefined}
+              >
+                {grid && <span className="srcpv-cell-top">{c.top}</span>}
+                {grid && c.bot && <span className="srcpv-cell-bot">{c.bot}</span>}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       {model.palettes.length > 0 && (
         <div className="srcpv-swatches" aria-label="Resulting palettes">
