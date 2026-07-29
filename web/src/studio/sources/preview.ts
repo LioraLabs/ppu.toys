@@ -56,7 +56,7 @@ export function buildPreviewModel(
     for (let i = 0; i < cols * rows; i++) cells.push({ top: `#${i}`, bot: "" });
   }
 
-  const image = decoded ? quantizedRgba(decoded, meta.width, meta.height) : null;
+  const image = decoded ? quantizedRgba(decoded, meta.width, meta.height, meta.cells) : null;
   const palettes = !decoded ? [] : decoded.kind === "m7" ? [decoded.palette] : decoded.palettes;
   return {
     cols,

@@ -471,6 +471,46 @@ export const sourceMetaBg: SourceMeta = {
   },
 };
 
+/** A valid v1 OBJ source payload (two 8px cells: a half/half tile + its
+ *  mirror) so SourcePreview exercises the cells-driven sheet reassembly
+ *  (flips + per-cell palettes) with no wasm. */
+export const sourcePayloadObj: Uint8Array = (() => {
+  const bytes: number[] = [];
+  const u8 = (v: number) => bytes.push(v & 0xff);
+  const u16 = (v: number) => bytes.push(v & 0xff, (v >> 8) & 0xff); // little-endian
+  u8(1); // version
+  u8(2); // kind = obj
+  u8(8); // cell size
+  u8(1); // one sub-palette: red, blue
+  u8(2);
+  [0x001f, 0x7c00].forEach(u16);
+  u16(2); // tiles: blank + left-half idx 1 / right-half idx 2
+  const words = new Array<number>(2 * 16).fill(0);
+  for (let r = 0; r < 8; r++) words[16 + r] = 0x00f0 | 0x0f00;
+  words.forEach(u16);
+  return new Uint8Array(bytes);
+})();
+
+export const sourceMetaObj: SourceMeta = {
+  width: 16,
+  height: 8,
+  report: {
+    mode: "obj",
+    report: {
+      colors_used: 2,
+      palettes_used: 1,
+      tile_cells: 2,
+      unique_tiles: 1,
+      vram_words: 32,
+      overflows: [],
+    },
+  },
+  cells: [
+    { tile: 1, pal: 0, flip_x: false, flip_y: false },
+    { tile: 1, pal: 0, flip_x: true, flip_y: false }, // dedup'd mirror
+  ],
+};
+
 export function makeSourceMeta(overrides?: Partial<SourceMeta>): SourceMeta {
   return {
     width: 16,

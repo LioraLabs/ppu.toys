@@ -164,4 +164,42 @@ describe("decodeSourcePayload", () => {
     // px1 = byte 0 -> transparent
     expect(pixels[7]).toBe(0); // alpha of second pixel
   });
+
+  it("quantizedRgba obj: reassembles the sheet from cells (flips + per-cell palette)", () => {
+    // stored tile: left half index 1, right half index 2
+    const tile = new Array<number>(64).fill(0);
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) tile[y * 8 + x] = x < 4 ? 1 : 2;
+    const d = {
+      kind: "obj" as const,
+      cellSize: 8,
+      palettes: [
+        [0x001f, 0x7c00], // p0: red, blue
+        [0x03e0, 0x7fff], // p1: green, white
+      ],
+      tiles: [new Array<number>(64).fill(0), tile],
+    };
+    const cells = [
+      { tile: 1, pal: 0, flip_x: false, flip_y: false },
+      { tile: 1, pal: 1, flip_x: true, flip_y: false }, // same tile, mirrored, other palette
+    ];
+    const { pixels } = quantizedRgba(d, 16, 8, cells);
+    expect([...pixels.slice(0, 3)]).toEqual([255, 0, 0]); // (0,0) idx1 p0 = red
+    // (8,0): cell 1 mirrored -> reads stored x=7 -> idx2, p1 = white
+    expect([...pixels.slice(8 * 4, 8 * 4 + 3)]).toEqual([255, 255, 255]);
+  });
+
+  it("quantizedRgba obj: block cells stride the name table (+1 right, +16 down)", () => {
+    // 16px cell = 4 subtiles at name-table slots base+0, +1, +16, +17.
+    const solid = (idx: number) => new Array<number>(64).fill(idx);
+    const tiles: number[][] = [];
+    tiles[0] = solid(1); // TL red
+    tiles[1] = solid(2); // TR blue
+    tiles[16] = solid(1);
+    tiles[17] = solid(2);
+    const d = { kind: "obj" as const, cellSize: 16, palettes: [[0x001f, 0x7c00]], tiles };
+    const cells = [{ tile: 0, pal: 0, flip_x: false, flip_y: false }];
+    const { pixels } = quantizedRgba(d, 16, 16, cells);
+    expect([...pixels.slice(0, 3)]).toEqual([255, 0, 0]); // (0,0) slot 0
+    expect([...pixels.slice(8 * 4, 8 * 4 + 3)]).toEqual([0, 0, 255]); // (8,0) slot +1
+  });
 });

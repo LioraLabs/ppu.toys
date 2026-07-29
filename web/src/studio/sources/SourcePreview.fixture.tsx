@@ -2,8 +2,10 @@ import { SourcePreview } from "./SourcePreview";
 import {
   sourceMetaBg,
   sourceMetaM7,
+  sourceMetaObj,
   sourcePayloadBg,
   sourcePayloadM7,
+  sourcePayloadObj,
   makeSourceMeta,
 } from "../../fixtures";
 import "./sources.css";
@@ -57,8 +59,17 @@ const BgTwoPalettes = () => {
   );
 };
 
+// OBJ sheet reassembly: the deduped half/half tile and its H-mirror land back
+// in their source-cell positions (red|blue then blue|red), not as a tile atlas.
+const ObjReassembled = () => (
+  <div style={{ width: 320, padding: 16 }}>
+    <SourcePreview kind="obj" meta={sourceMetaObj} payload={sourcePayloadObj} cellSize={8} />
+  </div>
+);
+
 export default {
   Mode7,
   BgTwoPalettes,
+  ObjReassembled,
   WithOverflowWarning,
 };

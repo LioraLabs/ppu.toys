@@ -1,3 +1,5 @@
+import type { ObjCellMeta } from "../../ppu/core";
+
 export interface DecodedBg {
   kind: "bg";
   bitDepth: 2 | 4 | 8;
@@ -152,11 +154,15 @@ export function bgCell(d: DecodedBg, cols: number, _rows: number, tx: number, ty
 }
 
 /** Paint a decoded source to an RGBA buffer (alpha 0 = transparent). width/height
- *  from meta. bg/m7 walk their tilemap/map; obj lays tiles row-major (base preview). */
+ *  from meta. bg/m7 walk their tilemap/map. obj REASSEMBLES the sheet from
+ *  `cells` (tile#/pal/flips per source cell; block cells stride the name table
+ *  +1 right, +16 down like obj_tile_addr); without cells it degrades to the
+ *  row-major tile atlas. */
 export function quantizedRgba(
   d: Decoded,
   width: number,
   height: number,
+  objCells?: ObjCellMeta[],
 ): { pixels: Uint8ClampedArray; width: number; height: number } {
   const px = new Uint8ClampedArray(width * height * 4);
   const put = (x: number, y: number, rgb: [number, number, number] | null) => {
@@ -197,8 +203,35 @@ export function quantizedRgba(
             put(tx * 8 + x, ty * 8 + y, b === 0 ? null : rgbaFrom555(d.palette[b - 1] ?? 0));
           }
       }
+  } else if (objCells && objCells.length) {
+    // obj: rebuild the source sheet — each cell places its (deduped, possibly
+    // flipped) tiles back where they came from, with the cell's sub-palette.
+    const n = Math.max(1, d.cellSize / 8); // 8x8 tiles per cell edge
+    const cols = Math.max(1, Math.ceil(width / d.cellSize));
+    objCells.forEach((c, k) => {
+      const cx = (k % cols) * d.cellSize,
+        cy = Math.floor(k / cols) * d.cellSize;
+      const pal = d.palettes[c.pal] ?? [];
+      for (let sy = 0; sy < n; sy++)
+        for (let sx = 0; sx < n; sx++) {
+          // cell 8: tile is the cell. Blocks: base + name-table stride.
+          const tile = d.tiles[d.cellSize === 8 ? c.tile : c.tile + sy * 16 + sx];
+          if (!tile) continue;
+          for (let y = 0; y < 8; y++)
+            for (let x = 0; x < 8; x++) {
+              const fx = c.flip_x ? 7 - x : x,
+                fy = c.flip_y ? 7 - y : y;
+              const idx = tile[fy * 8 + fx] ?? 0;
+              put(
+                cx + sx * 8 + x,
+                cy + sy * 8 + y,
+                idx === 0 ? null : rgbaFrom555(pal[idx - 1] ?? 0),
+              );
+            }
+        }
+    });
   } else {
-    // obj: lay 8x8 char tiles row-major across the sheet (base preview; labels come from cells)
+    // obj without cells (mock/degraded): row-major tile atlas
     const cols = Math.ceil(width / 8);
     d.tiles.forEach((tile, t) => {
       const tx = t % cols,
