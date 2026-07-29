@@ -26,6 +26,13 @@ function layerTag(id: PlaneId, mode: number): { tag: string; absent: boolean } {
 }
 
 function healthLine(r: ImportReport): { name: string; stats: string[]; warns: string[] } {
+  if (r.mode === "mismatch") {
+    return {
+      name: r.layer === undefined ? "OBJ" : `BG${r.layer + 1}`,
+      stats: [`"${r.slot}"`],
+      warns: [`not placed — needs ${r.expected}, found ${r.found}`],
+    };
+  }
   if (r.mode === "m7") {
     return {
       name: `M7 BG${r.layer + 1}`,

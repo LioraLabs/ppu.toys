@@ -68,7 +68,11 @@ export interface Mode7ImportBudget {
 export type ImportReport =
   | { mode: "tile"; layer: number; report: TileImportBudget }
   | { mode: "m7"; layer: number; report: Mode7ImportBudget }
-  | { mode: "obj"; report: TileImportBudget };
+  | { mode: "obj"; report: TileImportBudget }
+  /** Bind-time failure: the bound slot name mismatched the target (wrong kind
+   *  or bit depth), or no source is registered under it — the layer renders
+   *  blank and this diagnostic says why. `layer` is absent for obj.sheet. */
+  | { mode: "mismatch"; layer?: number; slot: string; expected: string; found: string };
 
 export type SourceKind = "bg" | "m7" | "obj";
 

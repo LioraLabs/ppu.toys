@@ -1304,9 +1304,10 @@ fn echo_bg_registers<'gc>(
 /// frame's zeroed-bootstrap slot, honoring the frame-wide `mode`, and echo the
 /// placement registers back into the layer globals. Strict bind validation: a
 /// store source whose kind or depth mismatches the slot renders blank (payload
-/// not placed) and pushes an `ImportBudget::Mismatch`. A slot id absent from the
-/// store simply renders nothing. Refreshes `reports` for the UI; assumes
-/// VRAM/CGRAM were zeroed by the caller.
+/// not placed) and pushes an `ImportBudget::Mismatch`. A slot id absent from
+/// the store renders nothing and reports a Mismatch with `found = "no source
+/// with this name"` (a typo used to be a silent blank layer). Refreshes
+/// `reports` for the UI; assumes VRAM/CGRAM were zeroed by the caller.
 fn place_bg_sources(
     ctx: piccolo::Context<'_>,
     store: &HashMap<String, crate::source::SourcePayload>,
@@ -1331,16 +1332,20 @@ fn place_bg_sources(
             if i != 0 {
                 continue;
             }
-            if let Some(payload) = store.get(&slot) {
-                match payload {
-                    SourcePayload::M7(src) => crate::source::place_m7(src, mem),
-                    other => reports.push(ImportBudget::Mismatch {
-                        layer: Some(i),
-                        slot: slot.clone(),
-                        expected: "m7".into(),
-                        found: kind_label(other).into(),
-                    }),
-                }
+            match store.get(&slot) {
+                Some(SourcePayload::M7(src)) => crate::source::place_m7(src, mem),
+                Some(other) => reports.push(ImportBudget::Mismatch {
+                    layer: Some(i),
+                    slot: slot.clone(),
+                    expected: "m7".into(),
+                    found: kind_label(other).into(),
+                }),
+                None => reports.push(ImportBudget::Mismatch {
+                    layer: Some(i),
+                    slot: slot.clone(),
+                    expected: "m7".into(),
+                    found: MISSING_SOURCE.into(),
+                }),
             }
         } else {
             let bpp = crate::modes::mode_info(mode).map_or(0, |m| m.bpp[i]);
@@ -1348,26 +1353,30 @@ fn place_bg_sources(
                 continue;
             }
             let cgram_base = if mode == 0 && bpp == 2 { i * 8 * 4 } else { 0 };
-            if let Some(payload) = store.get(&slot) {
-                match payload {
-                    SourcePayload::Bg(src) if src.bit_depth == bpp => {
-                        let (map_base, char_base) = bg_bases(ctx, layer);
-                        crate::source::place_bg(src, mem, map_base, char_base, cgram_base);
-                        echo_bg_registers(ctx, layer, src, map_base, char_base);
-                    }
-                    SourcePayload::Bg(src) => reports.push(ImportBudget::Mismatch {
-                        layer: Some(i),
-                        slot: slot.clone(),
-                        expected: format!("bg {bpp}bpp"),
-                        found: format!("bg {}bpp", src.bit_depth),
-                    }),
-                    other => reports.push(ImportBudget::Mismatch {
-                        layer: Some(i),
-                        slot: slot.clone(),
-                        expected: format!("bg {bpp}bpp"),
-                        found: kind_label(other).into(),
-                    }),
+            match store.get(&slot) {
+                Some(SourcePayload::Bg(src)) if src.bit_depth == bpp => {
+                    let (map_base, char_base) = bg_bases(ctx, layer);
+                    crate::source::place_bg(src, mem, map_base, char_base, cgram_base);
+                    echo_bg_registers(ctx, layer, src, map_base, char_base);
                 }
+                Some(SourcePayload::Bg(src)) => reports.push(ImportBudget::Mismatch {
+                    layer: Some(i),
+                    slot: slot.clone(),
+                    expected: format!("bg {bpp}bpp"),
+                    found: format!("bg {}bpp", src.bit_depth),
+                }),
+                Some(other) => reports.push(ImportBudget::Mismatch {
+                    layer: Some(i),
+                    slot: slot.clone(),
+                    expected: format!("bg {bpp}bpp"),
+                    found: kind_label(other).into(),
+                }),
+                None => reports.push(ImportBudget::Mismatch {
+                    layer: Some(i),
+                    slot: slot.clone(),
+                    expected: format!("bg {bpp}bpp"),
+                    found: MISSING_SOURCE.into(),
+                }),
             }
         }
     }
@@ -1377,8 +1386,8 @@ fn place_bg_sources(
 /// `obj.char_base`, OBJ palettes into the CGRAM OBJ half. Reads `obj.sheet` /
 /// `obj.char_base` straight from the Lua ctx (NOT `memory.obsel`, which
 /// `read_memory` fills LATER). A non-OBJ store source renders nothing and pushes
-/// an `ImportBudget::Mismatch`. An id absent from the store simply renders
-/// nothing. Runs in the same bootstrap slot as the BG placement; appends to the
+/// an `ImportBudget::Mismatch`; so does an id absent from the store (`found =
+/// "no source with this name"`). Runs in the same bootstrap slot; appends to the
 /// shared `reports` vec (`place_bg_sources` already `clear()`ed it and pushed
 /// the BG entries).
 fn place_obj_source(
@@ -1397,18 +1406,27 @@ fn place_obj_source(
     let char_base = crate::quantize::obj_char_base(
         obj.get(ctx, "char_base").to_integer().unwrap_or(0).max(0) as u32,
     );
-    if let Some(payload) = store.get(&slot) {
-        match payload {
-            SourcePayload::Obj(src) => crate::source::place_obj(src, mem, char_base as u16),
-            other => reports.push(ImportBudget::Mismatch {
-                layer: None,
-                slot: slot.clone(),
-                expected: "obj".into(),
-                found: kind_label(other).into(),
-            }),
-        }
+    match store.get(&slot) {
+        Some(SourcePayload::Obj(src)) => crate::source::place_obj(src, mem, char_base as u16),
+        Some(other) => reports.push(ImportBudget::Mismatch {
+            layer: None,
+            slot: slot.clone(),
+            expected: "obj".into(),
+            found: kind_label(other).into(),
+        }),
+        None => reports.push(ImportBudget::Mismatch {
+            layer: None,
+            slot: slot.clone(),
+            expected: "obj".into(),
+            found: MISSING_SOURCE.into(),
+        }),
     }
 }
+
+/// `found` label for a bound slot name with no registered source — the silent
+/// blank layer this used to be is the single most-asked "am I doing something
+/// wrong?"; a typo deserves a diagnostic, not nothing.
+const MISSING_SOURCE: &str = "no source with this name";
 
 /// VRAM word address of the tilemap entry for tile column `tx`, row `ty` at a
 /// layer's snapped `map_base` and screen size. Mirrors `bg::map_entry_addr`
