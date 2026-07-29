@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import "./styles/tokens.css";
 import { worker } from "./mocks/browser";
+import { parseTheme } from "./studio/theme";
 
 const workerReady = worker.start({ onUnhandledRequest: "bypass", quiet: true }).catch((error) => {
   console.error(error);
@@ -18,8 +19,15 @@ export default function CosmosRoot({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // Deterministic theme for fixtures/screenshots: same source of truth as the
+  // app's useTheme (localStorage, dark default) so a late-mounting ToolbarWired
+  // can never flip the theme mid-shot — shoot seeds ppu.theme before load.
   useEffect(() => {
-    document.documentElement.dataset.theme = "dark";
+    try {
+      document.documentElement.dataset.theme = parseTheme(localStorage.getItem("ppu.theme"));
+    } catch {
+      document.documentElement.dataset.theme = "dark";
+    }
   }, []);
 
   useEffect(() => {

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
-import { getToy, forkToy, type ToyFull } from "../api/apiClient";
+import { getToy, forkToy, goToSignIn, type ToyFull } from "../api/apiClient";
 import { useSession } from "../api/session";
 import { openCloudToy } from "../studio/cloud/openCloudToy";
 import { decodeBase64 } from "../api/base64";
 import { ReadOnlyPlayer, type PlayerSource } from "../components/ReadOnlyPlayer";
 import { HeartButton } from "../components/HeartButton";
+import { useDocumentTitle } from "./useDocumentTitle";
 import "./permalink.css";
 
 type Load = { status: "loading" } | { status: "error" } | { status: "ok"; toy: ToyFull };
@@ -18,6 +19,7 @@ export function Permalink() {
   const [active, setActive] = useState(0);
   const [forking, setForking] = useState(false);
   const [forkFailed, setForkFailed] = useState(false);
+  useDocumentTitle(load.status === "ok" ? `${load.toy.title} · ${load.toy.author.handle}` : undefined);
 
   useEffect(() => {
     if (!id) return;
@@ -46,6 +48,12 @@ export function Permalink() {
 
   async function fork() {
     if (!id) return;
+    if (!user) {
+      // Live sign-in ask instead of a dead disabled button — forking is the
+      // loop we want visitors to enter.
+      goToSignIn();
+      return;
+    }
     setForking(true);
     setForkFailed(false);
     try {
@@ -77,7 +85,12 @@ export function Permalink() {
         </header>
         <div className="permalink-actions">
           <HeartButton id={toy.id} heartCount={toy.heartCount} hearted={toy.hearted} signedIn={!!user} />
-          <button className="fork-btn" onClick={() => void fork()} disabled={!user || forking}>
+          <button
+            className="fork-btn"
+            onClick={() => void fork()}
+            disabled={forking}
+            title={user ? "Fork into your Studio" : "Sign in with Discord to fork this toy"}
+          >
             {forking ? "Forking…" : "Fork"}
           </button>
           {forkFailed && <span className="fork-error" role="alert">Fork failed — try again.</span>}

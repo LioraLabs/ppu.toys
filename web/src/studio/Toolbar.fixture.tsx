@@ -26,7 +26,20 @@ const Dirty = () => (
   <Toolbar sketchName={sketchName} dirty theme="dark" sourceSlot={sourceSlot} workspaceSlot={workspaceSlot} />
 );
 
+// Signed in: the account avatar renders (letter tile — no Discord hash in
+// fixtures) and opens the profile/wall/sign-out menu.
+const SignedIn = () => (
+  <Toolbar
+    sketchName={sketchName}
+    theme="dark"
+    user={{ id: "1", handle: "ada", avatar: null }}
+    sourceSlot={sourceSlot}
+    workspaceSlot={workspaceSlot}
+  />
+);
+
 export default {
   Clean,
   Dirty,
+  SignedIn,
 };

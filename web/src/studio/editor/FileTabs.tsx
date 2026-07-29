@@ -15,6 +15,9 @@ export interface FileTabsProps {
   /** Generated files that currently have pokes applied to them — swaps the
    *  ⚙ glyph for an accent ⚡ so a poked pokes.lua reads as "live". */
   pokedFiles?: ReadonlySet<string>;
+  /** Vim keybindings state shown (and toggled) by the status chip. */
+  vimMode?: boolean;
+  onToggleVim?: () => void;
   onSelect: (name: string) => void;
   onAdd: () => void;
   /** Store-validated rename; returns false when rejected (dup/empty). */
@@ -125,9 +128,16 @@ export function FileTabs(props: FileTabsProps) {
         +
       </button>
       <div className="ftab-spacer" />
-      <div className="ftab-status">
-        <span className="ftab-status-dot" /> vim · Lua 5.4
-      </div>
+      <button
+        type="button"
+        className={"ftab-vim" + (props.vimMode ? " ftab-vim--on" : "")}
+        aria-pressed={!!props.vimMode}
+        title={props.vimMode ? "Vim keybindings on — click to switch to plain" : "Vim keybindings off — click to enable"}
+        onClick={() => props.onToggleVim?.()}
+      >
+        <span className="ftab-status-dot" /> vim {props.vimMode ? "on" : "off"}
+      </button>
+      <div className="ftab-status">Lua 5.4</div>
     </div>
   );
 }

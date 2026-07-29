@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { LuaError, SourceFile } from "../ppu/core";
 import { CodeEditor } from "./editor/CodeEditor";
+import { editorSettings, useVimMode } from "./editor/editorSettings";
 import { FileTabs } from "./editor/FileTabs";
 import { routeErrorsByFile } from "./editor/diagnostics";
 import { createSourcePusher } from "./editor/sourcePush";
@@ -153,6 +154,7 @@ export function EditorPane({ onSources }: EditorPaneProps) {
 
   const activeFile = files.find((f) => f.name === active);
   const pokedFiles = usePokes().length > 0 ? GENERATED : EMPTY_SET;
+  const vimMode = useVimMode();
 
   return (
     <section className="editor">
@@ -162,6 +164,8 @@ export function EditorPane({ onSources }: EditorPaneProps) {
         errorFiles={errorFiles}
         generated={GENERATED}
         pokedFiles={pokedFiles}
+        vimMode={vimMode}
+        onToggleVim={editorSettings.toggleVim}
         onSelect={setActiveName}
         onAdd={() => setActiveName(openSketchStore.addFile())}
         onRename={rename}
@@ -175,6 +179,7 @@ export function EditorPane({ onSources }: EditorPaneProps) {
           docKey={keyFor(active)}
           doc={activeFile?.source ?? ""}
           generated={GENERATED.has(active)}
+          vimMode={vimMode}
           onChange={(src) => openSketchStore.editFile(active, src)}
           errors={routed.get(active) ?? NO_ERRORS}
         />

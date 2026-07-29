@@ -42,6 +42,6 @@ describe("routing", () => {
 
   it("renders the privacy page under /privacy", () => {
     at("/privacy");
-    expect(screen.getByText(/privacy/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /privacy/i })).toBeInTheDocument();
   });
 });

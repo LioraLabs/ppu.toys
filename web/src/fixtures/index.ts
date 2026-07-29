@@ -20,7 +20,7 @@ export function makeWallCard(overrides?: Partial<WallCard>): WallCard {
   return {
     id: "abc123",
     title: "Dusk",
-    author: { handle: "ada", avatar: null },
+    author: { id: "1", handle: "ada", avatar: null },
     thumbUrl: "/blobs/thumb/abc123",
     clipUrl: "/blobs/clip/abc123",
     heartCount: 3,
@@ -38,6 +38,7 @@ export function makeMe(overrides?: Partial<Me>): Me {
   return {
     id: "1",
     handle: "ada",
+    avatar: null,
     isAdmin: false,
     ...overrides,
   };
@@ -57,7 +58,7 @@ export const wallPage: WallPage = makeWallPage();
 
 export function makeProfile(overrides?: Partial<Profile>): Profile {
   return {
-    user: { handle: "ada", avatar: null },
+    user: { id: "1", handle: "ada", avatar: null },
     toys: [wallCard, wallCard2],
     ...overrides,
   };

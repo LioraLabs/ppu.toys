@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 export type Theme = "dark" | "light";
 
@@ -21,19 +21,41 @@ function loadTheme(): Theme {
   }
 }
 
-/** Theme state: owns the `data-theme` attribute on <html> (tokens.css keys the
- *  light palette off [data-theme="light"]) and persists the choice. Holds local
- *  state and is intended for a single consumer (the Toolbar) — if a second
- *  consumer ever needs it, lift to a shared store. */
+/** Shared theme store: owns the `data-theme` attribute on <html> (tokens.css
+ *  keys the light palette off [data-theme="light"]) and persists the choice.
+ *  Module-level state so every consumer (Toolbar, SettingsPanel) stays in
+ *  sync — the old per-hook local state desyncs with a second consumer. */
+let theme: Theme = loadTheme();
+const listeners = new Set<() => void>();
+
+function apply(t: Theme) {
+  if (typeof document !== "undefined") document.documentElement.dataset.theme = t;
+  try {
+    localStorage.setItem(STORAGE_KEY, t);
+  } catch {
+    /* non-persistent is fine */
+  }
+}
+
+export const themeStore = {
+  get: (): Theme => theme,
+  toggle(): void {
+    theme = nextTheme(theme);
+    apply(theme);
+    for (const l of listeners) l();
+  },
+  subscribe(cb: () => void): () => void {
+    listeners.add(cb);
+    return () => void listeners.delete(cb);
+  },
+};
+
 export function useTheme() {
-  const [theme, setTheme] = useState<Theme>(loadTheme);
-  useLayoutEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    try {
-      localStorage.setItem(STORAGE_KEY, theme);
-    } catch {
-      /* non-persistent is fine */
-    }
-  }, [theme]);
-  return { theme, toggleTheme: () => setTheme((t) => nextTheme(t)) };
+  const t = useSyncExternalStore(themeStore.subscribe, themeStore.get);
+  // (re)assert the attribute on mount — the first consumer applies the
+  // persisted choice, later consumers are no-ops.
+  useEffect(() => {
+    apply(themeStore.get());
+  }, []);
+  return { theme: t, toggleTheme: themeStore.toggle };
 }

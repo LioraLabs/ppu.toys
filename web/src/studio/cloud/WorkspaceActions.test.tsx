@@ -30,7 +30,7 @@ const mockUseSession = useSession as unknown as ReturnType<typeof vi.fn>;
 const mockCreateToy = createToy as unknown as ReturnType<typeof vi.fn>;
 const mockUpdateToy = updateToy as unknown as ReturnType<typeof vi.fn>;
 
-const USER: Me = { id: "u1", handle: "ada", isAdmin: false };
+const USER: Me = { id: "u1", handle: "ada", avatar: null, isAdmin: false };
 
 beforeEach(() => {
   cloudDraft._resetForTests();

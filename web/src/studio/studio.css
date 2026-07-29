@@ -49,11 +49,26 @@
   font-family: var(--font-sans); font-size: 13px; cursor: pointer;
 }
 .btn-solid:hover { background: color-mix(in srgb, var(--orange) 85%, #ffffff); }
-.avatar {
-  width: 30px; height: 30px; border-radius: 50%;
-  background: linear-gradient(135deg, #3a414f, #22262f);
-  border: 1px solid var(--line);
+.tb-home { display: flex; align-items: center; gap: 14px; text-decoration: none; }
+.tb-home:hover .wordmark { color: var(--orange); }
+.tb-account { position: relative; }
+.tb-avatar-btn {
+  display: block; padding: 0; border: 1px solid var(--line); border-radius: 50%;
+  background: none; cursor: pointer;
 }
+.tb-avatar-btn:hover { border-color: var(--mid); }
+.tb-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 30;
+  min-width: 140px; display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25); overflow: hidden;
+}
+.tb-menu-item {
+  padding: 8px 12px; text-align: left; font-family: var(--font-sans); font-size: 13px;
+  color: var(--txt2); background: none; border: none; text-decoration: none; cursor: pointer;
+}
+.tb-menu-item:hover { background: var(--hover); }
+.tb-menu-item + .tb-menu-item { border-top: 1px solid var(--line2); }
 
 .rail {
   width: var(--rail-w); flex: none;
@@ -74,6 +89,39 @@
 }
 .rail-spacer { flex: 1; }
 .rail .settings { color: var(--dim); }
+
+/* Settings flyout, anchored off the rail's gear item */
+.settings-panel {
+  position: fixed;
+  left: var(--rail-w);
+  bottom: 0;
+  width: 280px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-dock);
+  border-right: 1px solid var(--border-primary);
+  border-top: 1px solid var(--border-primary);
+  font-family: var(--font-sans);
+  color: var(--text-mid);
+}
+.settings-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.settings-row:last-child { border-bottom: none; }
+.settings-row-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.settings-label { font-size: 12px; color: var(--text-main); }
+.settings-hint { font-size: 10px; color: var(--text-dim); }
+.settings-seg { display: flex; border: 1px solid var(--border-button); border-radius: var(--radius-pill); overflow: hidden; flex: none; }
+.settings-seg-btn {
+  font-family: var(--font-sans); font-size: 11px;
+  padding: 3px 10px; border: none; background: transparent;
+  color: var(--text-dim); cursor: pointer;
+}
+.settings-seg-btn + .settings-seg-btn { border-left: 1px solid var(--border-button); }
+.settings-seg-btn--on { background: var(--raised); color: var(--text-main); }
 
 .section-header {
   font-family: var(--font-mono); font-size: 11px; letter-spacing: .12em;

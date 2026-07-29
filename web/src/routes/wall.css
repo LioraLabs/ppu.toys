@@ -1,15 +1,22 @@
+.wall-hero {
+  display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap;
+  padding: 1.5rem 1.5rem 0;
+  font-family: var(--font-sans);
+}
+.wall-hero h1 { margin: 0; font-size: 1.3rem; color: var(--txt); }
+.wall-hero p { margin: 0; color: var(--dim); }
 .wall-toolbar {
   display: flex; gap: 0.5rem; padding: 1rem 1.5rem 0;
-  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-family: var(--font-sans);
 }
 .sort-tab {
-  background: none; border: 1px solid #2a2a33; color: #b9b9c6;
+  background: none; border: 1px solid var(--line); color: var(--txt2);
   padding: 0.3rem 0.8rem; border-radius: 999px; cursor: pointer; font: inherit;
 }
-.sort-tab--on { background: #2a2a33; color: #e8e8ef; }
-.wall-empty { padding: 2rem 1.5rem; color: #8b8b98; font-family: "IBM Plex Sans", system-ui, sans-serif; }
+.sort-tab--on { background: var(--raised); color: var(--txt); }
+.wall-empty { padding: 2rem 1.5rem; color: var(--dim); font-family: var(--font-sans); }
 .wall-more { display: flex; justify-content: center; padding: 0 0 2rem; }
 .wall-more button {
-  background: #2a2a33; color: #e8e8ef; border: none; border-radius: 6px;
+  background: var(--raised); color: var(--txt); border: none; border-radius: 6px;
   padding: 0.5rem 1.2rem; cursor: pointer; font: inherit;
 }

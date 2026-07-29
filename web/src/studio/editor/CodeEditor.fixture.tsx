@@ -49,8 +49,16 @@ const Generated = () => (
   </Frame>
 );
 
+// Vim keybindings opted in — renders the vim status panel (--NORMAL--).
+const VimOn = () => (
+  <Frame>
+    <CodeEditor docKey="doc3" doc={luaSource} vimMode onChange={noop} errors={[]} />
+  </Frame>
+);
+
 export default {
   Default,
   WithError,
   Generated,
+  VimOn,
 };

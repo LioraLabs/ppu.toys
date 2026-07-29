@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { type Extension } from "@codemirror/state";
+import { Compartment, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { StreamLanguage } from "@codemirror/language";
 import { lua } from "@codemirror/legacy-modes/mode/lua";
@@ -23,6 +23,8 @@ export interface CodeEditorProps {
    *  rebuilt from `doc` whenever it changes externally instead of treating
    *  the editor buffer as the source of truth. */
   generated?: boolean;
+  /** Vim keybindings on/off. Off = plain CodeMirror bindings (the default). */
+  vimMode?: boolean;
   /** Called on every document change with the new source. */
   onChange: (src: string) => void;
   /** Errors already routed to THIS doc (compile + runtime), see
@@ -33,14 +35,21 @@ export interface CodeEditorProps {
 /** ONE CodeMirror view for the whole pane; per-file EditorStates swap through
  *  it so tab switches preserve undo history (docStates). Source pushing and
  *  error routing live in EditorPane — this component only edits and displays. */
-export function CodeEditor({ docKey, doc, generated = false, onChange, errors }: CodeEditorProps) {
+export function CodeEditor({ docKey, doc, generated = false, vimMode = false, onChange, errors }: CodeEditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const docsRef = useRef<DocStates | null>(null);
   const keyRef = useRef(docKey);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
-  const initial = useRef({ docKey, doc, generated });
+  // One compartment instance shared by every per-file EditorState, so the
+  // input mode can be reconfigured without rebuilding docs (undo survives).
+  const vimComp = useRef(new Compartment());
+  const vimModeRef = useRef(vimMode);
+  vimModeRef.current = vimMode;
+  const initial = useRef({ docKey, doc, generated, vimMode });
+
+  const vimExt = (on: boolean): Extension => (on ? vim({ status: true }) : []);
 
   useEffect(() => {
     if (!host.current) return;
@@ -48,7 +57,7 @@ export function CodeEditor({ docKey, doc, generated = false, onChange, errors }:
       if (u.docChanged) onChangeRef.current(u.state.doc.toString());
     });
     const extensions: Extension[] = [
-      vim({ status: true }), // first: takes key precedence
+      vimComp.current.of(vimExt(initial.current.vimMode)), // first: takes key precedence
       basicSetup,
       StreamLanguage.define(lua),
       autocompletion({ override: [ppuCompletions] }),
@@ -81,16 +90,29 @@ export function CodeEditor({ docKey, doc, generated = false, onChange, errors }:
     const view = viewRef.current;
     const docs = docsRef.current;
     if (!view || !docs) return;
+    // A swapped-in state carries the compartment config it was stored with,
+    // which may predate an input-mode toggle — re-assert the current mode.
+    const syncVim = () =>
+      view.dispatch({ effects: vimComp.current.reconfigure(vimExt(vimModeRef.current)) });
     if (keyRef.current === docKey) {
       if (generated && view.state.doc.toString() !== doc) {
         view.setState(docs.acquire(docKey, doc, generated));
+        syncVim();
       }
       return;
     }
     docs.store(keyRef.current, view.state);
     keyRef.current = docKey;
     view.setState(docs.acquire(docKey, doc, generated));
+    syncVim();
   }, [docKey, doc, generated]);
+
+  // input-mode toggle: reconfigure the live state in place
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: vimComp.current.reconfigure(vimExt(vimMode)) });
+    // vimExt is a stable pure helper
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vimMode]);
 
   // (re)display the routed diagnostics for the active doc
   useEffect(() => {

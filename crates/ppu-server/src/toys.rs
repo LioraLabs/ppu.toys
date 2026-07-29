@@ -217,10 +217,10 @@ pub struct WallQuery { #[serde(default)] sort: Option<String>, #[serde(default)]
 
 const PAGE_SIZE: i64 = 24;
 
-fn wall_card(id: &str, title: &str, handle: &str, avatar: &Option<String>, heart_count: i64, hearted: bool) -> serde_json::Value {
+fn wall_card(id: &str, title: &str, author_id: &str, handle: &str, avatar: &Option<String>, heart_count: i64, hearted: bool) -> serde_json::Value {
     serde_json::json!({
         "id": id, "title": title,
-        "author": { "handle": handle, "avatar": avatar },
+        "author": { "id": author_id, "handle": handle, "avatar": avatar },
         "thumbUrl": format!("/blobs/thumb/{id}"),
         "clipUrl": format!("/blobs/clip/{id}"),
         "heartCount": heart_count, "hearted": hearted,
@@ -230,16 +230,16 @@ fn wall_card(id: &str, title: &str, handle: &str, avatar: &Option<String>, heart
 async fn wall(State(state): State<AppState>, maybe: Option<AuthUser>, Query(q): Query<WallQuery>) -> AppResult<Response> {
     let page = q.page.unwrap_or(0).max(0);
     let order = match q.sort.as_deref() { Some("popular") => "t.heart_count DESC, t.created_at DESC", _ => "t.created_at DESC" };
-    let sql = format!("SELECT t.id,t.title,t.heart_count,u.handle,u.avatar_hash FROM toys t JOIN users u ON u.id=t.author_id
+    let sql = format!("SELECT t.id,t.title,t.heart_count,u.id,u.handle,u.avatar_hash FROM toys t JOIN users u ON u.id=t.author_id
                        WHERE t.state='published' ORDER BY {order} LIMIT ? OFFSET ?");
-    let rows: Vec<(String,String,i64,String,Option<String>)> = sqlx::query_as(&sql)
+    let rows: Vec<(String,String,i64,String,String,Option<String>)> = sqlx::query_as(&sql)
         .bind(PAGE_SIZE + 1).bind(page * PAGE_SIZE).fetch_all(&state.pool).await?;
     let uid = maybe.as_ref().map(|u| u.id.clone());
     let has_more = rows.len() as i64 > PAGE_SIZE;
     let mut cards = Vec::new();
-    for (id,title,hc,handle,avatar) in rows.into_iter().take(PAGE_SIZE as usize) {
+    for (id,title,hc,author_id,handle,avatar) in rows.into_iter().take(PAGE_SIZE as usize) {
         let hearted = match &uid { Some(u) => sqlx::query_as::<_,(i64,)>("SELECT 1 FROM hearts WHERE user_id=? AND toy_id=?").bind(u).bind(&id).fetch_optional(&state.pool).await?.is_some(), None => false };
-        cards.push(wall_card(&id,&title,&handle,&avatar,hc,hearted));
+        cards.push(wall_card(&id,&title,&author_id,&handle,&avatar,hc,hearted));
     }
     Ok(Json(serde_json::json!({ "toys": cards, "nextPage": if has_more { Some(page+1) } else { None } })).into_response())
 }
@@ -252,9 +252,9 @@ async fn profile(State(state): State<AppState>, maybe: Option<AuthUser>, Path(ha
     let mut cards = Vec::new();
     for (id,title,hc) in rows {
         let hearted = match &viewer { Some(v) => sqlx::query_as::<_,(i64,)>("SELECT 1 FROM hearts WHERE user_id=? AND toy_id=?").bind(v).bind(&id).fetch_optional(&state.pool).await?.is_some(), None => false };
-        cards.push(wall_card(&id,&title,&handle,&avatar,hc,hearted));
+        cards.push(wall_card(&id,&title,&uid,&handle,&avatar,hc,hearted));
     }
-    Ok(Json(serde_json::json!({ "user": { "handle": handle, "avatar": avatar }, "toys": cards })).into_response())
+    Ok(Json(serde_json::json!({ "user": { "id": uid, "handle": handle, "avatar": avatar }, "toys": cards })).into_response())
 }
 
 pub fn routes() -> Router<AppState> {

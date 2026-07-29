@@ -61,6 +61,23 @@ export function WorkspaceActions() {
     }
   }
 
+  // Ctrl/Cmd+S = Save (signed in). Capture phase beats the browser's
+  // save-page dialog and CodeMirror; registered only while this is mounted.
+  useEffect(() => {
+    if (!user) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.key === "s" || e.key === "S") && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        e.stopPropagation();
+        void handleSave();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+    // handleSave identity changes per render; the latest closure is fine
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, busy]);
+
   if (!user) {
     return (
       <a className="btn-ghost" href={SIGN_IN_URL}>

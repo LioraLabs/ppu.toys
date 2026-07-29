@@ -13,7 +13,7 @@ pub const SESSION_COOKIE: &str = "ppu_sess";
 pub const STATE_COOKIE: &str = "ppu_oauth_state";
 pub const CSRF_HEADER: &str = "x-ppu-csrf";
 
-pub struct AuthUser { pub id: String, pub handle: String, pub is_admin: bool }
+pub struct AuthUser { pub id: String, pub handle: String, pub avatar: Option<String>, pub is_admin: bool }
 
 impl FromRequestParts<AppState> for AuthUser {
     type Rejection = AppError;
@@ -26,11 +26,11 @@ impl FromRequestParts<AppState> for AuthUser {
         let sid = jar.get(SESSION_COOKIE).map(|c| c.value().to_string())
             .ok_or_else(|| AppError::status(StatusCode::UNAUTHORIZED, "no session"))?;
         let now = crate::db::now();
-        let row: Option<(String, String, i64)> = sqlx::query_as(
-            "SELECT u.id, u.handle, u.is_admin FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires_at > ?"
+        let row: Option<(String, String, Option<String>, i64)> = sqlx::query_as(
+            "SELECT u.id, u.handle, u.avatar_hash, u.is_admin FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires_at > ?"
         ).bind(&sid).bind(now).fetch_optional(&state.pool).await?;
-        let (id, handle, is_admin) = row.ok_or_else(|| AppError::status(StatusCode::UNAUTHORIZED, "invalid session"))?;
-        Ok(AuthUser { id, handle, is_admin: is_admin != 0 })
+        let (id, handle, avatar, is_admin) = row.ok_or_else(|| AppError::status(StatusCode::UNAUTHORIZED, "invalid session"))?;
+        Ok(AuthUser { id, handle, avatar, is_admin: is_admin != 0 })
     }
 }
 
@@ -56,7 +56,7 @@ fn removal_cookie(name: &'static str) -> Cookie<'static> {
 }
 
 async fn me(user: AuthUser) -> impl IntoResponse {
-    Json(serde_json::json!({ "id": user.id, "handle": user.handle, "isAdmin": user.is_admin }))
+    Json(serde_json::json!({ "id": user.id, "handle": user.handle, "avatar": user.avatar, "isAdmin": user.is_admin }))
 }
 
 async fn logout(State(state): State<AppState>, _user: AuthUser, jar: CookieJar) -> AppResult<Response> {

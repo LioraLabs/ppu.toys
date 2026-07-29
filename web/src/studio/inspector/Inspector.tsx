@@ -1,6 +1,7 @@
-import { useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import type { FrameResult } from "../../ppu/core";
 import { useInspectorFrame } from "./useInspectorFrame";
+import { inspectorStore, useInspectorView } from "./inspectorStore";
 import { INSPECTOR_TABS, overlayForTab, type OverlayId, type TabId } from "./tabs";
 import { TraceTab } from "./TraceTab";
 import { MemoryTabWired } from "./MemoryTabWired";
@@ -51,8 +52,9 @@ function wiredOverlay(overlay: OverlayId, _frame: FrameResult, onCollapse: () =>
 }
 
 export function Inspector({ renderTab = wiredTab, renderOverlay = wiredOverlay }: InspectorProps = {}) {
-  const [tab, setTab] = useState<TabId>("trace");
-  const [overlay, setOverlay] = useState<OverlayId | null>(null);
+  // Shared store, not local state: the ActivityRail drives these too.
+  const { tab, overlay } = useInspectorView();
+  const setTab = inspectorStore.setTab;
   const frame = useInspectorFrame();
   const expandTarget = overlayForTab(tab);
   return (
@@ -73,14 +75,14 @@ export function Inspector({ renderTab = wiredTab, renderOverlay = wiredOverlay }
           <button
             type="button"
             className="btn-ghost insp-expand"
-            onClick={() => setOverlay(expandTarget)}
+            onClick={() => inspectorStore.openOverlay(expandTarget)}
           >
             ⤢ Expand
           </button>
         )}
       </div>
       {renderTab(tab, frame)}
-      {overlay && renderOverlay(overlay, frame, () => setOverlay(null))}
+      {overlay && renderOverlay(overlay, frame, inspectorStore.collapse)}
     </div>
   );
 }

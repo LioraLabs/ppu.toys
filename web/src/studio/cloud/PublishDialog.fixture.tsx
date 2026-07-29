@@ -2,6 +2,7 @@ import { MemoryRouter } from "react-router-dom";
 import { OverlayStage } from "../../cosmos/FixtureStage";
 import { PublishDialog } from "./PublishDialog";
 import { publishSave } from "../../fixtures";
+import "../studio.css"; // btn-ghost/btn-solid — the dialog's buttons style from the studio chrome
 import "./cloud.css";
 
 // PublishDialog rendered open. It is already prop-driven: the ensure-saved

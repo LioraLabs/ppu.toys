@@ -16,6 +16,7 @@
 }
 .cloud-title { font-family: var(--font-sans); font-weight: 600; color: var(--txt); font-size: 14px; }
 .cloud-body { display: flex; flex-direction: column; gap: 10px; padding: 14px; }
+.cloud-explainer { margin: 0; font-family: var(--font-sans); font-size: 12px; color: var(--dim); line-height: 1.45; }
 .cloud-field {
   display: flex; flex-direction: column; gap: 4px;
   font-family: var(--font-sans); font-size: 12px; color: var(--mid);

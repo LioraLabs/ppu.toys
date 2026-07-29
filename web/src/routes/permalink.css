@@ -1,30 +1,30 @@
 .permalink {
   display: grid; grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr);
   gap: 1.5rem; padding: 1.5rem; align-items: start;
-  font-family: "IBM Plex Sans", system-ui, sans-serif; color: #e8e8ef;
+  font-family: var(--font-sans); color: var(--txt);
 }
 @media (max-width: 800px) { .permalink { grid-template-columns: 1fr; } }
 .permalink-stage { background: #000; border-radius: 8px; overflow: hidden; }
 .permalink-head h1 { margin: 0 0 0.25rem; font-size: 1.4rem; }
-.permalink-author { color: #8b8b98; text-decoration: none; }
+.permalink-author { color: var(--dim); text-decoration: none; }
 .permalink-author:hover { text-decoration: underline; }
-.permalink-desc { color: #b9b9c6; }
+.permalink-desc { color: var(--txt2); }
 .permalink-actions { display: flex; align-items: center; gap: 1rem; margin: 1rem 0; }
 .fork-btn {
-  background: #2a2a33; color: #e8e8ef; border: none; border-radius: 6px;
+  background: var(--raised); color: var(--txt); border: none; border-radius: 6px;
   padding: 0.4rem 1rem; cursor: pointer; font: inherit;
 }
 .fork-btn:disabled { opacity: 0.6; cursor: default; }
-.fork-error { color: #ff7a7a; font-size: 0.85rem; }
+.fork-error { color: var(--red); font-size: 0.85rem; }
 .code-tabs { display: flex; gap: 0.25rem; flex-wrap: wrap; }
 .code-tab {
-  background: none; border: 1px solid #2a2a33; color: #b9b9c6;
+  background: none; border: 1px solid var(--line); color: var(--txt2);
   padding: 0.2rem 0.6rem; border-radius: 4px 4px 0 0; cursor: pointer; font: inherit; font-size: 0.85rem;
 }
-.code-tab--on { background: #17171d; color: #e8e8ef; }
+.code-tab--on { background: var(--panel); color: var(--txt); }
 .code-body {
-  margin: 0; padding: 0.75rem; background: #17171d; border: 1px solid #2a2a33;
+  margin: 0; padding: 0.75rem; background: var(--panel); border: 1px solid var(--line);
   border-radius: 0 4px 4px 4px; overflow-x: auto; max-height: 60vh;
-  font-family: "IBM Plex Mono", monospace; font-size: 0.8rem; color: #d6d6e0;
+  font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-code);
 }
-.permalink-msg { padding: 2rem; color: #8b8b98; font-family: "IBM Plex Sans", system-ui, sans-serif; }
+.permalink-msg { padding: 2rem; color: var(--dim); font-family: var(--font-sans); }

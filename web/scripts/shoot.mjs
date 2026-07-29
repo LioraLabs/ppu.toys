@@ -119,9 +119,20 @@ async function main() {
     const { chromium } = await import("playwright");
     browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: args.width, height: args.height } });
+    // Seed the theme BEFORE load: the decorator and the app's useTheme both read
+    // ppu.theme, so late-mounting components (e.g. ToolbarWired behind async
+    // wasm init) re-assert the same theme instead of racing the old post-load
+    // attribute write back to dark.
+    if (args.theme) {
+      await page.addInitScript((theme) => {
+        try {
+          localStorage.setItem("ppu.theme", theme);
+        } catch {}
+        document.documentElement.dataset.theme = theme;
+      }, args.theme);
+    }
     await page.goto(url);
     await page.waitForSelector("body[data-cosmos-ready='true']");
-    if (args.theme) await page.evaluate((theme) => (document.documentElement.dataset.theme = theme), args.theme);
     await page.locator("#root > *").first().screenshot({ path: outPath });
     console.log(outPath);
     console.log(`${fs.statSync(outPath).size} bytes`);

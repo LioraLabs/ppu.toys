@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { StudioLayout } from "./StudioLayout";
 import { ToolbarWired } from "./ToolbarWired";
 import { ActivityRailWired } from "./ActivityRailWired";
@@ -5,6 +6,7 @@ import { EditorPane } from "./EditorPane";
 import { RightColumn } from "./RightColumn";
 import { transport } from "./transport/transport";
 import { useOpenSketch, openContextLabel } from "./sketches/openSketch";
+import { useDocumentTitle } from "../routes/useDocumentTitle";
 
 /** The wired studio: fills StudioLayout's slots with the full app — the sketch
  *  store (openSketch), the CodeMirror EditorPane, the transport-driven
@@ -16,6 +18,21 @@ export function Studio() {
   const state = useOpenSketch();
   const { dirty } = state;
   const sketchName = openContextLabel(state);
+  useDocumentTitle(`${sketchName} · Studio`);
+
+  // Ctrl/Cmd+Enter = ▶ Run, everywhere in the studio. Capture phase so it wins
+  // over CodeMirror's own Enter handling while focus is in the editor.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        e.stopPropagation();
+        transport.restart();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
   return (
     <StudioLayout
       toolbar={<ToolbarWired sketchName={sketchName} dirty={dirty} />}

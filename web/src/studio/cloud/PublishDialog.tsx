@@ -75,12 +75,16 @@ export function PublishDialog({ onClose, save }: PublishDialogProps) {
         </header>
 
         <div className="cloud-body">
+          <p className="cloud-explainer">
+            Publishing records a short loop clip of your toy and puts it on the
+            public wall, playable by anyone at its own link.
+          </p>
           <label className="cloud-field">
-            title
+            Title
             <input type="text" value={title} disabled={busy} onChange={(e) => setTitle(e.target.value)} />
           </label>
           <label className="cloud-field">
-            description
+            Description
             <textarea value={description} disabled={busy} rows={3} onChange={(e) => setDescription(e.target.value)} />
           </label>
 

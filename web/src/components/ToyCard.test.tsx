@@ -9,8 +9,9 @@ import { makeWallCard } from "../fixtures";
 vi.mock("../api/apiClient", () => ({
   addHeart: vi.fn(async () => {}),
   removeHeart: vi.fn(async () => {}),
+  goToSignIn: vi.fn(),
 }));
-import { addHeart, removeHeart } from "../api/apiClient";
+import { addHeart, goToSignIn, removeHeart } from "../api/apiClient";
 
 const card = makeWallCard();
 
@@ -56,8 +57,10 @@ describe("ToyCard", () => {
     expect(removeHeart).toHaveBeenCalledWith("abc123");
   });
 
-  it("disables hearting when signed out", () => {
+  it("routes a signed-out heart to sign-in instead of mutating", () => {
     render(<MemoryRouter><ToyCard card={card} signedIn={false} /></MemoryRouter>);
-    expect(screen.getByRole("button", { name: /heart/i })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /sign in to heart/i }));
+    expect(goToSignIn).toHaveBeenCalled();
+    expect(addHeart).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import type { WallCard } from "../api/apiClient";
+import { Avatar } from "./Avatar";
 import { HeartButton } from "./HeartButton";
 import "./cards.css";
 
@@ -25,6 +26,7 @@ export function ToyCard({ card, signedIn }: { card: WallCard; signedIn: boolean 
         <div className="toy-card-text">
           <Link to={`/t/${card.id}`} className="toy-card-title">{card.title}</Link>
           <Link to={`/u/${card.author.handle}`} className="toy-card-author">
+            <Avatar handle={card.author.handle} id={card.author.id} avatar={card.author.avatar} size={16} />
             {card.author.handle}
           </Link>
         </div>

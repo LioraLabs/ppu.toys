@@ -52,12 +52,22 @@
   overflow-y: auto;
   flex: 1;
 }
+.library-list--demos { flex: none; max-height: 45%; }
+.library-section {
+  padding: 10px 12px 2px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
 .library-empty {
   padding: 12px 8px;
   font-size: 12px;
   color: var(--text-dim);
 }
 .library-row {
+  position: relative; /* anchors the hover-revealed .library-actions overlay */
   display: flex;
   align-items: center;
   gap: 4px;
@@ -97,7 +107,19 @@
   flex: none;
 }
 .library-actions {
-  display: flex;
+  /* revealed on row hover/focus — three chips per row otherwise drown the
+     list and force name truncation. Overlaid on the row's hover surface so
+     nothing shifts. */
+  display: none;
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
   gap: 4px;
-  flex: none;
+  padding-left: 8px;
+  background: var(--bg-hover-list);
+}
+.library-row:hover .library-actions,
+.library-row:focus-within .library-actions {
+  display: flex;
 }

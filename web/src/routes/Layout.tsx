@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Link, Outlet } from "react-router-dom";
 import { useSession, sessionStore } from "../api/session";
 import { SIGN_IN_URL } from "../api/apiClient";
+import { Avatar } from "../components/Avatar";
 import "./layout.css";
 
 export function Layout() {
@@ -20,7 +21,10 @@ export function Layout() {
           <Link to="/studio">Studio</Link>
           {!loading && user && (
             <>
-              <Link to={`/u/${user.handle}`}>{user.handle}</Link>
+              <Link className="site-nav-user" to={`/u/${user.handle}`}>
+                <Avatar handle={user.handle} id={user.id} avatar={user.avatar} size={20} />
+                {user.handle}
+              </Link>
               <button className="linklike" onClick={() => void sessionStore.signOut()}>
                 Sign out
               </button>
@@ -34,6 +38,13 @@ export function Layout() {
       <main className="site-main">
         <Outlet />
       </main>
+      <footer className="site-footer">
+        <span>ppu.toys — little graphics toys for a real SNES PPU</span>
+        <nav>
+          <Link to="/tos">Terms</Link>
+          <Link to="/privacy">Privacy</Link>
+        </nav>
+      </footer>
     </div>
   );
 }

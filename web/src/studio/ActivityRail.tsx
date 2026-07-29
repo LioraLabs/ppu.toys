@@ -3,14 +3,16 @@ import { type ReactNode } from "react";
 export type RailItemId = "files" | "layers" | "palette" | "sprites" | "settings";
 
 export interface ActivityRailProps {
-  /** Item shown selected (inset-indicator). Defaults to the handoff's active item. */
+  /** Item shown selected (inset-indicator); none when absent. */
   active?: RailItemId;
   /** Whether the Files panel is open — drives the Files button's pressed/active
    *  appearance independently of `active` (the file library is a toggle, not a
    *  persistent view selection). Owned by the wired wrapper. */
   filesOpen?: boolean;
-  /** Rail action registration point. The wired wrapper toggles the sketch
-   *  library on "files"; later tickets claim the rest. No-op when absent. */
+  /** Same toggle treatment for the Settings flyout. */
+  settingsOpen?: boolean;
+  /** Rail actions: files/settings toggle their flyouts, layers/palette/sprites
+   *  jump to the matching inspector view (wired wrapper). No-op when absent. */
   onSelect?: (id: RailItemId) => void;
 }
 
@@ -42,10 +44,10 @@ function RailItem({
   );
 }
 
-/** Presentational left nav: a pure function of `active` + `filesOpen`. Renders no
- *  panels and reads no store — the wired wrapper (ActivityRailWired) owns the
- *  files-panel state and mounts LibraryPanel. */
-export function ActivityRail({ active = "layers", filesOpen = false, onSelect }: ActivityRailProps) {
+/** Presentational left nav: a pure function of its props. Renders no panels
+ *  and reads no store — the wired wrapper (ActivityRailWired) owns the flyout
+ *  state and mounts LibraryPanel / SettingsPanel. */
+export function ActivityRail({ active, filesOpen = false, settingsOpen = false, onSelect }: ActivityRailProps) {
   return (
     <nav className="rail">
       <RailItem id="files" label="Files" active={filesOpen || active === "files"} onSelect={onSelect}>
@@ -81,7 +83,7 @@ export function ActivityRail({ active = "layers", filesOpen = false, onSelect }:
 
       <div className="rail-spacer" />
 
-      <RailItem id="settings" label="Settings" className="settings" active={active === "settings"} onSelect={onSelect}>
+      <RailItem id="settings" label="Settings" className="settings" active={settingsOpen || active === "settings"} onSelect={onSelect}>
         <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth={1.4} strokeLinecap="round" strokeLinejoin="round">
           <circle cx="9" cy="9" r="3"/>
           <circle cx="9" cy="9" r="6.5" strokeDasharray="2 2"/>

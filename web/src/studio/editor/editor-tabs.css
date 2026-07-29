@@ -16,4 +16,8 @@
 .ftab-add:hover { color: var(--text-hi); background: var(--bg-hover-list); }
 .ftab-spacer { flex: 1; }
 .ftab-status { display: flex; align-items: center; gap: 6px; padding: 0 14px; font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); white-space: nowrap; }
-.ftab-status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-green); flex: none; }
+.ftab-status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-dim); flex: none; }
+.ftab-vim { display: flex; align-items: center; gap: 6px; padding: 0 10px; font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); white-space: nowrap; background: none; border: none; cursor: pointer; }
+.ftab-vim:hover { color: var(--text-main); }
+.ftab-vim--on { color: var(--text-main); }
+.ftab-vim--on .ftab-status-dot { background: var(--accent-green); }

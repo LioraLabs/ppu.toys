@@ -64,7 +64,8 @@ export function LibraryPanel({ onClose }: { onClose: () => void }) {
           ×
         </button>
       </header>
-      <ul className="library-list">
+      <div className="library-section">Demos</div>
+      <ul className="library-list library-list--demos">
         {DEMOS.map((d) => {
           const isOpen = open.context.kind === "demo" && open.context.demoId === d.id;
           return (
@@ -78,12 +79,13 @@ export function LibraryPanel({ onClose }: { onClose: () => void }) {
                 }}
               >
                 <span className="library-name">{d.label}</span>
-                <span className="library-updated">demo · read-only</span>
+                <span className="library-updated">read-only</span>
               </button>
             </li>
           );
         })}
       </ul>
+      <div className="library-section">My sketches</div>
       <ul className="library-list">
         {sketches.length === 0 && (
           <li className="library-empty">No sketches yet — edit a demo or hit New.</li>

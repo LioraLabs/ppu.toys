@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { getWall, type WallCard, type WallSort } from "../api/apiClient";
+import { useDocumentTitle } from "./useDocumentTitle";
 import { useSession } from "../api/session";
 import { ToyCard } from "../components/ToyCard";
 import "../components/cards.css";
 import "./wall.css";
 
 export function Wall() {
+  useDocumentTitle();
   const { user } = useSession();
   const [sort, setSort] = useState<WallSort>("recent");
   const [cards, setCards] = useState<WallCard[]>([]);
@@ -49,6 +52,15 @@ export function Wall() {
 
   return (
     <div className="wall">
+      {!user && (
+        <div className="wall-hero">
+          <h1>Toys for the SNES picture chip.</h1>
+          <p>
+            Watch them run, then <Link to="/studio">open the Studio</Link> and make your own —
+            live Lua on an authentic PPU.
+          </p>
+        </div>
+      )}
       <div className="wall-toolbar">
         <button
           className={`sort-tab${sort === "recent" ? " sort-tab--on" : ""}`}
