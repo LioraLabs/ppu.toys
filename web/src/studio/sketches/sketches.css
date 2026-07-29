@@ -126,3 +126,11 @@
 .library-row:focus-within .library-actions {
   display: flex;
 }
+
+/* Docked variant: fills its dockview panel instead of flying out. */
+.library--docked {
+  position: static;
+  width: 100%;
+  height: 100%;
+  border-right: none;
+}

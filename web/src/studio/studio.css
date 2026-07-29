@@ -157,48 +157,11 @@
   border-top: 1px solid var(--line2);
 }
 
-.rail {
-  width: var(--rail-w);
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  padding: 9px 0;
-  background: var(--panel2);
-  border-right: 1px solid var(--line);
-}
-.rail-item {
-  width: 38px;
-  height: 38px;
-  border-radius: 8px;
-  border: none;
-  background: transparent;
-  color: var(--mid);
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-}
-.rail-item:hover {
-  background: var(--hover);
-}
-.rail-item--active {
-  color: var(--orange);
-  background: color-mix(in srgb, var(--orange) 14%, transparent);
-  box-shadow: inset 2px 0 0 var(--orange);
-}
-.rail-spacer {
-  flex: 1;
-}
-.rail .settings {
-  color: var(--dim);
-}
-
-/* Settings flyout, anchored off the rail's gear item */
+/* Settings flyout, anchored off the toolbar's gear */
 .settings-panel {
   position: fixed;
-  left: var(--rail-w);
-  bottom: 0;
+  right: 10px;
+  top: calc(var(--toolbar-h) + 4px);
   width: 280px;
   z-index: 20;
   display: flex;
@@ -267,13 +230,6 @@
   text-transform: uppercase;
 }
 
-.center-col {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  border-right: 1px solid var(--line);
-}
 .editor {
   flex: 1;
   min-height: 0;
@@ -296,13 +252,6 @@
   overflow: auto;
 }
 
-.right {
-  width: var(--right-w);
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  background: var(--panel);
-}
 .output {
   padding: 12px 14px;
   flex: none;
@@ -427,57 +376,6 @@
   color: var(--dim2);
 }
 
-/* Click-to-toggle / drag-to-resize bar for the bottom dock. */
-.dock-bar {
-  appearance: none;
-  -webkit-appearance: none;
-  flex: none;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 0 12px;
-  border: none;
-  border-top: 1px solid var(--line);
-  background: var(--panel2);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.13em;
-  color: var(--dim);
-  cursor: pointer;
-  user-select: none;
-  touch-action: none;
-}
-.dock-bar[data-open="true"] {
-  cursor: row-resize;
-}
-.dock-bar:hover {
-  color: var(--mid);
-  background: var(--hover);
-}
-.dock-bar-chev {
-  color: var(--orange);
-}
-.dock {
-  flex: none;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--panel);
-}
-
-/* Drag handle between the editor and the right column. */
-.pane-splitter {
-  width: 5px;
-  flex: none;
-  cursor: col-resize;
-  background: transparent;
-  transition: background 0.12s;
-}
-.pane-splitter:hover,
-.pane-splitter:active {
-  background: color-mix(in srgb, var(--orange) 40%, transparent);
-}
 .drop-sub--error {
   color: var(--red);
 }
@@ -544,4 +442,100 @@
 .reg-value {
   font-weight: 500;
   color: var(--text-code);
+}
+
+/* ── dockable shell ─────────────────────────────────────────────────────── */
+.studio-body {
+  flex: 1;
+  min-height: 0;
+}
+.dock-panel-body {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--panel);
+}
+.dock-panel-body > * {
+  flex: 1;
+  min-height: 0;
+}
+
+/* dockview theme mapped onto the studio tokens (extends dockview-theme-dark) */
+.dockview-theme-ppu {
+  --dv-group-view-background-color: var(--panel);
+  --dv-tabs-and-actions-container-background-color: var(--panel2);
+  --dv-tabs-and-actions-container-height: 30px;
+  --dv-activegroup-visiblepanel-tab-background-color: var(--panel);
+  --dv-activegroup-hiddenpanel-tab-background-color: var(--panel2);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--panel);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--panel2);
+  --dv-activegroup-visiblepanel-tab-color: var(--txt);
+  --dv-activegroup-hiddenpanel-tab-color: var(--dim);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--mid);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--dim);
+  --dv-separator-border: var(--line);
+  --dv-drag-over-background-color: color-mix(in srgb, var(--orange) 18%, transparent);
+  --dv-drag-over-border-color: var(--orange);
+  --dv-paneview-active-outline-color: var(--orange);
+  --dv-background-color: var(--bg);
+}
+.dockview-theme-ppu .dv-tab {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+}
+
+/* toolbar layout menu */
+.layout-menu {
+  position: relative;
+}
+.layout-menu-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+}
+.layout-menu-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 31;
+  min-width: 170px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+.layout-menu-head {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.13em;
+  color: var(--dim);
+  padding: 6px 8px 3px;
+}
+.layout-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--txt2);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.layout-menu-item:hover {
+  background: var(--hover);
+}
+.layout-menu-tick {
+  width: 12px;
+  color: var(--orange);
+  font-size: 11px;
 }

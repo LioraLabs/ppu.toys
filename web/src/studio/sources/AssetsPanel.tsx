@@ -17,7 +17,9 @@ function kindLabel(kind: SketchSource["kind"]): string {
  *  existing convert dialog; every row previews and removes. Wired by design
  *  (open-sketch store + transport are its whole purpose); the fixture drives
  *  it through the store like production does. */
-export function AssetsPanel({ onClose }: { onClose: () => void }) {
+/** `onClose` is optional: as a dock panel (the default home since the rail
+ *  retired) the dockview tab owns closing; flyout callers pass it. */
+export function AssetsPanel({ onClose }: { onClose?: () => void } = {}) {
   const state = useOpenSketch();
   const [adding, setAdding] = useState(false);
   const [openRow, setOpenRow] = useState<string | null>(null);
@@ -36,15 +38,20 @@ export function AssetsPanel({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <aside className="library assets-panel" aria-label="Toy assets">
+    <aside
+      className={"library assets-panel" + (onClose ? "" : " library--docked")}
+      aria-label="Toy assets"
+    >
       <header className="library-head">
         <span className="library-title">ASSETS · {openContextLabel(state)}</span>
         <button type="button" className="library-btn" onClick={() => setAdding(true)}>
           + Add
         </button>
-        <button type="button" className="library-btn" aria-label="Close assets" onClick={onClose}>
-          ×
-        </button>
+        {onClose && (
+          <button type="button" className="library-btn" aria-label="Close assets" onClick={onClose}>
+            ×
+          </button>
+        )}
       </header>
       <ul className="library-list">
         {sources.length === 0 && templateAssets.length === 0 && (

@@ -26,6 +26,11 @@ export interface ToolbarProps {
   onSignOut?: () => void;
   /** Account-menu "New toy" (opens a fresh starter in the studio). */
   onNewToy?: () => void;
+  /** Settings flyout toggle (vim mode etc.) — the gear lives here since the
+   *  activity rail retired. */
+  onToggleSettings?: () => void;
+  /** Layout controls (LayoutMenu over the dock api). */
+  layoutSlot?: ReactNode;
   /** Injected wired cloud actions (WorkspaceActions in production). Slot for the
    *  same reason — it reads the session/network. */
   workspaceSlot?: ReactNode;
@@ -119,6 +124,8 @@ export function Toolbar({
   onToggleTheme,
   onSignOut,
   onNewToy,
+  onToggleSettings,
+  layoutSlot,
   workspaceSlot,
 }: ToolbarProps) {
   return (
@@ -135,6 +142,7 @@ export function Toolbar({
         {dirty && <span className="unsaved-dot" />}
       </div>
       <div className="tb-spacer" />
+      {layoutSlot}
       <button
         type="button"
         className="btn-solid"
@@ -151,6 +159,17 @@ export function Toolbar({
       >
         {theme === "dark" ? "Light" : "Dark"}
       </button>
+      {onToggleSettings && (
+        <button
+          type="button"
+          className="btn-ghost"
+          onClick={onToggleSettings}
+          aria-label="Editor settings"
+          title="Editor settings"
+        >
+          ⚙
+        </button>
+      )}
       {workspaceSlot}
       {user && <AccountMenu user={user} onSignOut={onSignOut} onNewToy={onNewToy} />}
     </header>

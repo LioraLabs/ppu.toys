@@ -16,7 +16,7 @@ export interface InspectorProps {
   /** Body renderer for the active tab. Defaults to the live wired set (which
    *  reads the shared ppuCore for memory/vram/compose) — a fixture overrides it
    *  with fixture-fed presentational tabs so the inspector chrome + tab
-   *  switching render wasm-free (see StudioLayout.fixture). */
+   *  switching render wasm-free (see StudioDock.fixture). */
   renderTab?: (tab: TabId, frame: FrameResult) => ReactNode;
 }
 
@@ -40,7 +40,6 @@ function wiredTab(tab: TabId, frame: FrameResult): ReactNode {
 }
 
 export function Inspector({ renderTab = wiredTab }: InspectorProps = {}) {
-  // Shared store, not local state: the ActivityRail drives these too.
   const { tab } = useInspectorView();
   const setTab = inspectorStore.setTab;
   const frame = useInspectorFrame();

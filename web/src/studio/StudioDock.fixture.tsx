@@ -2,10 +2,10 @@ import { useState } from "react";
 import type { ReactNode } from "react";
 import type { FrameResult, SourceFile } from "../ppu/core";
 import { WIDTH, HEIGHT } from "../ppu/core";
-import { StudioLayout } from "./StudioLayout";
+import { StudioDock } from "./StudioDock";
 import { Studio } from "./Studio";
 import { Toolbar } from "./Toolbar";
-import { ActivityRail } from "./ActivityRail";
+import { AssetsPanel } from "./sources/AssetsPanel";
 import { FileTabs } from "./editor/FileTabs";
 import { CodeEditor } from "./editor/CodeEditor";
 import { Inspector } from "./inspector/Inspector";
@@ -34,8 +34,8 @@ import "./inspector/compose/compose.css";
 import "./pokes/pokes.css";
 
 // The composed studio shell — the level ABOVE the ~88 leaf stories. `Composed`
-// assembles the real layout (StudioLayout), the real chrome (Toolbar,
-// ActivityRail), the real editor leaves (FileTabs + CodeEditor) and the real
+// assembles the real dock shell (StudioDock), the real chrome (Toolbar) and
+// the real editor leaves (FileTabs + CodeEditor) and the real
 // Inspector chrome entirely from fixtures, so the whole-app arrangement
 // (grid, columns, panel adjacency, theming) is editable wasm-free with the
 // usual fixture/shoot loop. Only the truly rasterizer-bound surfaces are
@@ -222,24 +222,13 @@ const toolbarWorkspaceSlot = (
 
 function ComposedShell() {
   return (
-    <div style={{ position: "relative" }}>
-      <StudioLayout
-        toolbar={
-          <Toolbar
-            sketchName={sketchName}
-            dirty
-            theme="dark"
-            workspaceSlot={toolbarWorkspaceSlot}
-          />
-        }
-        rail={<ActivityRail active="layers" />}
+    <div className="studio" style={{ position: "relative", height: "100vh" }}>
+      <Toolbar sketchName={sketchName} dirty theme="dark" workspaceSlot={toolbarWorkspaceSlot} />
+      <StudioDock
         editor={<EditorMock />}
-        dock={<Inspector renderTab={fixtureTab} />}
-        right={
-          <aside className="right">
-            <OutputMock f={frame} />
-          </aside>
-        }
+        assets={<AssetsPanel />}
+        output={<OutputMock f={frame} />}
+        inspector={<Inspector renderTab={fixtureTab} />}
       />
     </div>
   );

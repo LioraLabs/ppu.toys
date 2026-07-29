@@ -1,27 +1,26 @@
-import { useEffect } from "react";
-import { StudioLayout } from "./StudioLayout";
+import { useEffect, useState } from "react";
+import type { DockviewApi } from "dockview-react";
+import { StudioDock, LayoutMenu } from "./StudioDock";
 import { ToolbarWired } from "./ToolbarWired";
-import { ActivityRailWired } from "./ActivityRailWired";
 import { EditorPane } from "./EditorPane";
-import { RightColumn } from "./RightColumn";
+import { OutputCanvas } from "./output/OutputCanvas";
 import { Inspector } from "./inspector/Inspector";
-import { inspectorStore, useInspectorView } from "./inspector/inspectorStore";
+import { AssetsPanel } from "./sources/AssetsPanel";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { transport } from "./transport/transport";
 import { useOpenSketch, openContextLabel } from "./sketches/openSketch";
 import { useDocumentTitle } from "../routes/useDocumentTitle";
 
-/** The wired studio: fills StudioLayout's slots with the full app — the sketch
- *  store (openSketch), the CodeMirror EditorPane, the transport-driven
- *  RightColumn (OutputCanvas owns the rAF/wasm loop), and the wired chrome
- *  (ToolbarWired/ActivityRailWired). The composition itself is available
- *  wasm-free via StudioLayout.fixture (fixture-fed slots); this wired shell is
+/** The wired studio: a toolbar over the dockable shell (StudioDock) — four
+ *  panels the user arranges freely: CODE (EditorPane), ASSETS, OUTPUT (the
+ *  transport-driven live demo) and INSPECTOR. The composition is available
+ *  wasm-free via StudioDock.fixture (fixture-fed slots); this wired shell is
  *  available there too as the opt-in `CoreStage` live fixture. */
 export function Studio() {
   const state = useOpenSketch();
-  const view = useInspectorView();
   const { dirty } = state;
   const sketchName = openContextLabel(state);
+  const [dockApi, setDockApi] = useState<DockviewApi | null>(null);
   useDocumentTitle(`${sketchName} · Studio`);
 
   // Ctrl/Cmd+Enter = ▶ Run, everywhere in the studio. Capture phase so it wins
@@ -38,18 +37,27 @@ export function Studio() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, []);
   return (
-    <StudioLayout
-      toolbar={<ToolbarWired sketchName={sketchName} dirty={dirty} />}
-      rail={<ActivityRailWired />}
-      editor={<EditorPane onSources={transport.setSources} />}
-      dock={
-        <ErrorBoundary label="Inspector">
-          <Inspector />
-        </ErrorBoundary>
-      }
-      dockOpen={view.dockOpen}
-      onDockToggle={inspectorStore.toggleDock}
-      right={<RightColumn />}
-    />
+    <div className="studio">
+      <ToolbarWired
+        sketchName={sketchName}
+        dirty={dirty}
+        layoutSlot={dockApi ? <LayoutMenu api={dockApi} /> : null}
+      />
+      <StudioDock
+        editor={<EditorPane onSources={transport.setSources} />}
+        assets={<AssetsPanel />}
+        output={
+          <ErrorBoundary label="Output">
+            <OutputCanvas />
+          </ErrorBoundary>
+        }
+        inspector={
+          <ErrorBoundary label="Inspector">
+            <Inspector />
+          </ErrorBoundary>
+        }
+        onApi={setDockApi}
+      />
+    </div>
   );
 }

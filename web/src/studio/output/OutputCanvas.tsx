@@ -12,7 +12,7 @@ import { loadFx, saveFx, type PresentFx } from "./fx";
  *  No story (wired): owns the rAF present loop and reads live transport frames
  *  (the wasm rasterizer's framebuffer) onto a real WebGL/Canvas2D surface — a
  *  wasm-free story would render an empty canvas, so faking pixels here would be
- *  dishonest. The StudioLayout fixture rebuilds the arrangement wasm-free. */
+ *  dishonest. The StudioDock fixture rebuilds the arrangement wasm-free. */
 export function OutputCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const displayRef = useRef<HTMLDivElement>(null);

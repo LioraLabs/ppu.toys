@@ -58,8 +58,8 @@ function Segment<T extends string>({
   );
 }
 
-/** Settings flyout, mounted off the rail's gear item. Presentational — the
- *  wired wrapper (ActivityRailWired) supplies the theme + editor stores. */
+/** Settings flyout, mounted off the toolbar's gear. Presentational — the
+ *  wired wrapper (ToolbarWired) supplies the theme + editor stores. */
 export function SettingsPanel({
   theme,
   onToggleTheme,
