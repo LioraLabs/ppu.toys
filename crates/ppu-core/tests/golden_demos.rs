@@ -618,6 +618,17 @@ fn mode7_floor_uses_interleaved_mode7_import() {
 }
 
 #[test]
+fn mode7_map_view_is_populated_after_the_floor_demo() {
+    let (_fb, e) = render_demo(MODE7_SRC);
+    let map = ppu_core::render_mode7_map(e.memory());
+    let opaque = map.chunks_exact(4).filter(|px| px[3] == 255).count();
+    assert!(
+        opaque > 100_000,
+        "m7 map view nearly empty: {opaque} opaque px"
+    );
+}
+
+#[test]
 fn mode7_floor_draws_below_horizon() {
     let (fb, _) = render_demo(MODE7_SRC);
     let px = &fb[(160 * WIDTH + 128) * 4..][..4];
@@ -809,6 +820,34 @@ fn spotlight_demo_masks_scene_to_a_circular_iris() {
     let corner = &fb[(5 * WIDTH + 5) * 4..][..4];
     assert_ne!(center[..3], [0, 0, 0], "iris centre was clipped");
     assert_eq!(corner[..3], [0, 0, 0], "outside the iris should be black");
+}
+
+/// The Windows editor's per-scanline feed, end to end: the demo's `hdma()` hook
+/// really does reach `window_scanline_bytes`, so the panel can draw the iris
+/// instead of the two straight lines scanline 0 implies.
+#[test]
+fn spotlight_window_scanlines_trace_the_iris_chords() {
+    let mut e = demo_engine(SPOTLIGHT_SRC);
+    let lt = e.frame(1.0, 60).unwrap();
+    let bytes = ppu_core::window_scanline_bytes(&lt);
+    let stride = ppu_core::WIN_SCANLINE_STRIDE;
+    assert_eq!(bytes.len(), HEIGHT * stride);
+
+    // Chord width at row y; <= 0 is the demo's empty span (lo > hi).
+    let span = |y: usize| bytes[y * stride + 1] as i32 - bytes[y * stride] as i32 + 1;
+    // The demo's circle: cx = 128, cy = 112, r = 70.
+    assert_eq!(span(112), 141, "widest chord at the centre row (58..198)");
+    assert!(
+        span(112) > span(60),
+        "the chord narrows away from the centre"
+    );
+    assert!(span(0) <= 0, "rows above the circle carry an empty span");
+
+    // What the panel's HDMA badge keys off: the edges sweep, the select bytes
+    // (index 4 = W12SEL) stay frame-wide.
+    let varies = |i: usize| (0..HEIGHT).any(|y| bytes[y * stride + i] != bytes[i]);
+    assert!(varies(0) && varies(1), "WH0/WH1 are hdma-driven here");
+    assert!(!varies(4), "W12SEL is frame-wide in this demo");
 }
 
 #[test]
