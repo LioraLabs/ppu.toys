@@ -3,6 +3,12 @@
 //! and the two shared window ranges (WH0-3), decide whether screen column `x` is
 //! "inside the combined window". No PPU state, no I/O — so the color-math
 //! feature reuses `in_window` verbatim with the COLOR window's bits.
+//!
+//! `window_scanline_bytes` is the one exception: a read-back seam over a
+//! resolved `LineTable` for the Windows editor panel, the window counterpart of
+//! `mode7_scanline_segments`.
+
+use crate::linetable::LineTable;
 
 /// The 2-bit WLOG logic combining window 1 and window 2 (WBGLOG/WOBJLOG fields).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,9 +93,43 @@ pub fn in_window(sel: &WindowSel, win: &WindowRanges, x: usize) -> bool {
     }
 }
 
+/// Bytes per row in `window_scanline_bytes`, and their order: WH0, WH1, WH2,
+/// WH3, W12SEL, W34SEL, WOBJSEL, WBGLOG, WOBJLOG, TMW, TSW. Deliberately the
+/// same layout as the friendly `win` namespace's `WinBytes` (`lua.rs`) and
+/// `WIN_SCANLINE_REGS` in the web inspector's compose model.
+pub const WIN_SCANLINE_STRIDE: usize = 11;
+
+/// Every scanline's window registers from a resolved frame — the Windows
+/// editor panel's per-scanline feed, mirroring `mode7_scanline_segments`.
+/// `WIN_SCANLINE_STRIDE` bytes per row, row 0 first, absolute (post-quantize)
+/// values. Windows have no "not applicable" state, so unlike the M7 fan there
+/// is no NaN row: every scanline reports its effective mask registers, whether
+/// an `hdma()` hook moved them or they are still the frame-wide defaults.
+pub fn window_scanline_bytes(lt: &LineTable) -> Vec<u8> {
+    let mut out = Vec::with_capacity(lt.rows.len() * WIN_SCANLINE_STRIDE);
+    for row in &lt.rows {
+        out.extend_from_slice(&[
+            row.wh0,
+            row.wh1,
+            row.wh2,
+            row.wh3,
+            row.w12sel,
+            row.w34sel,
+            row.wobjsel,
+            row.wbglog,
+            row.wobjlog,
+            row.tmw,
+            row.tsw,
+        ]);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::linetable::LineTableBuilder;
+    use crate::registers::LineTableRow;
 
     const FULL: WindowRanges = WindowRanges {
         w1_left: 0,
@@ -226,5 +266,47 @@ mod tests {
         let s = sel(true, false, false, false, WLog::And);
         assert!(in_window(&s, &win, 128)); // W1 inside; W2 ignored despite AND
         assert!(!in_window(&s, &win, 0));
+    }
+
+    #[test]
+    fn scanline_bytes_report_one_stride_per_row_in_declared_order() {
+        let mut def = LineTableRow::default();
+        def.wh0 = 10;
+        def.wh1 = 20;
+        def.wh2 = 30;
+        def.wh3 = 40;
+        def.w12sel = 0x02;
+        def.w34sel = 0x20;
+        def.wobjsel = 0x22;
+        def.wbglog = 0x01;
+        def.wobjlog = 0x02;
+        def.tmw = 0x01;
+        def.tsw = 0x02;
+        let lt = LineTableBuilder::new(def).build(3);
+        let b = window_scanline_bytes(&lt);
+        assert_eq!(b.len(), 3 * WIN_SCANLINE_STRIDE);
+        let row0 = &b[..WIN_SCANLINE_STRIDE];
+        assert_eq!(
+            row0,
+            [10, 20, 30, 40, 0x02, 0x20, 0x22, 0x01, 0x02, 0x01, 0x02]
+        );
+        // unhooked rows all carry the frame-wide defaults
+        assert_eq!(&b[WIN_SCANLINE_STRIDE..2 * WIN_SCANLINE_STRIDE], row0);
+    }
+
+    #[test]
+    fn scanline_bytes_follow_a_per_line_hook() {
+        // The spotlight iris shape: W1 spans a circle's chord on each row.
+        let mut b = LineTableBuilder::new(LineTableRow::default());
+        b.hdma(0, 3, |y, r| {
+            r.wh0 = 128 - (y as u8);
+            r.wh1 = 128 + (y as u8);
+        });
+        let bytes = window_scanline_bytes(&b.build(4));
+        let at = |y: usize, i: usize| bytes[y * WIN_SCANLINE_STRIDE + i];
+        assert_eq!((at(0, 0), at(0, 1)), (128, 128));
+        assert_eq!((at(3, 0), at(3, 1)), (125, 131));
+        // registers the hook never touched stay flat across the frame
+        assert!((0..4).all(|y| at(y, 4) == at(0, 4)));
     }
 }

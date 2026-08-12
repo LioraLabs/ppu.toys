@@ -109,6 +109,7 @@ function makeCore(state: { throwing: boolean }): PpuCore {
     addSource: () => ({ ok: true }),
     m7Scanlines: () => new Float32Array(0),
     m7MapView: () => new Uint8ClampedArray(0),
+    winScanlines: () => new Uint8Array(0),
     removeSource: () => true,
   };
 }

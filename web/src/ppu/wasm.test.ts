@@ -26,6 +26,7 @@ function fakeCore(over: Partial<WasmCoreLike> = {}): WasmCoreLike {
     traceObj: () => null,
     m7Scanlines: () => new Float32Array(0),
     m7MapView: () => new Uint8Array(0),
+    winScanlines: () => new Uint8Array(0),
     convertSource: () => ({
       payload: new Uint8Array(),
       meta: {

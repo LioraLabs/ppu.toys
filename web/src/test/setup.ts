@@ -19,6 +19,7 @@ import {
   PlaneId,
   WIDTH,
   HEIGHT,
+  WIN_STRIDE,
 } from "../ppu/core";
 import { setPpuCore } from "../ppu/instance";
 import { server } from "../mocks/server";
@@ -92,6 +93,9 @@ class StubPpuCore implements PpuCore {
   }
   m7MapView() {
     return new Uint8ClampedArray(1024 * 1024 * 4);
+  }
+  winScanlines() {
+    return new Uint8Array(HEIGHT * WIN_STRIDE);
   }
   convertSource(
     _kind: SourceKind,

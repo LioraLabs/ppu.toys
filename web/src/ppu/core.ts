@@ -233,6 +233,11 @@ export interface PpuCore {
   m7Scanlines(): Float32Array;
   /** The full 1024x1024 Mode-7 plane as RGBA (register-free base image). */
   m7MapView(): Uint8ClampedArray;
+  /** Per-scanline window registers from the latest frame: `WIN_STRIDE` bytes
+   *  per row (WH0-3, W12SEL, W34SEL, WOBJSEL, WBGLOG, WOBJLOG, TMW, TSW).
+   *  `registers` above is scanline 0 only — this is what an `hdma()`-swept
+   *  window actually did across the frame. Empty before the first frame. */
+  winScanlines(): Uint8Array;
   /** Pure quantize+pack: image -> versioned source payload + meta. No engine mutation. */
   convertSource(
     kind: SourceKind,
@@ -249,3 +254,7 @@ export interface PpuCore {
 
 export const WIDTH = 256;
 export const HEIGHT = 224;
+
+/** Bytes per row in `winScanlines()`. Mirrors `WIN_SCANLINE_STRIDE` in
+ *  `crates/ppu-core/src/window.rs` — the two must move together. */
+export const WIN_STRIDE = 11;

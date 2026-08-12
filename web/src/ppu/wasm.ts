@@ -45,6 +45,7 @@ export interface WasmCoreLike {
   traceObj(index: number): unknown;
   m7Scanlines(): ArrayLike<number>;
   m7MapView(): ArrayLike<number>;
+  winScanlines(): ArrayLike<number>;
   convertSource(kind: SourceKind, options: ConvertSourceOptions, imageData: ImageData): unknown;
   addSource(name: string, payload: Uint8Array): unknown;
   removeSource(name: string): boolean;
@@ -106,6 +107,9 @@ export function wrapWasmCore(core: WasmCoreLike): PpuCore {
     },
     m7MapView(): Uint8ClampedArray {
       return new Uint8ClampedArray(core.m7MapView());
+    },
+    winScanlines(): Uint8Array {
+      return new Uint8Array(core.winScanlines());
     },
     convertSource(
       kind: SourceKind,

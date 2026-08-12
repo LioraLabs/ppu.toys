@@ -12,7 +12,7 @@ import type {
   SourceFile,
   SourceMeta,
 } from "../ppu/core";
-import { HEIGHT, WIDTH } from "../ppu/core";
+import { HEIGHT, WIDTH, WIN_STRIDE } from "../ppu/core";
 import type { OpenContext, OpenSketchState } from "../studio/sketches/openSketch";
 import type { Sketch, SketchMeta, SketchSource } from "../studio/sketches/sketchStore";
 
@@ -220,6 +220,26 @@ export function makeFrameResult(overrides?: Partial<FrameResult>): FrameResult {
 }
 
 export const frameResult: FrameResult = makeFrameResult();
+
+/** A stand-in rendered scene: a warm diagonal ramp over an 8px tile grid. The
+ *  default fixture framebuffer is all-black, which is fine for panels that only
+ *  blit it — but the Windows preview's whole job is to DIM what the mask
+ *  excludes, and dimmed black is still black. Stories that need the mask to be
+ *  visible blit this instead. */
+export function makeSceneFramebuffer(): Uint8ClampedArray {
+  const fb = new Uint8ClampedArray(WIDTH * HEIGHT * 4);
+  for (let y = 0; y < HEIGHT; y++) {
+    for (let x = 0; x < WIDTH; x++) {
+      const o = (y * WIDTH + x) * 4;
+      const grid = (x >> 3) % 2 === (y >> 3) % 2 ? 18 : 0;
+      fb[o] = 90 + (x / WIDTH) * 140 + grid;
+      fb[o + 1] = 70 + (y / HEIGHT) * 90 + grid;
+      fb[o + 2] = 130 - (x / WIDTH) * 60 + grid;
+      fb[o + 3] = 255;
+    }
+  }
+  return fb;
+}
 
 /** 32K-word VRAM image for the VramTab tile decoder + tilemap render (BG1,
  *  char base 0 / map base 0 per frameRegisters mode 1). The general fill is a
@@ -560,6 +580,42 @@ export function makeM7ViewData(): {
     at(255, 2);
   }
   return { map, segments };
+}
+
+/** Synthetic per-scanline window feed (`ppuCore.winScanlines()` shape):
+ *  `WIN_STRIDE` bytes per row in the core's documented order — WH0-3, W12SEL,
+ *  W34SEL, WOBJSEL, WBGLOG, WOBJLOG, TMW, TSW.
+ *
+ *  `sweep` reproduces the bundled `spotlight` demo — W1 spanning a circle's
+ *  chord on each row — so the fixture shows what an `hdma()`-driven window
+ *  looks like in the panel. Without it (`sweep: false`) every row carries the
+ *  same values, which is the static case the panel has always rendered. */
+export function makeWinScanlines({
+  sweep = true,
+  cx = 128,
+  cy = 112,
+  r = 70,
+}: { sweep?: boolean; cx?: number; cy?: number; r?: number } = {}): Uint8Array {
+  const rows = new Uint8Array(HEIGHT * WIN_STRIDE);
+  for (let y = 0; y < HEIGHT; y++) {
+    const o = y * WIN_STRIDE;
+    if (sweep) {
+      const inside = r * r - (y - cy) * (y - cy);
+      if (inside < 0) {
+        rows[o] = 1; // lo > hi = empty span, exactly as the demo writes it
+        rows[o + 1] = 0;
+      } else {
+        const hw = Math.floor(Math.sqrt(inside));
+        rows[o] = Math.max(0, cx - hw);
+        rows[o + 1] = Math.min(255, cx + hw);
+      }
+    } else {
+      rows[o] = 64;
+      rows[o + 1] = 192;
+    }
+    rows[o + 6] = 0x20; // WOBJSEL: color window follows W1 (high nibble enable)
+  }
+  return rows;
 }
 
 export function makeSourceMeta(overrides?: Partial<SourceMeta>): SourceMeta {

@@ -205,6 +205,19 @@ impl PpuCore {
         }
     }
 
+    /// Every scanline's window registers from the most recent frame — 11 bytes
+    /// per row (WH0-3, W12SEL, W34SEL, WOBJSEL, WBGLOG, WOBJLOG, TMW, TSW), the
+    /// Windows editor's per-scanline feed. The window counterpart of
+    /// `m7Scanlines`: it is what makes an `hdma()`-swept mask visible instead of
+    /// the row-0 snapshot `registers()` reports.
+    #[wasm_bindgen(js_name = winScanlines)]
+    pub fn win_scanlines(&self) -> Vec<u8> {
+        match &self.last_lt {
+            Some(lt) => crate::window_scanline_bytes(lt),
+            None => vec![],
+        }
+    }
+
     /// The full 1024x1024 Mode-7 plane as RGBA (register-free base image for
     /// the M7 editor panel).
     #[wasm_bindgen(js_name = m7MapView)]
