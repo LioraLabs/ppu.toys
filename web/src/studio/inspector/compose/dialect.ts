@@ -2,15 +2,16 @@ import { useSyncExternalStore } from "react";
 import type { PokeDialect } from "./model";
 
 /** Persisted studio preference: which dialect NEW pokes emit — friendly field
- *  lines (`color.op = "sub"`) or raw whole-register mnemonics
- *  (`CGADSUB = 0x41`). Emission-only: loading stays dialect-agnostic
- *  (parsePokes reads both), existing lines are never rewritten. */
+ *  lines (`color.op = "sub"`), raw whole-register mnemonics (`CGADSUB = 0x41`),
+ *  or per-scanline keyframes (`win.w1.lo` interpolated inside a generated
+ *  `hdma()` hook). Emission-only: loading stays dialect-agnostic (parsePokes
+ *  reads all three), existing lines are never rewritten. */
 
 export const DIALECT_STORAGE_KEY = "ppu.toys:poke-dialect";
 
 /** Normalize an untrusted stored value. Friendly is the default. */
 export function parseDialect(raw: unknown): PokeDialect {
-  return raw === "raw" ? "raw" : "friendly";
+  return raw === "raw" ? "raw" : raw === "scanline" ? "scanline" : "friendly";
 }
 
 /** Load the persisted dialect (SSR/no-storage safe). */

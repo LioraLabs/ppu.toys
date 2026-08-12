@@ -1,5 +1,6 @@
 import { HEIGHT, WIDTH, type RegisterView } from "../../../ppu/core";
 import type { Poke } from "../../pokes/pokes";
+import { formatKeyframes, keyframeValueAt, pokeKeyframes } from "../../pokes/scanlinePokes";
 
 /** Pure decode/encode logic for the Compose/Windows tabs + Compositor overlay.
  *  The UI reads LIVE register values (power-on default when the core omits
@@ -102,13 +103,18 @@ export function fieldPoke(w: FieldWrite): Poke {
   return { lvalue: w.field, expr: w.expr, note: `$${w.addr.toString(16).toUpperCase()}` };
 }
 
-export type PokeDialect = "friendly" | "raw";
+export type PokeDialect = "friendly" | "raw" | "scanline";
 
 /** Project one control action's field writes into pokes. friendly = one poke
  *  per field (neighbor bits preserved by the core's fold); raw = one
- *  whole-register poke per touched register, last write wins. */
+ *  whole-register poke per touched register, last write wins.
+ *
+ *  "scanline" is NOT handled here: a keyframe write needs the target scanline
+ *  and the poke's existing keyframes, neither of which is a pure function of
+ *  the writes. It falls back to friendly (the scalar form of the same field),
+ *  and `writesToKeyframePokes` in pokeStore owns the real scanline path. */
 export function writesToPokes(writes: readonly FieldWrite[], dialect: PokeDialect): Poke[] {
-  if (dialect === "friendly") return writes.map(fieldPoke);
+  if (dialect !== "raw") return writes.map(fieldPoke);
   const last = new Map<number, number>();
   for (const w of writes) last.set(w.addr, w.value);
   return [...last].map(([addr, value]) => regPoke(addr, value));
@@ -166,6 +172,18 @@ export function regeneratePokes(pokes: readonly Poke[], dialect: PokeDialect): P
       passthrough.push(p);
       continue;
     }
+    // A scanline poke collapses to its value at line 0 before re-projection:
+    // its curve cannot survive a trip through the whole-register byte model.
+    // Going the other way (below) makes that value a single held keyframe, so
+    // scanline -> friendly -> scanline keeps the line-0 value and loses the
+    // sweep. The UI warns before a conversion that would drop keyframes.
+    const kf = pokeKeyframes(p);
+    if (kf) {
+      const v = keyframeValueAt(p.lvalue, kf, 0);
+      const spec0 = FIELD_SPECS.get(p.lvalue);
+      if (spec0) bytes.set(t.addr, spec0.encode(ensure(t.addr), v));
+      continue;
+    }
     if (t.raw) {
       const v = Number(p.expr);
       if (!Number.isNaN(v)) bytes.set(t.addr, v);
@@ -195,6 +213,21 @@ export function regeneratePokes(pokes: readonly Poke[], dialect: PokeDialect): P
             : formatFieldValue(decoded);
       out.push({ lvalue: field, expr, note: `$${addr.toString(16).toUpperCase()}` });
     }
+  }
+  // -> scanline: every field becomes a single held keyframe, which renders
+  // identically to the frame-wide poke it came from. Only numeric fields can
+  // be swept; a bool/string field (screen.main.bg1, color.op) has no curve, so
+  // it stays a plain assignment.
+  if (dialect === "scanline") {
+    return [
+      ...passthrough,
+      ...out.map((p) => {
+        const v = Number(p.expr);
+        return Number.isFinite(v) && p.expr.trim() !== ""
+          ? { ...p, expr: formatKeyframes([{ y: 0, v }]) }
+          : p;
+      }),
+    ];
   }
   return [...passthrough, ...out];
 }
@@ -690,9 +723,14 @@ function parseFieldExpr(expr: string): FieldValue | null {
   return Number.isNaN(n) ? null : n;
 }
 
-/** Solid/hollow decision for the poke marker, both dialects: friendly field
+/** Solid/hollow decision for the poke marker, all dialects: friendly field
  *  pokes decode the live register through FIELD_SPECS; raw register pokes
- *  compare the whole byte. null = non-comparable. */
+ *  compare the whole byte. null = non-comparable.
+ *
+ *  A SCANLINE poke is deliberately non-comparable: its keyframe expr is not a
+ *  number, and `registers` is scanline 0 only, so there is no single live value
+ *  to match against. The marker stays neutral rather than claiming a match it
+ *  cannot check — the keyframe track shows the value at the inspected line. */
 export function pokeMatchesLive(p: Poke, registers: RegisterView[]): boolean | null {
   const read: ReadReg = (addr) => liveReg(registers, addr);
   const spec = FIELD_SPECS.get(p.lvalue);

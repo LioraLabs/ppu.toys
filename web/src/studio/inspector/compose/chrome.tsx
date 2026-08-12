@@ -10,7 +10,7 @@ import {
   usePokesSource,
 } from "../../pokes/pokeStore";
 import { HexPoke } from "../../pokes/HexPoke";
-import { pokeMatchesLive } from "./model";
+import { pokeMatchesLive, type PokeDialect } from "./model";
 import type { Compositor } from "./useCompositor";
 import { usePokeDialect } from "./dialect";
 
@@ -62,30 +62,43 @@ export function PokeDot({
  *  are untouched (a re-poke of the same control migrates its line — the write
  *  evicts the other dialect's poke on that register). Always visible, unlike
  *  PokeBar: the choice matters before the first poke exists. */
+const DIALECTS: readonly { id: PokeDialect; label: string; title: string }[] = [
+  {
+    id: "friendly",
+    label: "friendly",
+    title: 'new pokes emit friendly fields — color.op = "sub"',
+  },
+  {
+    id: "raw",
+    label: "raw",
+    title: "new pokes emit whole-register mnemonics — CGADSUB = 0x41",
+  },
+  {
+    id: "scanline",
+    label: "scanline",
+    title:
+      "new pokes emit per-scanline keyframes inside a generated hdma() hook — needs a panel with a selected scanline (Windows); elsewhere it falls back to friendly",
+  },
+];
+
 export function DialectToggle() {
   const d = usePokeDialect();
   return (
     <div className="cmp-dialect">
       <span className="cmp-dialect-label">POKE AS</span>
       <div className="cmp-seg cmp-dialect-seg" role="group" aria-label="poke dialect">
-        <button
-          type="button"
-          className={d === "friendly" ? "cmp-seg--on" : ""}
-          aria-pressed={d === "friendly"}
-          title={'new pokes emit friendly fields — color.op = "sub"'}
-          onClick={() => setDialect("friendly")}
-        >
-          friendly
-        </button>
-        <button
-          type="button"
-          className={d === "raw" ? "cmp-seg--on" : ""}
-          aria-pressed={d === "raw"}
-          title="new pokes emit whole-register mnemonics — CGADSUB = 0x41"
-          onClick={() => setDialect("raw")}
-        >
-          raw
-        </button>
+        {DIALECTS.map((o) => (
+          <button
+            key={o.id}
+            type="button"
+            className={d === o.id ? "cmp-seg--on" : ""}
+            aria-pressed={d === o.id}
+            title={o.title}
+            onClick={() => setDialect(o.id)}
+          >
+            {o.label}
+          </button>
+        ))}
       </div>
     </div>
   );

@@ -133,22 +133,59 @@ all seven are part of the current architecture:
   register truth. Aux tabs have no overlay and no distinct styling today —
   the marker is informational.
 
+## Per-scanline editors (Mode 7, Windows)
+
+`hdma(y0, y1, fn)` can move any `LineTableRow` field per scanline
+(`crates/ppu-core/src/linetable.rs`), but the inspector's `registers` are
+`derive_registers(&lt.rows[0], …)` (`crates/ppu-core/src/wasm.rs`) — **scanline
+0 only**. So a swept register is invisible to a tab that reads only the frame
+snapshot. Two panels solve that the same way, and a third would follow the same
+three parts:
+
+1. **A read-back seam** over the resolved `LineTable`, exported alongside the
+   frame. Mode 7 has `mode7_scanline_segments` → `m7Scanlines()` (4 f32 per row,
+   NaN = not mode 7); Windows has `window_scanline_bytes` → `winScanlines()`
+   (`WIN_SCANLINE_STRIDE` = 11 bytes per row — WH0-3, W12SEL, W34SEL, WOBJSEL,
+   WBGLOG, WOBJLOG, TMW, TSW). Both read `last_lt` and return empty before the
+   first frame; both are cheap enough to pull every transport frame in a
+   `…Wired` container (`Mode7PanelWired`, `WindowsTabWired`).
+2. **A per-scanline view**. The M7 panel draws the fan — one sampling segment
+   per row over the plane image. The Windows panel resolves its mask and its
+   four WH edges per row (`compose/winScanlines.ts`), so an iris draws as a
+   circle; a scanline scrubber then pins every control and readout to one row
+   via `readAt`, a `ReadReg` lens that takes window registers from that row and
+   falls through to the frame snapshot for everything else. `varyingRegs`
+   drives the ⚡HDMA badges — which registers this frame actually sweeps.
+3. **A generated `hdma()` snippet**, because the write path cannot express this.
+   A poke is one line in `apply_pokes()` and therefore frame-wide; there is no
+   per-scanline poke. So both panels emit copyable Lua instead — the M7
+   perspective tool (`Mode7Panel.tsx`) and the window shape tool
+   (`compose/winSnippet.ts`: iris / wipe / bars). The iris shape is the bundled
+   `spotlight` demo, and `golden_demos.rs`
+   (`spotlight_window_scanlines_trace_the_iris_chords`) pins that the demo's
+   hook really does reach the feed.
+
+Note the write asymmetry this creates: a control still pokes frame-wide, so on a
+register the hook drives, the poke only survives outside the hook's range. That
+is what the ⚡ chip warns about.
+
 Pokes (`web/src/studio/pokes/`): Compose/Windows controls, CGRAM cell colors,
 and register readout rows all poke through one path — `poke()`/`unpoke()`/
 `clearPokes()` (`pokeStore.ts`) parse and regenerate the reserved, read-only
 `pokes.lua` file (`POKES_FILE`, always tab 0) from a `{lvalue, expr, note?}`
-list (`pokes.ts`). Pokes come in two dialects sharing that one file format:
+list (`pokes.ts`). Pokes come in three dialects sharing that one file format:
 friendly field assignments (`color.op = "sub"`, `screen.main.bg1 = true`,
 `win.w1.lo = 40`) where the field is the poke's identity, so each touched
 field owns its line and neighboring bits are preserved by the core's namespace
-fold, and raw whole-register writes (`TM = 0x13`) — the register-readout hex
-editor still pokes raw. Which dialect NEW pokes emit is the **POKE AS
-friendly|raw** toggle (`DialectToggle`, `inspector/compose/chrome.tsx`, shown
-in the Compose/Windows tabs and the Compositor overlay) — default friendly,
+fold, raw whole-register writes (`TM = 0x13`) — the register-readout hex
+editor still pokes raw — and **scanline** keyframes (see below). Which dialect
+NEW pokes emit is the **POKE AS friendly|raw|scanline** toggle
+(`DialectToggle`, `inspector/compose/chrome.tsx`, shown above the editor while
+the `pokes.lua` tab is active) — default friendly,
 persisted at localStorage `ppu.toys:poke-dialect`
 (`inspector/compose/dialect.ts`). Emission-only: `parsePokes` is
-dialect-agnostic, so a saved `pokes.lua` in either or mixed dialect still
-loads. The two dialects never coexist on one register: writing a poke evicts
+dialect-agnostic, so a saved `pokes.lua` in any or mixed dialect still
+loads. The two frame-wide dialects never coexist on one register: writing a poke evicts
 the other dialect's pokes for that same register (`evictCrossDialect`,
 `inspector/compose/model.ts`) — so re-poking a control after flipping the
 toggle migrates its line to the current dialect, and a raw `CGADSUB = 0x80`
@@ -171,6 +208,61 @@ by the next poke. Poking a bundled demo forks it like any other edit. Pokes
 are a file, not session state: ▶ Run and a reload both leave `pokes.lua`
 untouched; a warning chip appears if pokes exist but no file calls
 `apply_pokes()`.
+
+### The scanline dialect
+
+A frame-wide poke is one assignment. A **scanline** poke is a keyframe list
+that the generated file interpolates inside an `hdma()` hook — one assignment
+per line. The `Poke` record is unchanged: the keyframes ride in `expr` as
+`{{0,128},{112,58},{223,128}}`, and an expr starting with `{` IS the
+discriminator (no scalar register value can be a table), so `upsertPoke`,
+`evictCrossDialect` and the poke chips all keep working without knowing the
+dialect exists (`pokes/scanlinePokes.ts`).
+
+Each scanline poke carries an inclusive **range** (`Poke.range`, default the
+whole frame) — the lines its hook covers. `pokesToLua` groups the pokes by
+range and emits one `hdma()` per distinct range, after the frame-wide lines;
+the range lives on the hook header, which is where it belongs in readable Lua,
+so `parsePokes` reads it back off that line rather than having it smuggled into
+every keyframe expr. Several scoped hooks each doing their own thing is the
+normal case, not a workaround —
+`crates/ppu-core/tests/hook_composition.rs` pins that hooks compose: writes
+don't leak past a hook's range, hooks touching different fields of one register
+both survive, and a later hook sees an earlier one's write on the same row.
+
+The `pk`/`pki`/`pkf` helpers are emitted **only when a scanline poke exists** —
+a sketch with none generates byte-identical output to before, which matters
+because every bundled demo ships a generated (empty) `pokes.lua`.
+`pki` rounds and `pkf` does not: the DSL silently ignores a fractional write to
+an integer register (`to_integer()` rejects it), so an interpolated `127.375`
+would leave the register at its default instead of at 127. `pkHelper` picks per
+field; `keyframeValueAt` mirrors that rounding so the panel reads back exactly
+what the engine will write.
+
+In the Windows tab the selected scanline binds writes as well as reads
+(`WindowsTab.tsx`), so in this dialect dragging an edge keyframes the line you
+are looking at; `KeyframeTrack` lists the resulting curves. Where no scanline
+is selected (Compose), the dialect degrades to a frame-wide friendly poke, and
+a field with no numeric value (`screen.main.bg1`, `color.op`) has no curve to
+keyframe so it stays frame-wide too.
+
+**Two precedence rules, and they differ.** `apply_pokes()` runs first in
+`frame()`, so its hooks register before any hook the script registers later —
+a script `hdma()` still wins, matching the frame-wide convention. But a hook
+always beats the frame defaults, so _within its range_ a scanline poke is not
+overridden by a plain later assignment in the script. That is not a DSL wart:
+real HDMA behaves the same way, since a channel rewriting a register every
+scanline overrides whatever was written once during vblank. Narrowing a poke's
+range is how you hand those lines back to the script — outside the range the
+hook never runs. `crates/ppu-core/tests/scanline_pokes.rs` pins all of it
+against the real engine, along with the generated file's exact shape.
+
+Converting dialects is lossy in one direction: any → scanline makes each value
+a single held keyframe (same rendered result), but scanline → friendly/raw
+collapses the curve to its line-0 value, because a sweep cannot survive the
+whole-register byte model `regeneratePokes` projects through. The poke marker
+stays neutral on a scanline poke rather than claiming a match — `registers` is
+scanline 0 only, so there is no single live value to compare.
 
 ## Demos + assets
 

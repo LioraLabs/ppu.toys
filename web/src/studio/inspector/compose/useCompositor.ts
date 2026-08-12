@@ -1,6 +1,6 @@
 import type { FrameResult } from "../../../ppu/core";
 import type { Poke } from "../../pokes/pokes";
-import { pokeMany, usePokes } from "../../pokes/pokeStore";
+import { pokeKeyframeWrites, pokeMany, usePokes } from "../../pokes/pokeStore";
 import { useInspectorFrame } from "../useInspectorFrame";
 import { liveReg, pokesAt, writesToPokes, type FieldWrite, type ReadReg } from "./model";
 import { pokeDialect } from "./dialect";
@@ -8,9 +8,16 @@ import { pokeDialect } from "./dialect";
 /** The compositor write path: project field writes through the persisted
  *  dialect setting and upsert in ONE pokes.lua regeneration (cross-dialect
  *  eviction happens inside pokeMany). Plain function so the wiring tests
- *  drive it without rendering the hook. */
-export function compositorWrite(writes: readonly FieldWrite[]): void {
-  pokeMany(writesToPokes(writes, pokeDialect.get()));
+ *  drive it without rendering the hook.
+ *
+ *  `scanline` is the row a per-scanline write keyframes. Only panels that HAVE
+ *  a selected scanline pass it (the Windows tab); without one the scanline
+ *  dialect degrades to a frame-wide friendly poke, so a control that cannot
+ *  express a curve still writes something sensible rather than nothing. */
+export function compositorWrite(writes: readonly FieldWrite[], scanline?: number): void {
+  const d = pokeDialect.get();
+  if (d === "scanline" && scanline !== undefined) pokeKeyframeWrites(writes, scanline);
+  else pokeMany(writesToPokes(writes, d));
 }
 
 /** Everything the Compose/Windows sections render from — shared by the docked

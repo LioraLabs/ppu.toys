@@ -22,6 +22,7 @@ import { BlitCanvas } from "./inspector/BlitCanvas";
 import { makeFixtureCompositor } from "./inspector/compose/storyCompositor";
 import {
   makeM7ViewData,
+  makeWinScanlines,
   sketchName,
   sketchFiles,
   makeFrameResult,
@@ -99,8 +100,9 @@ function fixturePages(f: FrameResult): Record<TabId, ReactNode> {
     memory: <MemoryTab frame={f} vram={frameVram} />,
     compose: <ComposeTab c={compositor} screens={frameScreens} />,
     // WindowsTab's compositor sits on injectable seams (inspector frame +
-    // poke store), so the real tab renders wasm-free under the provider.
-    windows: <WindowsTab />,
+    // poke store) and its per-scanline feed is a prop, so the real tab renders
+    // wasm-free under the provider.
+    windows: <WindowsTab rows={makeWinScanlines()} />,
     m7: <Mode7Panel data={m7ViewData} onPoke={() => {}} onClearPokes={() => {}} />,
     registers: <RegistersTab frame={f} />,
     sprites: <SpritesTab frame={f} />,

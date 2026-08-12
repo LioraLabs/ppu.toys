@@ -4,7 +4,7 @@ import type { TabId } from "./tabs";
 import { TraceTab } from "./TraceTab";
 import { MemoryTabWired } from "./MemoryTabWired";
 import { ComposeTabWired } from "./ComposeTabWired";
-import { WindowsTab } from "./WindowsTab";
+import { WindowsTabWired } from "./WindowsTabWired";
 import { Mode7PanelWired } from "./Mode7PanelWired";
 import { RegistersTab } from "./RegistersTab";
 import { SpritesTab } from "./SpritesTab";
@@ -29,7 +29,7 @@ export const WIRED_INSPECTOR_PANELS: Record<TabId, () => ReactNode> = {
   trace: () => <TraceTab />,
   memory: () => <MemoryTabWired />,
   compose: () => <ComposeTabWired />,
-  windows: () => <WindowsTab />,
+  windows: () => <WindowsTabWired />,
   m7: () => <Mode7PanelWired />,
   registers: () => <RegistersPanel />,
   sprites: () => <SpritesPanel />,
