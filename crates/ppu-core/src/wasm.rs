@@ -288,12 +288,7 @@ impl PpuCore {
         options: JsValue,
         image_data: JsValue,
     ) -> Result<JsValue, JsValue> {
-        let kind = match kind {
-            "bg" => crate::SourceKind::Bg,
-            "m7" => crate::SourceKind::M7,
-            "obj" => crate::SourceKind::Obj,
-            other => return Err(JsValue::from_str(&format!("unknown source kind '{other}'"))),
-        };
+        let kind: crate::SourceKind = kind.parse().map_err(|e: String| JsValue::from_str(&e))?;
         let opts: crate::ConvertOptions = if options.is_undefined() || options.is_null() {
             Default::default()
         } else {

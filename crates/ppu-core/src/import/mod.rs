@@ -60,8 +60,11 @@ pub enum Overflow {
         needed: usize,
         remapped_tiles: usize,
     },
-    /// Unique tiles exceeded the char budget; excess map cells fall back to
-    /// the blank tile.
+    /// Tiles exceeded the char budget; `kept` were emitted. For an assembled
+    /// bg/obj import `unique` is the deduped tile count and excess map cells
+    /// fall back to the blank tile; for a SHEET (no dedup, no blank tile)
+    /// `unique` is simply the sheet's cell count and cells past `kept` have no
+    /// char data at all — their `cells[k].tile` still names the true index.
     Tiles { unique: usize, kept: usize },
     /// 16x16 import is not implemented; imported as 8x8.
     TileSize16,
@@ -75,11 +78,74 @@ pub struct BudgetReport {
     pub palettes_used: usize,
     /// Map cells covered by the (cropped) image.
     pub tile_cells: usize,
-    /// Deduped art tiles (excl. the reserved blank tile 0).
+    /// Deduped art tiles (excl. the reserved blank tile 0). A sheet import
+    /// dedups nothing and reserves nothing, so there it is just the number of
+    /// chars emitted (cell count, or 1024 when the ceiling clipped it).
     pub unique_tiles: usize,
     /// Total VRAM words emitted (char + tilemap).
     pub vram_words: usize,
     pub overflows: Vec<Overflow>,
+}
+
+/// Steps 3-5 of both tile importers: global colour budget over every cell,
+/// per-cell weighted histograms of the budgeted colours, then the sub-palette
+/// fit — pushing `Overflow::Colors` / `Overflow::Palettes` as it goes. Shared
+/// by `import_tile_bg` and `import_tile_sheet`, which differ only in what they
+/// do with the resulting grids (tilemap + dedup vs. straight sheet order).
+fn fit_cell_palettes(
+    ptiles: &[self::tiles::PixelTile],
+    palette_count: usize,
+    cap: usize,
+    overflows: &mut Vec<Overflow>,
+) -> self::quantize::RegionFit {
+    let mut hist: BTreeMap<u16, u32> = BTreeMap::new();
+    for t in ptiles {
+        for c in t.iter().flatten() {
+            *hist.entry(*c).or_default() += 1;
+        }
+    }
+    let budget = palette_count * cap;
+    let global: Option<Vec<u16>> = if hist.len() > budget {
+        overflows.push(Overflow::Colors {
+            unique: hist.len(),
+            budget,
+        });
+        let hv: Vec<(u16, u32)> = hist.iter().map(|(&c, &n)| (c, n)).collect();
+        Some(reduce_palette(&hv, budget))
+    } else {
+        None
+    };
+    let map_color = |c: u16| global.as_ref().map_or(c, |g| g[quantize::nearest(g, c)]);
+
+    let tile_hists: Vec<Vec<(u16, u32)>> = ptiles
+        .iter()
+        .map(|t| {
+            let mut m: BTreeMap<u16, u32> = BTreeMap::new();
+            for c in t.iter().flatten() {
+                *m.entry(map_color(*c)).or_default() += 1;
+            }
+            m.into_iter().collect()
+        })
+        .collect();
+
+    let fit = fit_palettes(&tile_hists, palette_count, cap);
+    if fit.palettes_needed > palette_count {
+        let remapped = tile_hists
+            .iter()
+            .zip(&fit.assignment)
+            .filter(|(th, &a)| {
+                !th.is_empty()
+                    && th
+                        .iter()
+                        .any(|(c, _)| !fit.palettes[a as usize].contains(c))
+            })
+            .count();
+        overflows.push(Overflow::Palettes {
+            needed: fit.palettes_needed,
+            remapped_tiles: remapped,
+        });
+    }
+    fit
 }
 
 /// Convert an RGBA image into authentic tile-BG data: split -> global color
@@ -124,56 +190,8 @@ pub fn import_tile_bg(
     // 2. tile split (BGR555 + transparency happen here)
     let (ptiles, cols, rows) = split_tiles_at(&cropped, w, h, opts.remap.alpha_threshold);
 
-    // 3. global color budget: sub-palettes x cap colors (median-cut + k-means)
-    let mut hist: BTreeMap<u16, u32> = BTreeMap::new();
-    for t in &ptiles {
-        for c in t.iter().flatten() {
-            *hist.entry(*c).or_default() += 1;
-        }
-    }
-    let budget = palette_count * cap;
-    let global: Option<Vec<u16>> = if hist.len() > budget {
-        overflows.push(Overflow::Colors {
-            unique: hist.len(),
-            budget,
-        });
-        let hv: Vec<(u16, u32)> = hist.iter().map(|(&c, &n)| (c, n)).collect();
-        Some(reduce_palette(&hv, budget))
-    } else {
-        None
-    };
-    let map_color = |c: u16| global.as_ref().map_or(c, |g| g[quantize::nearest(g, c)]);
-
-    // 4. per-tile weighted histograms of budgeted colors (sorted by color)
-    let tile_hists: Vec<Vec<(u16, u32)>> = ptiles
-        .iter()
-        .map(|t| {
-            let mut m: BTreeMap<u16, u32> = BTreeMap::new();
-            for c in t.iter().flatten() {
-                *m.entry(map_color(*c)).or_default() += 1;
-            }
-            m.into_iter().collect()
-        })
-        .collect();
-
-    // 5. cluster-and-refine fit into the target sub-palette count
-    let fit = fit_palettes(&tile_hists, palette_count, cap);
-    if fit.palettes_needed > palette_count {
-        let remapped = tile_hists
-            .iter()
-            .zip(&fit.assignment)
-            .filter(|(th, &a)| {
-                !th.is_empty()
-                    && th
-                        .iter()
-                        .any(|(c, _)| !fit.palettes[a as usize].contains(c))
-            })
-            .count();
-        overflows.push(Overflow::Palettes {
-            needed: fit.palettes_needed,
-            remapped_tiles: remapped,
-        });
-    }
+    // 3-5. global color budget -> per-tile histograms -> sub-palette fit
+    let fit = fit_cell_palettes(&ptiles, palette_count, cap, &mut overflows);
 
     // 6. dither-aware index remap (against the ORIGINAL 8-bit pixels) +
     //    flip-aware dedup; tile 0 reserved blank so padding and dropped cells
@@ -261,6 +279,94 @@ pub fn import_tile_bg(
     )
 }
 
+/// Convert an RGBA tilesheet into BG char data: the same pipeline as
+/// [`import_tile_bg`] minus the 512px crop, the flip-aware dedup and the
+/// tilemap. Chars come out in row-major sheet order with NO reserved blank
+/// tile, so char N is the Nth 8x8 cell of the PNG and `bg[n].map[x][y] =
+/// {tile = N}` addresses it directly against author-set geometry.
+pub fn import_tile_sheet(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    opts: &ImportOptions,
+) -> (crate::source::SheetSource, crate::source::SourceMeta) {
+    let mut overflows = Vec::new();
+    let (bpp, cap, palette_count) = match opts.bit_depth {
+        2 => (2u8, 3usize, 8usize),
+        8 => (8u8, 255usize, 1usize),
+        _ => (4u8, 15usize, 8usize),
+    };
+    let (w, h) = (width as usize, height as usize);
+
+    let (ptiles, cols, rows) = split_tiles_at(rgba, w, h, opts.remap.alpha_threshold);
+
+    let fit = fit_cell_palettes(&ptiles, palette_count, cap, &mut overflows);
+
+    let grids = remap_image(
+        rgba,
+        w,
+        h,
+        &fit.palettes,
+        &fit.assignment,
+        cols,
+        rows,
+        &opts.remap,
+    );
+
+    // No dedup and no reserved blank: cell k IS char k. Only the 10-bit
+    // tilemap tile field caps how many of them a map can name.
+    let ncells = grids.len();
+    let max_tiles = 1024usize;
+    let kept = ncells.min(max_tiles);
+    if ncells > max_tiles {
+        overflows.push(Overflow::Tiles {
+            unique: ncells,
+            kept,
+        });
+    }
+    let words_per_tile = bpp as usize * 4;
+    let mut char_words = Vec::with_capacity(kept * words_per_tile);
+    for g in &grids[..kept] {
+        char_words.extend(pack_planar(g, bpp));
+    }
+
+    // Cells keep their TRUE sheet index even past the ceiling: an honest
+    // "this cell has no char" beats renumbering a WYSIWYG sheet.
+    let cells: Vec<obj::ObjCell> = fit
+        .assignment
+        .iter()
+        .enumerate()
+        .map(|(k, &pal)| obj::ObjCell {
+            tile: k as u16,
+            pal: pal & 7,
+            flip_x: false,
+            flip_y: false,
+        })
+        .collect();
+
+    let report = BudgetReport {
+        colors_used: fit.palettes.iter().map(|p| p.len()).sum(),
+        palettes_used: fit.palettes.len(),
+        tile_cells: ncells,
+        unique_tiles: kept,
+        vram_words: char_words.len(),
+        overflows,
+    };
+    (
+        crate::source::SheetSource {
+            bit_depth: bpp,
+            palettes: fit.palettes,
+            char_words,
+        },
+        crate::source::SourceMeta {
+            width,
+            height,
+            report: crate::source::SourceReport::Sheet { report },
+            cells: Some(cells),
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,6 +412,94 @@ mod tests {
         assert_eq!(report.tile_cells, 2);
         assert_eq!(report.unique_tiles, 2);
         assert!(report.overflows.is_empty());
+    }
+
+    // PPU-93: char N is the Nth PNG cell — sheet order, no dedup, no blank tile.
+    #[test]
+    fn sheet_emits_chars_in_sheet_order_with_no_reserved_blank() {
+        let (src, meta) = import_tile_sheet(&two_tile_rgba(), 16, 8, &ImportOptions::default());
+        assert_eq!(src.palettes, vec![vec![0x001f, 0x7c00]]);
+        // two source cells -> exactly two chars, the FIRST of them being cell 0.
+        assert_eq!(src.char_words.len(), 2 * 16);
+        assert_eq!(src.char_words[0], 0x00ff); // char 0 = all-red cell
+        assert_eq!(src.char_words[16], 0x0ff0); // char 1 = half/half cell
+        let cells = meta.cells.as_ref().unwrap();
+        assert_eq!(
+            cells[0],
+            crate::import::obj::ObjCell {
+                tile: 0,
+                pal: 0,
+                flip_x: false,
+                flip_y: false
+            }
+        );
+        assert_eq!(cells[1].tile, 1);
+        let crate::source::SourceReport::Sheet { report } = &meta.report else {
+            panic!("expected sheet report");
+        };
+        assert_eq!(report.tile_cells, 2);
+        assert!(report.overflows.is_empty());
+    }
+
+    // PPU-93: identical cells are NOT deduped — sheet indexing must stay WYSIWYG.
+    #[test]
+    fn sheet_keeps_duplicate_and_mirrored_cells_distinct() {
+        // three cells: A, A again, and A mirrored. Dedup would collapse to one.
+        let mut v = Vec::new();
+        for _y in 0..8 {
+            for x in 0..24 {
+                let red = match x / 8 {
+                    0 | 1 => x % 8 < 4,
+                    _ => x % 8 >= 4,
+                };
+                v.extend_from_slice(if red {
+                    &[255u8, 0, 0, 255]
+                } else {
+                    &[0, 0, 255, 255]
+                });
+            }
+        }
+        let (src, meta) = import_tile_sheet(&v, 24, 8, &ImportOptions::default());
+        assert_eq!(src.char_words.len(), 3 * 16);
+        let cells = meta.cells.as_ref().unwrap();
+        assert_eq!([cells[0].tile, cells[1].tile, cells[2].tile], [0, 1, 2]);
+        assert!(cells.iter().all(|c| !c.flip_x && !c.flip_y));
+        assert_eq!(&src.char_words[0..16], &src.char_words[16..32]); // cell 1 stored again
+    }
+
+    // PPU-93: no 512px crop, and the 1024-char ceiling reports through the
+    // existing overflow/budget report.
+    #[test]
+    fn sheet_skips_the_512px_crop_and_reports_the_1024_char_ceiling() {
+        // 8px tall, 8264px wide -> 1033 cells: past 512px AND past 1024 chars.
+        let mut v = Vec::new();
+        for _y in 0..8 {
+            for x in 0..8264 {
+                let red = (x / 8) % 2 == 0;
+                v.extend_from_slice(if red {
+                    &[255u8, 0, 0, 255]
+                } else {
+                    &[0, 0, 255, 255]
+                });
+            }
+        }
+        let (src, meta) = import_tile_sheet(&v, 8264, 8, &ImportOptions::default());
+        let crate::source::SourceReport::Sheet { report } = &meta.report else {
+            panic!("expected sheet report");
+        };
+        // every cell of the sheet is accounted for: nothing was cropped away
+        assert_eq!(report.tile_cells, 1033);
+        assert_eq!(meta.cells.as_ref().unwrap().len(), 1033);
+        assert!(!report
+            .overflows
+            .iter()
+            .any(|o| matches!(o, Overflow::Cropped { .. })));
+        // ...but only 1024 chars are emitted, and that is reported honestly
+        assert_eq!(src.char_words.len(), 1024 * 16);
+        assert!(report.overflows.contains(&Overflow::Tiles {
+            unique: 1033,
+            kept: 1024
+        }));
     }
 
     #[test]

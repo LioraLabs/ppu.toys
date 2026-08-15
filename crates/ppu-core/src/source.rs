@@ -7,7 +7,7 @@
 //! Byte layout v1 (little-endian):
 //!
 //! ```text
-//! common:  u8 version=1 | u8 kind (0=bg 1=m7 2=obj)
+//! common:  u8 version=1 | u8 kind (0=bg 1=m7 2=obj 3=sheet)
 //! bg:      u8 bit_depth (2|4|8) | u8 tile_size (8)
 //!          u8 pal_count, per palette: u8 len + len*u16 BGR555
 //!          u16 tile_count, tile_count*(bit_depth*4)*u16 char words (bitplane-packed, tile 0 blank)
@@ -19,6 +19,11 @@
 //! obj:     u8 cell_size (8|16|32|64)
 //!          u8 pal_count, per palette: u8 len + len*u16 BGR555
 //!          u16 tile_count, tile_count*16 u16 char words (4bpp fixed)
+//! sheet:   u8 bit_depth (2|4|8)                     <- tile size is fixed 8x8
+//!          u8 pal_count, per palette: u8 len + len*u16 BGR555
+//!          u16 tile_count, tile_count*(bit_depth*4)*u16 char words (sheet order,
+//!          NO reserved blank tile). No screen_size, no tilemap: map geometry is
+//!          the author's, not the payload's.
 //! ```
 //!
 //! Tilemap/map tile numbers are relative to the payload's own char block;
@@ -38,6 +43,21 @@ pub enum SourceKind {
     Bg,
     M7,
     Obj,
+    Sheet,
+}
+
+/// The kind strings the JS surface names a source by (`convertSource`).
+impl std::str::FromStr for SourceKind {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "bg" => Ok(SourceKind::Bg),
+            "m7" => Ok(SourceKind::M7),
+            "obj" => Ok(SourceKind::Obj),
+            "sheet" => Ok(SourceKind::Sheet),
+            other => Err(format!("unknown source kind '{other}'")),
+        }
+    }
 }
 
 /// Extensible Mode 7 format options. v1 is empty; encoded as a length-prefixed
@@ -80,11 +100,24 @@ pub struct ObjSource {
     pub char_words: Vec<u16>,
 }
 
+/// A tilesheet: chars in row-major sheet order with NO reserved blank tile and
+/// no tilemap. Char N is the Nth 8x8 cell of the source PNG; map geometry is
+/// the author's (`bg[n].map`), not the payload's.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SheetSource {
+    pub bit_depth: u8,
+    /// Sub-palettes as BGR555 color lists; sub-palette entry 0 (transparent) implicit.
+    pub palettes: Vec<Vec<u16>>,
+    /// Bitplane-packed char words, bit_depth*4 words/tile, sheet order.
+    pub char_words: Vec<u16>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum SourcePayload {
     Bg(BgSource),
     M7(M7Source),
     Obj(ObjSource),
+    Sheet(SheetSource),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,6 +164,8 @@ pub enum SourceReport {
     Mode7 { report: Mode7ImportReport },
     #[serde(rename = "obj")]
     Obj { report: BudgetReport },
+    #[serde(rename = "sheet")]
+    Sheet { report: BudgetReport },
 }
 
 /// Tilemap length in words for a BGnSC screen-size field.
@@ -220,6 +255,7 @@ impl SourcePayload {
             SourcePayload::Bg(_) => SourceKind::Bg,
             SourcePayload::M7(_) => SourceKind::M7,
             SourcePayload::Obj(_) => SourceKind::Obj,
+            SourcePayload::Sheet(_) => SourceKind::Sheet,
         }
     }
 
@@ -296,6 +332,30 @@ impl SourcePayload {
                 b.push(s.cell_size);
                 push_palettes(&mut b, &s.palettes);
                 push_u16(&mut b, (s.char_words.len() / 16) as u16);
+                for &w in &s.char_words {
+                    push_u16(&mut b, w);
+                }
+            }
+            SourcePayload::Sheet(s) => {
+                debug_assert!(s.palettes.len() <= 8, "sheet: more than 8 sub-palettes");
+                let pal_cap = (1usize << s.bit_depth).min(256) - 1;
+                debug_assert!(
+                    s.palettes.iter().all(|p| p.len() <= pal_cap),
+                    "sheet: sub-palette longer than bit_depth allows"
+                );
+                let wpt = s.bit_depth as usize * 4;
+                debug_assert!(
+                    s.char_words.len() % wpt == 0,
+                    "sheet: char_words not a whole number of tiles"
+                );
+                debug_assert!(
+                    s.char_words.len() / wpt <= 1024,
+                    "sheet: more than 1024 tiles"
+                );
+                b.push(3);
+                b.push(s.bit_depth);
+                push_palettes(&mut b, &s.palettes);
+                push_u16(&mut b, (s.char_words.len() / wpt) as u16);
                 for &w in &s.char_words {
                     push_u16(&mut b, w);
                 }
@@ -394,6 +454,29 @@ impl SourcePayload {
                     char_words,
                 })
             }
+            3 => {
+                let bit_depth = r.u8()?;
+                if !matches!(bit_depth, 2 | 4 | 8) {
+                    return Err(PayloadError::BadParam("bit_depth"));
+                }
+                // Same CGRAM-band caps as the assembled bg kind.
+                let max_pals = if bit_depth == 8 { 1 } else { 8 };
+                let max_len = (1usize << bit_depth).min(256) - 1;
+                let palettes = r.palettes(max_pals, max_len)?;
+                let tile_count = r.u16()? as usize;
+                // A sheet has no legitimate reason to exceed the 10-bit tilemap
+                // tile field — the importer already caps there — so reject
+                // before allocating on a corrupt/hostile count.
+                if tile_count > 1024 {
+                    return Err(PayloadError::BadParam("tile_count"));
+                }
+                let char_words = r.u16s(tile_count * bit_depth as usize * 4)?;
+                SourcePayload::Sheet(SheetSource {
+                    bit_depth,
+                    palettes,
+                    char_words,
+                })
+            }
             k => return Err(PayloadError::BadKind(k)),
         };
         r.done()?;
@@ -415,22 +498,58 @@ pub fn place_bg(
     char_base: u16,
     cgram_base: usize,
 ) {
-    for (o, &w) in src.char_words.iter().enumerate() {
-        mem.vram[(char_base as usize + o) & 0x7fff] = w;
-    }
+    place_chars_and_palettes(
+        mem,
+        char_base,
+        cgram_base,
+        src.bit_depth,
+        &src.palettes,
+        &src.char_words,
+    );
     for (o, &w) in src.tilemap_words.iter().enumerate() {
         mem.vram[(map_base as usize + o) & 0x7fff] = w;
     }
-    let stride = match src.bit_depth {
+}
+
+/// Char words at `char_base` + sub-palettes at the bit-depth CGRAM stride from
+/// `cgram_base`. Shared by the assembled-bg and sheet placements — the only
+/// difference between them is that a bg also lays down a tilemap.
+fn place_chars_and_palettes(
+    mem: &mut Memory,
+    char_base: u16,
+    cgram_base: usize,
+    bit_depth: u8,
+    palettes: &[Vec<u16>],
+    char_words: &[u16],
+) {
+    for (o, &w) in char_words.iter().enumerate() {
+        mem.vram[(char_base as usize + o) & 0x7fff] = w;
+    }
+    let stride = match bit_depth {
         2 => 4,
         8 => 256,
         _ => 16,
     };
-    for (pi, p) in src.palettes.iter().enumerate() {
+    for (pi, p) in palettes.iter().enumerate() {
         for (ci, &c) in p.iter().enumerate() {
             mem.cgram[(cgram_base + pi * stride + ci + 1) & 0xff] = c;
         }
     }
+}
+
+/// Write a sheet source: chars at `char_base`, palettes into the CGRAM band —
+/// and no tilemap. Map geometry belongs to the author (`bg[n].map_base` /
+/// `screen_size` / `map`), so placement deliberately leaves the map region and
+/// the layer's registers alone.
+pub fn place_sheet(src: &SheetSource, mem: &mut Memory, char_base: u16, cgram_base: usize) {
+    place_chars_and_palettes(
+        mem,
+        char_base,
+        cgram_base,
+        src.bit_depth,
+        &src.palettes,
+        &src.char_words,
+    );
 }
 
 /// Write a Mode 7 source into the byte-interleaved region (words 0..0x4000):
@@ -562,6 +681,21 @@ pub fn convert_source(
             );
             Ok((SourcePayload::Obj(src), meta))
         }
+        SourceKind::Sheet => {
+            let bit_depth = opts.bit_depth.unwrap_or(4);
+            if !matches!(bit_depth, 2 | 4 | 8) {
+                return Err(format!(
+                    "sheet bit_depth must be 2, 4 or 8 (got {bit_depth})"
+                ));
+            }
+            let io = crate::import::ImportOptions {
+                bit_depth,
+                tile_size: 8, // sheet cells are fixed 8x8
+                remap: remap_options(opts)?,
+            };
+            let (src, meta) = crate::import::import_tile_sheet(rgba, width, height, &io);
+            Ok((SourcePayload::Sheet(src), meta))
+        }
     }
 }
 
@@ -589,6 +723,65 @@ mod tests {
             tiles_h: 1,
             map: vec![0, 1],
         }
+    }
+
+    fn sample_sheet() -> SheetSource {
+        SheetSource {
+            bit_depth: 2,
+            palettes: vec![vec![0x001f, 0x7c00], vec![0x03e0]],
+            char_words: vec![0xbeefu16; 2 * 8], // 2 tiles at 2bpp
+        }
+    }
+
+    // PPU-93: sheet payload is bit depth + palettes + char words, nothing else.
+    #[test]
+    fn sheet_roundtrips_and_carries_no_map_geometry() {
+        let p = SourcePayload::Sheet(sample_sheet());
+        let b = p.encode();
+        assert_eq!(SourcePayload::decode(&b).unwrap(), p);
+        // version, kind=3, bit_depth, pal_count, pal0 len, color lo/hi ...
+        assert_eq!(&b[..6], &[1, 3, 2, 2, 2, 0x1f]);
+        // header(2) + bit_depth(1) + pal block(1 + (1+4) + (1+2) = 9) = 12, then u16 tile_count
+        assert_eq!(&b[12..14], &[2, 0]);
+        // ...and the payload ENDS with the char words: no screen_size byte, no tilemap.
+        assert_eq!(b.len(), 14 + 16 * 2);
+    }
+
+    // PPU-93: same strict codec discipline as the existing kinds.
+    #[test]
+    fn sheet_decode_is_strict() {
+        assert_eq!(
+            SourcePayload::decode(&[1, 3, 3]),
+            Err(PayloadError::BadParam("bit_depth"))
+        );
+        let mut too_many_pals = SourcePayload::Sheet(sample_sheet()).encode();
+        too_many_pals[3] = 9;
+        assert_eq!(
+            SourcePayload::decode(&too_many_pals),
+            Err(PayloadError::BadParam("palettes"))
+        );
+        let mut eight_bpp = SourcePayload::Sheet(sample_sheet()).encode();
+        eight_bpp[2] = 8; // 8bpp allows only one sub-palette
+        assert_eq!(
+            SourcePayload::decode(&eight_bpp),
+            Err(PayloadError::BadParam("palettes"))
+        );
+        let mut trailing = SourcePayload::Sheet(sample_sheet()).encode();
+        trailing.push(0);
+        assert_eq!(
+            SourcePayload::decode(&trailing),
+            Err(PayloadError::TrailingBytes)
+        );
+        let mut short = SourcePayload::Sheet(sample_sheet()).encode();
+        short.truncate(short.len() - 1);
+        assert_eq!(SourcePayload::decode(&short), Err(PayloadError::Truncated));
+        // a corrupt tile_count is rejected before any allocation
+        let mut huge = SourcePayload::Sheet(sample_sheet()).encode();
+        huge[12..14].copy_from_slice(&1025u16.to_le_bytes());
+        assert_eq!(
+            SourcePayload::decode(&huge),
+            Err(PayloadError::BadParam("tile_count"))
+        );
     }
 
     fn sample_obj() -> ObjSource {
@@ -789,6 +982,24 @@ mod tests {
         assert_eq!(mem.vram[2] & 0x00ff, 0); // not aliased to a stride-2 write
     }
 
+    // PPU-93: a sheet places chars + palettes and NOTHING else — no tilemap.
+    #[test]
+    fn place_sheet_writes_chars_and_banded_palette_but_no_map() {
+        let s = sample_sheet();
+        let mut mem = Memory::new();
+        mem.vram[0x0000] = 0xdead; // an author-owned map word
+        place_sheet(&s, &mut mem, 0x1000, 0);
+        assert_eq!(mem.vram[0x1000], 0xbeef); // char 0 = first sheet cell
+        assert_eq!(mem.vram[0x0000], 0xdead); // map region untouched
+        assert_eq!(mem.cgram[1], 0x001f); // pal 0 entry 1 (stride 4 at 2bpp)
+        assert_eq!(mem.cgram[2], 0x7c00);
+        assert_eq!(mem.cgram[5], 0x03e0); // pal 1 entry 1 = 1*4+0+1
+        assert_eq!(mem.cgram[0], 0); // transparent slot untouched
+        let mut mem2 = Memory::new();
+        place_sheet(&s, &mut mem2, 0x1000, 32); // mode-0 band shifts the block
+        assert_eq!(mem2.cgram[33], 0x001f);
+    }
+
     #[test]
     fn place_obj_writes_char_at_base_and_obj_palettes() {
         let s = sample_obj();
@@ -797,6 +1008,39 @@ mod tests {
         assert_eq!(mem.vram[0x2000], 0x00ff);
         assert_eq!(mem.cgram[129], 0x001f);
         assert_eq!(mem.cgram[1], 0); // BG half untouched
+    }
+
+    // PPU-93: the kind string the wasm `convertSource` entry parses.
+    #[test]
+    fn kind_strings_include_sheet_and_reject_the_unknown() {
+        assert_eq!("bg".parse(), Ok(SourceKind::Bg));
+        assert_eq!("m7".parse(), Ok(SourceKind::M7));
+        assert_eq!("obj".parse(), Ok(SourceKind::Obj));
+        assert_eq!("sheet".parse(), Ok(SourceKind::Sheet));
+        assert_eq!(
+            "tilesheet".parse::<SourceKind>(),
+            Err("unknown source kind 'tilesheet'".to_string())
+        );
+    }
+
+    // PPU-93: the pure conversion entry accepts the sheet kind and carries the
+    // per-cell attribute map, same shape the OBJ sheet source emits.
+    #[test]
+    fn convert_source_sheet_emits_sheet_payload_with_cells() {
+        let rgba = vec![255u8, 0, 0, 255, 0, 0, 255, 255]; // 2x1
+        let (p, meta) =
+            convert_source(SourceKind::Sheet, &ConvertOptions::default(), &rgba, 2, 1).unwrap();
+        assert!(matches!(&p, SourcePayload::Sheet(s) if s.bit_depth == 4));
+        let cells = meta.cells.as_ref().unwrap();
+        assert_eq!(cells.len(), 1); // a 2x1 image is one 8x8 cell
+        assert_eq!(cells[0].tile, 0);
+        assert!(!cells[0].flip_x && !cells[0].flip_y);
+        assert!(matches!(meta.report, SourceReport::Sheet { .. }));
+        let bad_bd = ConvertOptions {
+            bit_depth: Some(3),
+            ..Default::default()
+        };
+        assert!(convert_source(SourceKind::Sheet, &bad_bd, &rgba, 2, 1).is_err());
     }
 
     #[test]

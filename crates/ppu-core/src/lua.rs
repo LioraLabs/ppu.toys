@@ -1266,6 +1266,7 @@ fn kind_label(p: &crate::source::SourcePayload) -> &'static str {
         crate::source::SourcePayload::Bg(_) => "bg",
         crate::source::SourcePayload::M7(_) => "m7",
         crate::source::SourcePayload::Obj(_) => "obj",
+        crate::source::SourcePayload::Sheet(_) => "sheet",
     }
 }
 
@@ -1364,6 +1365,24 @@ fn place_bg_sources(
                     slot: slot.clone(),
                     expected: format!("bg {bpp}bpp"),
                     found: format!("bg {}bpp", src.bit_depth),
+                }),
+                // A sheet places chars + palettes only: map geometry is the
+                // author's, so DON'T echo map_base/screen_size/tile_size back
+                // onto the layer the way an assembled bg source does. char_base
+                // IS echoed — it is placement, not geometry, and `bg_bases`
+                // defaults an unset one to 0x1000, so without the echo the
+                // rasterizer would read BG12NBA=0 and the layer would render
+                // black with no diagnostic.
+                Some(SourcePayload::Sheet(src)) if src.bit_depth == bpp => {
+                    let (_, char_base) = bg_bases(ctx, layer);
+                    crate::source::place_sheet(src, mem, char_base, cgram_base);
+                    layer.set(ctx, "char_base", char_base as i64).unwrap();
+                }
+                Some(SourcePayload::Sheet(src)) => reports.push(ImportBudget::Mismatch {
+                    layer: Some(i),
+                    slot: slot.clone(),
+                    expected: format!("bg {bpp}bpp"),
+                    found: format!("sheet {}bpp", src.bit_depth),
                 }),
                 Some(other) => reports.push(ImportBudget::Mismatch {
                     layer: Some(i),
