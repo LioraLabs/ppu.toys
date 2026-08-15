@@ -1,3 +1,9 @@
 [workspace]
 members = ["crates/ppu-core", "crates/ppu-server"]
 resolver = "2"
+
+# piccolo 0.3.3 aborts the VM on two ordinary table shapes (PPU-97). The fix has
+# been on piccolo's master since 2024 but was never released, and upstream is
+# unmaintained. See vendor/piccolo/README.md — including when to delete this.
+[patch.crates-io]
+piccolo = { path = "vendor/piccolo" }

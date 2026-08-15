@@ -9,6 +9,8 @@
 .cook/
 .worktrees/
 /crates/ppu-server/build/
+/vendor/piccolo/target/
+/vendor/piccolo/Cargo.lock
 
 # Local configuration and data
 .env
