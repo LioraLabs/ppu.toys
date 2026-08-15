@@ -16,7 +16,80 @@ describe("DEMOS", () => {
       "mosaic",
       "mode7-extbg",
       "direct-color",
+      "tilesheet-cavern",
     ]);
+  });
+
+  // PPU-95: the tilesheet demo binds BOTH source kinds at once, and their
+  // palettes have to be the same set — mode 1 places every BG source's palettes
+  // at CGRAM 0, so BG2's import lands on top of BG1's.
+  it("tilesheet-cavern carries a sheet and an assembled source over one shared palette", () => {
+    const d = DEMOS.find((x) => x.id === "tilesheet-cavern")!;
+    expect(d.assets.map((a) => [a.id, a.kind])).toEqual([
+      ["cavern_tiles", "sheet"],
+      ["cavern_back", "bg"],
+    ]);
+    const [tiles, back] = d.assets;
+    expect([tiles.width, tiles.height]).toEqual([64, 24]); // 8x3 cells of 8x8
+    expect([back.width, back.height]).toEqual([256, 224]);
+    for (const a of d.assets) expect(a.data.length).toBe(a.width * a.height * 4);
+
+    // Cell 0 is blank on purpose: a sheet reserves no blank tile, so Tiled's
+    // empty cell (gid 0 -> tile 0) needs the author to leave one.
+    for (let y = 0; y < 8; y++) {
+      for (let x = 0; x < 8; x++) expect(tiles.data[(y * 64 + x) * 4 + 3]).toBe(0);
+    }
+
+    const colours = (a: (typeof d.assets)[number]) => {
+      const out = new Set<string>();
+      for (let i = 0; i < a.data.length; i += 4) {
+        if (a.data[i + 3]) out.add(`${a.data[i]},${a.data[i + 1]},${a.data[i + 2]}`);
+      }
+      return out;
+    };
+    const cs = colours(tiles);
+    expect(cs.size).toBe(14); // one 4bpp sub-palette holds 15
+    expect([...cs].sort()).toEqual([...colours(back)].sort());
+  });
+
+  // PPU-95: the level table is a Tiled Lua export and `gid - 1` is the adapter,
+  // so a gid past the tileset's tilecount would silently draw the wrong cell.
+  it("tilesheet-cavern's level table is a well-formed Tiled export", () => {
+    const d = DEMOS.find((x) => x.id === "tilesheet-cavern")!;
+    expect(d.source).toContain('type = "tilelayer"');
+    expect(d.source).toContain('encoding = "lua"');
+    expect(d.source).toContain("firstgid = 1");
+    expect(d.source).toContain("tilecount = 24");
+    const body = /data = \{([\s\S]*?)\n {6}\},/.exec(d.source)![1];
+    const gids = body
+      .split(",")
+      .map((g) => g.trim())
+      .filter(Boolean)
+      .map(Number);
+    expect(gids).toHaveLength(96 * 12); // width * height, row-major
+    expect(gids.every((g) => Number.isInteger(g) && g >= 0 && g <= 24)).toBe(true);
+    expect(gids).toContain(0); // Tiled's empty cell
+  });
+
+  // PPU-95: the demo is reference code people copy — these lines ARE the
+  // workflow it documents, so a silent edit that guts them should fail.
+  it("tilesheet-cavern's lua ships the streaming-camera workflow", () => {
+    const d = DEMOS.find((x) => x.id === "tilesheet-cavern")!;
+    // a sheet echoes back only char_base, so the map geometry is set explicitly
+    expect(d.source).toContain('bg[1].source = "cavern_tiles"');
+    expect(d.source).toContain("bg[1].char_base = 0x1000");
+    expect(d.source).toContain("bg[1].map_base = 0x0000");
+    expect(d.source).toContain("bg[1].screen_size = 1");
+    expect(d.source).toContain("return gid - 1"); // the whole Tiled adapter
+    expect(d.source).toContain("local mcol = (cam_tile + s) % MAP_COLS"); // the ring
+    expect(d.source).toContain("bg[1].scroll.x = cam % 512"); // fine scroll
+    expect(d.source).toContain("tile = anim.first + phase % anim.frames"); // animation
+    // the assembled layer alongside, on plain scroll
+    expect(d.source).toContain('bg[2].source = "cavern_back"');
+    expect(d.source).toContain("bg[2].scroll.x = cam / 3");
+    // map entries stay on ONE line: a constructor split across lines falls out
+    // of the editor's map-entry completion scope.
+    expect(d.source).toContain("bg[1].map[mcol][MAP_TOP + r] = { tile = tile, pal = 0 }");
   });
 
   it("dusk-parallax carries sky/hills/hero with correct RGBA sizes", () => {

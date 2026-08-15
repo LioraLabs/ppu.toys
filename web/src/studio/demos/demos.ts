@@ -213,6 +213,384 @@ function ramp(): DemoAsset {
   return { id: "ramp", width: w, height: h, data, kind: "bg", options: { bit_depth: 8 } };
 }
 
+// ── cavern: the tilesheet demo's two sources ────────────────────────────────
+// Mirrored byte-for-byte by cavern_tiles()/cavern_back() in
+// crates/ppu-core/tests/golden_demos.rs — that mirror is what makes the demo's
+// golden PNG evidence about the art the studio actually ships. Edit both.
+// A 14-colour master palette shared by BOTH images, on purpose. In mode 1 every
+// BG source places its palettes at CGRAM 0 (there is no per-layer CGRAM bank
+// outside mode 0's 2bpp layers), and BG2 is placed after BG1 — two different
+// palettes would clobber each other.
+//
+// The invariant that makes the overwrite a no-op has TWO halves, and the second
+// is easy to lose: the images must use an identical colour SET, *and* that set
+// must fit ONE sub-palette (15 at 4bpp). Sorting alone is not enough — past one
+// sub-palette `region_fit` partitions greedily in tile order, so the same colour
+// set can split differently between two images and the sorted indices diverge.
+// 14 <= 15 is therefore load-bearing, not slack. Channels are multiples of 8
+// (the rgb15 grid) so none collapse when 8-bit colour is reduced to 5 — a
+// collapse would not break the invariant, but it would waste a slot.
+// demos.test.ts pins both halves; golden_demos.rs pins the resulting CGRAM.
+const CAVERN_PAL = [
+  0x000000, // 0 = transparent, never placed (palette index 0 is the see-through one)
+  0x101828, //  1,
+  0x283860, //  2,
+  0x4870a8, //  3,
+  0x78c0e0, //  4,
+  0x302820, //  5,
+  0x604830, //  6,
+  0x987048, //  7,
+  0x383840, //  8,
+  0x585868, //  9,
+  0x909098, // 10,
+  0xb83810, // 11,
+  0xf07018, // 12,
+  0xffc850, // 13,
+  0x58a848, // 14
+];
+
+/** 24 8x8 cells in row-major SHEET order, so cell N is what `tile = N` draws.
+ *  One template literal per cell: 64 hex palette indices, whitespace stripped,
+ *  '0' = transparent. Cell 0 is blank deliberately — a sheet has no reserved
+ *  blank tile, so the author reserves one (and Tiled's empty gid 0 maps onto it). */
+const CAVERN_CELLS = [
+  //  0 blank (the author-reserved empty tile: a sheet has no built-in one)
+  `
+    00000000
+    00000000
+    00000000
+    00000000
+    00000000
+    00000000
+    00000000
+    00000000
+  `,
+  //  1 rock fill
+  `
+    99a99998
+    9a999899
+    99989a99
+    89999a98
+    999a8999
+    9998999a
+    9a999998
+    899a9999
+  `,
+  //  2 rock top (moss cap)
+  `
+    eeeeeeee
+    9ee9eee9
+    a99a99a9
+    99a99999
+    9899999a
+    99998999
+    9a999998
+    99989a99
+  `,
+  //  3 rock dark (bedrock)
+  `
+    88818888
+    81888818
+    88888188
+    88188888
+    88888818
+    18888188
+    88818888
+    88888881
+  `,
+  //  4 dirt fill
+  `
+    66576665
+    66666756
+    57666665
+    66566766
+    66675666
+    56666657
+    66566666
+    66666576
+  `,
+  //  5 dirt top
+  `
+    77777777
+    67767677
+    66676666
+    66666576
+    56666666
+    66657666
+    66666665
+    65666676
+  `,
+  //  6 brick course A
+  `
+    aaaaaaaa
+    a999999a
+    a999999a
+    88888888
+    aaaaaaaa
+    99a99999
+    99999a99
+    88888888
+  `,
+  //  7 brick course B
+  `
+    9a9988aa
+    999988a9
+    88888888
+    aa999999
+    a9999999
+    88888888
+    9988aa99
+    9988a999
+  `,
+  //  8 lava frame 0
+  `
+    bbbbbbbb
+    bcbbbbcb
+    bccbbccb
+    cccdcccc
+    ccdddccc
+    cdddddcc
+    dddddddd
+    dddddddd
+  `,
+  //  9 lava frame 1
+  `
+    bbbbbbbb
+    bbcbbcbb
+    bcccbccb
+    ccccdccc
+    cccdddcc
+    ccdddddc
+    dddddddd
+    dddddddd
+  `,
+  // 10 lava frame 2
+  `
+    bbbbbbbb
+    bbbcbcbb
+    bbccbcbb
+    cccccdcc
+    ccccdddc
+    cccddddd
+    dddddddd
+    dddddddd
+  `,
+  // 11 lava frame 3
+  `
+    bbbbbbbb
+    cbbbcbbc
+    ccbbccbc
+    ccccccdc
+    cccccddd
+    ccccddcd
+    dddddddd
+    dddddddd
+  `,
+  // 12 water frame 0
+  `
+    44433334
+    33333333
+    33232333
+    32222233
+    22222222
+    22122222
+    21112221
+    11111111
+  `,
+  // 13 water frame 1
+  `
+    34443333
+    33333333
+    33323233
+    33222223
+    22222222
+    22212222
+    12111222
+    11111111
+  `,
+  // 14 water frame 2
+  `
+    33444333
+    33333333
+    23332323
+    33322222
+    22222222
+    22221222
+    22121112
+    11111111
+  `,
+  // 15 water frame 3
+  `
+    33344433
+    33333333
+    32333232
+    23332222
+    22222222
+    22222122
+    22212111
+    11111111
+  `,
+  // 16 ledge left
+  `
+    000aaaaa
+    00aa999a
+    0aa99999
+    aa999998
+    a9999899
+    a9989999
+    89999998
+    89999889
+  `,
+  // 17 ledge mid
+  `
+    aaaaaaaa
+    a99999a9
+    999a9999
+    99899999
+    99998999
+    89999998
+    99899899
+    98999899
+  `,
+  // 18 ledge right
+  `
+    aaaaa000
+    a999aa00
+    99999aa0
+    899999aa
+    9989999a
+    9999899a
+    89999998
+    98899998
+  `,
+  // 19 pillar
+  `
+    0aaaaaa0
+    0a9999a0
+    0a9889a0
+    0a9889a0
+    0a9889a0
+    0a9889a0
+    0a9999a0
+    0aaaaaa0
+  `,
+  // 20 crystal
+  `
+    00044000
+    00434400
+    04333440
+    04333340
+    03333340
+    03323330
+    00332300
+    00033000
+  `,
+  // 21 pebbles
+  `
+    00000000
+    00090000
+    000a9000
+    00000000
+    0900009a
+    0a90000a
+    00000000
+    0000a900
+  `,
+  // 22 rock top-left corner
+  `
+    0000eeee
+    000ee99e
+    00ee999a
+    0ee99999
+    ee999a99
+    e99999a9
+    9998999a
+    999a9999
+  `,
+  // 23 rock top-right corner
+  `
+    eeee0000
+    e99ee000
+    a999ee00
+    99999ee0
+    99a999ee
+    9a99999e
+    a9998999
+    9999a999
+  `,
+].map((c) => c.replace(/\s/g, ""));
+
+function cavernTiles(): DemoAsset {
+  const cols = 8;
+  const w = cols * 8,
+    h = (CAVERN_CELLS.length / cols) * 8;
+  const data = new Uint8ClampedArray(w * h * 4);
+  CAVERN_CELLS.forEach((cell, n) => {
+    const ox = (n % cols) * 8,
+      oy = Math.floor(n / cols) * 8;
+    for (let y = 0; y < 8; y++) {
+      for (let x = 0; x < 8; x++) {
+        const idx = parseInt(cell[y * 8 + x], 16);
+        if (!idx) continue; // palette index 0 -> transparent, the backdrop shows
+        const c = CAVERN_PAL[idx];
+        const i = ((oy + y) * w + ox + x) * 4;
+        data[i] = c >> 16;
+        data[i + 1] = (c >> 8) & 0xff;
+        data[i + 2] = c & 0xff;
+        data[i + 3] = 255;
+      }
+    }
+  });
+  return {
+    id: "cavern_tiles",
+    width: w,
+    height: h,
+    data,
+    kind: "sheet",
+    options: { bit_depth: 4 },
+  };
+}
+
+/** Backdrop palette index at (x, y): distant cave pillars in strata bands. The
+ *  32px horizontal period makes the 256px plane wrap seamlessly under a plain
+ *  `scroll`, and every one of the 14 colours appears — the shared-palette
+ *  invariant needs the colour SETS equal, not merely overlapping. */
+function cavernBackIndex(x: number, y: number): number {
+  const px = x % 32;
+  const pillar = px >= 10 && px < 22;
+  if (px >= 14 && px < 17 && y >= 70 && y < 73) return 4; // crystal glints on the pillar face
+  if (pillar && y >= 126 && y < 129) return 14; // moss cap where the distant rock begins
+  if (pillar && (px === 10 || px === 21) && y >= 96 && y < 168) return 10; // lit pillar edge
+  if (px >= 15 && px < 18 && y >= 196) return y >= 214 ? 13 : y >= 206 ? 12 : 11; // lava vent
+  if (pillar && y >= 188 && y < 196) return 7; // dirt seam catching the vent light
+  if (!pillar && y >= 180 && y < 188) return 6;
+  // Below the moss line everything recedes into the dark, so a gap in the terrain
+  // reads as cave depth rather than as a bright slab.
+  if (y < 56) return pillar ? 2 : 1;
+  if (y < 96) return pillar ? 3 : 2;
+  if (y < 129) return pillar ? 9 : 3;
+  if (y < 168) return pillar ? 9 : 8;
+  if (y < 200) return pillar ? 8 : 5;
+  return pillar ? 5 : 1;
+}
+
+function cavernBack(): DemoAsset {
+  const w = SCREEN_W,
+    h = SCREEN_H;
+  const data = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const c = CAVERN_PAL[cavernBackIndex(x, y)];
+      const i = (y * w + x) * 4;
+      data[i] = c >> 16;
+      data[i + 1] = (c >> 8) & 0xff;
+      data[i + 2] = c & 0xff;
+      data[i + 3] = 255;
+    }
+  }
+  return { id: "cavern_back", width: w, height: h, data, kind: "bg", options: { bit_depth: 4 } };
+}
+
 // ── Lua sources (verbatim from golden_demos.rs DUSK_MAIN_SRC / DUSK_PALETTE_SRC / MODE7_SRC) ──
 const DUSK_MAIN_SRC = `-- ppu.toys :: dusk-parallax (Mode 1: parallax BG scroll + CGRAM colour-cycle + sprite)
 -- Multi-file flagship: SPEED + dusk_palette() live in palette.lua. Chunks run in
@@ -430,6 +808,142 @@ function frame(t, f)
 end
 `;
 
+const CAVERN_SRC = `-- ppu.toys :: tilesheet-cavern (Mode 1: a camera streaming a Tiled-authored map
+-- out of a tilesheet, with animated lava/water, over an assembled-import backdrop)
+--
+-- The reference implementation of the tilesheet workflow:
+--   1. bind a 'sheet' source         -- chars land in sheet order: tile N = cell N
+--   2. set the map geometry YOURSELF -- a sheet echoes back only char_base
+--   3. rewrite bg[1].map each frame  -- the 64x32 tilemap IS the camera's window
+--
+-- LEVEL is a Tiled Lua export (File > Export As > Lua) with its 'data' array kept
+-- whole, one map row per line as Tiled writes it. To use your own map, replace
+-- this table -- and then check the four things below it that are level-specific:
+-- ANIM's keys (gids of THIS tileset), MAP_TOP (assumes LEVEL_H rows fit above
+-- row 32), pal = 0 in the map write, and the palette constraint on BG2.
+local LEVEL = {
+  version = "1.10", luaversion = "5.1",
+  orientation = "orthogonal", renderorder = "right-down",
+  width = 96, height = 12, tilewidth = 8, tileheight = 8,
+  tilesets = {
+    { name = "cavern_tiles", firstgid = 1, tilewidth = 8, tileheight = 8, tilecount = 24, columns = 8 },
+  },
+  layers = {
+    {
+      type = "tilelayer", name = "terrain", x = 0, y = 0,
+      width = 96, height = 12, visible = true, opacity = 1, encoding = "lua",
+      data = {
+         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+         0,  0,  0,  0,  0,  0,  0,  0, 20,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 17, 18, 18, 18, 18, 19,  0, 20,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 17, 18, 18, 18, 19,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+         0,  0,  0,  0,  0,  0,  0,  0, 20,  0, 17, 18, 18, 18, 19,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  7,  8,  7,  8,  7, 22,  0, 20,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  7,  8,  7,  8,  7,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+         0,  0, 22,  0,  0, 21,  0,  0, 20,  0,  7,  8,  7,  8, 22,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 24,  3,  3,  3,  3,  3,  3,  3,  3,  0, 20,  0,  0,  0,  0,  0,  0,  0,  0, 17, 18, 18, 19,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 17, 18, 18, 19,  0,  0,  0,  0,  0,  0,
+         3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  0,  0, 21,  0,  0,  0, 23,  0,  0,  0,  0,  0,  0,  0,  0,  0,  2,  2,  2,  2,  2,  2,  2,  2,  2,  3,  3,  3,  0, 21,  0,  0,  0,  0,  0,  7,  8,  7,  8,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 20,  0,  0,  0,  0,  0,  0,  0,  0,  0,  7,  8,  7,  8,  0, 21,  0,  0,  3,  3,
+         2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  3,  3,  3,  3,  3,  3,  2,  0,  0,  0,  0,  0,  0,  0,  0,  0,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  3,  3,  3,  0, 22,  0,  0,  0,  0,  0, 21,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 22,  0,  0,  0,  0,  0, 20,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  3,  3,  3,  2,  2,
+         2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  9,  9,  9,  9,  9,  9,  9,  9,  9,  6,  6,  6,  6,  6,  6,  6,  6,  6,  2,  2,  2,  2,  2,  2,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3, 23, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 24,  3,  3,  3,  3,  0,  0, 20,  0,  0, 21,  0,  0,  0, 22,  0,  0,  0,  0,  3,  3,  3,  2,  2,  2,  2,  2,
+         6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  2,  2,  2,  2,  2,  2,  6,  9,  9,  9,  9,  9,  9,  9,  9,  9,  5,  5,  5,  5,  5,  5,  5,  5,  5,  6,  6,  6,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,  2,  2,  2,  2,  2,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  2,  2,  2,  2,  2,  2,  6,  6,
+         4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  6,  6,  6,  6,  6,  6,  4,  9,  9,  9,  9,  9,  9,  9,  9,  9,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  6,  6,  6,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  6,  6,  6,  4,  4,
+         4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  9,  9,  9,  9,  9,  9,  9,  9,  9,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,  6,  6,  6,  6,  6,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  6,  6,  6,  4,  4,  4,  4,  4,
+      },
+    },
+  },
+}
+
+local TERRAIN = LEVEL.layers[1]
+local LEVEL_W, LEVEL_H = TERRAIN.width, TERRAIN.height
+local LEVEL_PX = LEVEL_W * LEVEL.tilewidth   -- 768 px of level...
+local MAP_COLS = 64                          -- ...over a 512 px (64 tile) tilemap
+local MAP_TOP = 16                           -- terrain sits on screen tile rows 16..27
+local SPEED = 64                             -- camera pixels per second
+local ANIM_HZ = 6                            -- animated-tile steps per second
+
+-- Tiled numbers tiles from the tileset's firstgid (1 here) and writes 0 for an
+-- empty cell. A sheet numbers chars from 0 with NO reserved blank tile, so the
+-- adapter is just gid - 1 -- and an empty Tiled cell lands on sheet cell 0, which
+-- this sheet leaves blank on purpose.
+local function gid_to_tile(gid)
+  if gid == 0 then return 0 end
+  return gid - 1
+end
+
+-- Animated materials. The level stores ONE gid per material; the frame picks the
+-- variant. Variants are consecutive sheet cells, so a cycle is a single add.
+-- Pokes re-run every frame, which is the whole animation mechanism.
+local ANIM = {
+  [9]  = { first = 8,  frames = 4 },   -- lava  -> cells 8..11
+  [13] = { first = 12, frames = 4 },   -- water -> cells 12..15
+}
+
+function frame(t, f)
+  apply_pokes()
+  mode = 1; brightness = 15
+
+  -- BG1 = the tilesheet. Binding a sheet places its chars and palettes and echoes
+  -- back char_base ONLY: map_base, screen_size and tile_size stay yours, and BG1
+  -- rasterizes at map_base 0 by default, so say what you mean.
+  bg[1].source = "cavern_tiles"
+  bg[1].char_base = 0x1000             -- default, shown explicitly
+  bg[1].map_base = 0x0000              -- default, shown explicitly
+  bg[1].screen_size = 1                -- 64x32 tiles = 512x256 px
+
+  -- BG2 = an ordinary assembled import, which brings its own tilemap and only
+  -- needs somewhere to live. Both source kinds, one frame.
+  --
+  -- SWAPPING THE ART? Four constraints below bite SILENTLY -- each one gives a
+  -- wrong picture, never an error:
+  --  1. Both images must use the SAME SET of colours, and that set must fit ONE
+  --     sub-palette (15 at 4bpp). Outside mode 0 every BG source lands its
+  --     palettes at CGRAM 0 and BG2 is placed after BG1, so a backdrop with a
+  --     different palette silently recolours the tilesheet layer.
+  --  2. pal = 0 in the map write below assumes that single sub-palette. A sheet
+  --     needing several puts each cell's index in the import report (the source
+  --     preview labels it) -- there is no way to read it back from Lua.
+  --  3. char_base 0x1000 -> 0x2000 leaves the sheet 256 chars at 4bpp. A bigger
+  --     sheet overruns BG2's chars; move BG2 up.
+  --  4. MAP_TOP + LEVEL_H must be <= 32, the tilemap's height in tiles.
+  bg[2].source = "cavern_back"
+  bg[2].char_base = 0x2000
+  bg[2].map_base = 0x0800
+
+  -- The camera walks the level and loops. The scroll register only ever sees it
+  -- mod 512 -- the tilemap's own width -- which is the fine (sub-tile) scroll.
+  local cam = (t * SPEED) % LEVEL_PX
+  local cam_tile = floor(cam / LEVEL.tilewidth)
+  bg[1].scroll.x = cam % 512
+  -- Parallax at exactly 1/3: the backdrop is 256 px wide and the level 768, so
+  -- one level loop is three backdrop loops and the wrap never shows.
+  bg[2].scroll.x = cam / 3
+
+  local phase = floor(t * ANIM_HZ)
+
+  -- Coarse streaming. 33 columns = the 32 on screen plus the partial one the fine
+  -- scroll pulls in. Tilemap column (cam_tile + s) % 64 is exactly the column the
+  -- rasterizer reads for screen column s, so crossing 512 px needs no special
+  -- case; and a column outside this window can never be on screen, which is why
+  -- writing only the window is enough. (VRAM is zeroed every frame before
+  -- imports, so the window is rewritten each frame rather than patched.)
+  for s = 0, 32 do
+    local col = (cam_tile + s) % LEVEL_W     -- column of the LEVEL
+    local mcol = (cam_tile + s) % MAP_COLS   -- column of the TILEMAP
+    if bg[1].map[mcol] == nil then bg[1].map[mcol] = {} end
+    for r = 0, LEVEL_H - 1 do
+      local gid = TERRAIN.data[r * LEVEL_W + col + 1]   -- Tiled data: row-major, 1-based
+      local anim = ANIM[gid]
+      local tile
+      if anim then
+        tile = anim.first + phase % anim.frames
+      else
+        tile = gid_to_tile(gid)
+      end
+      -- One line per map entry: the editor completes tile/pal/prio/flip_x/flip_y
+      -- inside a single-line constructor.
+      bg[1].map[mcol][MAP_TOP + r] = { tile = tile, pal = 0 }
+    end
+  end
+end
+`;
+
 // ── demo assembly: every demo ships a generated, read-only pokes.lua first ──
 // (main.lua's frame() calls apply_pokes() as its first line, matching what
 // openSketch/newSketch already do for user sketches — see pokes/pokes.ts).
@@ -476,6 +990,12 @@ export const DEMOS: Demo[] = [
   demo("mosaic", "mosaic", [{ name: "main.lua", source: MOSAIC_SRC }], [ramp()]),
   demo("mode7-extbg", "mode7-extbg", [{ name: "main.lua", source: EXTBG_SRC }], []),
   demo("direct-color", "direct-color", [{ name: "main.lua", source: DIRECT_SRC }], []),
+  demo(
+    "tilesheet-cavern",
+    "tilesheet-cavern",
+    [{ name: "main.lua", source: CAVERN_SRC }],
+    [cavernTiles(), cavernBack()],
+  ),
 ];
 
 // ── first-run starter ────────────────────────────────────────────────────────

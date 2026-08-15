@@ -5,6 +5,7 @@ use ppu_core::{
 };
 use std::path::Path;
 
+const CAVERN_GOLDEN: &str = "tests/fixtures/golden_tilesheet_cavern.png";
 const DUSK_GOLDEN: &str = "tests/fixtures/golden_dusk_parallax.png";
 const MODE7_GOLDEN: &str = "tests/fixtures/golden_mode7_floor.png";
 const OFFSET_GOLDEN: &str = "tests/fixtures/golden_offset_per_tile.png";
@@ -271,6 +272,142 @@ function frame(t, f)
 end
 "#;
 
+const CAVERN_SRC: &str = r#"-- ppu.toys :: tilesheet-cavern (Mode 1: a camera streaming a Tiled-authored map
+-- out of a tilesheet, with animated lava/water, over an assembled-import backdrop)
+--
+-- The reference implementation of the tilesheet workflow:
+--   1. bind a 'sheet' source         -- chars land in sheet order: tile N = cell N
+--   2. set the map geometry YOURSELF -- a sheet echoes back only char_base
+--   3. rewrite bg[1].map each frame  -- the 64x32 tilemap IS the camera's window
+--
+-- LEVEL is a Tiled Lua export (File > Export As > Lua) with its 'data' array kept
+-- whole, one map row per line as Tiled writes it. To use your own map, replace
+-- this table -- and then check the four things below it that are level-specific:
+-- ANIM's keys (gids of THIS tileset), MAP_TOP (assumes LEVEL_H rows fit above
+-- row 32), pal = 0 in the map write, and the palette constraint on BG2.
+local LEVEL = {
+  version = "1.10", luaversion = "5.1",
+  orientation = "orthogonal", renderorder = "right-down",
+  width = 96, height = 12, tilewidth = 8, tileheight = 8,
+  tilesets = {
+    { name = "cavern_tiles", firstgid = 1, tilewidth = 8, tileheight = 8, tilecount = 24, columns = 8 },
+  },
+  layers = {
+    {
+      type = "tilelayer", name = "terrain", x = 0, y = 0,
+      width = 96, height = 12, visible = true, opacity = 1, encoding = "lua",
+      data = {
+         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+         0,  0,  0,  0,  0,  0,  0,  0, 20,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 17, 18, 18, 18, 18, 19,  0, 20,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 17, 18, 18, 18, 19,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+         0,  0,  0,  0,  0,  0,  0,  0, 20,  0, 17, 18, 18, 18, 19,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  7,  8,  7,  8,  7, 22,  0, 20,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  7,  8,  7,  8,  7,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+         0,  0, 22,  0,  0, 21,  0,  0, 20,  0,  7,  8,  7,  8, 22,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 24,  3,  3,  3,  3,  3,  3,  3,  3,  0, 20,  0,  0,  0,  0,  0,  0,  0,  0, 17, 18, 18, 19,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 17, 18, 18, 19,  0,  0,  0,  0,  0,  0,
+         3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  0,  0, 21,  0,  0,  0, 23,  0,  0,  0,  0,  0,  0,  0,  0,  0,  2,  2,  2,  2,  2,  2,  2,  2,  2,  3,  3,  3,  0, 21,  0,  0,  0,  0,  0,  7,  8,  7,  8,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 20,  0,  0,  0,  0,  0,  0,  0,  0,  0,  7,  8,  7,  8,  0, 21,  0,  0,  3,  3,
+         2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  3,  3,  3,  3,  3,  3,  2,  0,  0,  0,  0,  0,  0,  0,  0,  0,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  3,  3,  3,  0, 22,  0,  0,  0,  0,  0, 21,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 22,  0,  0,  0,  0,  0, 20,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  3,  3,  3,  2,  2,
+         2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  9,  9,  9,  9,  9,  9,  9,  9,  9,  6,  6,  6,  6,  6,  6,  6,  6,  6,  2,  2,  2,  2,  2,  2,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3, 23, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 24,  3,  3,  3,  3,  0,  0, 20,  0,  0, 21,  0,  0,  0, 22,  0,  0,  0,  0,  3,  3,  3,  2,  2,  2,  2,  2,
+         6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  2,  2,  2,  2,  2,  2,  6,  9,  9,  9,  9,  9,  9,  9,  9,  9,  5,  5,  5,  5,  5,  5,  5,  5,  5,  6,  6,  6,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,  2,  2,  2,  2,  2,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  2,  2,  2,  2,  2,  2,  6,  6,
+         4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  6,  6,  6,  6,  6,  6,  4,  9,  9,  9,  9,  9,  9,  9,  9,  9,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  6,  6,  6,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  6,  6,  6,  4,  4,
+         4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  9,  9,  9,  9,  9,  9,  9,  9,  9,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,  6,  6,  6,  6,  6,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  6,  6,  6,  4,  4,  4,  4,  4,
+      },
+    },
+  },
+}
+
+local TERRAIN = LEVEL.layers[1]
+local LEVEL_W, LEVEL_H = TERRAIN.width, TERRAIN.height
+local LEVEL_PX = LEVEL_W * LEVEL.tilewidth   -- 768 px of level...
+local MAP_COLS = 64                          -- ...over a 512 px (64 tile) tilemap
+local MAP_TOP = 16                           -- terrain sits on screen tile rows 16..27
+local SPEED = 64                             -- camera pixels per second
+local ANIM_HZ = 6                            -- animated-tile steps per second
+
+-- Tiled numbers tiles from the tileset's firstgid (1 here) and writes 0 for an
+-- empty cell. A sheet numbers chars from 0 with NO reserved blank tile, so the
+-- adapter is just gid - 1 -- and an empty Tiled cell lands on sheet cell 0, which
+-- this sheet leaves blank on purpose.
+local function gid_to_tile(gid)
+  if gid == 0 then return 0 end
+  return gid - 1
+end
+
+-- Animated materials. The level stores ONE gid per material; the frame picks the
+-- variant. Variants are consecutive sheet cells, so a cycle is a single add.
+-- Pokes re-run every frame, which is the whole animation mechanism.
+local ANIM = {
+  [9]  = { first = 8,  frames = 4 },   -- lava  -> cells 8..11
+  [13] = { first = 12, frames = 4 },   -- water -> cells 12..15
+}
+
+function frame(t, f)
+  apply_pokes()
+  mode = 1; brightness = 15
+
+  -- BG1 = the tilesheet. Binding a sheet places its chars and palettes and echoes
+  -- back char_base ONLY: map_base, screen_size and tile_size stay yours, and BG1
+  -- rasterizes at map_base 0 by default, so say what you mean.
+  bg[1].source = "cavern_tiles"
+  bg[1].char_base = 0x1000             -- default, shown explicitly
+  bg[1].map_base = 0x0000              -- default, shown explicitly
+  bg[1].screen_size = 1                -- 64x32 tiles = 512x256 px
+
+  -- BG2 = an ordinary assembled import, which brings its own tilemap and only
+  -- needs somewhere to live. Both source kinds, one frame.
+  --
+  -- SWAPPING THE ART? Four constraints below bite SILENTLY -- each one gives a
+  -- wrong picture, never an error:
+  --  1. Both images must use the SAME SET of colours, and that set must fit ONE
+  --     sub-palette (15 at 4bpp). Outside mode 0 every BG source lands its
+  --     palettes at CGRAM 0 and BG2 is placed after BG1, so a backdrop with a
+  --     different palette silently recolours the tilesheet layer.
+  --  2. pal = 0 in the map write below assumes that single sub-palette. A sheet
+  --     needing several puts each cell's index in the import report (the source
+  --     preview labels it) -- there is no way to read it back from Lua.
+  --  3. char_base 0x1000 -> 0x2000 leaves the sheet 256 chars at 4bpp. A bigger
+  --     sheet overruns BG2's chars; move BG2 up.
+  --  4. MAP_TOP + LEVEL_H must be <= 32, the tilemap's height in tiles.
+  bg[2].source = "cavern_back"
+  bg[2].char_base = 0x2000
+  bg[2].map_base = 0x0800
+
+  -- The camera walks the level and loops. The scroll register only ever sees it
+  -- mod 512 -- the tilemap's own width -- which is the fine (sub-tile) scroll.
+  local cam = (t * SPEED) % LEVEL_PX
+  local cam_tile = floor(cam / LEVEL.tilewidth)
+  bg[1].scroll.x = cam % 512
+  -- Parallax at exactly 1/3: the backdrop is 256 px wide and the level 768, so
+  -- one level loop is three backdrop loops and the wrap never shows.
+  bg[2].scroll.x = cam / 3
+
+  local phase = floor(t * ANIM_HZ)
+
+  -- Coarse streaming. 33 columns = the 32 on screen plus the partial one the fine
+  -- scroll pulls in. Tilemap column (cam_tile + s) % 64 is exactly the column the
+  -- rasterizer reads for screen column s, so crossing 512 px needs no special
+  -- case; and a column outside this window can never be on screen, which is why
+  -- writing only the window is enough. (VRAM is zeroed every frame before
+  -- imports, so the window is rewritten each frame rather than patched.)
+  for s = 0, 32 do
+    local col = (cam_tile + s) % LEVEL_W     -- column of the LEVEL
+    local mcol = (cam_tile + s) % MAP_COLS   -- column of the TILEMAP
+    if bg[1].map[mcol] == nil then bg[1].map[mcol] = {} end
+    for r = 0, LEVEL_H - 1 do
+      local gid = TERRAIN.data[r * LEVEL_W + col + 1]   -- Tiled data: row-major, 1-based
+      local anim = ANIM[gid]
+      local tile
+      if anim then
+        tile = anim.first + phase % anim.frames
+      else
+        tile = gid_to_tile(gid)
+      end
+      -- One line per map entry: the editor completes tile/pal/prio/flip_x/flip_y
+      -- inside a single-line constructor.
+      bg[1].map[mcol][MAP_TOP + r] = { tile = tile, pal = 0 }
+    end
+  end
+end
+"#;
+
 fn ramp() -> Vec<u8> {
     let mut data = vec![0u8; WIDTH * HEIGHT * 4];
     for y in 0..HEIGHT {
@@ -440,6 +577,396 @@ fn mode0_bg2() -> Vec<u8> {
     data
 }
 
+// ── cavern (PPU-95): the tilesheet demo's two sources ───────────────────────
+// Mirrors web/src/studio/demos/demos.ts cavernTiles()/cavernBack() exactly —
+// these two MUST agree or the golden proves nothing about the shipped demo.
+// One 14-colour master palette feeds both images on purpose: in mode 1 every BG
+// source places its palettes at CGRAM 0 and BG2 is placed after BG1, so two
+// different palettes would clobber each other. The invariant has TWO halves --
+// an identical colour SET, and that set fitting ONE sub-palette (15 at 4bpp).
+// Sorting alone is not enough: past one sub-palette region_fit partitions
+// greedily in tile order, so one colour set can split differently between two
+// images. 14 <= 15 is load-bearing, not slack.
+// `cavern_backdrop_import_does_not_recolour_the_tilesheet_layer` pins the CGRAM.
+const CAVERN_PAL: [(u8, u8, u8); 15] = [
+    (0x00, 0x00, 0x00), // 0 = transparent, never placed
+    (0x10, 0x18, 0x28), //  1
+    (0x28, 0x38, 0x60), //  2
+    (0x48, 0x70, 0xa8), //  3
+    (0x78, 0xc0, 0xe0), //  4
+    (0x30, 0x28, 0x20), //  5
+    (0x60, 0x48, 0x30), //  6
+    (0x98, 0x70, 0x48), //  7
+    (0x38, 0x38, 0x40), //  8
+    (0x58, 0x58, 0x68), //  9
+    (0x90, 0x90, 0x98), // 10
+    (0xb8, 0x38, 0x10), // 11
+    (0xf0, 0x70, 0x18), // 12
+    (0xff, 0xc8, 0x50), // 13
+    (0x58, 0xa8, 0x48), // 14
+];
+
+/// 24 8x8 cells in row-major SHEET order: cell N is what `tile = N` draws.
+/// 64 hex palette indices per cell, whitespace stripped, '0' = transparent.
+const CAVERN_CELLS: [&str; 24] = [
+    //  0 blank (the author-reserved empty tile: a sheet has no built-in one)
+    r"
+      00000000
+      00000000
+      00000000
+      00000000
+      00000000
+      00000000
+      00000000
+      00000000
+    ",
+    //  1 rock fill
+    r"
+      99a99998
+      9a999899
+      99989a99
+      89999a98
+      999a8999
+      9998999a
+      9a999998
+      899a9999
+    ",
+    //  2 rock top (moss cap)
+    r"
+      eeeeeeee
+      9ee9eee9
+      a99a99a9
+      99a99999
+      9899999a
+      99998999
+      9a999998
+      99989a99
+    ",
+    //  3 rock dark (bedrock)
+    r"
+      88818888
+      81888818
+      88888188
+      88188888
+      88888818
+      18888188
+      88818888
+      88888881
+    ",
+    //  4 dirt fill
+    r"
+      66576665
+      66666756
+      57666665
+      66566766
+      66675666
+      56666657
+      66566666
+      66666576
+    ",
+    //  5 dirt top
+    r"
+      77777777
+      67767677
+      66676666
+      66666576
+      56666666
+      66657666
+      66666665
+      65666676
+    ",
+    //  6 brick course A
+    r"
+      aaaaaaaa
+      a999999a
+      a999999a
+      88888888
+      aaaaaaaa
+      99a99999
+      99999a99
+      88888888
+    ",
+    //  7 brick course B
+    r"
+      9a9988aa
+      999988a9
+      88888888
+      aa999999
+      a9999999
+      88888888
+      9988aa99
+      9988a999
+    ",
+    //  8 lava frame 0
+    r"
+      bbbbbbbb
+      bcbbbbcb
+      bccbbccb
+      cccdcccc
+      ccdddccc
+      cdddddcc
+      dddddddd
+      dddddddd
+    ",
+    //  9 lava frame 1
+    r"
+      bbbbbbbb
+      bbcbbcbb
+      bcccbccb
+      ccccdccc
+      cccdddcc
+      ccdddddc
+      dddddddd
+      dddddddd
+    ",
+    // 10 lava frame 2
+    r"
+      bbbbbbbb
+      bbbcbcbb
+      bbccbcbb
+      cccccdcc
+      ccccdddc
+      cccddddd
+      dddddddd
+      dddddddd
+    ",
+    // 11 lava frame 3
+    r"
+      bbbbbbbb
+      cbbbcbbc
+      ccbbccbc
+      ccccccdc
+      cccccddd
+      ccccddcd
+      dddddddd
+      dddddddd
+    ",
+    // 12 water frame 0
+    r"
+      44433334
+      33333333
+      33232333
+      32222233
+      22222222
+      22122222
+      21112221
+      11111111
+    ",
+    // 13 water frame 1
+    r"
+      34443333
+      33333333
+      33323233
+      33222223
+      22222222
+      22212222
+      12111222
+      11111111
+    ",
+    // 14 water frame 2
+    r"
+      33444333
+      33333333
+      23332323
+      33322222
+      22222222
+      22221222
+      22121112
+      11111111
+    ",
+    // 15 water frame 3
+    r"
+      33344433
+      33333333
+      32333232
+      23332222
+      22222222
+      22222122
+      22212111
+      11111111
+    ",
+    // 16 ledge left
+    r"
+      000aaaaa
+      00aa999a
+      0aa99999
+      aa999998
+      a9999899
+      a9989999
+      89999998
+      89999889
+    ",
+    // 17 ledge mid
+    r"
+      aaaaaaaa
+      a99999a9
+      999a9999
+      99899999
+      99998999
+      89999998
+      99899899
+      98999899
+    ",
+    // 18 ledge right
+    r"
+      aaaaa000
+      a999aa00
+      99999aa0
+      899999aa
+      9989999a
+      9999899a
+      89999998
+      98899998
+    ",
+    // 19 pillar
+    r"
+      0aaaaaa0
+      0a9999a0
+      0a9889a0
+      0a9889a0
+      0a9889a0
+      0a9889a0
+      0a9999a0
+      0aaaaaa0
+    ",
+    // 20 crystal
+    r"
+      00044000
+      00434400
+      04333440
+      04333340
+      03333340
+      03323330
+      00332300
+      00033000
+    ",
+    // 21 pebbles
+    r"
+      00000000
+      00090000
+      000a9000
+      00000000
+      0900009a
+      0a90000a
+      00000000
+      0000a900
+    ",
+    // 22 rock top-left corner
+    r"
+      0000eeee
+      000ee99e
+      00ee999a
+      0ee99999
+      ee999a99
+      e99999a9
+      9998999a
+      999a9999
+    ",
+    // 23 rock top-right corner
+    r"
+      eeee0000
+      e99ee000
+      a999ee00
+      99999ee0
+      99a999ee
+      9a99999e
+      a9998999
+      9999a999
+    ",
+];
+
+fn cavern_px(buf: &mut [u8], w: usize, x: usize, y: usize, idx: u32) {
+    if idx == 0 {
+        return; // transparent: leave alpha 0 so the backdrop shows through
+    }
+    let (r, g, b) = CAVERN_PAL[idx as usize];
+    let i = (y * w + x) * 4;
+    buf[i..i + 4].copy_from_slice(&[r, g, b, 255]);
+}
+
+fn cavern_tiles() -> Vec<u8> {
+    let cols = 8usize;
+    let (w, h) = (cols * 8, (CAVERN_CELLS.len() / cols) * 8);
+    let mut buf = vec![0u8; w * h * 4];
+    for (n, cell) in CAVERN_CELLS.iter().enumerate() {
+        let s: Vec<u32> = cell
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .map(|c| c.to_digit(16).unwrap())
+            .collect();
+        assert_eq!(s.len(), 64, "cavern cell {n} is not 8x8");
+        let (ox, oy) = ((n % cols) * 8, (n / cols) * 8);
+        for y in 0..8 {
+            for x in 0..8 {
+                cavern_px(&mut buf, w, ox + x, oy + y, s[y * 8 + x]);
+            }
+        }
+    }
+    buf
+}
+
+/// Backdrop palette index at (x, y). 32px horizontal period so the 256px plane
+/// wraps seamlessly under a plain `scroll`; uses all 14 colours because the
+/// shared-palette invariant needs the colour SETS equal, not merely overlapping.
+fn cavern_back_index(x: usize, y: usize) -> u32 {
+    let px = x % 32;
+    let pillar = (10..22).contains(&px);
+    let p = |a: u32, b: u32| if pillar { a } else { b };
+    if (14..17).contains(&px) && (70..73).contains(&y) {
+        return 4; // crystal glints on the pillar face
+    }
+    if pillar && (126..129).contains(&y) {
+        return 14; // moss cap where the distant rock begins
+    }
+    if pillar && (px == 10 || px == 21) && (96..168).contains(&y) {
+        return 10; // lit pillar edge
+    }
+    if (15..18).contains(&px) && y >= 196 {
+        return if y >= 214 {
+            13
+        } else if y >= 206 {
+            12
+        } else {
+            11
+        }; // lava vent
+    }
+    if pillar && (188..196).contains(&y) {
+        return 7; // dirt seam catching the vent light
+    }
+    if !pillar && (180..188).contains(&y) {
+        return 6;
+    }
+    // Below the moss line everything recedes into the dark, so a gap in the
+    // terrain reads as cave depth rather than as a bright slab.
+    if y < 56 {
+        return p(2, 1);
+    }
+    if y < 96 {
+        return p(3, 2);
+    }
+    if y < 129 {
+        return p(9, 3);
+    }
+    if y < 168 {
+        return p(9, 8);
+    }
+    if y < 200 {
+        return p(8, 5);
+    }
+    p(5, 1)
+}
+
+fn cavern_back() -> Vec<u8> {
+    let (w, h) = (WIDTH, HEIGHT);
+    let mut buf = vec![0u8; w * h * 4];
+    for y in 0..h {
+        for x in 0..w {
+            cavern_px(&mut buf, w, x, y, cavern_back_index(x, y));
+        }
+    }
+    buf
+}
+
 /// Empty pokes.lua chunk — mirrors `pokesToLua([])` / `EMPTY_POKES` from
 /// web/src/studio/pokes/pokes.ts byte-for-byte. Demos that call apply_pokes()
 /// as frame()'s first line need this no-op definition in scope; demos that
@@ -480,6 +1007,15 @@ fn add_obj(e: &mut LuaEngine, name: &str, rgba: Vec<u8>, w: u32, h: u32) {
     e.add_source(name, &payload.encode()).unwrap();
 }
 
+fn add_sheet(e: &mut LuaEngine, name: &str, rgba: Vec<u8>, w: u32, h: u32, bit_depth: u8) {
+    let opts = ConvertOptions {
+        bit_depth: Some(bit_depth),
+        ..Default::default()
+    };
+    let (payload, _) = convert_source(SourceKind::Sheet, &opts, &rgba, w, h).unwrap();
+    e.add_source(name, &payload.encode()).unwrap();
+}
+
 fn demo_engine_files(files: &[(&str, &str)]) -> LuaEngine {
     let mut e = LuaEngine::new();
     add_bg(&mut e, "sky", sky(), WIDTH as u32, HEIGHT as u32, 4);
@@ -513,6 +1049,15 @@ fn demo_engine_files(files: &[(&str, &str)]) -> LuaEngine {
     );
     add_bg(&mut e, "panel", panel(), WIDTH as u32, HEIGHT as u32, 4);
     add_bg(&mut e, "ramp", ramp(), WIDTH as u32, HEIGHT as u32, 8);
+    add_sheet(&mut e, "cavern_tiles", cavern_tiles(), 64, 24, 4);
+    add_bg(
+        &mut e,
+        "cavern_back",
+        cavern_back(),
+        WIDTH as u32,
+        HEIGHT as u32,
+        4,
+    );
     let mut chunks = Vec::with_capacity(files.len() + 1);
     chunks.push(("pokes.lua", EMPTY_POKES_SRC));
     chunks.extend_from_slice(files);
@@ -1196,4 +1741,278 @@ fn dusk_parallax_multi_file_matches_single_file_concat() {
         single == multi,
         "flagship split must be framebuffer-identical to its concatenation"
     );
+}
+
+// ── tilesheet-cavern (PPU-95) ───────────────────────────────────────────────
+// The demo streams a 768px-wide Tiled-authored level across a 512px hardware
+// tilemap while cycling animated tiles, so its two moving parts (camera, tile
+// phase) have to be pinned independently to see either one.
+
+/// A engine carrying ONLY the cavern demo's two sources. `demo_engine_files`
+/// imports every demo's assets — including a 1024x1024 Mode 7 source — which
+/// costs seconds per render, and the tests below render a dozen frames. The
+/// golden test still goes through `render_demo` so the shipped path is covered.
+fn cavern_engine(src: &str) -> LuaEngine {
+    let mut e = LuaEngine::new();
+    add_sheet(&mut e, "cavern_tiles", cavern_tiles(), 64, 24, 4);
+    add_bg(
+        &mut e,
+        "cavern_back",
+        cavern_back(),
+        WIDTH as u32,
+        HEIGHT as u32,
+        4,
+    );
+    e.set_sources(&[("pokes.lua", EMPTY_POKES_SRC), ("main.lua", src)])
+        .unwrap();
+    e
+}
+
+/// The shipped demo with its camera pinned at `cam` px and its tile animation
+/// held at `phase`, optionally with the assembled backdrop off the main screen —
+/// so the frame becomes a pure function of whichever variable is under test.
+fn cavern_pinned(cam: f64, phase: u32, backdrop: bool) -> Vec<u8> {
+    cavern_pinned_src(CAVERN_SRC, cam, phase, backdrop)
+}
+
+/// True when `b` is `a` scrolled left by exactly `dx` px — the whole visible
+/// frame, not a sample.
+fn shifted_left_by(a: &[u8], b: &[u8], dx: usize) -> bool {
+    (0..HEIGHT).all(|y| (0..WIDTH - dx).all(|x| px(a, x + dx, y) == px(b, x, y)))
+}
+
+// PPU-95: "Camera scrolls seamlessly past 512px: coarse streaming of the visible
+// window into bg[n].map from the level table, fine scroll via the scroll
+// registers mod 512."
+#[test]
+fn cavern_streams_the_level_across_the_512px_tilemap_wrap() {
+    // The backdrop is off (its 1/3-rate parallax is not an integer px per step)
+    // and the animation is frozen, so BG1's picture is a pure function of the
+    // camera. Stepping the camera 8px must shift the frame exactly 8px — and the
+    // step from 504 to 512 is the one that wraps the tilemap.
+    let before = cavern_pinned(504.0, 0, false);
+    let after = cavern_pinned(512.0, 0, false);
+    assert!(
+        shifted_left_by(&before, &after, 8),
+        "streaming broke across the 512px tilemap wrap"
+    );
+
+    // The same step well away from the wrap, as a control on the comparison.
+    assert!(
+        shifted_left_by(
+            &cavern_pinned(200.0, 0, false),
+            &cavern_pinned(208.0, 0, false),
+            8
+        ),
+        "streaming broke away from the wrap too — the test is measuring the wrong thing"
+    );
+
+    // The ring modulus is load-bearing: writing at the LEVEL column instead of
+    // the TILEMAP column puts columns 64..95 into a different screen of the
+    // 64x32 map, which the rasterizer never reads back at the same place.
+    let mutant = CAVERN_SRC.replace(
+        "local mcol = (cam_tile + s) % MAP_COLS",
+        "local mcol = (cam_tile + s) % LEVEL_W",
+    );
+    assert_ne!(mutant, CAVERN_SRC, "ring-modulus mutation did not apply");
+    let m_before = cavern_pinned_src(&mutant, 504.0, 0, false);
+    let m_after = cavern_pinned_src(&mutant, 512.0, 0, false);
+    assert!(
+        !shifted_left_by(&m_before, &m_after, 8),
+        "a wrong ring modulus still shifted cleanly — the seam test proves nothing"
+    );
+}
+
+/// `cavern_pinned` against a possibly-mutated source. The pins are asserted to
+/// have actually landed: a source edit that silently stopped matching would make
+/// every test below vacuous.
+fn cavern_pinned_src(src: &str, cam: f64, phase: u32, backdrop: bool) -> Vec<u8> {
+    let cam_pin = format!("local cam = {cam}");
+    let phase_pin = format!("local phase = {phase}");
+    let mut s = src
+        .replace("local cam = (t * SPEED) % LEVEL_PX", &cam_pin)
+        .replace("local phase = floor(t * ANIM_HZ)", &phase_pin);
+    assert!(s.contains(&cam_pin), "camera pin did not apply");
+    assert!(s.contains(&phase_pin), "animation pin did not apply");
+    if !backdrop {
+        let before = s.len();
+        s = s.replace(r#"bg[2].source = "cavern_back""#, "screen.main.bg2 = false");
+        assert_ne!(before, s.len(), "backdrop drop did not apply");
+    }
+    let mut e = cavern_engine(&s);
+    let lt = e.frame(1.0, 60).unwrap();
+    render_frame(&lt, e.memory())
+}
+
+// PPU-95: "Tile animation visible: map-entry `tile =` cycling between sheet
+// variants as a function of frame time."
+#[test]
+fn cavern_cycles_its_lava_and_water_variants() {
+    // Camera pinned, so the ONLY thing that can move is the map entry's `tile =`.
+    let p0 = cavern_pinned(0.0, 0, true);
+    let p1 = cavern_pinned(0.0, 1, true);
+    let p4 = cavern_pinned(0.0, 4, true);
+    assert_ne!(p0, p1, "the animation phase changed nothing on screen");
+    assert_eq!(p0, p4, "lava/water is not a 4-variant cycle");
+
+    // And it moves ONLY the animated materials: everything above the terrain
+    // (screen tile rows 0..15, i.e. y < 128) is untouched between phases.
+    for y in 0..128 {
+        for x in 0..WIDTH {
+            assert_eq!(
+                px(&p0, x, y),
+                px(&p1, x, y),
+                "animation leaked outside the terrain at ({x},{y})"
+            );
+        }
+    }
+}
+
+// PPU-95: "A second layer uses an assembled bg import with plain `scroll`
+// scrolling, on screen at the same time."
+#[test]
+fn cavern_scrolls_an_assembled_import_beside_the_tilesheet_layer() {
+    // Both kinds really are on screen: dropping the backdrop changes the frame,
+    // and what it changes is the band above the terrain.
+    let both = cavern_pinned(0.0, 0, true);
+    let sheet_only = cavern_pinned(0.0, 0, false);
+    assert_ne!(both, sheet_only, "the assembled backdrop is not on screen");
+    assert_ne!(
+        px(&both, 4, 40),
+        px(&sheet_only, 4, 40),
+        "the sky band is not coming from the assembled import"
+    );
+
+    // The backdrop scrolls at exactly 1/3 the camera rate through the plain
+    // scroll register: a 48px camera step moves the pure-backdrop band 16px,
+    // while the sheet layer moves the full 48.
+    let a = cavern_pinned(0.0, 0, true);
+    let b = cavern_pinned(48.0, 0, true);
+    for y in 0..128 {
+        for x in 0..WIDTH - 16 {
+            assert_eq!(
+                px(&a, x + 16, y),
+                px(&b, x, y),
+                "backdrop parallax is not 1/3 the camera rate at ({x},{y})"
+            );
+        }
+    }
+    assert!(
+        shifted_left_by(
+            &cavern_pinned(0.0, 0, false),
+            &cavern_pinned(48.0, 0, false),
+            48
+        ),
+        "the tilesheet layer did not scroll at the full camera rate"
+    );
+}
+
+// PPU-95: "Map data table matches Tiled's Lua export shape, converted with a
+// `gid - 1` adapter." Checked by colour so it is independent of how the demo
+// indexes anything.
+#[test]
+fn cavern_gid_adapter_puts_the_authored_level_on_screen() {
+    let fb = cavern_pinned(0.0, 0, true);
+    // At camera 0 the lava pit (level columns 22..30) sits at screen x 176..247,
+    // its surface on screen tile row 26 -> y 208..215.
+    let lava = px(&fb, 200, 212);
+    assert!(
+        lava[0] > 0xa0 && lava[2] < 0x70,
+        "expected lava at (200,212), got {lava:?}"
+    );
+    // A plain rock column at the same row is grey — r, g and b within 0x20.
+    let rock = px(&fb, 8, 212);
+    let (lo, hi) = (
+        rock[0].min(rock[1]).min(rock[2]),
+        rock[0].max(rock[1]).max(rock[2]),
+    );
+    assert!(
+        hi - lo < 0x20,
+        "expected grey rock at (8,212), got {rock:?}"
+    );
+    // Tiled's empty cell (gid 0) maps onto sheet cell 0, which is blank. Level
+    // rows 0..2 are entirely gid 0, so screen y 128..151 is a band the streaming
+    // loop DOES write, every entry of it through gid_to_tile(0) — the band above
+    // (y < 128) is never written at all and would stay transparent whatever the
+    // adapter did, which is why it is the wrong place to check this.
+    let no_sheet = cavern_pinned_src(
+        &CAVERN_SRC.replace(
+            r#"bg[1].source = "cavern_tiles""#,
+            "screen.main.bg1 = false",
+        ),
+        0.0,
+        0,
+        true,
+    );
+    for y in 128..152 {
+        for x in 0..WIDTH {
+            assert_eq!(
+                px(&fb, x, y),
+                px(&no_sheet, x, y),
+                "an empty Tiled cell is not drawing the blank sheet cell at ({x},{y})"
+            );
+        }
+    }
+    // ...and the sheet layer is genuinely doing something lower down.
+    assert_ne!(px(&fb, 8, 212), px(&no_sheet, 8, 212));
+}
+
+// PPU-95: the sheet must stay under the 1024-char ceiling. Past it a cells[k]
+// with tile >= 1024 masks to 10 bits and renders cell k & 0x3ff — a wrong
+// picture, not a blank one — and a successfully bound sheet emits no
+// ImportBudget, so the inspector cannot warn. The demo checks its own sheet.
+#[test]
+fn cavern_sheet_stays_under_the_char_ceiling() {
+    let opts = ConvertOptions {
+        bit_depth: Some(4),
+        ..Default::default()
+    };
+    let (_, meta) = convert_source(SourceKind::Sheet, &opts, &cavern_tiles(), 64, 24).unwrap();
+    let ppu_core::SourceReport::Sheet { report } = &meta.report else {
+        panic!("cavern_tiles did not import as a sheet: {:?}", meta.report);
+    };
+    assert_eq!(report.unique_tiles, 24, "sheet char count changed");
+    assert!(
+        report.overflows.is_empty(),
+        "sheet overflowed: {:?}",
+        report.overflows
+    );
+    assert_eq!(meta.cells.as_ref().map(|c| c.len()), Some(24));
+}
+
+// PPU-95: both sources are drawn from ONE master palette because mode 1 places
+// every BG source's palettes at CGRAM 0 and BG2 is placed after BG1. If they
+// ever diverge, the backdrop import silently recolours the tilesheet layer.
+#[test]
+fn cavern_backdrop_import_does_not_recolour_the_tilesheet_layer() {
+    let mut both = cavern_engine(CAVERN_SRC);
+    both.frame(1.0, 60).unwrap();
+    let with_backdrop = both.memory().cgram;
+
+    let sheet_only = CAVERN_SRC.replace(r#"bg[2].source = "cavern_back""#, "");
+    assert_ne!(sheet_only, CAVERN_SRC, "backdrop unbind did not apply");
+    let mut only = cavern_engine(&sheet_only);
+    only.frame(1.0, 60).unwrap();
+
+    assert_eq!(
+        with_backdrop,
+        only.memory().cgram,
+        "the assembled backdrop's palette overwrote the tilesheet's"
+    );
+}
+
+#[test]
+fn tilesheet_cavern_demo_matches_golden_png() {
+    assert!(Path::new(CAVERN_GOLDEN).exists());
+    let (actual, _) = render_demo(CAVERN_SRC);
+    let expected = decode_png(CAVERN_GOLDEN);
+    assert_eq!(actual.len(), expected.len());
+    assert_eq!(actual, expected, "tilesheet-cavern differs from golden PNG");
+}
+
+#[test]
+#[ignore = "regenerates the committed tilesheet-cavern demo golden PNG"]
+fn regen_golden_tilesheet_cavern() {
+    let (fb, _) = render_demo(CAVERN_SRC);
+    write_png(CAVERN_GOLDEN, &fb);
 }

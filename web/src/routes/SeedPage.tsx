@@ -19,6 +19,8 @@ const BLURBS: Record<string, string> = {
   mosaic: "The $2106 mosaic effect, per-BG.",
   "mode7-extbg": "Mode 7 EXTBG: per-pixel priority splits the plane in two.",
   "direct-color": "8bpp direct colour — BGR233 straight from the pixel byte.",
+  "tilesheet-cavern":
+    "A camera streaming a Tiled-authored map out of a tilesheet, with animated lava and water.",
 };
 
 /** DEV-ONLY (route is gated in AppRoutes): publishes every bundled demo as the
