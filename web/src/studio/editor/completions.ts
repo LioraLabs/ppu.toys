@@ -108,7 +108,11 @@ const MATH_MEMBERS: Completion[] = [
 /** bg[n].* layer members. */
 const BG_MEMBERS: Completion[] = [
   { label: "scroll", type: "property", detail: ".x/.y · BGnHOFS/BGnVOFS $210D-$2114" },
-  { label: "source", type: "property", detail: "asset id — quantized into tiles+map" },
+  {
+    label: "source",
+    type: "property",
+    detail: "asset id — a bg source brings tiles+map, a sheet brings chars only",
+  },
   { label: "visible", type: "property", detail: "bool — playground layer toggle" },
   { label: "tile_size", type: "property", detail: "8 or 16 · BGMODE $2105" },
   { label: "map_base", type: "property", detail: "tilemap VRAM word addr · BGnSC $2107-$210A" },
@@ -120,6 +124,21 @@ const BG_MEMBERS: Completion[] = [
   },
   { label: "mosaic", type: "property", detail: "bool per-layer enable · MOSAIC $2106" },
   { label: "map", type: "property", detail: "map[col][row] = {tile,pal,prio,flip_x,flip_y}" },
+];
+
+/** The fields of one `bg[n].map[col][row]` entry — exactly the lanes packed
+ *  into a tilemap word. Completed inside the table constructor, because that is
+ *  where they get written (`= {tile = 5, pal = 1}`), not after a dot. */
+const MAP_ENTRY_MEMBERS: Completion[] = [
+  {
+    label: "tile",
+    type: "property",
+    detail: "char index 0..1023 (sheet order for a sheet source)",
+  },
+  { label: "pal", type: "property", detail: "sub-palette 0..7" },
+  { label: "prio", type: "property", detail: "priority bit 0/1" },
+  { label: "flip_x", type: "property", detail: "bool — mirror horizontally" },
+  { label: "flip_y", type: "property", detail: "bool — mirror vertically" },
 ];
 
 /** obj.* members (the sheet/OBSEL surface — NOT the per-sprite fields). */
@@ -301,12 +320,30 @@ export function ppuCompletions(ctx: CompletionContext): CompletionResult | null 
   // the lookbehind anchors the base name: `myobj.` / `subbg[1].` must NOT
   // complete as obj/bg (nested-bracket indices like bg[t[1]] degrade to the
   // plain-globals path — acceptable)
+  //
+  // FIRST, ahead of the map-entry table below: a member expression INSIDE an
+  // entry (`... = {tile = math.|`) is still a member access, and the entry
+  // regex's `[^{}]*` tail would otherwise swallow it and offer the entry
+  // fields after the dot. A member only ever matches when it ends at the
+  // cursor, so `= {` and `= {ti` still fall through to the entry check.
   const member = ctx.matchBefore(
     /(?<![\w.\]])((?:bg|obj)\s*\[[^\]]*\]|math|obj|m7|color\s*\.\s*on|color|screen\s*\.\s*(?:main|sub)|screen|win\s*\.\s*(?:w[12]|bg[1-4]|obj|color)|win)\s*\.\w*/,
   );
   if (member) {
     const from = member.from + member.text.lastIndexOf(".") + 1;
     return { from, options: memberOptions(member.text) };
+  }
+
+  // map-entry table: `bg[1].map[0][0] = {tile = 5, |`. Anchored on `bg[..]`, so
+  // `m7.map[y][x] = {` (a tile NUMBER, not a table) never gets these fields.
+  // Line-scoped, because matchBefore only ever sees the current line — a table
+  // split across lines falls through to the globals path.
+  const entry = ctx.matchBefore(
+    /(?<![\w.\]])bg\s*\[[^\]]*\]\s*\.\s*map\s*(?:\[[^\]]*\]\s*){2}=\s*\{[^{}]*/,
+  );
+  if (entry) {
+    const word = ctx.matchBefore(/\w*/);
+    return { from: word ? word.from : ctx.pos, options: MAP_ENTRY_MEMBERS };
   }
 
   const word = ctx.matchBefore(/\w+/);

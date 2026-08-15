@@ -3,9 +3,11 @@ import {
   sourceMetaBg,
   sourceMetaM7,
   sourceMetaObj,
+  sourceMetaSheet,
   sourcePayloadBg,
   sourcePayloadM7,
   sourcePayloadObj,
+  sourcePayloadSheet,
   makeSourceMeta,
 } from "../../fixtures";
 import "./sources.css";
@@ -67,9 +69,18 @@ const ObjReassembled = () => (
   </div>
 );
 
+// Tilesheet: the atlas IS the source image (char N = the Nth cell), so the
+// t0..t3 labels read in sheet order and the two sub-palettes drive the tint.
+const Tilesheet = () => (
+  <div style={{ width: 320, padding: 16 }}>
+    <SourcePreview kind="sheet" meta={sourceMetaSheet} payload={sourcePayloadSheet} />
+  </div>
+);
+
 export default {
   Mode7,
   BgTwoPalettes,
   ObjReassembled,
+  Tilesheet,
   WithOverflowWarning,
 };

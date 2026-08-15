@@ -491,6 +491,54 @@ export const sourceMetaBg: SourceMeta = {
   },
 };
 
+/** A valid v1 tilesheet payload: a 2x2 sheet of four 2bpp chars in row-major
+ *  sheet order, so SourcePreview exercises the sheet atlas, the t0..t3 labels
+ *  and the two-sub-palette tint with no wasm. */
+export const sourcePayloadSheet: Uint8Array = (() => {
+  const bytes: number[] = [];
+  const u8 = (v: number) => bytes.push(v & 0xff);
+  const u16 = (v: number) => bytes.push(v & 0xff, (v >> 8) & 0xff); // little-endian
+  u8(1); // version
+  u8(3); // kind = sheet
+  u8(2); // bit_depth (2bpp: 3 colors per sub-palette)
+  u8(2); // two sub-palettes
+  u8(3);
+  [0x001f, 0x03e0, 0x7c00].forEach(u16); // p0: red, green, blue
+  u8(3);
+  [0x03ff, 0x7fe0, 0x7fff].forEach(u16); // p1: yellow, cyan, white
+  u16(4); // four chars, sheet order
+  // 2bpp row word = plane0 low byte | plane1 high byte -> flat index per char
+  const flat = (idx: number) => (idx & 1 ? 0x00ff : 0) | (idx & 2 ? 0xff00 : 0);
+  [1, 2, 3, 1].forEach((idx, t) => {
+    for (let r = 0; r < 8; r++) u16(t === 3 && r % 2 ? flat(2) : flat(idx));
+  });
+  return new Uint8Array(bytes);
+})();
+
+export const sourceMetaSheet: SourceMeta = {
+  width: 16,
+  height: 16,
+  report: {
+    mode: "sheet",
+    report: {
+      colors_used: 6,
+      palettes_used: 2,
+      tile_cells: 4,
+      unique_tiles: 4,
+      vram_words: 32,
+      overflows: [],
+    },
+  },
+  // sheet cells: tile IS the sheet index, flips always false; `pal` is the
+  // quantizer's sub-palette assignment — the thing the preview labels.
+  cells: [
+    { tile: 0, pal: 0, flip_x: false, flip_y: false },
+    { tile: 1, pal: 0, flip_x: false, flip_y: false },
+    { tile: 2, pal: 1, flip_x: false, flip_y: false },
+    { tile: 3, pal: 1, flip_x: false, flip_y: false },
+  ],
+};
+
 /** A valid v1 OBJ source payload (two 8px cells: a half/half tile + its
  *  mirror) so SourcePreview exercises the cells-driven sheet reassembly
  *  (flips + per-cell palettes) with no wasm. */

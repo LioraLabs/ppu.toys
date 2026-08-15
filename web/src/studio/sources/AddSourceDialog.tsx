@@ -12,6 +12,7 @@ const KINDS: { id: SourceKind; label: string }[] = [
   { id: "bg", label: "BG (tilemap)" },
   { id: "m7", label: "Mode 7" },
   { id: "obj", label: "OBJ (sprites)" },
+  { id: "sheet", label: "Tilesheet (chars only)" },
 ];
 
 type Dither = "none" | "bayer" | "diffusion";
@@ -37,9 +38,10 @@ export function AddSourceDialog({ onClose }: { onClose: () => void }) {
   const options: ConvertSourceOptions = useMemo(() => {
     if (kind === "m7") return {}; // fixed pipeline, no remap options
     const remap = { dither, dither_strength: strength, alpha_threshold: alphaT };
-    return kind === "bg"
-      ? { bit_depth: bitDepth, tile_size: 8, ...remap }
-      : { cell_size: cellSize, ...remap };
+    // bg and sheet are both BG char data: bit depth, 8px tiles. Only obj sizes cells.
+    return kind === "obj"
+      ? { cell_size: cellSize, ...remap }
+      : { bit_depth: bitDepth, tile_size: 8, ...remap };
   }, [kind, bitDepth, cellSize, dither, strength, alphaT]);
 
   const converted = useMemo(() => {
@@ -151,7 +153,7 @@ export function AddSourceDialog({ onClose }: { onClose: () => void }) {
               </select>
             </label>
 
-            {kind === "bg" && (
+            {(kind === "bg" || kind === "sheet") && (
               <label className="srcdlg-field">
                 bit depth
                 <select
@@ -165,6 +167,12 @@ export function AddSourceDialog({ onClose }: { onClose: () => void }) {
               </label>
             )}
             {kind === "bg" && <div className="srcpv-note">tile size fixed at 8px.</div>}
+            {kind === "sheet" && (
+              <div className="srcpv-note">
+                Cells fixed at 8×8, read row-major: char N is the Nth cell, so bg[n].map[x][y] =
+                &#123;tile = N&#125;. No dedup and no tilemap — map geometry is yours.
+              </div>
+            )}
 
             {kind === "obj" && (
               <label className="srcdlg-field">

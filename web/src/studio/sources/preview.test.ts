@@ -76,6 +76,56 @@ describe("buildPreviewModel", () => {
     expect(m.cells[1]).toMatchObject({ top: "t9", bot: "p3" });
   });
 
+  // PPU-94: sheet labels come from meta.cells like obj, but the grid is a fixed
+  // 8px atlas and cells[k].tile IS k (no dedup, no reserved blank) — so label k
+  // must read t{k}. A row-major grid catches the off-by-one a 1xN one wouldn't.
+  const sheetMeta = (cells: number[][], overflows: unknown[] = []): SourceMeta => ({
+    width: 16,
+    height: 16,
+    report: {
+      mode: "sheet",
+      report: {
+        colors_used: 6,
+        palettes_used: 2,
+        tile_cells: 4,
+        unique_tiles: 4,
+        vram_words: 128,
+        overflows,
+      },
+    } as SourceMeta["report"],
+    cells: cells.map(([tile, pal]) => ({ tile, pal, flip_x: false, flip_y: false })),
+  });
+
+  it("sheet: 2x2 atlas labelled in sheet order with the assigned sub-palette", () => {
+    const m = buildPreviewModel(
+      "sheet",
+      sheetMeta([
+        [0, 0],
+        [1, 1],
+        [2, 0],
+        [3, 1],
+      ]),
+      new Uint8Array([1]),
+    );
+    expect(m.cols).toBe(2);
+    expect(m.rows).toBe(2);
+    expect(m.cellPx).toBe(8); // fixed 8x8 cells, no cell-size option
+    expect(m.cells.map((c) => c.top)).toEqual(["t0", "t1", "t2", "t3"]);
+    expect(m.cells.map((c) => c.pal)).toEqual([0, 1, 0, 1]);
+    expect(m.budget).toContain("4/1024 tiles");
+  });
+
+  it("sheet: a Tiles overflow reaches the warns line", () => {
+    // PPU-93 hazard: a cells[k].tile past 1024 masks to 10 bits at poke time and
+    // renders the WRONG cell. report.overflows is the only signal there is.
+    const m = buildPreviewModel(
+      "sheet",
+      sheetMeta([[0, 0]], [{ kind: "Tiles", unique: 1200, kept: 1024 }]),
+      new Uint8Array([1]),
+    );
+    expect(m.warns).toContain("Tiles: 1200 unique, kept 1024");
+  });
+
   it("degrades when payload undecodable (mock stub): grid by dims, index labels, no image", () => {
     const m = buildPreviewModel("bg", bgMeta(), new Uint8Array([1]));
     expect(m.cols).toBe(2);

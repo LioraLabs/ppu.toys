@@ -22,7 +22,15 @@ export interface DecodedObj {
   palettes: number[][];
   tiles: number[][]; // 64 idx each (4bpp)
 }
-export type Decoded = DecodedBg | DecodedM7 | DecodedObj;
+/** Tilesheet: chars in row-major sheet order, no tilemap and no reserved blank
+ *  — tile N is the Nth 8x8 cell of the source PNG. */
+export interface DecodedSheet {
+  kind: "sheet";
+  bitDepth: 2 | 4 | 8;
+  palettes: number[][];
+  tiles: number[][]; // 64 palette indices each (0 = transparent)
+}
+export type Decoded = DecodedBg | DecodedM7 | DecodedObj | DecodedSheet;
 
 class Rd {
   i = 0;
@@ -129,6 +137,15 @@ export function decodeSourcePayload(bytes: Uint8Array): Decoded | null {
       const words = rd.u16s(count * 16);
       return { kind: "obj", cellSize, palettes, tiles: unpackTiles(words, count, 4) };
     }
+    if (kind === 3) {
+      // sheet: bit depth, palettes, char words. No tile_size, no screen size,
+      // no tilemap — the author owns the map geometry.
+      const bitDepth = rd.u8() as 2 | 4 | 8;
+      const palettes = rd.palettes();
+      const count = rd.u16();
+      const words = rd.u16s(count * bitDepth * 4);
+      return { kind: "sheet", bitDepth, palettes, tiles: unpackTiles(words, count, bitDepth) };
+    }
     return null;
   } catch {
     return null;
@@ -156,13 +173,14 @@ export function bgCell(d: DecodedBg, cols: number, _rows: number, tx: number, ty
 /** Paint a decoded source to an RGBA buffer (alpha 0 = transparent). width/height
  *  from meta. bg/m7 walk their tilemap/map. obj REASSEMBLES the sheet from
  *  `cells` (tile#/pal/flips per source cell; block cells stride the name table
- *  +1 right, +16 down like obj_tile_addr); without cells it degrades to the
- *  row-major tile atlas. */
+ *  +1 right, +16 down like obj_tile_addr). sheet — and obj without cells —
+ *  paint the row-major 8px tile atlas, which for a sheet IS the source image:
+ *  tile N is the Nth PNG cell, in `cells[N].pal`. */
 export function quantizedRgba(
   d: Decoded,
   width: number,
   height: number,
-  objCells?: ObjCellMeta[],
+  cells?: ObjCellMeta[],
 ): { pixels: Uint8ClampedArray; width: number; height: number } {
   const px = new Uint8ClampedArray(width * height * 4);
   const put = (x: number, y: number, rgb: [number, number, number] | null) => {
@@ -203,12 +221,14 @@ export function quantizedRgba(
             put(tx * 8 + x, ty * 8 + y, b === 0 ? null : rgbaFrom555(d.palette[b - 1] ?? 0));
           }
       }
-  } else if (objCells && objCells.length) {
+  } else if (d.kind === "obj" && cells && cells.length) {
     // obj: rebuild the source sheet — each cell places its (deduped, possibly
     // flipped) tiles back where they came from, with the cell's sub-palette.
+    // Gated on the kind: a sheet also carries `cells`, but it has no cellSize
+    // and its chars already sit in source order.
     const n = Math.max(1, d.cellSize / 8); // 8x8 tiles per cell edge
     const cols = Math.max(1, Math.ceil(width / d.cellSize));
-    objCells.forEach((c, k) => {
+    cells.forEach((c, k) => {
       const cx = (k % cols) * d.cellSize,
         cy = Math.floor(k / cols) * d.cellSize;
       const pal = d.palettes[c.pal] ?? [];
@@ -231,12 +251,13 @@ export function quantizedRgba(
         }
     });
   } else {
-    // obj without cells (mock/degraded): row-major tile atlas
+    // sheet (tile N = the Nth source cell, in its own sub-palette), and obj
+    // without cells (mock/degraded, everything in sub-palette 0).
     const cols = Math.ceil(width / 8);
     d.tiles.forEach((tile, t) => {
       const tx = t % cols,
         ty = Math.floor(t / cols);
-      const pal = d.palettes[0] ?? [];
+      const pal = d.palettes[cells?.[t]?.pal ?? 0] ?? [];
       for (let y = 0; y < 8; y++)
         for (let x = 0; x < 8; x++) {
           const idx = tile[y * 8 + x] ?? 0;

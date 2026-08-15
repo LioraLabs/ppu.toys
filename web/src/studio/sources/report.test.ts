@@ -37,6 +37,25 @@ describe("sourceReportView", () => {
     expect(v.warns).toEqual(["44 tiles over capacity"]);
   });
 
+  // PPU-94: a sheet is BG char data — 10-bit tilemap tile field, BG sub-palettes.
+  // It must read against the 1024 cap, not OBJ's 512.
+  it("sheet report: tiles/1024, sub-palettes/8, surfaces the tile ceiling", () => {
+    const r: SourceReport = {
+      mode: "sheet",
+      report: {
+        colors_used: 30,
+        palettes_used: 4,
+        tile_cells: 1200,
+        unique_tiles: 1024,
+        vram_words: 32768,
+        overflows: [{ kind: "Tiles", unique: 1200, kept: 1024 }],
+      },
+    };
+    const v = sourceReportView(r);
+    expect(v.budget).toEqual(["1024/1024 tiles", "4/8 sub-palettes", "30 colors"]);
+    expect(v.warns).toEqual(["Tiles: 1200 unique, kept 1024"]);
+  });
+
   it("obj report: tiles/512, OBJ sub-palettes/8, surfaces overflow kinds", () => {
     const r: SourceReport = {
       mode: "obj",

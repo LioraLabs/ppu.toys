@@ -77,7 +77,10 @@ export type ImportReport =
    *  blank and this diagnostic says why. `layer` is absent for obj.sheet. */
   | { mode: "mismatch"; layer?: number; slot: string; expected: string; found: string };
 
-export type SourceKind = "bg" | "m7" | "obj";
+/** `sheet` is a tilesheet: 8x8 chars in row-major sheet order, no dedup and no
+ *  tilemap — char N is the Nth PNG cell, and map geometry is the author's
+ *  (`bg[n].map`). */
+export type SourceKind = "bg" | "m7" | "obj" | "sheet";
 
 /** Format-commit options for convertSource. bg: bit_depth (default 4);
  *  obj: cell_size — the OBJ size one obj[i].tile addresses (default 8);
@@ -94,7 +97,9 @@ export interface ConvertSourceOptions {
   alpha_threshold?: number; // 0-255, default 128
 }
 
-/** One source cell's resolved OBJ attributes (obj sources). */
+/** One source cell's resolved attributes. obj: the OBJ attributes obj[i] gets.
+ *  sheet: `tile` is the cell's own sheet index and the flips are always false —
+ *  what it carries is `pal`, the sub-palette the quantizer assigned that cell. */
 export interface ObjCellMeta {
   tile: number;
   pal: number;
@@ -106,7 +111,8 @@ export interface ObjCellMeta {
 export type SourceReport =
   | { mode: "tile"; report: TileImportBudget }
   | { mode: "m7"; report: Mode7ImportBudget }
-  | { mode: "obj"; report: TileImportBudget };
+  | { mode: "obj"; report: TileImportBudget }
+  | { mode: "sheet"; report: TileImportBudget };
 
 /** Travels alongside a payload, never inside it. */
 export interface SourceMeta {

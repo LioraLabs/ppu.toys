@@ -86,6 +86,59 @@ describe("decodeSourcePayload", () => {
     expect(d.tiles.length).toBe(1);
   });
 
+  // PPU-94: sheet is kind byte 3 — bit depth, palettes, char words. No
+  // tile_size, no screen size, no tilemap: map geometry is the author's.
+  it("decodes a sheet payload (2bpp, 2 tiles, 1 pal)", () => {
+    const bytes = new Uint8Array([
+      1,
+      3, // version, kind=sheet
+      2, // bit_depth
+      1,
+      1,
+      ...u16le(0x001f), // pal_count=1, pal0 len=1, color
+      ...u16le(2), // tile_count=2
+      ...Array(16)
+        .fill(0)
+        .flatMap(() => u16le(0)), // 2 tiles * (2*4)=8 words
+    ]);
+    const d = decodeSourcePayload(bytes);
+    expect(d?.kind).toBe("sheet");
+    if (d?.kind !== "sheet") throw new Error("kind");
+    expect(d.bitDepth).toBe(2);
+    expect(d.palettes).toEqual([[0x001f]]);
+    expect(d.tiles.length).toBe(2);
+    expect(d.tiles[0].length).toBe(64);
+  });
+
+  // PPU-94: a sheet is a row-major atlas — char N is the Nth PNG cell, painted
+  // with the sub-palette the quantizer assigned that cell.
+  it("quantizedRgba sheet: row-major atlas, each cell in its own sub-palette", () => {
+    const solid = Array(8)
+      .fill(0)
+      .flatMap(() => u16le(0x00ff)); // 2bpp: plane0 all ones -> every px index 1
+    const bytes = new Uint8Array([
+      1,
+      3,
+      2, // version, kind=sheet, bit_depth=2
+      2,
+      1,
+      ...u16le(0x001f), // p0: red
+      1,
+      ...u16le(0x7c00), // p1: blue
+      ...u16le(2), // tile_count=2
+      ...solid,
+      ...solid,
+    ]);
+    const d = decodeSourcePayload(bytes)!;
+    const cells = [
+      { tile: 0, pal: 0, flip_x: false, flip_y: false },
+      { tile: 1, pal: 1, flip_x: false, flip_y: false },
+    ];
+    const { pixels } = quantizedRgba(d, 16, 8, cells);
+    expect([...pixels.slice(0, 3)]).toEqual([255, 0, 0]); // cell 0 -> p0 red
+    expect([...pixels.slice(8 * 4, 8 * 4 + 3)]).toEqual([0, 0, 255]); // cell 1 -> p1 blue
+  });
+
   it("unpacks bitplanes: leftmost pixel = bit 7", () => {
     // 2bpp tile, row 0 word = plane0=0x80 -> pixel(0,0) index 1, rest 0
     const bytes = new Uint8Array([

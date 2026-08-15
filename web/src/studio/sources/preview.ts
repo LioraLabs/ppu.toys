@@ -38,7 +38,11 @@ export function buildPreviewModel(
   const rows = Math.max(1, Math.ceil(meta.height / cellPx));
   const cells: CellLabel[] = [];
 
-  if (kind === "obj" && meta.cells && meta.cells.length) {
+  // obj and sheet both label from meta.cells: tile number + assigned
+  // sub-palette. For a sheet cells[k].tile IS k (sheet order, no dedup and no
+  // reserved blank), so the label reads the char number the author writes into
+  // `bg[n].map`.
+  if ((kind === "obj" || kind === "sheet") && meta.cells && meta.cells.length) {
     for (let i = 0; i < cols * rows; i++) {
       const c = meta.cells[i];
       cells.push(c ? { top: `t${c.tile}`, bot: `p${c.pal}`, pal: c.pal } : { top: "—", bot: "" });

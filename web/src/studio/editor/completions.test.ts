@@ -49,6 +49,58 @@ describe("ppuCompletions", () => {
     expect(labels).not.toContain("brightness");
   });
 
+  // PPU-94: a tilesheet is authored through bg[n].map entries, so the tilemap
+  // word's five fields have to be completable where they are actually written —
+  // inside the table constructor, not after a dot.
+  it("offers the bg[n].map entry fields inside the table constructor", () => {
+    const res = complete("bg[1].map[0][0] = {");
+    expect(res).not.toBeNull();
+    expect(res!.options.map((o) => o.label)).toEqual(["tile", "pal", "prio", "flip_x", "flip_y"]);
+    expect(res!.from).toBe("bg[1].map[0][0] = {".length); // nothing typed yet
+  });
+
+  it("keeps offering entry fields after a comma and a partial field name", () => {
+    const doc = "bg[2].map[x][y] = { tile = 5, fl";
+    const res = complete(doc);
+    expect(res!.options.map((o) => o.label)).toContain("flip_x");
+    expect(res!.from).toBe(doc.length - 2); // replaces the partial `fl`
+  });
+
+  it("does not offer entry fields for m7.map, whose entry is a tile number", () => {
+    const labels = complete("m7.map[0][0] = {")!.options.map((o) => o.label);
+    expect(labels).not.toContain("flip_x");
+  });
+
+  // PPU-94: the `bg[..]` anchor, pinned. Without it any `<word>[..].map[..][..]`
+  // would claim the tilemap-word fields.
+  it("anchors the entry table on bg[n] — not obj[n], not a lookalike name", () => {
+    for (const doc of ["obj[0].map[0][0] = {", "mybg[1].map[0][0] = {"]) {
+      expect(complete(doc)!.options.map((o) => o.label)).not.toContain("flip_x");
+    }
+  });
+
+  // PPU-94: a member expression inside an entry table is still a member access.
+  // The entry regex's `[^{}]*` tail would otherwise swallow `math.` and offer
+  // tile/pal/prio there — inserting `math.tile` on the line the demo writes.
+  it("completes a member expression used as an entry value, not the entry fields", () => {
+    const math = complete("bg[1].map[0][0] = { tile = math.")!;
+    expect(math.options.map((o) => o.label)).toContain("floor");
+    expect(math.options.map((o) => o.label)).not.toContain("prio");
+
+    const bg = complete("bg[1].map[x][y] = { tile = 1, pal = bg[2].")!;
+    expect(bg.options.map((o) => o.label)).toContain("scroll");
+
+    // …while the entry fields themselves still complete, typed or not.
+    expect(complete("bg[1].map[0][0] = {")!.options.map((o) => o.label)).toContain("prio");
+    expect(complete("bg[1].map[0][0] = {ti")!.options.map((o) => o.label)).toContain("tile");
+  });
+
+  it("bg[n].source names the tilesheet kind too", () => {
+    const res = complete("bg[1].");
+    const source = res!.options.find((o) => o.label === "source");
+    expect(source?.detail).toMatch(/sheet/i);
+  });
+
   it("returns null when there is no word to complete", () => {
     const state = EditorState.create({ doc: "x = 1 " });
     const ctx = new CompletionContext(state, 6, false);

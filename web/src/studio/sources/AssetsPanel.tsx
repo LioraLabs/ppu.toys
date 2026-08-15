@@ -8,9 +8,14 @@ import { SourcePreview } from "./SourcePreview";
 import "../sketches/sketches.css"; // library-head/title/btn flyout chrome
 import "./sources.css";
 
-function kindLabel(kind: SketchSource["kind"]): string {
-  return kind === "bg" ? "BG" : kind === "obj" ? "OBJ" : "M7";
-}
+/** A Record, not a ternary chain: adding a source kind must fail to compile
+ *  here rather than silently badge the new kind as the fallthrough one. */
+export const KIND_LABEL: Record<SketchSource["kind"], string> = {
+  bg: "BG",
+  m7: "M7",
+  obj: "OBJ",
+  sheet: "SHEET",
+};
 
 /** Assets flyout, mounted off the rail's top item: the graphics sources
  *  attached to the OPEN toy — what a processed PNG becomes. Add opens the
@@ -64,7 +69,7 @@ export function AssetsPanel({ onClose }: { onClose?: () => void } = {}) {
           <li key={a.id} className="library-row">
             <div className="library-open asset-row">
               <span className="library-name">{a.id}</span>
-              <span className="asset-kind">{kindLabel(a.kind)}</span>
+              <span className="asset-kind">{KIND_LABEL[a.kind]}</span>
               <span className="library-updated">
                 {a.width}×{a.height} · template
               </span>
@@ -83,7 +88,7 @@ export function AssetsPanel({ onClose }: { onClose?: () => void } = {}) {
               onClick={() => setOpenRow((v) => (v === s.name ? null : s.name))}
             >
               <span className="library-name">{s.name}</span>
-              <span className="asset-kind">{kindLabel(s.kind)}</span>
+              <span className="asset-kind">{KIND_LABEL[s.kind]}</span>
             </button>
             <span className="library-actions">
               <button type="button" className="library-btn" onClick={() => remove(s.name)}>
