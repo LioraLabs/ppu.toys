@@ -189,10 +189,9 @@ function ramp(): DemoAsset {
 // Mirrored byte-for-byte by cavern_tiles()/cavern_back() in
 // crates/ppu-core/tests/golden_demos.rs — that mirror is what makes the demo's
 // golden PNG evidence about the art the studio actually ships. Edit both.
-// A 14-colour master palette shared by BOTH images, on purpose. In mode 1 every
-// BG source places its palettes at CGRAM 0 (there is no per-layer CGRAM bank
-// outside mode 0's 2bpp layers), and BG2 is placed after BG1 — two different
-// palettes would clobber each other.
+// A 14-colour master palette shared by BOTH images, on purpose. Both dma calls
+// land their palettes at CGRAM 0 (pal defaults to 0), and the backdrop is
+// placed after the sheet — two different palettes would clobber each other.
 //
 // The invariant that makes the overwrite a no-op has TWO halves, and the second
 // is easy to lose: the images must use an identical colour SET, *and* that set
@@ -568,16 +567,22 @@ const DUSK_MAIN_SRC = `-- ppu.toys :: dusk-parallax (Mode 1: parallax BG scroll 
 -- Multi-file flagship: SPEED + dusk_palette() live in palette.lua. Chunks run in
 -- tab order into ONE shared global scope; frame() resolves after all chunks, so
 -- main.lua may reference palette.lua globals freely (main.lua is convention, not magic).
+-- Setup stage: dma() runs once, from top-level code, placing each source at an
+-- explicit VRAM/CGRAM address. Nothing is echoed back -- frame() points the
+-- layer registers at the same addresses, like the chip does.
+dma("sky", { char = 0x1000, map = 0x0000 })
+dma("hills", { char = 0x4000, map = 0x0800 })
+dma("hero", { char = 0x6000 })
 function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15
-  bg[1].source = "sky";   bg[2].source = "hills"
-  bg[2].map_base = 0x0800; bg[2].char_base = 0x4000
+  bg[1].char_base = 0x1000; bg[1].map_base = 0x0000
+  bg[2].char_base = 0x4000; bg[2].map_base = 0x0800
   bg[1].scroll.x = t * SPEED
   bg[2].scroll.x = t * SPEED * 3
   dusk_palette(t)
   obj[0].tile = 4; obj[0].pal = 0; obj[0].prio = 3; obj[0].x = 120; obj[0].y = 132 + sin(t*3) * 4
-  obj.char_base = 0x6000; obj.sheet = "hero"; obj[0].on = true
+  obj.char_base = 0x6000; obj[0].on = true
 end
 `;
 
@@ -589,9 +594,12 @@ end
 `;
 
 const MODE7_SRC = `-- ppu.toys :: mode7-floor (the namesake; per-scanline affine floor)
+-- An m7 payload always lives interleaved at VRAM 0x0000 on real hardware, so
+-- dma takes no address for it.
+dma("track")
 function frame(t, f)
   apply_pokes()
-  mode = 7; brightness = 15; bg[1].source = "track"
+  mode = 7; brightness = 15
   hdma(96, 223, function(y)
     local d = 64 / (y - 95)
     m7.a, m7.d = d, d
@@ -602,6 +610,8 @@ end
 `;
 
 const OFFSET_SRC = `-- ppu.toys :: offset-per-tile (Mode 2: BG3 table drives per-column scroll)
+dma("ribbons", { char = 0x1000, map = 0x0000 })
+
 function column_offset(col, dh, dv)
   local base = 0x0800
   bg[3].map_base = base
@@ -613,8 +623,7 @@ end
 function frame(t, f)
   apply_pokes()
   mode = 2; brightness = 15
-  bg[1].source = "ribbons"
-  bg[1].char_base = 0x1000
+  bg[1].char_base = 0x1000; bg[1].map_base = 0x0000
   bg[3].map_base = 0x0800
   for col = 0, 31 do
     local wave = floor((sin((col + t * 8) / 3) + 1) * 4)
@@ -624,21 +633,22 @@ end
 `;
 
 const MODE3_SRC = `-- ppu.toys :: mode3-gradient (Mode 3: 8bpp 256-colour BG1 gradient)
+dma("gradient", { char = 0x1000, map = 0x0000 })
 function frame(t, f)
   apply_pokes()
   mode = 3; brightness = 15
-  bg[1].source = "gradient"
-  bg[1].char_base = 0x1000
+  bg[1].char_base = 0x1000; bg[1].map_base = 0x0000
 end
 `;
 
 const TRANSLUCENCY_SRC = `-- ppu.toys :: translucency (½-add glass panel over a scrolling BG)
+dma("panel", { char = 0x1000, map = 0x0000 })
+dma("ribbons", { char = 0x2000, map = 0x0800 })
 function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15
-  bg[1].source = "panel"                       -- the glass panel (main only)
-  bg[2].source = "ribbons"; bg[2].char_base = 0x2000  -- scene, on main AND sub
-  bg[2].map_base = 0x0800
+  bg[1].char_base = 0x1000; bg[1].map_base = 0x0000   -- the glass panel (main only)
+  bg[2].char_base = 0x2000; bg[2].map_base = 0x0800   -- scene, on main AND sub
   screen.main.bg1 = true; screen.main.bg2 = true      -- panel + scene on the main screen
   screen.main.bg3 = false; screen.main.bg4 = false; screen.main.obj = false  -- power-on defaults ALL layers on: drop the rest
   screen.sub.bg2 = true    -- scene on the sub screen -> the addend under the glass
@@ -648,10 +658,11 @@ end
 `;
 
 const SPOTLIGHT_SRC = `-- ppu.toys :: spotlight (per-scanline circular iris via the colour window)
+dma("ribbons", { char = 0x1000, map = 0x0000 })
 function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15
-  bg[1].source = "ribbons"
+  bg[1].char_base = 0x1000; bg[1].map_base = 0x0000
   screen.main.bg1 = true    -- BG1 only on the main screen
   screen.main.bg2 = false; screen.main.bg3 = false   -- power-on defaults ALL layers on: drop the rest
   screen.main.bg4 = false; screen.main.obj = false
@@ -677,10 +688,11 @@ end
 `;
 
 const GLOW_SRC = `-- ppu.toys :: additive-glow (fixed-colour add brightens BG1 toward warm)
+dma("ribbons", { char = 0x1000, map = 0x0000 })
 function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15
-  bg[1].source = "ribbons"
+  bg[1].char_base = 0x1000; bg[1].map_base = 0x0000
   screen.main.bg1 = true    -- BG1 only on the main screen
   screen.main.bg2 = false; screen.main.bg3 = false   -- power-on defaults ALL layers on: drop the rest
   screen.main.bg4 = false; screen.main.obj = false
@@ -715,10 +727,11 @@ end
 `;
 
 const MOSAIC_SRC = `-- ppu.toys :: mosaic (BG1 pixelation; block size steps every 8 frames)
+dma("ramp", { char = 0x1000, map = 0x0000 })
 function frame(t, f)
   apply_pokes()
   mode = 3; brightness = 15
-  bg[1].source = "ramp"
+  bg[1].char_base = 0x1000; bg[1].map_base = 0x0000
   bg[1].mosaic = true
   mosaic = floor(f / 8) % 16
 end
@@ -784,8 +797,8 @@ const CAVERN_SRC = `-- ppu.toys :: tilesheet-cavern (Mode 1: a camera streaming 
 -- out of a tilesheet, with animated lava/water, over an assembled-import backdrop)
 --
 -- The reference implementation of the tilesheet workflow:
---   1. bind a 'sheet' source         -- chars land in sheet order: tile N = cell N
---   2. set the map geometry YOURSELF -- a sheet echoes back only char_base
+--   1. dma the sheet at setup        -- chars land in sheet order: tile N = cell N
+--   2. set the map geometry YOURSELF -- placement is explicit; nothing is echoed
 --   3. rewrite bg[1].map each frame  -- the 64x32 tilemap IS the camera's window
 --
 -- LEVEL is a Tiled Lua export (File > Export As > Lua) with its 'data' array kept
@@ -793,6 +806,12 @@ const CAVERN_SRC = `-- ppu.toys :: tilesheet-cavern (Mode 1: a camera streaming 
 -- this table -- and then check the four things below it that are level-specific:
 -- ANIM's keys (gids of THIS tileset), MAP_TOP (assumes LEVEL_H rows fit above
 -- row 32), pal = 0 in the map write, and the palette constraint on BG2.
+
+-- Setup stage: place both sources once, at explicit addresses. A sheet is
+-- chars+palette only (no map); the assembled backdrop brings its own tilemap.
+dma("cavern_tiles", { char = 0x1000 })
+dma("cavern_back", { char = 0x2000, map = 0x0800 })
+
 local LEVEL = {
   version = "1.10", luaversion = "5.1",
   orientation = "orthogonal", renderorder = "right-down",
@@ -851,11 +870,10 @@ function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15
 
-  -- BG1 = the tilesheet. Binding a sheet places its chars and palettes and echoes
-  -- back char_base ONLY: map_base, screen_size and tile_size stay yours, and BG1
-  -- rasterizes at map_base 0 by default, so say what you mean.
-  bg[1].source = "cavern_tiles"
-  bg[1].char_base = 0x1000             -- default, shown explicitly
+  -- BG1 = the tilesheet. The dma placed its chars and palette; the map geometry
+  -- is all yours -- and BG1 rasterizes at map_base 0 by default, so say what
+  -- you mean.
+  bg[1].char_base = 0x1000             -- where the dma put the chars
   bg[1].map_base = 0x0000              -- default, shown explicitly
   bg[1].screen_size = 1                -- 64x32 tiles = 512x256 px
 
@@ -865,16 +883,15 @@ function frame(t, f)
   -- SWAPPING THE ART? Four constraints below bite SILENTLY -- each one gives a
   -- wrong picture, never an error:
   --  1. Both images must use the SAME SET of colours, and that set must fit ONE
-  --     sub-palette (15 at 4bpp). Outside mode 0 every BG source lands its
-  --     palettes at CGRAM 0 and BG2 is placed after BG1, so a backdrop with a
-  --     different palette silently recolours the tilesheet layer.
+  --     sub-palette (15 at 4bpp). Both dma calls land their palettes at CGRAM 0
+  --     (pal defaults to 0) and the backdrop is placed after the sheet, so a
+  --     backdrop with a different palette silently recolours the tilesheet layer.
   --  2. pal = 0 in the map write below assumes that single sub-palette. A sheet
   --     needing several puts each cell's index in the import report (the source
   --     preview labels it) -- there is no way to read it back from Lua.
-  --  3. char_base 0x1000 -> 0x2000 leaves the sheet 256 chars at 4bpp. A bigger
+  --  3. char 0x1000 -> 0x2000 leaves the sheet 256 chars at 4bpp. A bigger
   --     sheet overruns BG2's chars; move BG2 up.
   --  4. MAP_TOP + LEVEL_H must be <= 32, the tilemap's height in tiles.
-  bg[2].source = "cavern_back"
   bg[2].char_base = 0x2000
   bg[2].map_base = 0x0800
 
@@ -893,8 +910,9 @@ function frame(t, f)
   -- scroll pulls in. Tilemap column (cam_tile + s) % 64 is exactly the column the
   -- rasterizer reads for screen column s, so crossing 512 px needs no special
   -- case; and a column outside this window can never be on screen, which is why
-  -- writing only the window is enough. (VRAM is zeroed every frame before
-  -- imports, so the window is rewritten each frame rather than patched.)
+  -- writing only the window is enough. (VRAM is zeroed and the dma placements
+  -- replayed every frame, so the window is rewritten each frame rather than
+  -- patched.)
   for s = 0, 32 do
     local col = (cam_tile + s) % LEVEL_W     -- column of the LEVEL
     local mcol = (cam_tile + s) % MAP_COLS   -- column of the TILEMAP

@@ -31,9 +31,9 @@ describe("DEMOS", () => {
     ]);
   });
 
-  // PPU-95: the tilesheet demo binds BOTH source kinds at once, and their
-  // palettes have to be the same set — mode 1 places every BG source's palettes
-  // at CGRAM 0, so BG2's import lands on top of BG1's.
+  // PPU-95: the tilesheet demo places BOTH source kinds at once, and their
+  // palettes have to be the same set — both dma calls land their palettes at
+  // CGRAM 0, so the backdrop's import lands on top of the sheet's.
   it("tilesheet-cavern carries a sheet and an assembled source over one shared palette", () => {
     const d = DEMOS.find((x) => x.id === "tilesheet-cavern")!;
     expect(d.assets.map((a) => [a.id, a.kind])).toEqual([
@@ -86,8 +86,8 @@ describe("DEMOS", () => {
   // workflow it documents, so a silent edit that guts them should fail.
   it("tilesheet-cavern's lua ships the streaming-camera workflow", () => {
     const d = DEMOS.find((x) => x.id === "tilesheet-cavern")!;
-    // a sheet echoes back only char_base, so the map geometry is set explicitly
-    expect(d.source).toContain('bg[1].source = "cavern_tiles"');
+    // placement is an explicit setup-stage dma; the map geometry is set in frame()
+    expect(d.source).toContain('dma("cavern_tiles", { char = 0x1000 })');
     expect(d.source).toContain("bg[1].char_base = 0x1000");
     expect(d.source).toContain("bg[1].map_base = 0x0000");
     expect(d.source).toContain("bg[1].screen_size = 1");
@@ -96,7 +96,7 @@ describe("DEMOS", () => {
     expect(d.source).toContain("bg[1].scroll.x = cam % 512"); // fine scroll
     expect(d.source).toContain("tile = anim.first + phase % anim.frames"); // animation
     // the assembled layer alongside, on plain scroll
-    expect(d.source).toContain('bg[2].source = "cavern_back"');
+    expect(d.source).toContain('dma("cavern_back", { char = 0x2000, map = 0x0800 })');
     expect(d.source).toContain("bg[2].scroll.x = cam / 3");
     // map entries stay on ONE line: a constructor split across lines falls out
     // of the editor's map-entry completion scope.
@@ -110,11 +110,11 @@ describe("DEMOS", () => {
     // sky/hills are full screen height so the BG layers don't tile vertically.
     expect(dims).toEqual({ sky: [256, 224], hills: [256, 224], hero: [64, 8] });
     for (const a of d.assets) expect(a.data.length).toBe(a.width * a.height * 4);
-    expect(d.source).toContain('bg[1].source = "sky"');
+    expect(d.source).toContain('dma("sky", { char = 0x1000, map = 0x0000 })');
     expect(d.source).toContain("bg[2].map_base = 0x0800");
     expect(d.source).toContain("bg[2].char_base = 0x4000");
     expect(d.source).toContain("obj.char_base = 0x6000");
-    expect(d.source).toContain('obj.sheet = "hero"');
+    expect(d.source).toContain('dma("hero", { char = 0x6000 })');
     expect(d.source).toContain("obj[0].prio = 3");
     expect(d.source).toContain("obj[0].pal = 0");
     expect(d.files!.map((f) => f.name)).toEqual(["pokes.lua", "main.lua", "palette.lua"]);
@@ -146,7 +146,7 @@ describe("DEMOS", () => {
     expect(d.assets.map((a) => a.id)).toEqual(["track"]);
     expect(d.assets[0].width).toBe(1024);
     expect(d.assets[0].height).toBe(1024);
-    expect(d.source).toContain('bg[1].source = "track"');
+    expect(d.source).toContain('dma("track")');
     expect(d.source).toContain("mode = 7");
     expect(d.source).toContain("m7.a, m7.d");
     expect(d.source).toContain("hdma(96, 223");
@@ -159,7 +159,7 @@ describe("DEMOS", () => {
     expect(d.assets[0].height).toBe(224);
     expect(d.assets[0].data.length).toBe(256 * 224 * 4);
     expect(d.source).toContain("mode = 3");
-    expect(d.source).toContain('bg[1].source = "gradient"');
+    expect(d.source).toContain('dma("gradient", { char = 0x1000, map = 0x0000 })');
     // >16 distinct colours -> the whole point of the 8bpp path
     const colors = new Set<string>();
     const g = d.assets[0].data;

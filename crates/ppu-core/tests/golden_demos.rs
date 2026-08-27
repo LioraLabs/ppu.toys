@@ -25,16 +25,22 @@ const DUSK_MAIN_SRC: &str = r#"-- ppu.toys :: dusk-parallax (Mode 1: parallax BG
 -- Multi-file flagship: SPEED + dusk_palette() live in palette.lua. Chunks run in
 -- tab order into ONE shared global scope; frame() resolves after all chunks, so
 -- main.lua may reference palette.lua globals freely (main.lua is convention, not magic).
+-- Setup stage: dma() runs once, from top-level code, placing each source at an
+-- explicit VRAM/CGRAM address. Nothing is echoed back -- frame() points the
+-- layer registers at the same addresses, like the chip does.
+dma("sky", { char = 0x1000, map = 0x0000 })
+dma("hills", { char = 0x4000, map = 0x0800 })
+dma("hero", { char = 0x6000 })
 function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15
-  bg[1].source = "sky";   bg[2].source = "hills"
-  bg[2].map_base = 0x0800; bg[2].char_base = 0x4000
+  bg[1].char_base = 0x1000; bg[1].map_base = 0x0000
+  bg[2].char_base = 0x4000; bg[2].map_base = 0x0800
   bg[1].scroll.x = t * SPEED
   bg[2].scroll.x = t * SPEED * 3
   dusk_palette(t)
   obj[0].tile = 4; obj[0].pal = 0; obj[0].prio = 3; obj[0].x = 120; obj[0].y = 132 + sin(t*3) * 4
-  obj.char_base = 0x6000; obj.sheet = "hero"; obj[0].on = true
+  obj.char_base = 0x6000; obj[0].on = true
 end
 "#;
 
@@ -53,9 +59,12 @@ fn dusk_concat() -> String {
 }
 
 const MODE7_SRC: &str = r#"-- ppu.toys :: mode7-floor (the namesake; per-scanline affine floor)
+-- An m7 payload always lives interleaved at VRAM 0x0000 on real hardware, so
+-- dma takes no address for it.
+dma("track")
 function frame(t, f)
   apply_pokes()
-  mode = 7; brightness = 15; bg[1].source = "track"
+  mode = 7; brightness = 15
   hdma(96, 223, function(y)
     local d = 64 / (y - 95)
     m7.a, m7.d = d, d
@@ -66,6 +75,8 @@ end
 "#;
 
 const OFFSET_SRC: &str = r#"-- ppu.toys :: offset-per-tile (Mode 2: BG3 table drives per-column scroll)
+dma("ribbons", { char = 0x1000, map = 0x0000 })
+
 function column_offset(col, dh, dv)
   local base = 0x0800
   bg[3].map_base = base
@@ -77,8 +88,7 @@ end
 function frame(t, f)
   apply_pokes()
   mode = 2; brightness = 15
-  bg[1].source = "ribbons"
-  bg[1].char_base = 0x1000
+  bg[1].char_base = 0x1000; bg[1].map_base = 0x0000
   bg[3].map_base = 0x0800
   for col = 0, 31 do
     local wave = floor((sin((col + t * 8) / 3) + 1) * 4)
@@ -88,29 +98,34 @@ end
 "#;
 
 const MODE3_SRC: &str = r#"-- ppu.toys :: mode3-gradient (Mode 3: 8bpp 256-colour BG1 gradient)
+dma("gradient", { char = 0x1000, map = 0x0000 })
 function frame(t, f)
   apply_pokes()
   mode = 3; brightness = 15
-  bg[1].source = "gradient"
-  bg[1].char_base = 0x1000
+  bg[1].char_base = 0x1000; bg[1].map_base = 0x0000
 end
 "#;
 
 const MODE0_SRC: &str = r#"-- ppu.toys :: mode0-bands (Mode 0: two 2bpp layers, per-layer CGRAM band)
+-- pal picks each source's CGRAM band explicitly (the mode-0 32-per-layer
+-- banding the old bind path applied automatically, spelled out).
+dma("mode0_bg1", { char = 0x1000, map = 0x0000, pal = 0 })
+dma("mode0_bg2", { char = 0x2000, map = 0x0400, pal = 32 })
 function frame(t, f)
   mode = 0; brightness = 15
-  bg[1].source = "mode0_bg1"
-  bg[2].source = "mode0_bg2"; bg[2].map_base = 0x0400; bg[2].char_base = 0x2000
+  bg[1].char_base = 0x1000; bg[1].map_base = 0x0000
+  bg[2].char_base = 0x2000; bg[2].map_base = 0x0400
 end
 "#;
 
 const TRANSLUCENCY_SRC: &str = r#"-- ppu.toys :: translucency (½-add glass panel over a scrolling BG)
+dma("panel", { char = 0x1000, map = 0x0000 })
+dma("ribbons", { char = 0x2000, map = 0x0800 })
 function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15
-  bg[1].source = "panel"                       -- the glass panel (main only)
-  bg[2].source = "ribbons"; bg[2].char_base = 0x2000  -- scene, on main AND sub
-  bg[2].map_base = 0x0800
+  bg[1].char_base = 0x1000; bg[1].map_base = 0x0000   -- the glass panel (main only)
+  bg[2].char_base = 0x2000; bg[2].map_base = 0x0800   -- scene, on main AND sub
   screen.main.bg1 = true; screen.main.bg2 = true      -- panel + scene on the main screen
   screen.main.bg3 = false; screen.main.bg4 = false; screen.main.obj = false  -- power-on defaults ALL layers on: drop the rest
   screen.sub.bg2 = true    -- scene on the sub screen -> the addend under the glass
@@ -120,10 +135,11 @@ end
 "#;
 
 const SPOTLIGHT_SRC: &str = r#"-- ppu.toys :: spotlight (per-scanline circular iris via the colour window)
+dma("ribbons", { char = 0x1000, map = 0x0000 })
 function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15
-  bg[1].source = "ribbons"
+  bg[1].char_base = 0x1000; bg[1].map_base = 0x0000
   screen.main.bg1 = true    -- BG1 only on the main screen
   screen.main.bg2 = false; screen.main.bg3 = false   -- power-on defaults ALL layers on: drop the rest
   screen.main.bg4 = false; screen.main.obj = false
@@ -149,10 +165,11 @@ end
 "#;
 
 const GLOW_SRC: &str = r#"-- ppu.toys :: additive-glow (fixed-colour add brightens BG1 toward warm)
+dma("ribbons", { char = 0x1000, map = 0x0000 })
 function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15
-  bg[1].source = "ribbons"
+  bg[1].char_base = 0x1000; bg[1].map_base = 0x0000
   screen.main.bg1 = true    -- BG1 only on the main screen
   screen.main.bg2 = false; screen.main.bg3 = false   -- power-on defaults ALL layers on: drop the rest
   screen.main.bg4 = false; screen.main.obj = false
@@ -207,10 +224,11 @@ end
 "#;
 
 const MOSAIC_SRC: &str = r#"-- ppu.toys :: mosaic (BG1 pixelation; block size steps every 8 frames)
+dma("ramp", { char = 0x1000, map = 0x0000 })
 function frame(t, f)
   apply_pokes()
   mode = 3; brightness = 15
-  bg[1].source = "ramp"
+  bg[1].char_base = 0x1000; bg[1].map_base = 0x0000
   bg[1].mosaic = true
   mosaic = floor(f / 8) % 16
 end
@@ -276,8 +294,8 @@ const CAVERN_SRC: &str = r#"-- ppu.toys :: tilesheet-cavern (Mode 1: a camera st
 -- out of a tilesheet, with animated lava/water, over an assembled-import backdrop)
 --
 -- The reference implementation of the tilesheet workflow:
---   1. bind a 'sheet' source         -- chars land in sheet order: tile N = cell N
---   2. set the map geometry YOURSELF -- a sheet echoes back only char_base
+--   1. dma the sheet at setup        -- chars land in sheet order: tile N = cell N
+--   2. set the map geometry YOURSELF -- placement is explicit; nothing is echoed
 --   3. rewrite bg[1].map each frame  -- the 64x32 tilemap IS the camera's window
 --
 -- LEVEL is a Tiled Lua export (File > Export As > Lua) with its 'data' array kept
@@ -285,6 +303,12 @@ const CAVERN_SRC: &str = r#"-- ppu.toys :: tilesheet-cavern (Mode 1: a camera st
 -- this table -- and then check the four things below it that are level-specific:
 -- ANIM's keys (gids of THIS tileset), MAP_TOP (assumes LEVEL_H rows fit above
 -- row 32), pal = 0 in the map write, and the palette constraint on BG2.
+
+-- Setup stage: place both sources once, at explicit addresses. A sheet is
+-- chars+palette only (no map); the assembled backdrop brings its own tilemap.
+dma("cavern_tiles", { char = 0x1000 })
+dma("cavern_back", { char = 0x2000, map = 0x0800 })
+
 local LEVEL = {
   version = "1.10", luaversion = "5.1",
   orientation = "orthogonal", renderorder = "right-down",
@@ -343,11 +367,10 @@ function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15
 
-  -- BG1 = the tilesheet. Binding a sheet places its chars and palettes and echoes
-  -- back char_base ONLY: map_base, screen_size and tile_size stay yours, and BG1
-  -- rasterizes at map_base 0 by default, so say what you mean.
-  bg[1].source = "cavern_tiles"
-  bg[1].char_base = 0x1000             -- default, shown explicitly
+  -- BG1 = the tilesheet. The dma placed its chars and palette; the map geometry
+  -- is all yours -- and BG1 rasterizes at map_base 0 by default, so say what
+  -- you mean.
+  bg[1].char_base = 0x1000             -- where the dma put the chars
   bg[1].map_base = 0x0000              -- default, shown explicitly
   bg[1].screen_size = 1                -- 64x32 tiles = 512x256 px
 
@@ -357,16 +380,15 @@ function frame(t, f)
   -- SWAPPING THE ART? Four constraints below bite SILENTLY -- each one gives a
   -- wrong picture, never an error:
   --  1. Both images must use the SAME SET of colours, and that set must fit ONE
-  --     sub-palette (15 at 4bpp). Outside mode 0 every BG source lands its
-  --     palettes at CGRAM 0 and BG2 is placed after BG1, so a backdrop with a
-  --     different palette silently recolours the tilesheet layer.
+  --     sub-palette (15 at 4bpp). Both dma calls land their palettes at CGRAM 0
+  --     (pal defaults to 0) and the backdrop is placed after the sheet, so a
+  --     backdrop with a different palette silently recolours the tilesheet layer.
   --  2. pal = 0 in the map write below assumes that single sub-palette. A sheet
   --     needing several puts each cell's index in the import report (the source
   --     preview labels it) -- there is no way to read it back from Lua.
-  --  3. char_base 0x1000 -> 0x2000 leaves the sheet 256 chars at 4bpp. A bigger
+  --  3. char 0x1000 -> 0x2000 leaves the sheet 256 chars at 4bpp. A bigger
   --     sheet overruns BG2's chars; move BG2 up.
   --  4. MAP_TOP + LEVEL_H must be <= 32, the tilemap's height in tiles.
-  bg[2].source = "cavern_back"
   bg[2].char_base = 0x2000
   bg[2].map_base = 0x0800
 
@@ -385,8 +407,9 @@ function frame(t, f)
   -- scroll pulls in. Tilemap column (cam_tile + s) % 64 is exactly the column the
   -- rasterizer reads for screen column s, so crossing 512 px needs no special
   -- case; and a column outside this window can never be on screen, which is why
-  -- writing only the window is enough. (VRAM is zeroed every frame before
-  -- imports, so the window is rewritten each frame rather than patched.)
+  -- writing only the window is enough. (VRAM is zeroed and the dma placements
+  -- replayed every frame, so the window is rewritten each frame rather than
+  -- patched.)
   for s = 0, 32 do
     local col = (cam_tile + s) % LEVEL_W     -- column of the LEVEL
     local mcol = (cam_tile + s) % MAP_COLS   -- column of the TILEMAP
@@ -580,9 +603,9 @@ fn mode0_bg2() -> Vec<u8> {
 // ── cavern (PPU-95): the tilesheet demo's two sources ───────────────────────
 // Mirrors web/src/studio/demos/demos.ts cavernTiles()/cavernBack() exactly —
 // these two MUST agree or the golden proves nothing about the shipped demo.
-// One 14-colour master palette feeds both images on purpose: in mode 1 every BG
-// source places its palettes at CGRAM 0 and BG2 is placed after BG1, so two
-// different palettes would clobber each other. The invariant has TWO halves --
+// One 14-colour master palette feeds both images on purpose: both dma calls
+// land their palettes at CGRAM 0 and the backdrop is placed after the sheet, so
+// two different palettes would clobber each other. The invariant has TWO halves --
 // an identical colour SET, and that set fitting ONE sub-palette (15 at 4bpp).
 // Sorting alone is not enough: past one sub-palette region_fit partitions
 // greedily in tile order, so one colour set can split differently between two
@@ -1112,8 +1135,8 @@ fn write_png(path: &str, fb: &[u8]) {
 #[test]
 fn dusk_parallax_uses_bg_imports_and_obj_import() {
     let (fb, e) = render_demo(&dusk_concat());
-    // Store-bound sources (sky/hills 4bpp BG, hero OBJ) place cleanly: the strict
-    // bind validation reports no mismatch (a wrong committed format would).
+    // The dma placements (sky/hills 4bpp BG, hero OBJ) replay cleanly: no
+    // Mismatch report (a source removed after placement would push one).
     assert!(
         !e.import_reports()
             .iter()
@@ -1151,7 +1174,7 @@ fn dusk_parallax_draws_obj_sprite_over_hills() {
 #[test]
 fn mode7_floor_uses_interleaved_mode7_import() {
     let (_fb, e) = render_demo(MODE7_SRC);
-    // The Mode 7 `track` source binds without mismatch and lays interleaved char
+    // The Mode 7 `track` dma places without mismatch and lays interleaved char
     // data into the high VRAM byte lane.
     assert!(
         !e.import_reports()
@@ -1835,8 +1858,10 @@ fn cavern_pinned_src(src: &str, cam: f64, phase: u32, backdrop: bool) -> Vec<u8>
     assert!(s.contains(&cam_pin), "camera pin did not apply");
     assert!(s.contains(&phase_pin), "animation pin did not apply");
     if !backdrop {
+        // The placement stays (its palette write is a byte-identical no-op by
+        // the shared-palette invariant); the layer just leaves the main screen.
         let before = s.len();
-        s = s.replace(r#"bg[2].source = "cavern_back""#, "screen.main.bg2 = false");
+        s = s.replace("bg[2].char_base = 0x2000", "screen.main.bg2 = false");
         assert_ne!(before, s.len(), "backdrop drop did not apply");
     }
     let mut e = cavern_engine(&s);
@@ -1936,10 +1961,7 @@ fn cavern_gid_adapter_puts_the_authored_level_on_screen() {
     // (y < 128) is never written at all and would stay transparent whatever the
     // adapter did, which is why it is the wrong place to check this.
     let no_sheet = cavern_pinned_src(
-        &CAVERN_SRC.replace(
-            r#"bg[1].source = "cavern_tiles""#,
-            "screen.main.bg1 = false",
-        ),
+        &CAVERN_SRC.replace("bg[1].char_base = 0x1000", "screen.main.bg1 = false"),
         0.0,
         0,
         true,
@@ -1980,17 +2002,21 @@ fn cavern_sheet_stays_under_the_char_ceiling() {
     assert_eq!(meta.cells.as_ref().map(|c| c.len()), Some(24));
 }
 
-// PPU-95: both sources are drawn from ONE master palette because mode 1 places
-// every BG source's palettes at CGRAM 0 and BG2 is placed after BG1. If they
-// ever diverge, the backdrop import silently recolours the tilesheet layer.
+// PPU-95: both sources are drawn from ONE master palette because both dma calls
+// land their palettes at CGRAM 0 and the backdrop is placed after the sheet. If
+// they ever diverge, the backdrop import silently recolours the tilesheet layer.
 #[test]
 fn cavern_backdrop_import_does_not_recolour_the_tilesheet_layer() {
     let mut both = cavern_engine(CAVERN_SRC);
     both.frame(1.0, 60).unwrap();
     let with_backdrop = both.memory().cgram;
 
-    let sheet_only = CAVERN_SRC.replace(r#"bg[2].source = "cavern_back""#, "");
-    assert_ne!(sheet_only, CAVERN_SRC, "backdrop unbind did not apply");
+    let sheet_only =
+        CAVERN_SRC.replace(r#"dma("cavern_back", { char = 0x2000, map = 0x0800 })"#, "");
+    assert_ne!(
+        sheet_only, CAVERN_SRC,
+        "backdrop placement removal did not apply"
+    );
     let mut only = cavern_engine(&sheet_only);
     only.frame(1.0, 60).unwrap();
 
