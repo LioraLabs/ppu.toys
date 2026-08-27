@@ -23,9 +23,9 @@ export const handlers = [
 
   http.post("/api/auth/logout", () => new HttpResponse(null, { status: 204 })),
 
-  http.post("/api/toys", () => HttpResponse.json({ id: "new1" })),
+  http.post("/api/toys", () => HttpResponse.json({ id: "new1", revision: 1 })),
 
-  http.put("/api/toys/:id", () => new HttpResponse(null, { status: 204 })),
+  http.put("/api/toys/:id", () => HttpResponse.json({ revision: 2 })),
 
   http.post("/api/toys/:id/publish", () => HttpResponse.json({ id: "abc123", state: "published" })),
 ];

@@ -9,16 +9,21 @@
 # and `test` fences on `build` (order-only) so compile errors surface once and
 # the test run doesn't contend with the build on the shared target/ tree.
 
-probe rust:tools
-    tools { cargo }
+tools rust:tools
+    cargo
+
+files server:src
+    "src/**/*.rs" "migrations/**" "Cargo.toml" "//Cargo.toml" "//Cargo.lock"
+
+files server:tests
+    "tests/**/*.rs"
 
 # ── BUILD: compile the server crate. Cached on the crate's sources + migrations
 #    + the workspace manifests (a shared dep bump in the root lockfile must
 #    invalidate). Stamp output (cargo owns target/); `local` since the artifact
 #    is a host-specific binary.
 recipe build
-    ingredients "src/**/*.rs" "migrations/**" "Cargo.toml" "//Cargo.toml" "//Cargo.lock"
-    seal rust:tools
+    seal rust:tools server:src
     cook "build/ppu-server.stamp" {
         cargo build -p ppu-server
         mkdir -p build && echo ok > $<out>
@@ -29,11 +34,12 @@ recipe build
 #    so compile errors surface under `build` first and the two cargo invocations
 #    don't race on target/.
 recipe test: build
-    ingredients "src/**/*.rs" "tests/**/*.rs" "migrations/**"
+    seal server:src server:tests
     test { cargo test -p ppu-server }
 
 # ── RUN: boot the server locally. Serves the built SPA (../../web/dist relative
 #    to this module dir → the repo's web/dist) alongside the live API; boots fine
 #    with no Discord creds (auth 503, everything else works). Long-running.
+#    The db is the repo's disposable build/dev.db — the same one `cook stack` uses.
 chore run
-    PPU_WEB_DIR=../../web/dist cargo run -p ppu-server
+    PPU_WEB_DIR=../../web/dist PPU_DB_PATH=../../build/dev.db cargo run -p ppu-server

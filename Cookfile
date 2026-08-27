@@ -19,6 +19,8 @@
 #   cook "web:build" production web build -> web/dist   (minted by cook_pnpm.task)
 #   cook install     pnpm install --frozen-lockfile (cached by lockfile hash)
 #   cook server.build  compile the axum backend (crates/ppu-server)
+#   cook cli         compile the ppu sync client
+#   cook cli-install install the ppu sync client locally
 #
 #   ── run ──────────────────────────────────────────────────────────────────────
 #   cook dev         Vite dev server (builds the WASM core first)
@@ -29,6 +31,11 @@
 #   cook "web:catalog"  static catalog build -> web/build (cached, minted)
 #   cook shoot       screenshot one story -> web/.shots (STORY=<story-id>)
 #   cook dev-offline Vite dev with the whole app mocked by MSW (VITE_MSW=1)
+#
+#   ── local testing bed (ephemeral db) ───────────────────────────────────────
+#   cook stack       backend + studio against build/dev.db (Ctrl-C stops both)
+#   cook stack-fresh throw the db away, then run the empty stack
+#   cook db-nuke     delete the ephemeral db
 #
 #   ── deploy/ops (production operations) ────────────────────────────────────
 #   cook deploy.ship / rollback / health / logs
@@ -91,14 +98,30 @@ register
 # ── WASM: rebuild the module only when the Rust core or its manifests change. The
 #    files Vite + tsc consume are declared explicitly (so web:* recipes form
 #    file-level edges to them). wasm-pack's --out-dir is relative to the crate dir.
+#    The core's sources determine the output but are never named on the command
+#    line, so they are a sealed `files` set, not a gather (CS-0229).
+files wasm:src
+    "crates/ppu-core/src/**/*.rs" "crates/ppu-core/Cargo.toml" "Cargo.toml" "Cargo.lock"
+
 recipe wasm
-    ingredients "crates/ppu-core/src/**/*.rs" "crates/ppu-core/Cargo.toml" "Cargo.toml" "Cargo.lock"
+    seal wasm:src
     cook "web/src/wasm/pkg/ppu_core.js"
          "web/src/wasm/pkg/ppu_core_bg.wasm"
          "web/src/wasm/pkg/ppu_core.d.ts"
          "web/src/wasm/pkg/ppu_core_bg.wasm.d.ts" {
         wasm-pack build crates/ppu-core --target web --out-dir ../../web/src/wasm/pkg
     }
+
+# ── CLI: the local toy directory ↔ ppu.toys sync client.
+files cli:src
+    "crates/ppu-cli/src/**/*.rs" "crates/ppu-cli/Cargo.toml" "Cargo.toml" "Cargo.lock"
+
+recipe cli
+    seal cli:src
+    cook "target/debug/ppu" { cargo build -p ppu-cli } local
+
+chore cli-install: cli
+    cargo install --path crates/ppu-cli
 
 # ── WEB alias: `cook web` still works — wasm first (file-edge ordered), then the
 #    minted pnpm build.
@@ -107,7 +130,7 @@ recipe web: wasm "web:build"
 # ── BUILD: the default target — the whole stack. server.build is an order-only
 #    fence (it produces nothing the web build reads) kept so `cook build` compiles
 #    the backend too.
-recipe build: web server.build
+recipe build: web server.build cli
 
 # ── DEV SERVER: long-running, interactive. Builds the WASM core first — the app
 #    has no mock fallback, so it can't render without it.
@@ -128,6 +151,26 @@ chore cosmos: wasm install
 #    screenshots the cached `web:catalog` build headlessly via Playwright.
 chore shoot: "web:catalog"
     sh -c 'pnpm --filter web run shoot "${STORY:?set STORY=<component-path#variant>, e.g. components/ToyCard#Default}"'
+
+# ── LOCAL DATA: an ephemeral sqlite db under build/ (gitignored). Every local
+#    entry point points at it via PPU_DB_PATH; the repo-root ppu.db is no longer
+#    anyone's target. There is no separate "create it migrated and empty" step —
+#    sqlx runs the migrations on connect, so deletion IS the fresh db.
+chore db-nuke
+    rm -f build/dev.db build/dev.db-shm build/dev.db-wal
+
+# ── STACK: the local testing bed — backend + studio dev server against the
+#    ephemeral db, torn down together on Ctrl-C. `stack-fresh` throws the db away
+#    first; content belongs in toy directories and arrives through `ppu sync`.
+#    The backend backgrounds into the next step and cook drains it when the chore
+#    ends — success, failure, or Ctrl-C (COOK-544, cook >= 0.16.1). No trap.
+#    server.build is kept for a fast start and so compile errors surface as a
+#    build failure, not as a server that never binds.
+chore stack: wasm install server.build
+    PPU_DB_PATH=build/dev.db target/debug/ppu-server &
+    pnpm --filter web run dev
+
+chore stack-fresh: db-nuke stack
 
 # ── TESTS ────────────────────────────────────────────────────────────────────
 chore test-core

@@ -39,11 +39,14 @@ export function WorkspaceActions() {
     const description = meta?.description ?? "";
     const existing = cloudDraft.current(state.session);
     if (existing) {
-      await updateToy(existing, { title, description, files, sources });
+      const revision = cloudDraft.revision(state.session);
+      if (revision === null) throw new Error("cloud revision missing");
+      const updated = await updateToy(existing, revision, { title, description, files, sources });
+      cloudDraft.set(existing, updated.revision, state.session);
       return existing;
     }
     const created = await createToy({ title, description, files, sources });
-    cloudDraft.set(created.id, state.session);
+    cloudDraft.set(created.id, created.revision, state.session);
     return created.id;
   }
 

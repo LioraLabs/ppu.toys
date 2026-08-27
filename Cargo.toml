@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/ppu-core", "crates/ppu-server"]
+members = ["crates/ppu-core", "crates/ppu-server", "crates/ppu-cli"]
 resolver = "2"
 
 # piccolo 0.3.3 aborts the VM on two ordinary table shapes (PPU-97). The fix has

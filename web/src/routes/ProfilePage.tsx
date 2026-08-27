@@ -1,6 +1,14 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { getProfile, getToy, type Profile } from "../api/apiClient";
+import {
+  createToken,
+  deleteToken,
+  getProfile,
+  getTokens,
+  getToy,
+  type ApiToken,
+  type Profile,
+} from "../api/apiClient";
 import { useSession } from "../api/session";
 import { openCloudToy } from "../studio/cloud/openCloudToy";
 import { Avatar } from "../components/Avatar";
@@ -16,6 +24,8 @@ export function ProfilePage() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [missing, setMissing] = useState(false);
   const [opening, setOpening] = useState<string | null>(null);
+  const [tokens, setTokens] = useState<ApiToken[]>([]);
+  const [newToken, setNewToken] = useState<string | null>(null);
   useDocumentTitle(handle);
 
   async function editDraft(id: string) {
@@ -43,6 +53,11 @@ export function ProfilePage() {
     };
   }, [handle]);
 
+  useEffect(() => {
+    if (user?.handle !== handle) return;
+    void getTokens().then(setTokens);
+  }, [handle, user?.handle]);
+
   if (missing) return <p className="profile-msg">No such user.</p>;
   if (!profile) return <p className="profile-msg">Loading…</p>;
 
@@ -68,6 +83,44 @@ export function ProfilePage() {
           </div>
         </div>
       </header>
+      {own && (
+        <section className="profile-tokens">
+          <h2>Local editing</h2>
+          <p>Create a personal token, then run the command once on your machine.</p>
+          <button
+            type="button"
+            className="profile-cta"
+            onClick={() =>
+              void createToken().then((created) => {
+                setTokens((current) => [created, ...current]);
+                setNewToken(created.token);
+              })
+            }
+          >
+            Create CLI token
+          </button>
+          {newToken && <pre className="profile-token-secret">ppu login {newToken}</pre>}
+          {tokens.length > 0 && (
+            <ul className="profile-token-list">
+              {tokens.map((token) => (
+                <li key={token.id}>
+                  <span>{token.name}</span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void deleteToken(token.id).then(() =>
+                        setTokens((current) => current.filter((t) => t.id !== token.id)),
+                      )
+                    }
+                  >
+                    Revoke
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
       {own && profile.drafts && profile.drafts.length > 0 && (
         <section className="profile-drafts">
           <h2>

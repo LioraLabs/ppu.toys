@@ -114,7 +114,8 @@ async fn serve_blob(
         Some(bytes) => Ok((
             [
                 (header::CONTENT_TYPE, content_type),
-                (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+                // Owners can republish the same toy id, replacing its preview.
+                (header::CACHE_CONTROL, "public, max-age=60, must-revalidate"),
             ],
             bytes,
         )

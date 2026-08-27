@@ -17,6 +17,7 @@ function toy(): ToyFull {
     title: "my toy",
     description: "",
     state: "draft",
+    revision: 4,
     files: [
       { name: "pokes.lua", source: "" },
       { name: "main.lua", source: "x" },
@@ -81,5 +82,6 @@ describe("openCloudToy", () => {
     expect(Array.from(sources[0].payload)).toEqual(Array.from(skyBytes));
 
     expect(cloudDraft.current(state.session)).toBe(t.id);
+    expect(cloudDraft.revision(state.session)).toBe(4);
   });
 });

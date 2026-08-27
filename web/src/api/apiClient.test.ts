@@ -1,10 +1,5 @@
-// @vitest-environment jsdom
-//
-// jsdom (not the default node environment) so `location` exists: MSW resolves
-// handlers registered with root-relative paths (e.g. "/api/me") against
-// `location.href` — under plain "node" there's no location, so relative
-// patterns never match a request's absolute URL.
-import { describe, it, expect } from "vitest";
+// @vitest-environment node
+import { afterAll, describe, it, expect } from "vitest";
 import { http, HttpResponse } from "msw";
 import { server } from "../mocks/server";
 import { me, profile, toyFull, wallPage } from "../fixtures";
@@ -23,38 +18,14 @@ import {
 } from "./apiClient";
 import type { SaveToyBody } from "./apiClient";
 
-// jsdom's Blob only implements slice()/size/type — no arrayBuffer()/text()/
-// stream(). The real fetch (undici, patched by MSW) needs those to serialize
-// a multipart FormData body; without them, publishToy's request hangs
-// forever trying to read the parts. Patch them in: arrayBuffer() via
-// FileReader (which jsdom implements fully against the same Blob data), then
-// text()/stream() built on top.
-if (typeof Blob.prototype.arrayBuffer !== "function") {
-  Blob.prototype.arrayBuffer = function (this: Blob): Promise<ArrayBuffer> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as ArrayBuffer);
-      reader.onerror = () => reject(reader.error);
-      reader.readAsArrayBuffer(this);
-    });
-  };
-}
-if (typeof Blob.prototype.text !== "function") {
-  Blob.prototype.text = function (this: Blob): Promise<string> {
-    return this.arrayBuffer().then((buf) => new TextDecoder().decode(buf));
-  };
-}
-if (typeof Blob.prototype.stream !== "function") {
-  Blob.prototype.stream = function (this: Blob): ReadableStream<Uint8Array<ArrayBuffer>> {
-    const self = this;
-    return new ReadableStream<Uint8Array<ArrayBuffer>>({
-      async start(controller) {
-        controller.enqueue(new Uint8Array(await self.arrayBuffer()));
-        controller.close();
-      },
-    });
-  };
-}
+// Browser code uses root-relative URLs. Node's fetch requires absolute ones;
+// resolving them here keeps fetch, Blob, and FormData in the same undici realm.
+const nativeFetch = globalThis.fetch;
+globalThis.location = new URL("http://localhost") as unknown as Location;
+globalThis.fetch = (input, init) => nativeFetch(new URL(String(input), location.href), init);
+afterAll(() => {
+  globalThis.fetch = nativeFetch;
+});
 
 describe("read endpoints", () => {
   it("getMe returns the user on 200", async () => {
@@ -165,10 +136,10 @@ describe("write endpoints", () => {
     server.use(
       http.post("/api/toys", async ({ request }) => {
         captured = request.clone();
-        return HttpResponse.json({ id: "new1" });
+        return HttpResponse.json({ id: "new1", revision: 1 });
       }),
     );
-    expect(await createToy(saveBody)).toEqual({ id: "new1" });
+    expect(await createToy(saveBody)).toEqual({ id: "new1", revision: 1 });
     expect(captured!.headers.get("X-PPU-CSRF")).toBe("1");
     expect(captured!.headers.get("content-type")).toContain("application/json");
     expect(await captured!.json()).toEqual(saveBody);
@@ -179,13 +150,13 @@ describe("write endpoints", () => {
     server.use(
       http.put("/api/toys/:id", async ({ request }) => {
         captured = request.clone();
-        return new HttpResponse(null, { status: 204 });
+        return HttpResponse.json({ revision: 4 });
       }),
     );
-    expect(await updateToy("abc", saveBody)).toBeUndefined();
+    expect(await updateToy("abc", 3, saveBody)).toEqual({ revision: 4 });
     expect(captured!.headers.get("X-PPU-CSRF")).toBe("1");
     expect(captured!.headers.get("content-type")).toContain("application/json");
-    expect(await captured!.json()).toEqual(saveBody);
+    expect(await captured!.json()).toEqual({ ...saveBody, expectedRevision: 3 });
   });
 
   it("publishToy POSTs /api/toys/:id/publish with FormData body, CSRF, and no JSON content-type", async () => {

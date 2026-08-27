@@ -24,13 +24,10 @@ async fn clip_served_with_cache_header_and_404_when_absent() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
-    assert!(res
-        .headers()
-        .get("cache-control")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .contains("max-age"));
+    assert_eq!(
+        res.headers().get("cache-control").unwrap(),
+        "public, max-age=60, must-revalidate"
+    );
     let b = axum::body::to_bytes(res.into_body(), 1 << 20)
         .await
         .unwrap();

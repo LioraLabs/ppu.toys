@@ -10,6 +10,9 @@ pub struct AppState {
     pub pool: SqlitePool,
     pub http: reqwest::Client,
     pub limiter: RateLimiter,
+    // ponytail: one server-wide toy write lock; move the update to one SQL
+    // transaction if write throughput ever matters.
+    pub toy_writes: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Clone, Default)]
@@ -57,6 +60,7 @@ impl AppState {
             pool,
             http: reqwest::Client::new(),
             limiter: RateLimiter::default(),
+            toy_writes: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 }

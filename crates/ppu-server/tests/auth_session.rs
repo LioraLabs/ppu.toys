@@ -94,3 +94,64 @@ async fn mutating_route_needs_csrf_header() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn personal_token_authenticates_without_csrf_and_is_stored_hashed() {
+    let app = common::test_app().await;
+    let sid = common::seed_session(&app.state, "42", "neo", false).await;
+    let res = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/tokens")
+                .header("cookie", format!("ppu_sess={sid}"))
+                .header("x-ppu-csrf", "1")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"name":"laptop"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), 4096).await.unwrap();
+    let token = serde_json::from_slice::<serde_json::Value>(&body).unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (stored,): (String,) = sqlx::query_as("SELECT token_hash FROM api_tokens")
+        .fetch_one(&app.state.pool)
+        .await
+        .unwrap();
+    assert!(!stored.contains(&token));
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/me")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let res = app
+        .router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/toys")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"title":"local","files":[],"sources":[]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}

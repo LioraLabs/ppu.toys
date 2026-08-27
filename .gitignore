@@ -16,8 +16,10 @@
 .env
 .env.*
 !.env.example
+/ppu.env
 /ppu.db
 /ppu.db-*
+/build/
 /data/
 /coverage/
 

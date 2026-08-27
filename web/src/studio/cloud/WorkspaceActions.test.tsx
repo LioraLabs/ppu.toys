@@ -55,8 +55,8 @@ describe("WorkspaceActions", () => {
 
   it("signed-in: Save creates the toy, then a second Save updates it", async () => {
     mockUseSession.mockReturnValue({ user: USER, loading: false });
-    mockCreateToy.mockResolvedValue({ id: "toy1" });
-    mockUpdateToy.mockResolvedValue(undefined);
+    mockCreateToy.mockResolvedValue({ id: "toy1", revision: 1 });
+    mockUpdateToy.mockResolvedValue({ revision: 2 });
     render(
       <MemoryRouter>
         <WorkspaceActions />
@@ -78,6 +78,7 @@ describe("WorkspaceActions", () => {
 
     fireEvent.click(saveBtn);
     await waitFor(() => expect(mockUpdateToy).toHaveBeenCalledTimes(1));
+    expect(mockUpdateToy.mock.calls[0][1]).toBe(1);
     expect(mockCreateToy).toHaveBeenCalledTimes(1);
   });
 });

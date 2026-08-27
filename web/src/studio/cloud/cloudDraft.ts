@@ -5,7 +5,7 @@
 
 import { useSyncExternalStore } from "react";
 
-let bound: { id: string; session: number } | null = null;
+let bound: { id: string; revision: number; session: number } | null = null;
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -19,8 +19,12 @@ export const cloudDraft = {
   },
 
   /** Bind `id` to `session`. */
-  set(id: string, session: number): void {
-    bound = { id, session };
+  revision(session: number): number | null {
+    return bound && bound.session === session ? bound.revision : null;
+  },
+
+  set(id: string, revision: number, session: number): void {
+    bound = { id, revision, session };
     emit();
   },
 

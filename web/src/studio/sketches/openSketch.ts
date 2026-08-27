@@ -1,5 +1,4 @@
 import { useSyncExternalStore } from "react";
-import { demoById, demoFiles, STARTER } from "../demos/demos";
 import { POKES_FILE, EMPTY_POKES } from "../pokes/pokes";
 import {
   newSketchObject,
@@ -14,16 +13,7 @@ import {
 /** Debounce window between the last change and the autosave write. */
 export const AUTOSAVE_MS = 800;
 
-export const NEW_SKETCH_SOURCE = `-- ppu.toys — flat SNES PPU globals, Lua 5.4
--- registers: mode, brightness, bg[1..4], cgram[], obj[], m7, vram[]
--- helpers: rgb(r,g,b), hsl(h,s,l), hdma(y0,y1,fn), sin/cos/floor, t, f
-function frame(t, f)
-  apply_pokes()
-  mode = 0
-  brightness = 15
-  cgram[0] = hsl(230, 0.5, 0.12 + 0.04 * sin(t)) -- breathing backdrop
-end
-`;
+export const NEW_SKETCH_SOURCE = "";
 
 /** pokes.lua is reserved: always present, always index 0. The ONLY generated
  *  file — every point where files enter or are read from the open context
@@ -36,9 +26,7 @@ function ensurePokesFirst(files: SketchFile[]): SketchFile[] {
   return [pokes, ...files.filter((f) => f.name !== POKES_FILE)];
 }
 
-/** What the editor is looking at: a read-only bundled demo, or a stored
- *  sketch. Demos become sketches lazily — see editFile/addSource. */
-export type OpenContext = { kind: "demo"; demoId: string } | { kind: "sketch"; sketch: Sketch };
+export type OpenContext = { kind: "sketch"; sketch: Sketch };
 
 export interface OpenSketchState {
   context: OpenContext;
@@ -50,7 +38,14 @@ export interface OpenSketchState {
   session: number;
 }
 
-let context: OpenContext = { kind: "demo", demoId: STARTER.id };
+function emptySketch(): Sketch {
+  return newSketchObject("untitled toy", [
+    { name: POKES_FILE, source: EMPTY_POKES },
+    { name: "main.lua", source: "" },
+  ]);
+}
+
+let context: OpenContext = { kind: "sketch", sketch: emptySketch() };
 let dirty = false;
 let session = 0;
 /** Mutation counter: lets an in-flight flush detect edits that raced it. */
@@ -80,7 +75,7 @@ async function flush(): Promise<void> {
     timer = null;
   }
   const ctx = context;
-  if (!dirty || ctx.kind !== "sketch") return;
+  if (!dirty) return;
   const flushedGen = gen;
   const saved = await saveSketch(ctx.sketch);
   // a newer edit or a context switch raced the save: leave state alone,
@@ -91,12 +86,8 @@ async function flush(): Promise<void> {
   emit();
 }
 
-/** Mutate the open SKETCH only — a demo context is a no-op (rename relies
- *  on this; every other mutation goes through the fork-aware mutateOpen). */
 function mutateSketch(update: (s: Sketch) => Sketch) {
-  const ctx = context;
-  if (ctx.kind !== "sketch") return;
-  context = { kind: "sketch", sketch: update(ctx.sketch) };
+  context = { kind: "sketch", sketch: update(context.sketch) };
   dirty = true;
   gen++;
   schedule();
@@ -105,19 +96,13 @@ function mutateSketch(update: (s: Sketch) => Sketch) {
 
 /** The open context as a mutable Sketch: the live sketch, or — for a demo —
  *  a brand-new in-memory fork ("<label> (copy)", pristine files, no sources). */
-function sketchToMutate(ctx: OpenContext): Sketch {
-  if (ctx.kind === "sketch") return ctx.sketch;
-  const label = demoById(ctx.demoId)?.label ?? ctx.demoId;
-  return newSketchObject(`${label} (copy)`, filesOf(ctx), [], ctx.demoId);
-}
-
 /** Transform the open context's sketch. Any mutation IS an edit, so a demo
  *  context forks first, with `update` applied to the fresh fork in the SAME
  *  emit. Synchronous by design: no await window in which a second keystroke
  *  could double-fork; `session` is untouched, so the editor survives the
  *  lazy fork. Persistence rides the scheduled autosave (saveSketch upserts). */
 function mutateOpen(update: (s: Sketch) => Sketch) {
-  const next = update(sketchToMutate(context));
+  const next = update(context.sketch);
   context = { kind: "sketch", sketch: { ...next, files: ensurePokesFirst(next.files) } };
   dirty = true;
   gen++;
@@ -132,9 +117,7 @@ function mutateOpen(update: (s: Sketch) => Sketch) {
  *  pokes.lua first, so this is a no-op reassert, kept as the single seam
  *  that guarantees it regardless of how demos.ts is authored. */
 function filesOf(ctx: OpenContext): SketchFile[] {
-  if (ctx.kind === "sketch") return ctx.sketch.files;
-  const demo = demoById(ctx.demoId);
-  return ensurePokesFirst(demo ? demoFiles(demo) : [{ name: "main.lua", source: "" }]);
+  return ctx.sketch.files;
 }
 
 /** Files of the LIVE context. */
@@ -149,10 +132,10 @@ function mutateFiles(update: (files: SketchFile[]) => SketchFile[]) {
 
 function openContext(next: OpenContext) {
   gen++; // invalidate any in-flight flush's state patch (its write still lands)
-  context =
-    next.kind === "sketch"
-      ? { kind: "sketch", sketch: { ...next.sketch, files: ensurePokesFirst(next.sketch.files) } }
-      : next;
+  context = {
+    kind: "sketch",
+    sketch: { ...next.sketch, files: ensurePokesFirst(next.sketch.files) },
+  };
   dirty = false;
   session++;
   emit();
@@ -163,14 +146,6 @@ export const openSketchStore = {
   subscribe(cb: () => void): () => void {
     listeners.add(cb);
     return () => void listeners.delete(cb);
-  },
-
-  /** Open a bundled demo as a read-only template. Pending edits on the
-   *  previous sketch are flushed (captured synchronously, saved async). */
-  openDemo(demoId: string): Promise<void> {
-    const pending = flush();
-    openContext({ kind: "demo", demoId });
-    return pending;
   },
 
   /** Open a stored sketch from the library. */
@@ -283,8 +258,7 @@ export const openSketchStore = {
   },
 
   /** Rename the OPEN sketch through the live context (renaming it directly in
-   *  the store would be reverted by the next autosave flush, which puts the
-   *  stale in-memory name back). No-op on a demo context. */
+   *  the store would be reverted by the next autosave flush). */
   rename(name: string): void {
     mutateSketch((s) => ({ ...s, name }));
   },
@@ -298,7 +272,7 @@ export const openSketchStore = {
       clearTimeout(timer);
       timer = null;
     }
-    context = { kind: "demo", demoId: STARTER.id };
+    context = { kind: "sketch", sketch: emptySketch() };
     dirty = false;
     session = 0;
     gen++;
@@ -312,8 +286,7 @@ export function useOpenSketch(): OpenSketchState {
 
 /** Display name of the open context — the toolbar seam for the Workspace shell. */
 export function openContextLabel(s: OpenSketchState): string {
-  const ctx = s.context;
-  return ctx.kind === "sketch" ? ctx.sketch.name : (demoById(ctx.demoId)?.label ?? ctx.demoId);
+  return s.context.sketch.name;
 }
 
 /** Ordered files of the open context — the editor's tab list. A single-file

@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react";
 import type { Asset } from "./assetStore";
 
 /** Shared, app-wide list of uploaded assets. Written by the add-source flow
- *  (output/DropZone.tsx), demos/loadDemo.ts and sketches/restore.ts; the VRAM
+ *  (output/DropZone.tsx) and sketches/restore.ts; the VRAM
  *  inspector reads it. Decouples writers/readers so previews/ids stay consistent. */
 let assets: Asset[] = [];
 const listeners = new Set<() => void>();

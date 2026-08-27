@@ -72,6 +72,7 @@ export function makeToyFull(overrides?: Partial<ToyFull>): ToyFull {
     title: "Dusk",
     description: "A quiet sunset scene.",
     state: "published",
+    revision: 1,
     files: [{ name: "main.lua", source: "-- code" }],
     sources: [],
     heartCount: 3,

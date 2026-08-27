@@ -6,7 +6,6 @@ import { ProfilePage } from "./ProfilePage";
 import { Tos } from "./Tos";
 import { Privacy } from "./Privacy";
 import { Studio } from "../studio/Studio";
-import { SeedPage } from "./SeedPage";
 
 export function AppRoutes() {
   return (
@@ -20,8 +19,6 @@ export function AppRoutes() {
       </Route>
       {/* Studio owns the full viewport — outside the nav shell so its layout is unchanged. */}
       <Route path="/studio" element={<Studio />} />
-      {/* Dev-only seeding harness (web/docs/seeding.md) — never in the prod bundle. */}
-      {import.meta.env.DEV && <Route path="/seed" element={<SeedPage />} />}
     </Routes>
   );
 }

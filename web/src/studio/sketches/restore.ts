@@ -1,7 +1,5 @@
 import { transport } from "../transport/transport";
 import { assetStore } from "../assets/sharedAssets";
-import { demoById } from "../demos/demos";
-import { loadDemo } from "../demos/loadDemo";
 import type { OpenContext } from "./openSketch";
 
 /** Load an open context's graphics into the live core + shared list. A forked
@@ -11,13 +9,6 @@ import type { OpenContext } from "./openSketch";
  *  await window, so overlapping opens can't interleave their list mutations. */
 export function restoreOpenContext(ctx: OpenContext): void {
   assetStore.reset();
-  if (ctx.kind === "demo") {
-    const demo = demoById(ctx.demoId);
-    if (demo) loadDemo(demo);
-    return;
-  }
-  const from = ctx.sketch.forkedFrom ? demoById(ctx.sketch.forkedFrom) : undefined;
-  if (from) loadDemo(from);
   for (const s of ctx.sketch.sources) {
     transport.addSource(s.name, s.payload);
     assetStore.set({

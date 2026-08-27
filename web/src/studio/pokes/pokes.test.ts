@@ -51,8 +51,7 @@ describe("scanline dialect", () => {
   };
 
   it("emits nothing extra when there are no scanline pokes", () => {
-    // Every bundled demo ships a generated (empty) pokes.lua — that output must
-    // stay byte-identical, so the hook and its helpers appear only when used.
+    // Empty output stays byte-identical, so helpers appear only when used.
     expect(EMPTY_POKES).not.toContain("hdma(");
     expect(EMPTY_POKES).not.toContain("local function pk");
     const flat = pokesToLua([{ lvalue: "TM", expr: "0x13" }]);

@@ -104,3 +104,31 @@
 .profile-draft-edit:hover {
   background: var(--hover);
 }
+.profile-tokens {
+  margin: 24px 0;
+}
+
+.profile-tokens p {
+  color: var(--txt2);
+}
+
+.profile-token-secret {
+  overflow-x: auto;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  user-select: all;
+}
+
+.profile-token-list {
+  max-width: 420px;
+  padding: 0;
+  list-style: none;
+}
+
+.profile-token-list li {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}

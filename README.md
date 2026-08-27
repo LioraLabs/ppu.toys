@@ -6,7 +6,7 @@
 
 The project pairs a headless Rust PPU engine with a browser-based studio. The engine currently supports tile modes 0–4 and affine Mode 7, including the familiar Mode 1 and Mode 7 workflows, per-scanline effects, sprites, priority and color compositing, and PNG import for backgrounds and sprite sheets.
 
-The studio provides a multi-file Lua editor, live output, register and memory inspectors, compositing controls, local sketches, bundled demos, and publishing. It is useful both as a creative toy and as an approachable way to learn the machinery behind SNES graphics.
+The studio provides a multi-file Lua editor, live output, register and memory inspectors, compositing controls, local sketches, and publishing. It is useful both as a creative toy and as an approachable way to learn the machinery behind SNES graphics.
 
 ## Quick start
 
@@ -15,7 +15,7 @@ You need Rust, Node.js/pnpm, `wasm-pack`, and [Cook](https://github.com/alexandr
 ```sh
 pnpm install
 cook wasm
-cook dev-wasm
+cook dev
 ```
 
 The final command starts Vite with the real WASM core. For a production build, run `cook build`.
@@ -32,7 +32,7 @@ The Rust crates can be built and tested directly with `cargo build --workspace` 
 
 ## Lua authoring
 
-A sketch is a small set of Lua files built around a `frame()` function. Lua writes PPU memory and register state; `scanline`/`hdma` hooks can vary that state across the frame for raster effects. The editor keeps the last valid program running while you type, and edits to bundled demos automatically become local sketches.
+A toy is a small set of Lua files built around a `frame()` function. Lua writes PPU memory and register state; `scanline`/`hdma` hooks can vary that state across the frame for raster effects. The editor keeps the last valid program running while you type.
 
 Drop a PNG onto the output to quantize and import it into authentic VRAM/CGRAM data. The inspector can then trace the rendered layers, sprites, palettes, and per-pixel compositing decisions.
 
@@ -62,7 +62,7 @@ pnpm --filter web test
 pnpm --filter web run build
 ```
 
-`cook build` produces the WASM package, `web/dist`, and the server binary. `cook dev-wasm` is the normal live-development loop.
+`cook build` produces the WASM package, `web/dist`, and the server binary. `cook dev` is the normal live-development loop, and `cook dev-offline` boots the same Vite server with MSW answering every API call so the app runs with no backend at all.
 
 ## Configuration
 
@@ -80,6 +80,74 @@ cook server.run
 ```
 
 The defaults use SQLite with database-backed blobs. Discord credentials are optional; fill them in when testing authentication or publishing flows that require them.
+
+## Running the site locally
+
+```sh
+cook stack
+```
+
+This runs the backend against the disposable, gitignored `build/dev.db` and the
+Studio at `http://localhost:5173/`. Ctrl-C stops both. Use `cook stack-fresh` to
+delete the database first, or `cook db-nuke` to delete it without starting the
+site. SQLite creates and migrates the next database automatically.
+
+No `.env` is needed for anonymous browsing; Discord is only needed for sign-in.
+
+## Edit a toy on your machine
+
+Install the small sync client:
+
+```sh
+cargo install --git https://github.com/LioraLabs/ppu.toys.git --bin ppu
+```
+
+When working from this checkout, `cook cli-install` installs the same binary.
+
+On your profile, create a CLI token under **Local editing**, then run the command
+shown there once.
+
+Start a new toy entirely locally:
+
+```sh
+ppu new my-tutorial
+cd my-tutorial
+$EDITOR main.lua
+ppu status
+ppu push
+```
+
+The first push creates a private draft and prints its URL. Open that URL in the
+Studio when you are ready to render its preview and publish it.
+
+To work on an existing toy:
+
+```sh
+ppu pull https://ppu.toys/t/abc123
+cd abc123
+$EDITOR main.lua
+ppu push
+```
+
+`ppu sync` handles the normal two-way loop: it pushes when only local files
+changed, pulls when only the server changed, and stops when both changed. In a
+conflict it leaves local files untouched and writes the remote versions under
+`.ppu/remote/`. `ppu pull --force` discards local edits; `ppu push --force`
+explicitly overwrites the latest remote code.
+
+`ppu.json` keeps the toy id, server revision, title, description, file order,
+and last-synced hashes. Pushes create normal server revisions and preserve the
+toy's existing image sources. Studio uses the same revision check, so a browser
+save and CLI push cannot silently overwrite one another.
+
+The intended toy development cycle is: `ppu new`, edit and run `ppu sync`
+as needed while the remote copy remains a private draft, open it in Studio to
+check the real renderer, then publish. Keep official tutorials/examples in a
+separate private repository as ordinary `ppu` toy directories; ppu.toys—not
+this application repository—is their public distribution. Update them with the
+same pull/edit/sync loop.
+Set `PPU_CONFIG` to override the default token file at
+`~/.config/ppu/config.json`.
 
 ## Deployment
 

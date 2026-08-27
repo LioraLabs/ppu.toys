@@ -11,11 +11,8 @@ export default defineConfig({
   publicDir: fileURLToPath(new URL("public", import.meta.url)),
   server: {
     proxy: (() => {
-      // Overridable for the demo-seeding runbook (web/docs/seeding.md):
-      // PPU_API_TARGET points the dev proxy at a real deployment and
-      // PPU_API_COOKIE (e.g. "ppu_sess=<sid>") authenticates every proxied
-      // request as the minted system account — the browser never sees the
-      // credential.
+      // Overridable when testing the local UI against another API deployment.
+      // PPU_API_COOKIE authenticates at the proxy; the browser never sees it.
       const target = process.env.PPU_API_TARGET ?? "http://127.0.0.1:8080";
       const cookie = process.env.PPU_API_COOKIE;
       const withAuth = {

@@ -8,6 +8,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use rand::Rng;
+use sha2::{Digest, Sha256};
 
 pub const SESSION_COOKIE: &str = "ppu_sess";
 pub const STATE_COOKIE: &str = "ppu_oauth_state";
@@ -18,6 +19,7 @@ pub struct AuthUser {
     pub handle: String,
     pub avatar: Option<String>,
     pub is_admin: bool,
+    pub api_token: bool,
 }
 
 impl FromRequestParts<AppState> for AuthUser {
@@ -26,6 +28,29 @@ impl FromRequestParts<AppState> for AuthUser {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
+        let bearer = parts
+            .headers
+            .get("authorization")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|h| h.strip_prefix("Bearer "));
+        if let Some(token) = bearer {
+            let hash = token_hash(token);
+            let row: Option<(String, String, Option<String>, i64)> = sqlx::query_as(
+                "SELECT u.id,u.handle,u.avatar_hash,u.is_admin FROM api_tokens t JOIN users u ON u.id=t.user_id WHERE t.token_hash=?",
+            )
+            .bind(hash)
+            .fetch_optional(&state.pool)
+            .await?;
+            let (id, handle, avatar, is_admin) =
+                row.ok_or_else(|| AppError::status(StatusCode::UNAUTHORIZED, "invalid token"))?;
+            return Ok(AuthUser {
+                id,
+                handle,
+                avatar,
+                is_admin: is_admin != 0,
+                api_token: true,
+            });
+        }
         if matches!(parts.method, Method::POST | Method::PUT | Method::DELETE)
             && parts.headers.get(CSRF_HEADER).is_none()
         {
@@ -50,8 +75,13 @@ impl FromRequestParts<AppState> for AuthUser {
             handle,
             avatar,
             is_admin: is_admin != 0,
+            api_token: false,
         })
     }
+}
+
+fn token_hash(token: &str) -> String {
+    format!("{:x}", Sha256::digest(token.as_bytes()))
 }
 
 impl FromRequestParts<AppState> for Option<AuthUser> {
@@ -100,6 +130,91 @@ async fn logout(
     }
     let jar = jar.remove(removal_cookie(SESSION_COOKIE));
     Ok((jar, StatusCode::NO_CONTENT).into_response())
+}
+
+#[derive(serde::Deserialize)]
+struct NewToken {
+    #[serde(default = "default_token_name")]
+    name: String,
+}
+
+fn default_token_name() -> String {
+    "CLI".into()
+}
+
+async fn list_tokens(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
+    if user.api_token {
+        return Err(AppError::status(
+            StatusCode::FORBIDDEN,
+            "manage tokens from the website",
+        ));
+    }
+    let rows: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT id,name,created_at FROM api_tokens WHERE user_id=? ORDER BY created_at DESC",
+    )
+    .bind(&user.id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|(id, name, created_at)| {
+                serde_json::json!({
+                    "id": id, "name": name, "createdAt": created_at
+                })
+            })
+            .collect::<Vec<_>>(),
+    )
+    .into_response())
+}
+
+async fn create_token(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(body): Json<NewToken>,
+) -> AppResult<Response> {
+    if user.api_token {
+        return Err(AppError::status(
+            StatusCode::FORBIDDEN,
+            "manage tokens from the website",
+        ));
+    }
+    let name = body.name.trim();
+    if name.is_empty() || name.len() > 80 {
+        return Err(AppError::status(
+            StatusCode::BAD_REQUEST,
+            "token name must be 1-80 characters",
+        ));
+    }
+    let id = rand_hex(8);
+    let token = format!("ppu_{}", rand_hex(32));
+    sqlx::query("INSERT INTO api_tokens(id,user_id,name,token_hash,created_at) VALUES(?,?,?,?,?)")
+        .bind(&id)
+        .bind(&user.id)
+        .bind(name)
+        .bind(token_hash(&token))
+        .bind(crate::db::now())
+        .execute(&state.pool)
+        .await?;
+    Ok(Json(serde_json::json!({ "id": id, "name": name, "token": token })).into_response())
+}
+
+async fn delete_token(
+    State(state): State<AppState>,
+    user: AuthUser,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> AppResult<Response> {
+    if user.api_token {
+        return Err(AppError::status(
+            StatusCode::FORBIDDEN,
+            "manage tokens from the website",
+        ));
+    }
+    sqlx::query("DELETE FROM api_tokens WHERE id=? AND user_id=?")
+        .bind(id)
+        .bind(user.id)
+        .execute(&state.pool)
+        .await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 pub fn rand_hex(bytes: usize) -> String {
@@ -235,6 +350,8 @@ async fn discord_callback(
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/me", get(me))
+        .route("/tokens", get(list_tokens).post(create_token))
+        .route("/tokens/{id}", axum::routing::delete(delete_token))
         .route("/auth/logout", post(logout))
         .route("/auth/discord", get(discord_start))
         .route("/auth/callback", get(discord_callback))

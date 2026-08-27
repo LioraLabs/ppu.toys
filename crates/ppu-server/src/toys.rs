@@ -39,6 +39,8 @@ pub struct SaveBody {
     pub files: Vec<FileDto>,
     #[serde(default)]
     pub sources: Vec<SourceDto>,
+    #[serde(default, rename = "expectedRevision")]
+    pub expected_revision: Option<i64>,
 }
 
 fn slug() -> String {
@@ -151,7 +153,7 @@ async fn create(
         .bind(&id).bind(&user.id).bind(&body.title).bind(&body.description).bind(&files_json).bind(now).execute(&state.pool).await?;
     write_sources(&state, &id, &body.sources).await?;
     snapshot_revision(&state, &id, &files_json).await?;
-    Ok(Json(serde_json::json!({ "id": id })).into_response())
+    Ok(Json(serde_json::json!({ "id": id, "revision": 1 })).into_response())
 }
 
 async fn update(
@@ -160,32 +162,54 @@ async fn update(
     Path(id): Path<String>,
     Json(body): Json<SaveBody>,
 ) -> AppResult<Response> {
-    // ~1/min throttle applies to re-saves (autosave/edit), not the one-shot create
-    if !state.limiter.check_save(&user.id) {
+    let _write = state.toy_writes.lock().await;
+    let author: Option<(String, i64)> =
+        sqlx::query_as("SELECT author_id,revision FROM toys WHERE id=?")
+            .bind(&id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let (author, current_revision) =
+        author.ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such toy"))?;
+    if author != user.id {
+        return Err(AppError::status(StatusCode::FORBIDDEN, "not your toy"));
+    }
+    let expected = body.expected_revision.ok_or_else(|| {
+        AppError::status(
+            StatusCode::PRECONDITION_REQUIRED,
+            "missing expectedRevision",
+        )
+    })?;
+    if current_revision != expected {
+        return Err(AppError::status(
+            StatusCode::CONFLICT,
+            "toy changed remotely",
+        ));
+    }
+    // ~1/min throttle applies to browser re-saves, after the cheap stale-write
+    // check so a conflict is never disguised as a rate-limit response.
+    if !user.api_token && !state.limiter.check_save(&user.id) {
         return Err(AppError::status(
             StatusCode::TOO_MANY_REQUESTS,
             "save rate limit",
         ));
     }
-    let author: Option<(String,)> = sqlx::query_as("SELECT author_id FROM toys WHERE id=?")
-        .bind(&id)
-        .fetch_optional(&state.pool)
-        .await?;
-    let author = author
-        .ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such toy"))?
-        .0;
-    if author != user.id {
-        return Err(AppError::status(StatusCode::FORBIDDEN, "not your toy"));
-    }
     validate_save(&body.files, &body.sources)?;
     let files_json = serde_json::to_string(&body.files)?;
-    sqlx::query("UPDATE toys SET title=?, description=?, files_json=? WHERE id=?")
+    let changed = sqlx::query("UPDATE toys SET title=?, description=?, files_json=?, revision=revision+1 WHERE id=? AND revision=?")
         .bind(&body.title)
         .bind(&body.description)
         .bind(&files_json)
         .bind(&id)
+        .bind(expected)
         .execute(&state.pool)
-        .await?;
+        .await?
+        .rows_affected();
+    if changed == 0 {
+        return Err(AppError::status(
+            StatusCode::CONFLICT,
+            "toy changed remotely",
+        ));
+    }
     // PUT replaces the whole source set: drop rows that are gone, then upsert the
     // current set (db mode; disk-mode orphan files are the known escape-hatch limit).
     sqlx::query("DELETE FROM toy_sources WHERE toy_id=?")
@@ -194,7 +218,7 @@ async fn update(
         .await?;
     write_sources(&state, &id, &body.sources).await?;
     snapshot_revision(&state, &id, &files_json).await?;
-    Ok(StatusCode::NO_CONTENT.into_response())
+    Ok(Json(serde_json::json!({ "revision": expected + 1 })).into_response())
 }
 
 async fn get_toy(
@@ -202,8 +226,8 @@ async fn get_toy(
     maybe: Option<AuthUser>,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let row: Option<(String,String,String,String,Option<String>,i64,String,String,Option<String>)> = sqlx::query_as(
-        "SELECT t.title,t.description,t.files_json,t.state,t.forked_from,t.heart_count,u.handle,u.id,u.avatar_hash
+    let row: Option<(String,String,String,String,Option<String>,i64,i64,String,String,Option<String>)> = sqlx::query_as(
+        "SELECT t.title,t.description,t.files_json,t.state,t.forked_from,t.heart_count,t.revision,u.handle,u.id,u.avatar_hash
          FROM toys t JOIN users u ON u.id=t.author_id WHERE t.id=?").bind(&id).fetch_optional(&state.pool).await?;
     let (
         title,
@@ -212,6 +236,7 @@ async fn get_toy(
         tstate,
         forked_from,
         heart_count,
+        revision,
         handle,
         author_id,
         avatar,
@@ -250,7 +275,7 @@ async fn get_toy(
         false
     };
     Ok(Json(serde_json::json!({
-        "id": id, "title": title, "description": description, "state": tstate,
+        "id": id, "title": title, "description": description, "state": tstate, "revision": revision,
         "files": files, "sources": sources, "heartCount": heart_count, "hearted": hearted, "forkedFrom": forked_from,
         "author": { "id": author_id, "handle": handle, "avatar": avatar },
     })).into_response())
@@ -265,6 +290,7 @@ async fn fork(
     user: AuthUser,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
+    let _write = state.toy_writes.lock().await;
     let src: Option<(String, String, String)> =
         sqlx::query_as("SELECT title,description,files_json FROM toys WHERE id=?")
             .bind(&id)
@@ -299,6 +325,7 @@ async fn publish(
             "publish rate limit",
         ));
     }
+    let _write = state.toy_writes.lock().await;
     let author: Option<(String,)> = sqlx::query_as("SELECT author_id FROM toys WHERE id=?")
         .bind(&id)
         .fetch_optional(&state.pool)

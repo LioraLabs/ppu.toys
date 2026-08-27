@@ -9,3 +9,4 @@ cook_modules
 pnpm-lock.yaml
 Cargo.lock
 cook.lock
+vendor

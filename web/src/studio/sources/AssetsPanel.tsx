@@ -1,7 +1,6 @@
 import { useState } from "react";
 import type { SketchSource } from "../sketches/sketchStore";
 import { openSketchStore, useOpenSketch, openContextLabel } from "../sketches/openSketch";
-import { demoById } from "../demos/demos";
 import { transport } from "../transport/transport";
 import { AddSourceDialog } from "./AddSourceDialog";
 import { SourcePreview } from "./SourcePreview";
@@ -30,10 +29,9 @@ export function AssetsPanel({ onClose }: { onClose?: () => void } = {}) {
   const [openRow, setOpenRow] = useState<string | null>(null);
 
   const ctx = state.context;
-  const sources: SketchSource[] = ctx.kind === "sketch" ? ctx.sketch.sources : [];
+  const sources: SketchSource[] = ctx.sketch.sources;
   // A demo/starter context's assets are procedural (regenerated on restore) —
   // shown as fixed rows; editing them means forking via a real add/remove.
-  const templateAssets = ctx.kind === "demo" ? (demoById(ctx.demoId)?.assets ?? []) : [];
 
   const remove = (name: string) => {
     if (!window.confirm(`Remove "${name}" from this toy?`)) return;
@@ -59,24 +57,13 @@ export function AssetsPanel({ onClose }: { onClose?: () => void } = {}) {
         )}
       </header>
       <ul className="library-list">
-        {sources.length === 0 && templateAssets.length === 0 && (
+        {sources.length === 0 && (
           <li className="library-empty">
             No assets yet. Add a PNG and it becomes real SNES graphics — tiles, palettes and a
             tilemap — then reference it from Lua:{" "}
             <code>dma(&quot;name&quot;, &#123; char = 0x1000 &#125;)</code>.
           </li>
         )}
-        {templateAssets.map((a) => (
-          <li key={a.id} className="library-row">
-            <div className="library-open asset-row">
-              <span className="library-name">{a.id}</span>
-              <span className="asset-kind">{KIND_LABEL[a.kind]}</span>
-              <span className="library-updated">
-                {a.width}×{a.height} · template
-              </span>
-            </div>
-          </li>
-        ))}
         {sources.map((s) => (
           <li
             key={s.name}

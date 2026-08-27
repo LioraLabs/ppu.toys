@@ -5,10 +5,9 @@
 ppu.toys {
 	encode zstd gzip
 
-	# Blob bytes (loop clips + thumbs) are content-addressed by toy id and never
-	# change — cache them hard in the browser and at the Cloudflare edge.
+	# Owners can republish a toy under the same id, replacing its clip/thumb.
 	@blobs path /blobs/*
-	header @blobs Cache-Control "public, max-age=31536000, immutable"
+	header @blobs Cache-Control "public, max-age=60, must-revalidate"
 
 	reverse_proxy 127.0.0.1:8080
 }

@@ -22,5 +22,5 @@ export async function openCloudToy(toy: ToyFull): Promise<void> {
     }));
   const sketch = await createSketch(toy.title || "untitled", toy.files, sources);
   await openSketchStore.openSketch(sketch.id);
-  cloudDraft.set(toy.id, openSketchStore.state().session);
+  cloudDraft.set(toy.id, toy.revision, openSketchStore.state().session);
 }

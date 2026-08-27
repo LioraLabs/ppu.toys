@@ -44,6 +44,7 @@ export interface ToyFull {
   title: string;
   description: string;
   state: string;
+  revision: number;
   files: ToyFile[];
   sources: ToySource[];
   heartCount: number;
@@ -55,6 +56,12 @@ export interface ToyFull {
 export interface DraftInfo {
   id: string;
   title: string;
+  createdAt: number;
+}
+
+export interface ApiToken {
+  id: string;
+  name: string;
   createdAt: number;
 }
 
@@ -131,6 +138,22 @@ export function logout(): Promise<void> {
   return request<void>("/api/auth/logout", { method: "POST" });
 }
 
+export function getTokens(): Promise<ApiToken[]> {
+  return request<ApiToken[]>("/api/tokens");
+}
+
+export function createToken(name = "CLI"): Promise<ApiToken & { token: string }> {
+  return request<ApiToken & { token: string }>("/api/tokens", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function deleteToken(id: string): Promise<void> {
+  return request<void>(`/api/tokens/${id}`, { method: "DELETE" });
+}
+
 export interface SaveToyBody {
   title: string;
   description?: string;
@@ -138,19 +161,23 @@ export interface SaveToyBody {
   sources: ToySource[];
 }
 
-export function createToy(body: SaveToyBody): Promise<{ id: string }> {
-  return request<{ id: string }>("/api/toys", {
+export function createToy(body: SaveToyBody): Promise<{ id: string; revision: number }> {
+  return request<{ id: string; revision: number }>("/api/toys", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 
-export function updateToy(id: string, body: SaveToyBody): Promise<void> {
-  return request<void>(`/api/toys/${id}`, {
+export function updateToy(
+  id: string,
+  expectedRevision: number,
+  body: SaveToyBody,
+): Promise<{ revision: number }> {
+  return request<{ revision: number }>(`/api/toys/${id}`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ...body, expectedRevision }),
   });
 }
 

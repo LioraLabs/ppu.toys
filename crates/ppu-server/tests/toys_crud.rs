@@ -70,12 +70,12 @@ async fn create_get_update_snapshots_revision() {
             &format!("/api/toys/{id}"),
             &sid,
             serde_json::json!({
-                "title": "Hi2", "files": [{"name":"main.lua","source":"return 2"}], "sources": []
+                "title": "Hi2", "files": [{"name":"main.lua","source":"return 2"}], "sources": [], "expectedRevision": 1
             }),
         ))
         .await
         .unwrap();
-    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(res.status(), StatusCode::OK);
     let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM toy_revisions WHERE toy_id=?")
         .bind(&id)
         .fetch_one(&app.state.pool)
@@ -119,6 +119,46 @@ async fn update_by_non_author_forbidden() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn stale_revision_is_conflict_without_overwriting() {
+    let app = common::test_app().await;
+    let sid = common::seed_session(&app.state, "1", "ann", false).await;
+    sqlx::query("INSERT INTO toys(id,author_id,title,files_json,state,created_at) VALUES('t','1','current','[]','draft',1)")
+        .execute(&app.state.pool).await.unwrap();
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(authed(
+            "PUT",
+            "/api/toys/t",
+            &sid,
+            serde_json::json!({"title":"next","files":[],"sources":[],"expectedRevision":1}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(authed(
+            "PUT",
+            "/api/toys/t",
+            &sid,
+            serde_json::json!({"title":"stale","files":[],"sources":[],"expectedRevision":1}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let (title, revision): (String, i64) =
+        sqlx::query_as("SELECT title,revision FROM toys WHERE id='t'")
+            .fetch_one(&app.state.pool)
+            .await
+            .unwrap();
+    assert_eq!((title.as_str(), revision), ("next", 2));
 }
 
 #[tokio::test]
@@ -312,12 +352,12 @@ async fn update_replaces_source_set() {
             &format!("/api/toys/{id}"),
             &sid,
             serde_json::json!({
-                "title":"S","files":[],"sources":[{"name":"a","kind":"bg"}]
+                "title":"S","files":[],"sources":[{"name":"a","kind":"bg"}],"expectedRevision":1
             }),
         ))
         .await
         .unwrap();
-    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(res.status(), StatusCode::OK);
     let names: Vec<(String,)> =
         sqlx::query_as("SELECT name FROM toy_sources WHERE toy_id=? ORDER BY name")
             .bind(&id)

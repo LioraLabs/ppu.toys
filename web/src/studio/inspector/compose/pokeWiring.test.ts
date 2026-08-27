@@ -80,9 +80,9 @@ describe("poke wiring", () => {
     expect(pokesSource()).toContain("  WH0 = 0x28 -- $2126");
   });
 
-  it("a poke on a DEMO context forks it; pokes.lua stays index 0", () => {
-    openSketchStore._resetForTests(); // back to the boot demo
-    expect(openSketchStore.state().context.kind).toBe("demo");
+  it("a poke updates the open toy; pokes.lua stays index 0", () => {
+    openSketchStore._resetForTests();
+    expect(openSketchStore.state().context.kind).toBe("sketch");
     poke(fieldPoke(setWindowEdge(REG.WH0, 40)));
     const s = openSketchStore.state();
     expect(s.context.kind).toBe("sketch");
