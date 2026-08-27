@@ -35,7 +35,7 @@ describe("mode7-road (tutorial 3/10)", () => {
   it("keeps the load-bearing tutorial lines", () => {
     const src = mode7Road.source;
     expect(src).toContain("mode = 7");
-    expect(src).toContain('bg[1].source = "road"');
+    expect(src).toContain('dma("road")'); // the setup-stage placement (and the swap-your-photo hook)
     expect(src).toContain("hdma(HORIZON + 1, 223, function(y)");
     expect(src).toContain("local d = SCALE / (y - HORIZON)"); // THE perspective divide
     expect(src).toContain("m7.a, m7.d = d, d");

@@ -1,17 +1,20 @@
 /** parallax-skyline — L1 tutorial toy 2 of 10 (after first-light; mode7-road
- *  is next). Teaches tile-BG image sources, scroll registers, VRAM layout for a
- *  second layer, HDMA scroll bands, and the multi-file shared global scope.
+ *  is next). The canonical dma() lesson: the setup stage (top-level code runs
+ *  once at compile = the loading screen), explicit VRAM placement for two
+ *  layers, scroll registers, HDMA scroll bands, and the multi-file shared
+ *  global scope.
  *
  *  Asset generators are pure + node-safe (raw RGBA) and mirrored byte-for-byte
  *  by crates/ppu-core/tests/tutorial_parallax_skyline.rs — edit both, or the
  *  golden proves nothing about the shipped art.
  *
  *  Both images draw from ONE 14-colour master palette, and both use the whole
- *  set, on purpose. Outside mode 0 every BG source lands its palettes at CGRAM
- *  0 and the SECOND import lands on top — identical colour SETS that fit one
- *  4bpp sub-palette (15 colours; 14 <= 15 is load-bearing) make that overwrite
- *  a no-op. See tilesheet-cavern in demos.ts for the full story. Channels are
- *  multiples of 8 (the rgb15 grid) so none collapse at 5-bit quantization. */
+ *  set, on purpose. Both dma placements default to pal = 0, so the SECOND
+ *  palette lands on top of the first at CGRAM 0 — identical colour SETS that
+ *  fit one 4bpp sub-palette (15 colours; 14 <= 15 is load-bearing) make that
+ *  overwrite a no-op. See tilesheet-cavern in demos.ts for the full story.
+ *  Channels are multiples of 8 (the rgb15 grid) so none collapse at 5-bit
+ *  quantization. */
 import { demo } from "../kit";
 import type { Demo, DemoAsset } from "../kit";
 
@@ -160,6 +163,19 @@ const MAIN_SRC = `-- ppu.toys :: parallax-skyline — tutorial 2 of 10 (after fi
 -- The third depth is free: an hdma hook rewrites bg[1]'s scroll per scanline,
 -- so ONE layer scrolls at two speeds — the classic SNES parallax-strip trick.
 --
+-- THE SETUP STAGE. Code outside frame() runs ONCE, when the toy compiles —
+-- that is your loading screen. It is where real games ran their DMA: copying
+-- chars, tilemaps and palettes from the cartridge into VRAM before the first
+-- frame ever drew. dma(name, opts) is that same hardware op. VRAM is one
+-- shared 64KB pool with no owner but you, so every image states its own
+-- addresses — two images must not overlap:
+local near = dma("skyline_near", { char = 0x1000, map = 0x0000 })
+local far  = dma("skyline_far",  { char = 0x4000, map = 0x0800 })
+-- From here on VRAM is the only truth. A layer never sees an image: inside
+-- frame(), bg[n].char_base/map_base simply point INTO VRAM — the same two
+-- registers (BGnNBA/BGnSC) the chip itself reads. dma returns the resolved
+-- addresses, so the registers wire from the placement instead of repeating it.
+--
 -- MULTI-FILE: this toy has two tabs. Chunks run in tab order into ONE shared
 -- global scope (PICO-8 style), so FAR_SPEED and band_speed() from skyline.lua
 -- are plain globals here. main.lua is a convention, not magic.
@@ -167,15 +183,11 @@ function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15
 
-  -- One image source per layer. In mode 1, bg1 draws over bg2, so the near
-  -- image goes on bg1 and is transparent (alpha 0) wherever the sky and far
-  -- towers must show through.
-  bg[1].source = "skyline_near"
-  bg[2].source = "skyline_far"
-
-  -- VRAM is one shared pool, and bg1 already sits at map_base 0 / char_base
-  -- 0x1000. A second layer needs its own addresses or the two would overlap:
-  bg[2].map_base = 0x0800; bg[2].char_base = 0x4000
+  -- Point each layer at the VRAM the setup stage filled. In mode 1, bg1
+  -- draws over bg2, so the near image went to bg1 and is transparent
+  -- (alpha 0) wherever the sky and far towers must show through.
+  bg[1].char_base = near.char; bg[1].map_base = near.map
+  bg[2].char_base = far.char;  bg[2].map_base = far.map
 
   -- Depth = scroll speed. The far layer creeps...
   bg[2].scroll.x = t * FAR_SPEED

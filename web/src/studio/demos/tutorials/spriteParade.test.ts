@@ -87,8 +87,11 @@ describe("sprite-parade tutorial", () => {
     const src = spriteParade.files![1].source;
     expect(src.startsWith("-- ppu.toys :: sprite-parade")).toBe(true);
     expect(src).toContain("function frame(t, f)\n  apply_pokes()");
-    expect(src).toContain('obj.sheet = "parade"'); // 1. bind the sheet
-    expect(src).toContain("obj.char_base = 0x6000");
+    // the setup stage: both dma placements, then OBSEL wired from the return
+    expect(src).toContain('local street = dma("street", { char = 0x1000, map = 0x0000 })');
+    expect(src).toContain('local sheet  = dma("parade", { char = 0x6000 })');
+    expect(src).toContain("bg[1].char_base = street.char; bg[1].map_base = street.map");
+    expect(src).toContain("obj.char_base = sheet.char");
     expect(src).toContain("obj.size_sel = 0"); // 2. the small/large pair
     expect(src).toContain("obj[0].large = true"); // ...and a sprite going large
     expect(src).toContain("obj[4].flip_x = true"); // 4. flipping

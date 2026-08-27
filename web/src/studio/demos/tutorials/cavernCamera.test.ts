@@ -29,10 +29,10 @@ describe("cavern-camera (tutorial 5/10)", () => {
   // These lines ARE the lesson — an edit that guts them should fail loudly.
   it("ships the tilesheet-workflow lines the toy teaches", () => {
     const s = cavernCamera.source;
-    // step 1: bind the sheet; steps 2: explicit map geometry (a sheet echoes
-    // back only char_base)
-    expect(s).toContain('bg[1].source = "cave_tiles"');
-    expect(s).toContain("bg[1].char_base = 0x1000");
+    // step 1: dma the sheet in (chars + palette, no map); step 2: explicit
+    // map geometry — placement writes nothing back, the registers are yours
+    expect(s).toContain('local sheet = dma("cave_tiles", { char = 0x1000 })');
+    expect(s).toContain("bg[1].char_base = sheet.char");
     expect(s).toContain("bg[1].map_base = 0x0000");
     expect(s).toContain("bg[1].screen_size = 1");
     // step 3: one-line map entries (the editor's completion contract)

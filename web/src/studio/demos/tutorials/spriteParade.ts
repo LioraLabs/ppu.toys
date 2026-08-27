@@ -349,17 +349,26 @@ const MAIN_SRC = `-- ppu.toys :: sprite-parade — tutorial 4/10: sprites (OBJ) 
 -- The SNES draws sprites out of OAM: 128 slots, each an x/y, a tile number,
 -- a palette, a priority and two flip bits. Here that table is obj[0..127].
 -- What this toy walks through, in reading order:
---   1. BINDING A SHEET   obj.sheet + obj.char_base put your art in OBJ VRAM
---   2. SIZES             obj.size_sel picks ONE small/large pair per frame;
---                        obj[i].large flips a single sprite to the large size
---   3. PLACING           obj[i].x/y/tile/pal/on — that is a sprite on screen
---   4. FLIPPING          obj[i].flip_x mirrors (the marcher walking back)
---   5. PALETTES          OBJ palettes live at CGRAM 128+, 16 entries each
---   6. PRIORITY          obj[i].prio 0..3 interleaves with the BG planes —
---                        watch the fence: prio 0 marches BEHIND it, prio 3 over
+--   1. THE SHEET     dma() put your art in OBJ VRAM at setup; obj.char_base
+--                    (OBSEL) points the sprite engine at it
+--   2. SIZES         obj.size_sel picks ONE small/large pair per frame;
+--                    obj[i].large flips a single sprite to the large size
+--   3. PLACING       obj[i].x/y/tile/pal/on — that is a sprite on screen
+--   4. FLIPPING      obj[i].flip_x mirrors (the marcher walking back)
+--   5. PALETTES      OBJ palettes live at CGRAM 128+, 16 entries each
+--   6. PRIORITY      obj[i].prio 0..3 interleaves with the BG planes —
+--                    watch the fence: prio 0 marches BEHIND it, prio 3 over
 -- (tutorial 1 first-light covers frame(t,f); 2 parallax-skyline covers BG
---  layers; 5 cavern-camera covers tilesheets; 10 sprite-limits pushes OAM
---  until the hardware starts dropping sprites.)
+--  layers and the dma setup stage; 5 cavern-camera covers tilesheets; 10
+--  sprite-limits pushes OAM until the hardware starts dropping sprites.)
+
+-- SETUP: top-level code runs once, at compile — the loading screen
+-- (parallax-skyline tells the full story). Two dma copies: the street is an
+-- assembled BG (chars + tilemap + palette to the addresses named); the parade
+-- sheet is OBJ chars — no tilemap, and its palette lands in the OBJ half of
+-- CGRAM. The OBJ chars park at 0x6000, well apart from the BG chars.
+local street = dma("street", { char = 0x1000, map = 0x0000 })
+local sheet  = dma("parade", { char = 0x6000 })
 
 SPEED = 32           -- parade pace, pixels per second
 
@@ -368,18 +377,19 @@ function frame(t, f)
   mode = 1; brightness = 15
   cgram[0] = rgb(96, 64, 128)   -- backdrop = dusk sky (CGRAM entry 0)
 
-  -- The street + picket fence: one assembled BG import. Its palette lands at
-  -- CGRAM 0; sprites never touch it — OBJ palettes live in the 128+ half.
-  bg[1].source = "street"
-  -- Power-on defaults turn every layer on, and an unbound layer rasterizes
+  -- The street + picket fence: point BG1 at the VRAM the setup stage filled.
+  -- Its palette sits at CGRAM 0; sprites never touch it — OBJ palettes live
+  -- in the 128+ half.
+  bg[1].char_base = street.char; bg[1].map_base = street.map
+  -- Power-on defaults turn every layer on, and an unpointed layer rasterizes
   -- whatever VRAM holds. Keep BG1 + OBJ, drop the rest (screen.main = TM).
   screen.main.bg2 = false; screen.main.bg3 = false; screen.main.bg4 = false
 
-  -- 1. BIND THE SHEET. The cell_size-8 OBJ importer reserves tile 0 as blank
-  -- and numbers each new unique 8x8 cell in order; this sheet leaves cell 0
-  -- blank ON PURPOSE so sheet cell N = OBJ tile N from there on.
-  obj.char_base = 0x6000        -- OBJ chars live apart from the BG chars
-  obj.sheet = "parade"
+  -- 1. THE SHEET. dma placed the chars during setup; OBSEL (obj.char_base)
+  -- points the sprite engine at them. The cell_size-8 OBJ importer reserves
+  -- tile 0 as blank and numbers each new unique 8x8 cell in order; this sheet
+  -- leaves cell 0 blank ON PURPOSE so sheet cell N = OBJ tile N from there on.
+  obj.char_base = sheet.char
 
   -- 2. SIZES. OBSEL holds one pair for the whole frame; each sprite picks
   -- its half of the pair with obj[i].large:

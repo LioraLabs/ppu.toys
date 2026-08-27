@@ -34,12 +34,14 @@ describe("parallax-skyline (tutorial 2/10)", () => {
     expect(parallaxSkyline.files![2].source).toContain("function band_speed(y)");
   });
 
-  it("teaches the two-layer VRAM layout and the hdma scroll split", () => {
+  it("teaches the setup stage, the two-layer VRAM layout and the hdma scroll split", () => {
     const src = parallaxSkyline.source;
-    expect(src).toContain('bg[1].source = "skyline_near"');
-    expect(src).toContain('bg[2].source = "skyline_far"');
-    // the second layer's own VRAM addresses
-    expect(src).toContain("bg[2].map_base = 0x0800; bg[2].char_base = 0x4000");
+    // the setup stage: top-level dma() placements with explicit addresses
+    expect(src).toContain('local near = dma("skyline_near", { char = 0x1000, map = 0x0000 })');
+    expect(src).toContain('local far  = dma("skyline_far",  { char = 0x4000, map = 0x0800 })');
+    // frame() wires the registers from the returned placements
+    expect(src).toContain("bg[1].char_base = near.char; bg[1].map_base = near.map");
+    expect(src).toContain("bg[2].char_base = far.char;  bg[2].map_base = far.map");
     // per-scanline scroll = the parallax-strip trick
     expect(src).toContain("hdma(0, 223, function(y)");
     expect(src).toContain("bg[1].scroll.x = t * band_speed(y)");
@@ -49,8 +51,8 @@ describe("parallax-skyline (tutorial 2/10)", () => {
   });
 
   it("draws both images from one identical 14-colour set (one 4bpp sub-palette)", () => {
-    // Outside mode 0 every BG source lands its palettes at CGRAM 0 and the
-    // second import lands on top: equal colour SETS fitting one sub-palette
+    // Both dma placements default to pal = 0, so the second palette lands on
+    // top of the first at CGRAM 0: equal colour SETS fitting one sub-palette
     // (15 at 4bpp) make that overwrite a no-op. See tilesheet-cavern.
     const colours = (a: (typeof parallaxSkyline.assets)[number]) => {
       const out = new Set<string>();

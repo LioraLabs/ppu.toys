@@ -24,12 +24,18 @@ const MAIN_SRC: &str = r#"-- ppu.toys tutorial 3/10 :: mode7-road — the affine
 -- divide per line, and a flat image lies down into a road.
 --
 -- THE PART TO STEAL: "road" is only an image source. Drag ANY png onto the
--- assets panel and point bg[1].source at its name — your photo becomes the
--- ground plane. That drag-drop is the whole reason this site exists.
+-- assets panel and change the name in the dma("road") line — your photo
+-- becomes the ground plane. That drag-drop is the whole reason this site
+-- exists.
+--
+-- Setup: one dma copies the image into the Mode 7 region. An m7 payload takes
+-- no addresses — on the real chip its chars and map ALWAYS live interleaved
+-- at VRAM 0x0000 (palette at CGRAM 1), so there is nothing to choose.
+-- (parallax-skyline, lesson 2, tells the full setup-stage story.)
+dma("road")                        -- the ground image — swap in your own here
 function frame(t, f)
   apply_pokes()
   mode = 7; brightness = 15        -- mode 7: BG1 is now the affine layer
-  bg[1].source = "road"            -- the ground image — swap in your own here
 
   local HORIZON = 96               -- screen row where ground meets sky
   local SCALE   = 128              -- eye height, in effect: bigger = higher up
@@ -64,7 +70,7 @@ function frame(t, f)
 end
 -- Try: move HORIZON, or SCALE = 64 to hug the ground
 -- Try: a bend — in the floor hook add  bg[1].scroll.x = (223 - y) * (223 - y) / 600
--- Try: the namesake — drag a photo into assets, set bg[1].source = "its-name"
+-- Try: the namesake — drag a photo into assets, change dma("road") to dma("its-name")
 "#;
 
 const GOLDEN: &str = "tests/fixtures/golden_tutorial_mode7_road.png";

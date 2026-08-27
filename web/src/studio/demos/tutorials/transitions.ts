@@ -87,11 +87,15 @@ const MAIN_SRC = `-- ppu.toys tutorial 8/10 :: transitions — the scene-change 
 --                       wipe-in reopens from that black
 local CYCLE = 12
 
+-- Setup stage: one dma copies the 8bpp scene into VRAM at compile — the
+-- loading screen (parallax-skyline, lesson 2, tells the full story).
+local vista = dma("vista", { char = 0x1000, map = 0x0000 })
+
 function frame(t, f)
   apply_pokes()
   mode = 3                       -- 8bpp BG1: one full-colour scene to transition over
-  bg[1].source = "vista"
-  bg[1].char_base = 0x1000
+  bg[1].char_base = vista.char
+  bg[1].map_base = vista.map
   bg[1].mosaic = true            -- enabling is free: size 0 below means "off"
   brightness = 15                -- the holds ARE these two defaults;
   mosaic = 0                     -- each phase only overrides what it needs

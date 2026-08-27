@@ -12,7 +12,10 @@ describe("split-screen tutorial", () => {
   });
 
   it("ships the city as a 4bpp BG import shaped for the top band", () => {
-    expect(splitScreen.assets.map((a) => [a.id, a.kind])).toEqual([["city", "bg"]]);
+    expect(splitScreen.assets.map((a) => [a.id, a.kind])).toEqual([
+      ["city", "bg"],
+      ["floor", "m7"],
+    ]);
     const [city] = splitScreen.assets;
     expect(city.options).toEqual({ bit_depth: 4 });
     expect([city.width, city.height]).toEqual([256, 224]);
@@ -38,22 +41,40 @@ describe("split-screen tutorial", () => {
   // These lines ARE the lesson — a silent edit that guts them should fail.
   it("keeps the per-scanline mode split intact in the lua", () => {
     const src = splitScreen.source;
-    // frame-wide default: mode 1 (also what the import binds under)
+    // frame-wide default: mode 1
     expect(src).toContain("mode = 1; brightness = 15");
-    expect(src).toContain('bg[1].source = "city"');
+    // the setup stage: both worlds placed by dma, each by its payload's kind
+    expect(src).toContain('local city = dma("city", { char = 0x4000, map = 0x7000 })');
+    expect(src).toContain('dma("floor")');
     // the city's tiles park above the mode 7 words
-    expect(src).toContain("bg[1].char_base = 0x4000");
+    expect(src).toContain("bg[1].char_base = city.char");
+    expect(src).toContain("bg[1].map_base = city.map");
     // THE trick: `mode` assigned INSIDE the hdma hook, per-scanline
     expect(src).toContain("hdma(split, 223, function(y)");
     expect(src).toMatch(/hdma\(split, 223, function\(y\)\n\s+mode = 7/);
     // the perspective divide that sells the floor (cribbed from mode7-road)
     expect(src).toContain("local d = 64 / (y - (split - 1))");
     expect(src).toContain("m7.a, m7.d = d, d");
-    // the floor is poked, not imported — an m7 import can't bind in a mode 1 frame
-    expect(src).toContain("m7pixel(0, px, py, c)");
-    // floor palette sits clear of the import's sub-palette 0 (shared CGRAM)
-    expect(src).toContain("cgram[16]");
-    expect(src).toContain("cgram[17]");
-    expect(src).toContain("cgram[18]");
+  });
+
+  it("paints the floor from three colours the city already owns (shared CGRAM 1..3)", () => {
+    // The m7 palette lands at CGRAM 1.. and the city's 4bpp palette at 0..;
+    // the render works because the floor's colour set is a subset of the
+    // city's, chosen so both placements write the same values into 1..3
+    // (tutorial_split_screen.rs pins the exact entries via the importers).
+    const [city, floor] = splitScreen.assets;
+    expect([floor.width, floor.height]).toEqual([1024, 1024]);
+    expect(floor.options).toEqual({});
+    const colours = (a: (typeof splitScreen.assets)[number]) => {
+      const out = new Set<string>();
+      for (let i = 0; i < a.data.length; i += 4) {
+        if (a.data[i + 3]) out.add(`${a.data[i]},${a.data[i + 1]},${a.data[i + 2]}`);
+      }
+      return out;
+    };
+    const fc = colours(floor);
+    expect([...fc].sort()).toEqual(["16,16,32", "224,104,72", "24,16,64"]);
+    const cc = colours(city);
+    for (const c of fc) expect(cc.has(c), `floor colour ${c} missing from the city`).toBe(true);
   });
 });

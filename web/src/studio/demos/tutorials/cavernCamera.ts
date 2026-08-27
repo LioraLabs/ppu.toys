@@ -1,5 +1,5 @@
 /** cavern-camera — L1 tutorial toy 5 of 10, the fundamentals-arc capstone.
- *  Teaches the tilesheet workflow: bind a "sheet" source, author a level map
+ *  Teaches the tilesheet workflow: dma a "sheet" source in, author a level map
  *  by hand in Lua, write bg[1].map[col][row] entries, pan a camera. The
  *  teaching-sized sibling of the tilesheet-cavern flagship demo (which streams
  *  a Tiled export through a ring buffer — pointed at from the Lua comments).
@@ -155,9 +155,14 @@ const MAIN_SRC = `-- ppu.toys :: cavern-camera (lesson 5 of 10 — build a LEVEL
 --
 -- You know layers, scroll and sprites (first-light .. sprite-parade). This is
 -- the capstone of the fundamentals: the tilesheet workflow, in three steps.
---   1. bind a 'sheet' source          -- chars land in sheet order: tile N = cell N
---   2. set the map geometry YOURSELF  -- a sheet echoes back only char_base
+--   1. dma a 'sheet' source in        -- chars land in sheet order: tile N = cell N
+--   2. set the map geometry YOURSELF  -- a sheet is chars + palette, NO map
 --   3. write bg[1].map[col][row]      -- the tilemap IS your level
+--
+-- Step 1, the setup stage (parallax-skyline, lesson 2, is the full dma
+-- story): a sheet carries no tilemap — where tiles GO is this whole lesson —
+-- so the only address it takes is where its chars land.
+local sheet = dma("cave_tiles", { char = 0x1000 })
 --
 -- ==== TYPE YOUR OWN LEVEL HERE ==============================================
 -- One string per row, one character per 8x8 tile:
@@ -196,11 +201,10 @@ function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15
 
-  -- Steps 1+2: bind the sheet, then say where everything lives. Binding a
-  -- sheet places its chars and palette and echoes back char_base ONLY —
-  -- map_base, screen_size and tile_size stay YOURS, so state them explicitly.
-  bg[1].source = "cave_tiles"
-  bg[1].char_base = 0x1000  -- the default, shown so you know it exists
+  -- Step 2: geometry is YOURS. dma placed chars and palette, nothing more;
+  -- every register below is you telling the chip how to read the tilemap
+  -- you are about to write.
+  bg[1].char_base = sheet.char  -- point BG1 at the chars from the setup stage
   bg[1].map_base = 0x0000   -- the tilemap starts at VRAM word 0
   bg[1].screen_size = 1     -- 64x32 tiles = 512x256 px; the whole level fits
 

@@ -1,14 +1,20 @@
 /** Tutorial toy 7/10 :: split-screen — per-scanline `mode` override: a mode 1
  *  city band up top, a mode 7 perspective floor below, in ONE frame. The Lua
- *  and the city() pixels are mirrored byte-for-byte by
+ *  and the city()/floorTex() pixels are mirrored byte-for-byte by
  *  crates/ppu-core/tests/tutorial_split_screen.rs (the golden PNG proves the
  *  frame the studio ships).
  *
- *  Only ONE import ships on purpose: the engine binds sources once per frame
- *  using the frame-wide mode (place_bg_sources in ppu-core/src/lua.rs), so a
- *  mode 7 texture import cannot bind in this mode 1 frame — the floor is poked
- *  into mode 7 tile 0 from Lua instead. The Lua header teaches exactly that.
- */
+ *  TWO imports, placed by dma(): the city as tile data at explicit addresses,
+ *  the floor as a real m7 payload in the interleaved 0x0000 region — dma
+ *  places by the payload's committed kind, not the frame-wide mode, which is
+ *  what lets both worlds coexist in one frame.
+ *
+ *  CGRAM is the one thing the two bands genuinely share. The floor is drawn
+ *  from THREE colours the city already owns — by construction they are the
+ *  city's three lowest BGR555 palette entries AND they sort into the same
+ *  order under the m7 importer's [r,g,b] palette sort, so both placements
+ *  write the same values into CGRAM 1..3 and neither band's colours break.
+ *  tutorial_split_screen.rs pins that invariant against the live importers. */
 import { demo } from "../kit";
 import type { Demo, DemoAsset } from "../kit";
 
@@ -92,6 +98,38 @@ function city(): DemoAsset {
   return { id: "city", width: W, height: H, data, kind: "bg", options: { bit_depth: 4 } };
 }
 
+// ── the floor: a 1024x1024 mode 7 texture, three colours borrowed from the city ──
+// A neon grid over checkered asphalt, sliding under the perspective divide.
+// Every period (32px grid, 8px checker) divides 1024, so the plane tiles
+// seamlessly; the pattern repeats every 32px, so the whole plane dedups to 16
+// unique 8x8 tiles. The three colours are EXACTLY the city's three lowest
+// BGR555 palette entries (see the header): navy asphalt = the near buildings,
+// indigo checker = the top sky band, warm grid = the band above the split —
+// so the shared CGRAM 1..3 entries agree between the two dma placements.
+export function floorTex(): DemoAsset {
+  const w = 1024,
+    h = 1024;
+  const data = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let r, g, b;
+      if (x % 32 < 2 || y % 32 < 2) {
+        [r, g, b] = [224, 104, 72]; // sunset grid seams
+      } else if ((Math.floor(x / 8) + Math.floor(y / 8)) % 2 === 1) {
+        [r, g, b] = [24, 16, 64]; // asphalt B (indigo)
+      } else {
+        [r, g, b] = [16, 16, 32]; // asphalt A (navy)
+      }
+      const i = (y * w + x) * 4;
+      data[i] = r;
+      data[i + 1] = g;
+      data[i + 2] = b;
+      data[i + 3] = 255;
+    }
+  }
+  return { id: "floor", width: w, height: h, data, kind: "m7", options: {} };
+}
+
 // ── the Lua IS the tutorial ──────────────────────────────────────────────────
 const MAIN_SRC = `-- ppu.toys tutorial 7/10 :: split-screen -- two hardware modes in ONE frame
 --
@@ -105,40 +143,31 @@ const MAIN_SRC = `-- ppu.toys tutorial 7/10 :: split-screen -- two hardware mode
 -- an hdma hook and only those scanlines flip. A per-scanline mode switch is a
 -- trick only this DSL does.
 --
--- One catch, and it is this toy's second lesson: imports bind ONCE per frame,
--- using the frame-wide mode. Mode 1 is frame-wide here, so the city binds as a
--- normal 4bpp BG import (parallax-skyline taught those) -- but a mode 7
--- texture import can NOT bind in a mode 1 frame, so the floor is poked into
--- mode 7 tile 0 instead (extbg-direct-color pokes the plane the same way).
--- The two worlds still share VRAM without colliding: mode 7 owns words
--- 0x0000-0x3FFF, so the city's tiles are parked above at 0x4000.
+-- Setup stage: BOTH worlds go into VRAM up front, each by its payload's own
+-- rules (parallax-skyline, lesson 2, tells the full dma story). The city is
+-- tile data at addresses we pick; a mode 7 texture always lands interleaved
+-- at 0x0000-0x3FFF (that region is hard-wired into the chip), which is
+-- exactly why the city's tiles park above it at 0x4000. dma places by what
+-- the data IS, not by what mode the frame runs in -- that is the whole
+-- reason one frame can hold both worlds.
+local city = dma("city", { char = 0x4000, map = 0x7000 })
+dma("floor")   -- m7: chars+map at 0x0000, its 3-colour palette at CGRAM 1..
+-- One palette serves both bands: CGRAM has no notion of the split. The floor
+-- is deliberately painted with three colours the city already owns, so its
+-- palette lands on entries 1..3 holding the exact same values -- shared
+-- paint instead of a fight.
 function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15    -- frame-wide default: every line starts in mode 1
 
-  -- Top band: the city (rows 0..111 of the import; the floor covers the rest).
-  bg[1].source = "city"
-  bg[1].char_base = 0x4000     -- clear of the mode 7 words (0x0000-0x3FFF)
-  bg[1].map_base = 0x7000
+  -- Top band: point BG1 at the city's VRAM home from the setup stage.
+  bg[1].char_base = city.char  -- clear of the mode 7 words (0x0000-0x3FFF)
+  bg[1].map_base = city.map
   screen.main.bg1 = true
   screen.main.bg2 = false; screen.main.bg3 = false  -- power-on defaults ALL layers
   screen.main.bg4 = false; screen.main.obj = false  -- on; they'd show garbage here
 
-  -- Bottom band's texture: ONE 8x8 tile. The zeroed mode 7 map reads tile 0 at
-  -- every cell, so whatever tile 0 holds repeats across the whole 1024x1024
-  -- plane -- an endless floor from 64 pixels.
-  cgram[0] = rgb(16, 8, 40)          -- backdrop, should anything miss
-  cgram[16] = rgb(56, 40, 72)        -- asphalt A   (16..18 sit clear of the
-  cgram[17] = rgb(248, 168, 248)     -- grid line     city's palette in 0..15:
-  cgram[18] = rgb(40, 28, 56)        -- asphalt B    CGRAM is shared by both bands)
-  for py = 0, 7 do
-    for px = 0, 7 do
-      local c = 16
-      if (floor(px / 4) + floor(py / 4)) % 2 == 1 then c = 18 end  -- 4px checker
-      if px == 0 or py == 0 then c = 17 end                        -- neon grid seams
-      m7pixel(0, px, py, c)
-    end
-  end
+  cgram[0] = rgb(16, 8, 40)    -- backdrop, should anything miss
 
   -- The split. The hook runs once per scanline y; every register assignment
   -- inside lands on that line ONLY.
@@ -152,13 +181,14 @@ function frame(t, f)
   end)
 end
 -- Try: move the split with 112 + floor(sin(t) * 16) (both uses of 'split' follow);
--- steer with m7.cx = 128 + sin(t) * 40; or set the frame-wide mode to 3 and watch
--- the city vanish -- an import only binds where its depth matches the mode's.
+-- steer with m7.cx = 128 + sin(t) * 40; or swap the floor for mode7-road's
+-- ground: drag any image into assets as an m7 texture and change the name in
+-- dma("floor").
 `;
 
 export const splitScreen: Demo = demo(
   "split-screen",
   "split-screen",
   [{ name: "main.lua", source: MAIN_SRC }],
-  [city()],
+  [city(), floorTex()],
 );
