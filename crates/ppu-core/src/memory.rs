@@ -23,8 +23,8 @@ pub fn unpack_rgb15(c: u16) -> [u8; 4] {
     [expand(r5), expand(g5), expand(b5), 255]
 }
 
-/// Frame-global PPU memory: word-addressed VRAM, CGRAM palette, OAM sprite
-/// table, and the OBJ sheet selector referenced by `obj.sheet`.
+/// Frame-global PPU memory: word-addressed VRAM, CGRAM palette, and the OAM
+/// sprite table.
 #[derive(Clone, Debug)]
 pub struct Memory {
     /// VRAM: 64KB as 32K 16-bit words, word-addressed like hardware
@@ -37,8 +37,6 @@ pub struct Memory {
     pub cgram: [u16; 256],
     /// OAM: the 128 sprites.
     pub oam: [Obj; 128],
-    /// Asset id of the OBJ tile sheet that `obj[i].tile` indexes.
-    pub obj_sheet: Option<String>,
     /// Frame-global OBJ binding registers (OBSEL $2101): char base + size select.
     pub obsel: Obsel,
     /// OAM priority rotation ($2103 bit 7). When true, per-line OBJ evaluation
@@ -58,7 +56,6 @@ impl Default for Memory {
             vram: [0; 0x8000],
             cgram: [0; 256],
             oam: [Obj::default(); 128],
-            obj_sheet: None,
             obsel: Obsel::default(),
             priority_rotate: false,
             oam_addr: 0,
@@ -100,7 +97,6 @@ mod tests {
         let m = Memory::new();
         assert_eq!(m.cgram, [0u16; 256]);
         assert!(m.oam.iter().all(|o| !o.on));
-        assert!(m.obj_sheet.is_none());
     }
 
     #[test]

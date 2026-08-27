@@ -180,18 +180,21 @@ end
 "#;
 
 const TM_MASK_SRC: &str = r#"-- ppu.toys :: tm-mask (TM drops BG2 from the main screen)
+dma("mode0_bg1", { char = 0x1000, map = 0x0000, pal = 0 })
+dma("mode0_bg2", { char = 0x2000, map = 0x0400, pal = 32 })
 function frame(t, f)
   mode = 0; brightness = 15
-  bg[1].source = "mode0_bg1"
-  bg[2].source = "mode0_bg2"; bg[2].map_base = 0x0400; bg[2].char_base = 0x2000
+  bg[1].char_base = 0x1000; bg[1].map_base = 0x0000
+  bg[2].char_base = 0x2000; bg[2].map_base = 0x0400
   TM = 0x01   -- BG1 only; BG2 is masked off the main screen
 end
 "#;
 
 const SHADOW_SRC: &str = r#"-- ppu.toys :: shadow (subtractive fixed-colour darkens BG1)
+dma("ribbons", { char = 0x1000, map = 0x0000 })
 function frame(t, f)
   mode = 1; brightness = 15
-  bg[1].source = "ribbons"
+  bg[1].char_base = 0x1000; bg[1].map_base = 0x0000
   TM = 0x01
   CGADSUB = 0x81          -- subtract (bit7) + BG1 math-enable
   CGWSEL = 0x00           -- addend = COLDATA fixed colour

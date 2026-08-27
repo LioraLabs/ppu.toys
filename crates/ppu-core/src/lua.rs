@@ -11,27 +11,15 @@ use piccolo::{
     StaticError, Table, Value,
 };
 
-use crate::import::BudgetReport;
-use crate::import_m7::Mode7ImportReport;
 use crate::{rgb15, LineTable, LineTableBuilder, LineTableRow, Memory, HEIGHT};
 
-/// One BG layer's import budget from the most recent `frame()`, surfaced to the
-/// UI (m4/inspector). Tagged by importer flavor.
+/// Per-frame placement diagnostics surfaced to the UI (assets panel/inspector).
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(tag = "mode")]
 pub enum ImportBudget {
-    #[serde(rename = "tile")]
-    Tile { layer: usize, report: BudgetReport },
-    #[serde(rename = "m7")]
-    Mode7 {
-        layer: usize,
-        report: Mode7ImportReport,
-    },
-    #[serde(rename = "obj")]
-    Obj { report: BudgetReport },
-    /// A bound source's kind/depth did not match the target slot: the layer
-    /// renders blank and this diagnostic is surfaced (NO conversion). `expected`
-    /// describes the slot's requirement, `found` the source that was bound.
+    /// A `dma()` placement whose source is gone from the store (removed after
+    /// init): the placement places nothing and this diagnostic says why.
+    /// `expected` describes the placement, `found` the failure.
     #[serde(rename = "mismatch")]
     Mismatch {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -137,8 +125,8 @@ impl LuaEngine {
     }
 
     /// Decode + register a source payload under `name` (the `addSource` core).
-    /// The store is the graphics-data home; the bind-time placement pass looks
-    /// up + validates + places from it (no importer on the store path).
+    /// The store is the graphics-data home; `dma()` validates against it at
+    /// init and the per-frame replay places from it (no importer on this path).
     pub fn add_source(
         &mut self,
         name: &str,
@@ -150,8 +138,8 @@ impl LuaEngine {
     }
 
     /// Forget the source registered under `name` (the `removeSource` core).
-    /// VRAM words already placed by a bind stay put (memory is authentic and
-    /// cannot be un-written); a later bind by this name fails loudly instead.
+    /// An existing `dma()` placement of this name degrades to an
+    /// `ImportBudget::Mismatch` on the next frame's replay and places nothing.
     pub fn remove_source(&mut self, name: &str) -> bool {
         self.source_store.borrow_mut().remove(name).is_some()
     }
@@ -266,8 +254,8 @@ impl LuaEngine {
 
         // Read frame-wide defaults + frame-global memory. VRAM is rebuilt fresh
         // each frame so the flush order is deterministic: zero -> dma replay
-        // (init placements, call order) -> imports (source= bootstrap) ->
-        // structured pokes -> raw vram[] (final authority).
+        // (init placements, call order) -> structured pokes (read_memory) ->
+        // raw vram[] (final authority).
         let defaults = {
             let mut l = self.lua.borrow_mut();
             l.enter(|ctx| {
@@ -280,9 +268,6 @@ impl LuaEngine {
                     &mut self.reports,
                     &mut self.memory,
                 );
-                let store = self.source_store.borrow();
-                place_bg_sources(ctx, &store, &mut self.reports, &mut self.memory);
-                place_obj_source(ctx, &store, &mut self.reports, &mut self.memory);
                 read_memory(ctx, &mut self.memory);
                 read_state(ctx)
             })
@@ -405,7 +390,7 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
         ctx.set_global(name, 0).unwrap();
     }
 
-    // bg[1..4] = { scroll = {x,y}, source=nil, visible=true }
+    // bg[1..4] = { scroll = {x,y}, visible=true }
     let bg = Table::new(&ctx);
     for i in 1..=4i64 {
         let layer = Table::new(&ctx);
@@ -482,7 +467,7 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     // vram (raw 16-bit word poke table: vram[addr] = word, 0..0x7FFF)
     ctx.set_global("vram", Table::new(&ctx)).unwrap();
 
-    // obj[0..127] + obj.sheet
+    // obj[0..127]
     let obj = Table::new(&ctx);
     for i in 0..128i64 {
         let o = Table::new(&ctx);
@@ -1318,7 +1303,6 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
                         row.bg[i].scroll_y = y as f32;
                     }
                 }
-                row.bg[i].source = value_to_string(layer.get(ctx, "source"));
                 row.bg[i].visible = match layer.get(ctx, "visible") {
                     Value::Nil => true,
                     v => v.to_bool(),
@@ -1407,15 +1391,6 @@ fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
                     scroll.set(ctx, "x", row.bg[i].scroll_x as f64).unwrap();
                     scroll.set(ctx, "y", row.bg[i].scroll_y as f64).unwrap();
                 }
-                match &row.bg[i].source {
-                    Some(s) => {
-                        let interned = ctx.intern(s.as_bytes());
-                        layer.set(ctx, "source", interned).unwrap();
-                    }
-                    None => {
-                        layer.set(ctx, "source", Value::Nil).unwrap();
-                    }
-                };
                 layer.set(ctx, "visible", row.bg[i].visible).unwrap();
                 layer
                     .set(ctx, "tile_size", row.bg[i].tile_size as i64)
@@ -1447,191 +1422,9 @@ fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
     }
 }
 
-/// A source payload's kind, as a short human label for diagnostics.
-fn kind_label(p: &crate::source::SourcePayload) -> &'static str {
-    match p {
-        crate::source::SourcePayload::Bg(_) => "bg",
-        crate::source::SourcePayload::M7(_) => "m7",
-        crate::source::SourcePayload::Obj(_) => "obj",
-        crate::source::SourcePayload::Sheet(_) => "sheet",
-    }
-}
-
-/// A BG layer's placement bases from its Lua globals: char_base defaults to
-/// 0x1000 when unset (the historical default), both snapped to legal alignment.
-fn bg_bases<'gc>(ctx: piccolo::Context<'gc>, layer: Table<'gc>) -> (u16, u16) {
-    let raw_char = layer.get(ctx, "char_base").to_integer().unwrap_or(0) as u32;
-    let char_base = if raw_char == 0 {
-        0x1000
-    } else {
-        crate::quantize::bg_char_base(raw_char)
-    };
-    let map_base =
-        crate::quantize::bg_map_base(layer.get(ctx, "map_base").to_integer().unwrap_or(0) as u32);
-    (map_base as u16, char_base as u16)
-}
-
-/// Echo the placement/format registers back into the Lua layer table so
-/// `read_state`, the rasterizer and the inspector all agree (as before).
-fn echo_bg_registers<'gc>(
-    ctx: piccolo::Context<'gc>,
-    layer: Table<'gc>,
-    src: &crate::source::BgSource,
-    map_base: u16,
-    char_base: u16,
-) {
-    layer.set(ctx, "map_base", map_base as i64).unwrap();
-    layer.set(ctx, "char_base", char_base as i64).unwrap();
-    layer
-        .set(ctx, "screen_size", src.screen_size as i64)
-        .unwrap();
-    layer.set(ctx, "tile_size", src.tile_size as i64).unwrap();
-}
-
-/// Place each bound `bg[n].source` from the source store into VRAM/CGRAM in the
-/// frame's zeroed-bootstrap slot, honoring the frame-wide `mode`, and echo the
-/// placement registers back into the layer globals. Strict bind validation: a
-/// store source whose kind or depth mismatches the slot renders blank (payload
-/// not placed) and pushes an `ImportBudget::Mismatch`. A slot id absent from
-/// the store renders nothing and reports a Mismatch with `found = "no source
-/// with this name"` (a typo used to be a silent blank layer). Appends to
-/// `reports` (frame() clears them before the dma replay); assumes VRAM/CGRAM
-/// were zeroed by the caller.
-fn place_bg_sources(
-    ctx: piccolo::Context<'_>,
-    store: &HashMap<String, crate::source::SourcePayload>,
-    reports: &mut Vec<ImportBudget>,
-    mem: &mut Memory,
-) {
-    use crate::source::SourcePayload;
-    let mode = crate::quantize::mode(ctx.get_global("mode").to_integer().unwrap_or(1) as u8);
-    let Value::Table(bg) = ctx.get_global("bg") else {
-        return;
-    };
-    for i in 0..4usize {
-        let Value::Table(layer) = bg.get(ctx, (i + 1) as i64) else {
-            continue;
-        };
-        let Some(slot) = value_to_string(layer.get(ctx, "source")) else {
-            continue;
-        };
-        if mode == 7 {
-            // Mode 7 is a single 8bpp BG1 plane over the interleaved region.
-            if i != 0 {
-                continue;
-            }
-            match store.get(&slot) {
-                Some(SourcePayload::M7(src)) => crate::source::place_m7(src, mem),
-                Some(other) => reports.push(ImportBudget::Mismatch {
-                    layer: Some(i),
-                    slot: slot.clone(),
-                    expected: "m7".into(),
-                    found: kind_label(other).into(),
-                }),
-                None => reports.push(ImportBudget::Mismatch {
-                    layer: Some(i),
-                    slot: slot.clone(),
-                    expected: "m7".into(),
-                    found: MISSING_SOURCE.into(),
-                }),
-            }
-        } else {
-            let bpp = crate::modes::mode_info(mode).map_or(0, |m| m.bpp[i]);
-            if !matches!(bpp, 2 | 4 | 8) {
-                continue;
-            }
-            let cgram_base = if mode == 0 && bpp == 2 { i * 8 * 4 } else { 0 };
-            match store.get(&slot) {
-                Some(SourcePayload::Bg(src)) if src.bit_depth == bpp => {
-                    let (map_base, char_base) = bg_bases(ctx, layer);
-                    crate::source::place_bg(src, mem, map_base, char_base, cgram_base);
-                    echo_bg_registers(ctx, layer, src, map_base, char_base);
-                }
-                Some(SourcePayload::Bg(src)) => reports.push(ImportBudget::Mismatch {
-                    layer: Some(i),
-                    slot: slot.clone(),
-                    expected: format!("bg {bpp}bpp"),
-                    found: format!("bg {}bpp", src.bit_depth),
-                }),
-                // A sheet places chars + palettes only: map geometry is the
-                // author's, so DON'T echo map_base/screen_size/tile_size back
-                // onto the layer the way an assembled bg source does. char_base
-                // IS echoed — it is placement, not geometry, and `bg_bases`
-                // defaults an unset one to 0x1000, so without the echo the
-                // rasterizer would read BG12NBA=0 and the layer would render
-                // black with no diagnostic.
-                Some(SourcePayload::Sheet(src)) if src.bit_depth == bpp => {
-                    let (_, char_base) = bg_bases(ctx, layer);
-                    crate::source::place_sheet(src, mem, char_base, cgram_base);
-                    layer.set(ctx, "char_base", char_base as i64).unwrap();
-                }
-                Some(SourcePayload::Sheet(src)) => reports.push(ImportBudget::Mismatch {
-                    layer: Some(i),
-                    slot: slot.clone(),
-                    expected: format!("bg {bpp}bpp"),
-                    found: format!("sheet {}bpp", src.bit_depth),
-                }),
-                Some(other) => reports.push(ImportBudget::Mismatch {
-                    layer: Some(i),
-                    slot: slot.clone(),
-                    expected: format!("bg {bpp}bpp"),
-                    found: kind_label(other).into(),
-                }),
-                None => reports.push(ImportBudget::Mismatch {
-                    layer: Some(i),
-                    slot: slot.clone(),
-                    expected: format!("bg {bpp}bpp"),
-                    found: MISSING_SOURCE.into(),
-                }),
-            }
-        }
-    }
-}
-
-/// Place a bound `obj.sheet` from the source store: OBJ char at the snapped
-/// `obj.char_base`, OBJ palettes into the CGRAM OBJ half. Reads `obj.sheet` /
-/// `obj.char_base` straight from the Lua ctx (NOT `memory.obsel`, which
-/// `read_memory` fills LATER). A non-OBJ store source renders nothing and pushes
-/// an `ImportBudget::Mismatch`; so does an id absent from the store (`found =
-/// "no source with this name"`). Runs in the same bootstrap slot; appends to the
-/// shared `reports` vec (`place_bg_sources` already `clear()`ed it and pushed
-/// the BG entries).
-fn place_obj_source(
-    ctx: piccolo::Context<'_>,
-    store: &HashMap<String, crate::source::SourcePayload>,
-    reports: &mut Vec<ImportBudget>,
-    mem: &mut Memory,
-) {
-    use crate::source::SourcePayload;
-    let Value::Table(obj) = ctx.get_global("obj") else {
-        return;
-    };
-    let Some(slot) = value_to_string(obj.get(ctx, "sheet")) else {
-        return;
-    };
-    let char_base = crate::quantize::obj_char_base(
-        obj.get(ctx, "char_base").to_integer().unwrap_or(0).max(0) as u32,
-    );
-    match store.get(&slot) {
-        Some(SourcePayload::Obj(src)) => crate::source::place_obj(src, mem, char_base as u16),
-        Some(other) => reports.push(ImportBudget::Mismatch {
-            layer: None,
-            slot: slot.clone(),
-            expected: "obj".into(),
-            found: kind_label(other).into(),
-        }),
-        None => reports.push(ImportBudget::Mismatch {
-            layer: None,
-            slot: slot.clone(),
-            expected: "obj".into(),
-            found: MISSING_SOURCE.into(),
-        }),
-    }
-}
-
-/// `found` label for a bound slot name with no registered source — the silent
-/// blank layer this used to be is the single most-asked "am I doing something
-/// wrong?"; a typo deserves a diagnostic, not nothing.
+/// `found` label for a `dma()` placement whose source is gone from the store —
+/// a removed source deserves a diagnostic, not nothing. (An init-time typo is
+/// a loud `dma` error; this covers removal AFTER placement.)
 const MISSING_SOURCE: &str = "no source with this name";
 
 /// VRAM word address of the tilemap entry for tile column `tx`, row `ty` at a
@@ -1648,17 +1441,16 @@ fn tilemap_addr(map_base: u16, screen_size: u8, tx: u32, ty: u32) -> usize {
     ((map_base as u32 + screen * 0x400 + (ty % 32) * 32 + (tx % 32)) & 0x7fff) as usize
 }
 
-/// Flush the DSL memory-poke surfaces into `Memory`. Runs AFTER the placement
-/// pass (`place_bg_sources`/`place_obj_source`) has laid down any `source =`
-/// bootstrap, so manual pokes compose on top under last-write-wins. Order:
-/// structured tilemap/char pokes, then the raw `vram[]` table as the FINAL
-/// authority (a raw word write always wins). `cgram[]` is applied as an override
-/// on top of the placed palette (only set entries). VRAM is NOT zeroed here —
-/// `frame()` zeroes it before placement.
+/// Flush the DSL memory-poke surfaces into `Memory`. Runs AFTER the dma replay
+/// has laid down the init placements, so manual pokes compose on top under
+/// last-write-wins. Order: structured tilemap/char pokes, then the raw `vram[]`
+/// table as the FINAL authority (a raw word write always wins). `cgram[]` is
+/// applied as an override on top of the placed palette (only set entries).
+/// VRAM is NOT zeroed here — `frame()` zeroes it before the replay.
 fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
-    // cgram[] overrides the import palette: apply only the entries the user
-    // actually set, so a `source =` import's colors survive where unpoked.
-    // (mem.cgram was zeroed and any import palette written before this runs.)
+    // cgram[] overrides the placed palette: apply only the entries the user
+    // actually set, so a dma placement's colors survive where unpoked.
+    // (mem.cgram was zeroed and any placed palette written before this runs.)
     if let Value::Table(cg) = ctx.get_global("cgram") {
         for (k, v) in cg {
             if let (Some(i), Some(c)) = (k.to_integer(), v.to_integer()) {
@@ -1669,7 +1461,6 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
         }
     }
     if let Value::Table(obj) = ctx.get_global("obj") {
-        mem.obj_sheet = value_to_string(obj.get(ctx, "sheet"));
         mem.obsel.char_base = crate::quantize::obj_char_base(
             obj.get(ctx, "char_base").to_integer().unwrap_or(0).max(0) as u32,
         );
