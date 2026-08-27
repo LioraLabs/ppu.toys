@@ -1,5 +1,5 @@
-/** A user-uploaded image. `id` is the string referenced from Lua as
- *  bg[n].source / obj.sheet. */
+/** A user-uploaded image. `id` is the name referenced from Lua as
+ *  dma("id", { char = ... }). */
 export interface Asset {
   id: string;
   name: string;

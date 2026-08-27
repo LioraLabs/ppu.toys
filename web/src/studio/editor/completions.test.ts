@@ -34,7 +34,7 @@ describe("ppuCompletions", () => {
   it("offers obj.* members after `obj.`", () => {
     const res = complete("obj.");
     const labels = res!.options.map((o) => o.label);
-    expect(labels).toContain("sheet");
+    expect(labels).not.toContain("sheet"); // M11: source sugar deleted — dma() places
     expect(labels).toContain("size_sel");
     expect(labels).toContain("name_select");
     expect(labels).toContain("char_base");
@@ -95,10 +95,21 @@ describe("ppuCompletions", () => {
     expect(complete("bg[1].map[0][0] = {ti")!.options.map((o) => o.label)).toContain("tile");
   });
 
-  it("bg[n].source names the tilesheet kind too", () => {
-    const res = complete("bg[1].");
-    const source = res!.options.find((o) => o.label === "source");
-    expect(source?.detail).toMatch(/sheet/i);
+  // M11: assets are placed by dma(name, opts) at init — the source=/sheet=
+  // lvalue sugar is gone from the DSL and must not be offered.
+  it("offers dma as a global with its one-line teaching doc", () => {
+    const res = complete("dm");
+    const dma = res!.options.find((o) => o.label === "dma");
+    expect(dma).toBeDefined();
+    expect(dma!.type).toBe("function");
+    expect(dma!.detail).toContain("init-only");
+    expect(dma!.detail).toContain("char =");
+    expect(dma!.detail).toContain("m7");
+  });
+
+  it("no longer offers the deleted bg[n].source / obj.sheet lvalues", () => {
+    expect(complete("bg[1].")!.options.map((o) => o.label)).not.toContain("source");
+    expect(complete("obj.")!.options.map((o) => o.label)).not.toContain("sheet");
   });
 
   it("returns null when there is no word to complete", () => {
@@ -149,7 +160,6 @@ describe("M8 DSL audit", () => {
     const labels = complete("bg[1].")!.options.map((o) => o.label);
     for (const m of [
       "scroll",
-      "source",
       "visible",
       "tile_size",
       "map_base",
@@ -163,14 +173,14 @@ describe("M8 DSL audit", () => {
     expect(labels).not.toContain("brightness");
   });
 
-  it("offers sprite members on indexed obj[n]. but sheet/OBSEL on plain obj.", () => {
+  it("offers sprite members on indexed obj[n]. but OBSEL on plain obj.", () => {
     const sprite = complete("obj[12].")!.options.map((o) => o.label);
     for (const m of ["x", "y", "tile", "pal", "prio", "flip_x", "flip_y", "on", "large"]) {
       expect(sprite).toContain(m);
     }
-    expect(sprite).not.toContain("sheet");
+    expect(sprite).not.toContain("char_base");
     const plain = complete("obj.")!.options.map((o) => o.label);
-    expect(plain).toContain("sheet");
+    expect(plain).toContain("char_base");
     expect(plain).toContain("priority_rotate");
     expect(plain).toContain("oam_addr");
     expect(plain).not.toContain("large");
@@ -185,11 +195,11 @@ describe("M8 DSL audit", () => {
 
   it("does NOT treat user identifiers ending in a DSL name as member access", () => {
     // myobj. / subbg[1]. / xm7. are user variables, not obj/bg/m7
-    expect(complete("myobj.")!.options.map((o) => o.label)).not.toContain("sheet");
+    expect(complete("myobj.")!.options.map((o) => o.label)).not.toContain("size_sel");
     expect(complete("subbg[1].")!.options.map((o) => o.label)).not.toContain("scroll");
     expect(complete("xm7.")!.options.map((o) => o.label)).not.toContain("extbg");
     // ...while the real bases still complete mid-expression
-    expect(complete("x = obj.")!.options.map((o) => o.label)).toContain("sheet");
+    expect(complete("x = obj.")!.options.map((o) => o.label)).toContain("size_sel");
   });
 
   it("offers the obj.first priority-rotation sugar", () => {

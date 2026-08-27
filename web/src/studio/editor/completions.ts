@@ -35,7 +35,7 @@ const GLOBALS: Completion[] = [
   },
   { label: "cgram", type: "variable", detail: "cgram[0..255] palette, 15-bit BGR · $2121/$2122" },
   { label: "vram", type: "variable", detail: "vram[0..0x7FFF] raw 16-bit words · $2116-$2119" },
-  { label: "obj", type: "variable", detail: "obj[0..127] sprites; obj.sheet · OAM, OBSEL $2101" },
+  { label: "obj", type: "variable", detail: "obj[0..127] sprites · OAM, OBSEL $2101" },
   { label: "TM", type: "variable", detail: "main screen designation bitmask · $212C" },
   { label: "TS", type: "variable", detail: "sub screen designation bitmask · $212D" },
   { label: "TMW", type: "variable", detail: "window mask enable, main · $212E" },
@@ -53,6 +53,12 @@ const GLOBALS: Completion[] = [
   { label: "CGADSUB", type: "variable", detail: "color-math control B (add/sub, layers) · $2131" },
   { label: "COLDATA", type: "variable", detail: "fixed color, 15-bit · $2132" },
   { label: "coldata", type: "function", detail: "coldata(byte) authentic $2132 channel write" },
+  {
+    label: "dma",
+    type: "function",
+    detail:
+      "dma(name, { char =, map =, pal = }) init-only VRAM placement — the payload kind decides the layout, returns the resolved {char,map,pal}; m7 sources take no opts",
+  },
   { label: "hdma", type: "function", detail: "hdma(y0,y1,fn) per-scanline hook · HDMA" },
   { label: "scanline", type: "function", detail: "alias of hdma · HDMA" },
   {
@@ -108,11 +114,6 @@ const MATH_MEMBERS: Completion[] = [
 /** bg[n].* layer members. */
 const BG_MEMBERS: Completion[] = [
   { label: "scroll", type: "property", detail: ".x/.y · BGnHOFS/BGnVOFS $210D-$2114" },
-  {
-    label: "source",
-    type: "property",
-    detail: "asset id — a bg source brings tiles+map, a sheet brings chars only",
-  },
   { label: "visible", type: "property", detail: "bool — playground layer toggle" },
   { label: "tile_size", type: "property", detail: "8 or 16 · BGMODE $2105" },
   { label: "map_base", type: "property", detail: "tilemap VRAM word addr · BGnSC $2107-$210A" },
@@ -141,9 +142,8 @@ const MAP_ENTRY_MEMBERS: Completion[] = [
   { label: "flip_y", type: "property", detail: "bool — mirror vertically" },
 ];
 
-/** obj.* members (the sheet/OBSEL surface — NOT the per-sprite fields). */
+/** obj.* members (the OBSEL surface — NOT the per-sprite fields). */
 const OBJ_MEMBERS: Completion[] = [
-  { label: "sheet", type: "property", detail: "OBJ tile sheet asset id" },
   { label: "char_base", type: "property", detail: "OBJ char base (VRAM word addr) · OBSEL $2101" },
   { label: "size_sel", type: "property", detail: "size pair 0..7 (small/large WxH) · OBSEL $2101" },
   {

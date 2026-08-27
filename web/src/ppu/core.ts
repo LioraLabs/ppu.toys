@@ -72,9 +72,9 @@ export type ImportReport =
   | { mode: "tile"; layer: number; report: TileImportBudget }
   | { mode: "m7"; layer: number; report: Mode7ImportBudget }
   | { mode: "obj"; report: TileImportBudget }
-  /** Bind-time failure: the bound slot name mismatched the target (wrong kind
+  /** Bind-time failure: the dma'd name mismatched the target (wrong kind
    *  or bit depth), or no source is registered under it — the layer renders
-   *  blank and this diagnostic says why. `layer` is absent for obj.sheet. */
+   *  blank and this diagnostic says why. `layer` is absent for obj placements. */
   | { mode: "mismatch"; layer?: number; slot: string; expected: string; found: string };
 
 /** `sheet` is a tilesheet: 8x8 chars in row-major sheet order, no dedup and no

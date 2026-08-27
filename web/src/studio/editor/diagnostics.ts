@@ -49,8 +49,7 @@ export function bindWarningsByFile(
 ): Map<string, LuaError[]> {
   const out = new Map<string, LuaError[]>();
   for (const m of mismatches) {
-    const who = m.layer === undefined ? "obj.sheet" : `bg[${m.layer + 1}].source`;
-    const message = `${who} "${m.slot}" not placed — needs ${m.expected}, found ${m.found}`;
+    const message = `dma("${m.slot}") not placed — needs ${m.expected}, found ${m.found}`;
     for (const f of files) {
       const idx = [`"${m.slot}"`, `'${m.slot}'`]
         .map((q) => f.source.indexOf(q))

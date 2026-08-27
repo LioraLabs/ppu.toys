@@ -62,7 +62,8 @@ export function AssetsPanel({ onClose }: { onClose?: () => void } = {}) {
         {sources.length === 0 && templateAssets.length === 0 && (
           <li className="library-empty">
             No assets yet. Add a PNG and it becomes real SNES graphics — tiles, palettes and a
-            tilemap — usable from Lua as <code>bg[n].source</code> / <code>obj.sheet</code>.
+            tilemap — then reference it from Lua:{" "}
+            <code>dma(&quot;name&quot;, &#123; char = 0x1000 &#125;)</code>.
           </li>
         )}
         {templateAssets.map((a) => (
