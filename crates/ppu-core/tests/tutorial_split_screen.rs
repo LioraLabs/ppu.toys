@@ -1,9 +1,11 @@
 //! Tutorial toy 7/10 :: split-screen — the Rust mirror of
 //! web/src/studio/demos/tutorials/splitScreen.ts (the Lua is verbatim, the
-//! city() pixels are byte-identical; the golden PNG proves the frame the
-//! studio ships). One frame, two hardware modes: the frame-wide default is
-//! mode 1 (city import), and `mode = 7` inside the hdma hook flips scanlines
-//! 112..223 to the affine floor.
+//! city()/floor_tex() pixels are byte-identical; the golden PNG proves the
+//! frame the studio ships). One frame, two hardware modes: the frame-wide
+//! default is mode 1 (city), and `mode = 7` inside the hdma hook flips
+//! scanlines 112..223 to the affine floor. Both payloads are placed by
+//! top-level `dma()` — the city at explicit addresses, the floor into the
+//! interleaved m7 region — the PPU-106 coexistence this toy now teaches.
 mod common;
 
 use ppu_core::render_frame;
@@ -22,40 +24,31 @@ const MAIN_SRC: &str = r#"-- ppu.toys tutorial 7/10 :: split-screen -- two hardw
 -- an hdma hook and only those scanlines flip. A per-scanline mode switch is a
 -- trick only this DSL does.
 --
--- One catch, and it is this toy's second lesson: imports bind ONCE per frame,
--- using the frame-wide mode. Mode 1 is frame-wide here, so the city binds as a
--- normal 4bpp BG import (parallax-skyline taught those) -- but a mode 7
--- texture import can NOT bind in a mode 1 frame, so the floor is poked into
--- mode 7 tile 0 instead (extbg-direct-color pokes the plane the same way).
--- The two worlds still share VRAM without colliding: mode 7 owns words
--- 0x0000-0x3FFF, so the city's tiles are parked above at 0x4000.
+-- Setup stage: BOTH worlds go into VRAM up front, each by its payload's own
+-- rules (parallax-skyline, lesson 2, tells the full dma story). The city is
+-- tile data at addresses we pick; a mode 7 texture always lands interleaved
+-- at 0x0000-0x3FFF (that region is hard-wired into the chip), which is
+-- exactly why the city's tiles park above it at 0x4000. dma places by what
+-- the data IS, not by what mode the frame runs in -- that is the whole
+-- reason one frame can hold both worlds.
+local city = dma("city", { char = 0x4000, map = 0x7000 })
+dma("floor")   -- m7: chars+map at 0x0000, its 3-colour palette at CGRAM 1..
+-- One palette serves both bands: CGRAM has no notion of the split. The floor
+-- is deliberately painted with three colours the city already owns, so its
+-- palette lands on entries 1..3 holding the exact same values -- shared
+-- paint instead of a fight.
 function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15    -- frame-wide default: every line starts in mode 1
 
-  -- Top band: the city (rows 0..111 of the import; the floor covers the rest).
-  bg[1].source = "city"
-  bg[1].char_base = 0x4000     -- clear of the mode 7 words (0x0000-0x3FFF)
-  bg[1].map_base = 0x7000
+  -- Top band: point BG1 at the city's VRAM home from the setup stage.
+  bg[1].char_base = city.char  -- clear of the mode 7 words (0x0000-0x3FFF)
+  bg[1].map_base = city.map
   screen.main.bg1 = true
   screen.main.bg2 = false; screen.main.bg3 = false  -- power-on defaults ALL layers
   screen.main.bg4 = false; screen.main.obj = false  -- on; they'd show garbage here
 
-  -- Bottom band's texture: ONE 8x8 tile. The zeroed mode 7 map reads tile 0 at
-  -- every cell, so whatever tile 0 holds repeats across the whole 1024x1024
-  -- plane -- an endless floor from 64 pixels.
-  cgram[0] = rgb(16, 8, 40)          -- backdrop, should anything miss
-  cgram[16] = rgb(56, 40, 72)        -- asphalt A   (16..18 sit clear of the
-  cgram[17] = rgb(248, 168, 248)     -- grid line     city's palette in 0..15:
-  cgram[18] = rgb(40, 28, 56)        -- asphalt B    CGRAM is shared by both bands)
-  for py = 0, 7 do
-    for px = 0, 7 do
-      local c = 16
-      if (floor(px / 4) + floor(py / 4)) % 2 == 1 then c = 18 end  -- 4px checker
-      if px == 0 or py == 0 then c = 17 end                        -- neon grid seams
-      m7pixel(0, px, py, c)
-    end
-  end
+  cgram[0] = rgb(16, 8, 40)    -- backdrop, should anything miss
 
   -- The split. The hook runs once per scanline y; every register assignment
   -- inside lands on that line ONLY.
@@ -69,8 +62,9 @@ function frame(t, f)
   end)
 end
 -- Try: move the split with 112 + floor(sin(t) * 16) (both uses of 'split' follow);
--- steer with m7.cx = 128 + sin(t) * 40; or set the frame-wide mode to 3 and watch
--- the city vanish -- an import only binds where its depth matches the mode's.
+-- steer with m7.cx = 128 + sin(t) * 40; or swap the floor for mode7-road's
+-- ground: drag any image into assets as an m7 texture and change the name in
+-- dma("floor").
 "#;
 
 const GOLDEN: &str = "tests/fixtures/golden_tutorial_split_screen.png";
@@ -134,22 +128,50 @@ fn city() -> Vec<u8> {
     data
 }
 
+/// Byte-identical mirror of floorTex() in splitScreen.ts: a 1024x1024 mode 7
+/// texture — a sunset neon grid (32px period, 2px seams) over 8px-checkered
+/// asphalt. The three colours are EXACTLY the city's three lowest BGR555
+/// palette entries, and they sort into the same order under the m7 importer's
+/// [r,g,b] palette sort, so both dma placements write the same values into
+/// the shared CGRAM 1..3 (`floor_palette_shares_the_citys_entries` pins this).
+fn floor_tex() -> Vec<u8> {
+    let mut data = vec![0u8; 1024 * 1024 * 4];
+    for y in 0..1024usize {
+        for x in 0..1024usize {
+            let (r, g, b) = if x % 32 < 2 || y % 32 < 2 {
+                (224u8, 104u8, 72u8) // sunset grid seams
+            } else if ((x / 8) + (y / 8)) % 2 == 1 {
+                (24, 16, 64) // asphalt B (indigo)
+            } else {
+                (16, 16, 32) // asphalt A (navy)
+            };
+            let i = (y * 1024 + x) * 4;
+            data[i..i + 4].copy_from_slice(&[r, g, b, 255]);
+        }
+    }
+    data
+}
+
+fn engine() -> ppu_core::LuaEngine {
+    common::engine_with(
+        &mut |e| {
+            common::add_bg(e, "city", city(), 256, 224, 4);
+            common::add_m7(e, "floor", floor_tex(), 1024, 1024);
+        },
+        &[("main.lua", MAIN_SRC)],
+    )
+}
+
 /// The t=1.0 / f=60 frame the golden pins.
 fn render() -> Vec<u8> {
-    let mut e = common::engine_with(
-        &mut |e| common::add_bg(e, "city", city(), 256, 224, 4),
-        &[("main.lua", MAIN_SRC)],
-    );
+    let mut e = engine();
     let lt = e.frame(1.0, 60).unwrap();
     render_frame(&lt, e.memory())
 }
 
 #[test]
 fn the_split_lands_where_the_hdma_says() {
-    let mut e = common::engine_with(
-        &mut |e| common::add_bg(e, "city", city(), 256, 224, 4),
-        &[("main.lua", MAIN_SRC)],
-    );
+    let mut e = engine();
     let lt = e.frame(1.0, 60).unwrap();
     assert_eq!(lt.rows[0].mode, 1, "top band should be mode 1");
     assert_eq!(
@@ -183,15 +205,20 @@ fn top_band_shows_the_mode1_city() {
 #[test]
 fn bottom_band_shows_the_mode7_floor() {
     let fb = render();
-    // Every floor colour (asphalt A/B, grid, backdrop) keeps green strictly
-    // below red and blue — nothing in the city's low band looks like that.
+    // Every pixel on a floor row is one of the dma-placed texture's three
+    // colours (through the rgb15 grid and back) — proof the m7 payload landed
+    // and its shared palette entries survived the city's placement.
+    let floor_colors: [[u8; 4]; 3] = [
+        ppu_core::unpack_rgb15(ppu_core::rgb15(16, 16, 32)),
+        ppu_core::unpack_rgb15(ppu_core::rgb15(24, 16, 64)),
+        ppu_core::unpack_rgb15(ppu_core::rgb15(224, 104, 72)),
+    ];
     let mut distinct = std::collections::HashSet::new();
     for x in (8..248).step_by(8) {
         let p = common::px(&fb, x, 200);
-        assert_eq!(p[3], 255);
         assert!(
-            p[1] < p[0] && p[1] < p[2],
-            "floor pixel at ({x},200) should be in the purple floor palette: {p:?}"
+            floor_colors.iter().any(|c| c == p),
+            "floor pixel at ({x},200) is not a floor-texture colour: {p:?}"
         );
         distinct.insert([p[0], p[1], p[2]]);
     }
@@ -199,6 +226,20 @@ fn bottom_band_shows_the_mode7_floor() {
         distinct.len() >= 2,
         "the checker/grid texture should show at least two colours on row 200"
     );
+}
+
+/// The palette-sharing invariant the Lua header teaches: the floor's three
+/// colours ARE the city's three lowest BGR555 entries, in the same order, so
+/// after both placements CGRAM 1..3 hold exactly those values (and the city's
+/// remaining entries are untouched by the floor).
+#[test]
+fn floor_palette_shares_the_citys_entries() {
+    let mut e = engine();
+    e.frame(1.0, 60).unwrap();
+    let cg = &e.memory().cgram;
+    assert_eq!(cg[1], ppu_core::rgb15(16, 16, 32), "entry 1 (navy)");
+    assert_eq!(cg[2], ppu_core::rgb15(24, 16, 64), "entry 2 (indigo)");
+    assert_eq!(cg[3], ppu_core::rgb15(224, 104, 72), "entry 3 (sunset)");
 }
 
 #[test]
