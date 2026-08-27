@@ -2,7 +2,7 @@
 //! frame-wide defaults + CGRAM/OAM, registers `hdma` hooks, then resolves the
 //! LineTable by invoking each covering hook per scanline (later call wins).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -71,10 +71,36 @@ pub struct LuaEngine {
     /// The source store: decoded `addSource` payloads keyed by name — the
     /// graphics-data home (kind + depth + palettes + tiles + tilemap all
     /// self-described by the payload). App-level; survives recompiles (NOT
-    /// cleared by set_sources, which owns Lua files).
-    source_store: HashMap<String, crate::source::SourcePayload>,
+    /// cleared by set_sources, which owns Lua files). Shared with the `dma`
+    /// callback installed in the VM (init-time name/kind validation).
+    source_store: Rc<RefCell<HashMap<String, crate::source::SourcePayload>>>,
+    /// Placements recorded by `dma()` during the current program's init
+    /// (top-level chunks + `init()`), replayed into VRAM/CGRAM each frame.
+    /// Swapped wholesale on a successful `set_sources` (recompile).
+    dma: Rc<DmaRecorder>,
     /// Per-layer import/diagnostic reports produced by the most recent `frame()`.
     reports: Vec<ImportBudget>,
+}
+
+/// The resolved result of one init-stage `dma(name, opts?)` call. Replay
+/// resolves `name` against the LIVE source store each frame, so an
+/// `add_source` under the same name flows into the placement without a
+/// recompile, and a `remove_source` degrades to a Mismatch report (same UX
+/// as the old binding path) instead of a stale copy.
+struct DmaPlacement {
+    name: String,
+    char_base: u16,
+    map_base: u16,
+    cgram_base: u8,
+}
+
+/// `dma()` call recorder shared between the engine and the callback installed
+/// in its VM. `active` is true only while `set_sources` executes top-level
+/// chunks + `init()` — the init-only gate.
+#[derive(Default)]
+struct DmaRecorder {
+    active: Cell<bool>,
+    placements: RefCell<Vec<DmaPlacement>>,
 }
 
 impl Default for LuaEngine {
@@ -85,15 +111,22 @@ impl Default for LuaEngine {
 
 impl LuaEngine {
     pub fn new() -> Self {
+        let source_store = Rc::new(RefCell::new(HashMap::new()));
+        let dma = Rc::new(DmaRecorder::default()); // inactive: no code has run
         let mut lua = Lua::core();
         lua.enter(install_bindings);
+        {
+            let (store, rec) = (source_store.clone(), dma.clone());
+            lua.enter(move |ctx| install_dma(ctx, store, rec));
+        }
         LuaEngine {
             lua: Rc::new(RefCell::new(lua)),
             frame_fn: None,
             init_fn: None,
             frame_file: None,
             memory: Memory::new(),
-            source_store: HashMap::new(),
+            source_store,
+            dma,
             reports: Vec::new(),
         }
     }
@@ -112,7 +145,7 @@ impl LuaEngine {
         payload: &[u8],
     ) -> Result<(), crate::source::PayloadError> {
         let p = crate::source::SourcePayload::decode(payload)?;
-        self.source_store.insert(name.to_string(), p);
+        self.source_store.borrow_mut().insert(name.to_string(), p);
         Ok(())
     }
 
@@ -120,7 +153,7 @@ impl LuaEngine {
     /// VRAM words already placed by a bind stay put (memory is authentic and
     /// cannot be un-written); a later bind by this name fails loudly instead.
     pub fn remove_source(&mut self, name: &str) -> bool {
-        self.source_store.remove(name).is_some()
+        self.source_store.borrow_mut().remove(name).is_some()
     }
 
     /// Per-layer import budgets from the most recent `frame()` (m4/inspector).
@@ -149,6 +182,16 @@ impl LuaEngine {
     pub fn set_sources(&mut self, files: &[(&str, &str)]) -> Result<(), LuaError> {
         let mut lua = Lua::core();
         lua.enter(install_bindings);
+        // dma() records into a FRESH recorder, active for the init window
+        // (top-level chunks + init()). Committed to the engine only on the
+        // swap-on-success below, so a failed recompile keeps the previous
+        // program's placements — same contract as the VM itself.
+        let rec = Rc::new(DmaRecorder::default());
+        rec.active.set(true);
+        {
+            let (store, rec) = (self.source_store.clone(), rec.clone());
+            lua.enter(move |ctx| install_dma(ctx, store, rec));
+        }
 
         for (name, src) in files {
             let load = lua.try_enter(|ctx| {
@@ -176,6 +219,7 @@ impl LuaEngine {
         self.frame_fn = frame_fn;
         self.frame_file = frame_file;
         self.init_fn = init_fn;
+        self.dma = rec.clone();
         self.memory = Memory::new();
 
         if let Some(init) = self.init_fn.clone() {
@@ -184,11 +228,15 @@ impl LuaEngine {
                 let f = ctx.fetch(&init);
                 ctx.stash(Executor::start(ctx, f, ()))
             });
-            l.execute::<()>(&ex).map_err(|e| {
+            let res = l.execute::<()>(&ex);
+            rec.active.set(false); // init window closes even on error
+            res.map_err(|e| {
                 let mut err = static_error_to_lua(e);
                 err.file = init_file.clone();
                 err
             })?;
+        } else {
+            rec.active.set(false);
         }
         Ok(())
     }
@@ -217,15 +265,24 @@ impl LuaEngine {
         }
 
         // Read frame-wide defaults + frame-global memory. VRAM is rebuilt fresh
-        // each frame so the flush order is deterministic: zero -> imports
-        // (source= bootstrap) -> structured pokes -> raw vram[] (final authority).
+        // each frame so the flush order is deterministic: zero -> dma replay
+        // (init placements, call order) -> imports (source= bootstrap) ->
+        // structured pokes -> raw vram[] (final authority).
         let defaults = {
             let mut l = self.lua.borrow_mut();
             l.enter(|ctx| {
                 self.memory.vram = [0u16; 0x8000];
                 self.memory.cgram = [0u16; 256];
-                place_bg_sources(ctx, &self.source_store, &mut self.reports, &mut self.memory);
-                place_obj_source(ctx, &self.source_store, &mut self.reports, &mut self.memory);
+                self.reports.clear();
+                replay_dma(
+                    &self.dma.placements.borrow(),
+                    &self.source_store.borrow(),
+                    &mut self.reports,
+                    &mut self.memory,
+                );
+                let store = self.source_store.borrow();
+                place_bg_sources(ctx, &store, &mut self.reports, &mut self.memory);
+                place_obj_source(ctx, &store, &mut self.reports, &mut self.memory);
                 read_memory(ctx, &mut self.memory);
                 read_state(ctx)
             })
@@ -564,6 +621,136 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     ctx.set_global("win", win).unwrap();
     ctx.set_global("__win_base", Table::new(&ctx)).unwrap();
     sync_win(ctx, &[0u8; 11]); // power-on: every window register is zero
+}
+
+/// A string Lua runtime error raised from a native callback (piccolo has no
+/// tracebacks; per-file attribution happens at the chunk/frame/hook seam).
+fn lua_err<'gc>(ctx: piccolo::Context<'gc>, msg: &str) -> piccolo::Error<'gc> {
+    Value::String(ctx.intern(msg.as_bytes())).into()
+}
+
+/// Install the `dma(name, opts?)` global — the init-stage VRAM placement
+/// primitive (M11). Callable only while `rec.active` (top-level chunk code +
+/// `init()`, i.e. during set_sources); anywhere else it raises. Validates the
+/// source name against the live store LOUDLY (a typo is an init error, not a
+/// silent blank layer), resolves `{char, map, pal}` opts (defaults 0x1000 /
+/// 0x0000 / 0; pal is the CGRAM entry index the palette block starts at),
+/// records the placement for per-frame replay, and returns the resolved table
+/// so registers wire from it. An m7 source takes NO opts — its chars+map live
+/// interleaved at the fixed 0x0000 region (palette at CGRAM 1) on real
+/// hardware, so explicit addresses are an error; it returns
+/// `{char = 0, map = 0, pal = 0}`.
+fn install_dma(
+    ctx: piccolo::Context<'_>,
+    store: Rc<RefCell<HashMap<String, crate::source::SourcePayload>>>,
+    rec: Rc<DmaRecorder>,
+) {
+    use crate::source::SourceKind;
+    let dma = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
+        if !rec.active.get() {
+            return Err(lua_err(
+                ctx,
+                "dma runs during setup — call it from top-level code, not frame() or hooks",
+            ));
+        }
+        let name = match stack.get(0) {
+            Value::String(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+            _ => {
+                return Err(lua_err(
+                    ctx,
+                    "dma: first argument must be a source name (string)",
+                ))
+            }
+        };
+        let kind = match store.borrow().get(&name) {
+            Some(p) => p.kind(),
+            None => return Err(lua_err(ctx, &format!("dma: no source named '{name}'"))),
+        };
+        let opts = match stack.get(1) {
+            Value::Table(t) => Some(t),
+            Value::Nil => None,
+            _ => return Err(lua_err(ctx, "dma: opts must be a table")),
+        };
+        let opt = |key: &'static str| opts.map_or(Value::Nil, |t| t.get(ctx, key));
+        let (char_base, map_base, cgram_base) = if kind == SourceKind::M7 {
+            for k in ["char", "map", "pal"] {
+                if !matches!(opt(k), Value::Nil) {
+                    return Err(lua_err(
+                        ctx,
+                        &format!(
+                            "dma: '{name}' is an m7 source — chars+map always live \
+                             interleaved at 0x0000 (palette at CGRAM 1), so it takes no '{k}' opt"
+                        ),
+                    ));
+                }
+            }
+            (0, 0, 0)
+        } else {
+            let int_opt = |key: &'static str, default: i64, max: i64| match opt(key) {
+                Value::Nil => Ok(default),
+                v => match v.to_integer() {
+                    Some(n) if (0..=max).contains(&n) => Ok(n),
+                    _ => Err(lua_err(
+                        ctx,
+                        &format!("dma: opts.{key} must be an integer in 0..{max:#x}"),
+                    )),
+                },
+            };
+            (
+                int_opt("char", 0x1000, 0x7fff)?,
+                int_opt("map", 0x0000, 0x7fff)?,
+                int_opt("pal", 0, 0xff)?,
+            )
+        };
+        rec.placements.borrow_mut().push(DmaPlacement {
+            name,
+            char_base: char_base as u16,
+            map_base: map_base as u16,
+            cgram_base: cgram_base as u8,
+        });
+        stack.clear();
+        let ret = Table::new(&ctx);
+        ret.set(ctx, "char", char_base).unwrap();
+        ret.set(ctx, "map", map_base).unwrap();
+        ret.set(ctx, "pal", cgram_base).unwrap();
+        stack.replace(ctx, ret);
+        Ok(CallbackReturn::Return)
+    });
+    ctx.set_global("dma", dma).unwrap();
+}
+
+/// Re-run the init-recorded `dma()` placements in call order into the frame's
+/// zeroed VRAM/CGRAM. The payload's committed kind decides the layout — NOT
+/// the frame-wide mode (the whole point of M11: an m7 payload and a tile bg
+/// coexist in one frame). Names resolve against the LIVE store: an
+/// `add_source` under a placed name flows in next frame; a removed one
+/// degrades to a Mismatch report (mirrors the old binding-path UX) and places
+/// nothing.
+fn replay_dma(
+    placements: &[DmaPlacement],
+    store: &HashMap<String, crate::source::SourcePayload>,
+    reports: &mut Vec<ImportBudget>,
+    mem: &mut Memory,
+) {
+    use crate::source::SourcePayload;
+    for p in placements {
+        match store.get(&p.name) {
+            Some(SourcePayload::Bg(src)) => {
+                crate::source::place_bg(src, mem, p.map_base, p.char_base, p.cgram_base as usize)
+            }
+            Some(SourcePayload::Sheet(src)) => {
+                crate::source::place_sheet(src, mem, p.char_base, p.cgram_base as usize)
+            }
+            Some(SourcePayload::M7(src)) => crate::source::place_m7(src, mem),
+            Some(SourcePayload::Obj(src)) => crate::source::place_obj(src, mem, p.char_base),
+            None => reports.push(ImportBudget::Mismatch {
+                layer: None,
+                slot: p.name.clone(),
+                expected: "dma placement".into(),
+                found: MISSING_SOURCE.into(),
+            }),
+        }
+    }
 }
 
 /// Chunk (source file) name a Lua function was compiled from; `None` for
@@ -1307,8 +1494,9 @@ fn echo_bg_registers<'gc>(
 /// store source whose kind or depth mismatches the slot renders blank (payload
 /// not placed) and pushes an `ImportBudget::Mismatch`. A slot id absent from
 /// the store renders nothing and reports a Mismatch with `found = "no source
-/// with this name"` (a typo used to be a silent blank layer). Refreshes
-/// `reports` for the UI; assumes VRAM/CGRAM were zeroed by the caller.
+/// with this name"` (a typo used to be a silent blank layer). Appends to
+/// `reports` (frame() clears them before the dma replay); assumes VRAM/CGRAM
+/// were zeroed by the caller.
 fn place_bg_sources(
     ctx: piccolo::Context<'_>,
     store: &HashMap<String, crate::source::SourcePayload>,
@@ -1316,7 +1504,6 @@ fn place_bg_sources(
     mem: &mut Memory,
 ) {
     use crate::source::SourcePayload;
-    reports.clear();
     let mode = crate::quantize::mode(ctx.get_global("mode").to_integer().unwrap_or(1) as u8);
     let Value::Table(bg) = ctx.get_global("bg") else {
         return;
