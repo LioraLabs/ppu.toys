@@ -17,6 +17,17 @@ describe("DEMOS", () => {
       "mode7-extbg",
       "direct-color",
       "tilesheet-cavern",
+      // the L1 tutorial arc, in pedagogical order
+      "first-light",
+      "parallax-skyline",
+      "mode7-road",
+      "sprite-parade",
+      "cavern-camera",
+      "stage-lights",
+      "split-screen",
+      "transitions",
+      "extbg-direct-color",
+      "sprite-limits",
     ]);
   });
 

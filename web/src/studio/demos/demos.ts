@@ -3,40 +3,12 @@
  *  node-safe (no DOM): assets are raw RGBA, wrapped into ImageData by loadDemo.
  *  Pixel generators mirror crates/ppu-core/tests/golden_demos.rs (the Lua sources
  *  ARE verbatim; some assets are retuned for on-screen looks — see below). */
-import { EMPTY_POKES } from "../pokes/pokes";
-import type { SourceKind, ConvertSourceOptions } from "../../ppu/core";
+import { demo, demoFiles } from "./kit";
+import type { Demo, DemoAsset, DemoFile } from "./kit";
+import { TUTORIALS } from "./tutorials";
 
-export interface DemoAsset {
-  /** Literal slot id referenced from Lua (bg[n].source / obj.sheet). */
-  id: string;
-  width: number;
-  height: number;
-  data: Uint8ClampedArray; // width*height*4 RGBA
-  /** Format the generator commits to at bind time (matches the demo's mode). */
-  kind: SourceKind;
-  options: ConvertSourceOptions;
-}
-
-export interface DemoFile {
-  name: string;
-  source: string;
-}
-
-export interface Demo {
-  id: string;
-  label: string;
-  /** Single-file form. For multi-file demos this is the files joined in tab
-   *  order with "\n" — the concatenation the parity golden proves equivalent. */
-  source: string;
-  /** Multi-file demos only. Tab order = chunk execution order (PICO-8 scope). */
-  files?: DemoFile[];
-  assets: DemoAsset[];
-}
-
-/** Ordered files of a demo — single-file demos present as one main.lua. */
-export function demoFiles(d: Demo): DemoFile[] {
-  return d.files ?? [{ name: "main.lua", source: d.source }];
-}
+export { demoFiles };
+export type { Demo, DemoAsset, DemoFile };
 
 // ── procedural sources ───────────────────────────────────────────────────────
 // Authored at full screen size (256x224) so the BG layers fill the frame and do
@@ -947,18 +919,7 @@ end
 // ── demo assembly: every demo ships a generated, read-only pokes.lua first ──
 // (main.lua's frame() calls apply_pokes() as its first line, matching what
 // openSketch/newSketch already do for user sketches — see pokes/pokes.ts).
-
-/** Files joined in tab order with "\n" — the Demo.source doc contract above. */
-function demoSource(files: DemoFile[]): string {
-  return files.map((f) => f.source).join("\n");
-}
-
-/** Build a Demo from its non-pokes files: prepends the generated pokes.lua
- *  and derives `source` from the full (pokes-included) file list. */
-function demo(id: string, label: string, files: DemoFile[], assets: DemoAsset[]): Demo {
-  const withPokes = [{ name: "pokes.lua", source: EMPTY_POKES }, ...files];
-  return { id, label, source: demoSource(withPokes), files: withPokes, assets };
-}
+// The demo()/demoFiles() helpers live in kit.ts, shared with tutorials/.
 
 export const DEMOS: Demo[] = [
   demo(
@@ -996,6 +957,8 @@ export const DEMOS: Demo[] = [
     [{ name: "main.lua", source: CAVERN_SRC }],
     [cavernTiles(), cavernBack()],
   ),
+  // The L1 tutorial arc (10 toys, fundamentals → advanced), seeded in order.
+  ...TUTORIALS,
 ];
 
 // ── first-run starter ────────────────────────────────────────────────────────
