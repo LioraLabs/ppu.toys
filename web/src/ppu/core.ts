@@ -68,14 +68,16 @@ export interface Mode7ImportBudget {
   map_tiles_h: number;
 }
 
-export type ImportReport =
-  | { mode: "tile"; layer: number; report: TileImportBudget }
-  | { mode: "m7"; layer: number; report: Mode7ImportBudget }
-  | { mode: "obj"; report: TileImportBudget }
-  /** Bind-time failure: the dma'd name mismatched the target (wrong kind
-   *  or bit depth), or no source is registered under it — the layer renders
-   *  blank and this diagnostic says why. `layer` is absent for obj placements. */
-  | { mode: "mismatch"; layer?: number; slot: string; expected: string; found: string };
+/** Per-frame placement diagnostic: a `dma()` placement whose source is gone
+ *  from the store (removed after init) places nothing and reports why.
+ *  (An init-time typo is a loud `dma` compile error instead.) */
+export type ImportReport = {
+  mode: "mismatch";
+  layer?: number;
+  slot: string;
+  expected: string;
+  found: string;
+};
 
 /** `sheet` is a tilesheet: 8x8 chars in row-major sheet order, no dedup and no
  *  tilemap — char N is the Nth PNG cell, and map geometry is the author's
@@ -107,7 +109,7 @@ export interface ObjCellMeta {
   flip_y: boolean;
 }
 
-/** Authoring-time budget snapshot — ImportReport minus the bind-time `layer`. */
+/** Authoring-time budget snapshot from convertSource, per source kind. */
 export type SourceReport =
   | { mode: "tile"; report: TileImportBudget }
   | { mode: "m7"; report: Mode7ImportBudget }
@@ -252,9 +254,9 @@ export interface PpuCore {
   ): ConvertSourceResult;
   /** Decode + register a payload for rendering under `name` (source-store stub, M10). */
   addSource(name: string, payload: Uint8Array): { ok: boolean; error?: string };
-  /** Forget a registered source; returns whether the name existed. VRAM words
-   *  already placed by a bind stay (memory cannot be un-written) — a later
-   *  bind by this name fails loudly instead. */
+  /** Forget a registered source; returns whether the name existed. An existing
+   *  `dma()` placement of this name degrades to a mismatch ImportReport on the
+   *  next frame and places nothing. */
   removeSource(name: string): boolean;
 }
 

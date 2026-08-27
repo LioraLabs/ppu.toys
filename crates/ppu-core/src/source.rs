@@ -2,7 +2,7 @@
 //! self-describing binary blobs a graphics source commits to at authoring
 //! time. The payload holds RENDER DATA ONLY (palette colors + packed tiles +
 //! tilemap); dims/budget/obj-cells travel alongside in `SourceMeta`.
-//! Placement (VRAM/CGRAM bases) stays a bind-time concern — see `place_*`.
+//! Placement (VRAM/CGRAM bases) stays a placement-time concern (`dma()`) — see `place_*`.
 //!
 //! Byte layout v1 (little-endian):
 //!
@@ -154,7 +154,7 @@ pub struct SourceMeta {
 }
 
 /// Budget snapshot, tagged like the ImportReport shape the UI already consumes
-/// (minus `layer`, which is a bind-time concept).
+/// (minus `layer`, which is a placement-time concept).
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(tag = "mode")]
 pub enum SourceReport {
@@ -484,7 +484,7 @@ impl SourcePayload {
     }
 }
 
-/// Write a BG source at bind-time bases. `cgram_base` is the CGRAM index the
+/// Write a BG source at the placement's bases. `cgram_base` is the CGRAM index the
 /// palette block starts at (the mode-0 per-layer band, else 0); sub-palette
 /// entry 0 stays unwritten (transparent).
 ///
@@ -555,7 +555,7 @@ pub fn place_sheet(src: &SheetSource, mem: &mut Memory, char_base: u16, cgram_ba
 /// Write a Mode 7 source into the byte-interleaved region (words 0..0x4000):
 /// char bytes in the high lane, the 128-wide map in the low lane, palette at
 /// CGRAM 1.. . Masked-lane writes assume the frame's zeroed-VRAM bootstrap
-/// (frame() zeroes VRAM/CGRAM before imports), composing like the m7 pokes.
+/// (frame() zeroes VRAM/CGRAM before the dma replay), composing like the m7 pokes.
 ///
 /// `src` must be decode-valid: an out-of-range struct (e.g. `map` shorter
 /// than `tiles_w*tiles_h`) may panic or alias VRAM cells outside its map.

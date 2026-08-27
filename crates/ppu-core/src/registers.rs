@@ -4,13 +4,12 @@
 use crate::quantize;
 use crate::window::{WindowRanges, WindowSel};
 
-/// One background layer. `source` names an uploaded image asset (importer sugar
-/// from m4/importer + m4/dsl); the binding registers below bind the layer to real VRAM.
+/// One background layer. The binding registers below bind the layer to real
+/// VRAM (chars/maps land there via init-stage `dma()` placements or pokes).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Bg {
     pub scroll_x: f32,
     pub scroll_y: f32,
-    pub source: Option<String>,
     pub visible: bool,
     /// Tile size in pixels, 8 or 16 (BGMODE bits 4-7).
     pub tile_size: u8,
@@ -27,7 +26,6 @@ impl Default for Bg {
         Bg {
             scroll_x: 0.0,
             scroll_y: 0.0,
-            source: None,
             visible: true,
             tile_size: 8,
             map_base: 0,
@@ -71,8 +69,9 @@ impl Default for Mode7 {
     }
 }
 
-/// One sprite (OAM entry). `tile` indexes the global `obj.sheet`. Coordinates are
-/// absolute registers: `x` 9-bit signed (negatives run off-left), `y` 8-bit.
+/// One sprite (OAM entry). `tile` indexes the OBJ name table at OBSEL's char
+/// base. Coordinates are absolute registers: `x` 9-bit signed (negatives run
+/// off-left), `y` 8-bit.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Obj {
     pub x: i16,
@@ -223,14 +222,13 @@ impl Default for LineTableRow {
 }
 
 /// Absolute (quantized) per-layer register state the rasterizer reads. Scroll is
-/// whole-pixel; `source`/`visible` are carried through (not registers, but the
-/// compositor needs them). No `Default` — always built via `From<&Bg>` (a derived
+/// whole-pixel; `visible` is carried through (not a register, but the
+/// compositor needs it). No `Default` — always built via `From<&Bg>` (a derived
 /// default would give `visible: false`, contradicting `Bg`'s `visible: true`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct RegBg {
     pub scroll_x: i16,
     pub scroll_y: i16,
-    pub source: Option<String>,
     pub visible: bool,
     /// Resolved row mode this layer belongs to.
     pub mode: u8,
@@ -267,7 +265,6 @@ impl From<&Bg> for RegBg {
         RegBg {
             scroll_x: quantize::scroll_reg(b.scroll_x),
             scroll_y: quantize::scroll_reg(b.scroll_y),
-            source: b.source.clone(),
             visible: b.visible,
             mode: 0,
             layer: 0,
@@ -480,7 +477,6 @@ mod tests {
         let mut src = LineTableRow::default(); // mode 1, brightness 15
         src.bg[0].scroll_x = 10.7;
         src.bg[0].scroll_y = -1.6;
-        src.bg[0].source = Some("sky".into());
         src.m7.a = 0.5; // -> Q8 128
         src.m7.cx = 127.6; // -> 128
         let reg = RegRow::from(&src);
@@ -488,7 +484,6 @@ mod tests {
         assert_eq!(reg.brightness, 15);
         assert_eq!(reg.bg[0].scroll_x, 11); // rounded whole px
         assert_eq!(reg.bg[0].scroll_y, -2);
-        assert_eq!(reg.bg[0].source.as_deref(), Some("sky"));
         assert!(reg.bg[0].visible);
         assert_eq!(reg.m7.a, 128); // Q8
         assert_eq!(reg.m7.cx, 128);
@@ -540,7 +535,7 @@ mod tests {
         assert_eq!(r.mode, 1);
         assert_eq!(r.brightness, 15);
         assert_eq!(r.bg.len(), 4);
-        assert!(r.bg.iter().all(|b| b.visible && b.source.is_none()));
+        assert!(r.bg.iter().all(|b| b.visible));
         assert_eq!(r.m7, Mode7::default());
     }
 

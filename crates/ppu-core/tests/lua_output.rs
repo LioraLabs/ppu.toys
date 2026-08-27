@@ -9,8 +9,7 @@ fn engine(src: &str) -> LuaEngine {
 }
 
 /// Register an RGBA image through the format-committed source path (mirrors the
-/// web `convertSource` + `addSource` flow). `bit_depth` must match the depth of
-/// the slot the demo script binds, or the strict bind validation renders blank.
+/// web `convertSource` + `addSource` flow); the script places it with `dma()`.
 fn add_bg(e: &mut LuaEngine, name: &str, rgba: Vec<u8>, w: u32, h: u32, bit_depth: u8) {
     let opts = ConvertOptions {
         bit_depth: Some(bit_depth),
@@ -52,14 +51,12 @@ fn cgram_and_obj_writes_land_in_memory() {
     let mut e = engine(
         "function frame(t,f) \
            cgram[0] = rgb(255,0,0); \
-           obj.sheet = 'sprites'; \
            obj[0].tile=4; obj[0].x=120; obj[0].pal=2; obj[0].on=true \
          end",
     );
     e.frame(0.0, 0).unwrap();
     let m = e.memory();
     assert_eq!(m.cgram[0], rgb15(255, 0, 0));
-    assert_eq!(m.obj_sheet.as_deref(), Some("sprites"));
     assert_eq!(m.oam[0].tile, 4);
     assert_eq!(m.oam[0].x, 120);
     assert_eq!(m.oam[0].pal, 2);
@@ -106,7 +103,6 @@ fn dusk_parallax_acceptance() {
 local SPEED = 12
 function frame(t, f)
   mode = 1; brightness = 15
-  bg[1].source = "sky";   bg[2].source = "hills"
   bg[1].scroll.x = t * SPEED
   bg[2].scroll.x = t * SPEED * 3
   for i = 0, 7 do cgram[0x40 + i] = hsl((t*40 + i*12) % 360, 0.6, 0.5) end
@@ -118,8 +114,6 @@ end
     let r = &lt.rows[0];
     assert_eq!(r.mode, 1);
     assert_eq!(r.brightness, 15);
-    assert_eq!(r.bg[0].source.as_deref(), Some("sky"));
-    assert_eq!(r.bg[1].source.as_deref(), Some("hills"));
     assert_eq!(r.bg[0].scroll_x, 12); // t*SPEED = 12, whole px
     assert_eq!(r.bg[1].scroll_x, 36); // t*SPEED*3 = 36, whole px
     let m = e.memory();
@@ -135,7 +129,7 @@ end
 fn mode7_floor_acceptance() {
     let src = r#"
 function frame(t, f)
-  mode = 7; brightness = 15; bg[1].source = "track"
+  mode = 7; brightness = 15
   hdma(96, 223, function(y)
     local d = 64 / (y - 95)
     m7.a, m7.d = d, d
@@ -155,7 +149,6 @@ end
     assert_eq!(lt.rows[96].m7.cx, 128); // whole-px center
     assert_eq!(lt.rows[120].m7.a, 655); // 64/25 = 2.56 -> round(2.56*256)
     assert_eq!(lt.rows[120].bg[0].scroll_y, 205); // 80*(64/25) = 204.8 -> whole px
-    assert_eq!(e.memory().obj_sheet, None);
 }
 
 #[test]
@@ -196,7 +189,7 @@ fn m7_map_and_char_write_correct_lanes() {
 }
 
 #[test]
-fn source_triggers_tile_bg_import_into_vram_cgram() {
+fn dma_places_tile_bg_into_vram_cgram() {
     let mut e = LuaEngine::new();
     // 16x8: left 12px red, right 4px blue -> two tiles, one palette.
     let mut rgba = Vec::new();
@@ -210,8 +203,11 @@ fn source_triggers_tile_bg_import_into_vram_cgram() {
         }
     }
     add_bg(&mut e, "sky", rgba, 16, 8, 4);
-    e.set_source("function frame(t,f) mode=1; bg[1].source='sky' end")
-        .unwrap();
+    e.set_source(
+        "dma('sky', { char = 0x1000, map = 0x0000 })\n\
+         function frame(t,f) mode=1; bg[1].char_base=0x1000 end",
+    )
+    .unwrap();
     let lt = e.frame(0.0, 0).unwrap();
     let m = e.memory();
     assert_eq!(m.cgram[1], rgb15(255, 0, 0)); // sub-palette 0 idx 1
@@ -219,17 +215,17 @@ fn source_triggers_tile_bg_import_into_vram_cgram() {
     assert_eq!(m.vram[0], 0x0001); // tilemap cell 0 = tile 1
     assert_eq!(m.vram[1], 0x0002); // cell 1 = tile 2
     assert_eq!(m.vram[0x1000 + 16], 0x00ff); // char base 0x1000, tile 1 row0 plane0
-    assert_eq!(lt.rows[0].bg[0].char_base, 0x1000); // echoed binding register
+    assert_eq!(lt.rows[0].bg[0].char_base, 0x1000); // the author's register write
     assert_eq!(lt.rows[0].bg[0].map_base, 0x0000);
-    assert!(e.import_reports().is_empty()); // clean bind: no mismatch
+    assert!(e.import_reports().is_empty()); // clean placement: no mismatch
 }
 
 #[test]
-fn mode0_source_import_writes_layer_cgram_band() {
+fn mode0_dma_pal_places_layer_cgram_band() {
     let mut e = LuaEngine::new();
     let rgba = [0u8, 255, 0, 255].repeat(64);
     add_bg(&mut e, "sky", rgba, 8, 8, 2);
-    e.set_source("function frame(t,f) mode=0; bg[2].source='sky' end")
+    e.set_source("dma('sky', { pal = 32 })\nfunction frame(t,f) mode=0 end")
         .unwrap();
     e.frame(0.0, 0).unwrap();
     let m = e.memory();
@@ -239,11 +235,11 @@ fn mode0_source_import_writes_layer_cgram_band() {
 }
 
 #[test]
-fn source_triggers_mode7_import_interleaved() {
+fn dma_places_mode7_interleaved() {
     let mut e = LuaEngine::new();
     let rgba = [255u8, 0, 0, 255].repeat(64); // 8x8 solid red = 256 bytes
     add_m7(&mut e, "track", rgba, 8, 8);
-    e.set_source("function frame(t,f) mode=7; bg[1].source='track' end")
+    e.set_source("dma('track')\nfunction frame(t,f) mode=7 end")
         .unwrap();
     e.frame(0.0, 0).unwrap();
     let m = e.memory();
@@ -253,7 +249,7 @@ fn source_triggers_mode7_import_interleaved() {
 }
 
 #[test]
-fn manual_pokes_override_source_import() {
+fn manual_pokes_override_dma_placement() {
     let mut e = LuaEngine::new();
     let mut rgba = Vec::new();
     for _ in 0..64 {
@@ -261,16 +257,17 @@ fn manual_pokes_override_source_import() {
     }
     add_bg(&mut e, "sky", rgba, 8, 8, 4);
     e.set_source(
-        "function frame(t,f) mode=1; bg[1].source='sky'; vram[0]=0xabcd; cgram[1]=rgb(0,255,0) end",
+        "dma('sky', { char = 0x1000, map = 0x0000 })\n\
+         function frame(t,f) mode=1; vram[0]=0xabcd; cgram[1]=rgb(0,255,0) end",
     )
     .unwrap();
     e.frame(0.0, 0).unwrap();
     assert_eq!(e.memory().vram[0], 0xabcd); // raw vram wins over the tilemap
-    assert_eq!(e.memory().cgram[1], rgb15(0, 255, 0)); // cgram poke wins over import
+    assert_eq!(e.memory().cgram[1], rgb15(0, 255, 0)); // cgram poke wins over placement
 }
 
 #[test]
-fn obj_sheet_triggers_obj_import_into_vram_and_obj_cgram() {
+fn dma_places_obj_chars_into_vram_and_obj_cgram() {
     let mut e = LuaEngine::new();
     // 16x8: left 12px red, right 4px blue -> two OBJ tiles, one OBJ palette (8).
     let mut rgba = Vec::new();
@@ -284,8 +281,10 @@ fn obj_sheet_triggers_obj_import_into_vram_and_obj_cgram() {
         }
     }
     add_obj(&mut e, "hero", rgba, 16, 8);
-    e.set_source("function frame(t,f) mode=1; obj.sheet='hero'; obj.char_base=0x2000 end")
-        .unwrap();
+    e.set_source(
+        "dma('hero', { char = 0x2000 })\nfunction frame(t,f) mode=1; obj.char_base=0x2000 end",
+    )
+    .unwrap();
     e.frame(0.0, 0).unwrap();
     let m = e.memory();
     // OBJ palettes land in CGRAM base 128 (sub-palette 8, indices 1/2).
@@ -295,12 +294,12 @@ fn obj_sheet_triggers_obj_import_into_vram_and_obj_cgram() {
     // tile 1 = all-red -> row0 plane0 = 0x00ff at char_base + 1*16).
     assert_eq!(m.vram[0x2000], 0); // reserved blank tile 0
     assert_eq!(m.vram[0x2000 + 16], 0x00ff);
-    assert_eq!(m.obsel.char_base, 0x2000); // obsel echoes the same snapped base
-    assert!(e.import_reports().is_empty()); // clean bind: no mismatch
+    assert_eq!(m.obsel.char_base, 0x2000); // the author's obj.char_base write
+    assert!(e.import_reports().is_empty()); // clean placement: no mismatch
 }
 
 #[test]
-fn mode3_source_imports_bg1_as_8bpp_and_bg2_as_4bpp() {
+fn mode3_dma_places_bg1_8bpp_and_bg2_4bpp() {
     let mut e = LuaEngine::new();
     let red = [255u8, 0, 0, 255].repeat(64);
     add_bg(&mut e, "fg", red.clone(), 8, 8, 8);
@@ -315,7 +314,9 @@ fn mode3_source_imports_bg1_as_8bpp_and_bg2_as_4bpp() {
     bg_rgba.extend([0u8, 0, 255, 255].repeat(64));
     add_bg(&mut e, "bg", bg_rgba, 8, 16, 4);
     e.set_source(
-        "function frame(t,f) mode=3; bg[1].source='fg'; bg[1].char_base=0x1000; bg[2].source='bg'; bg[2].map_base=0x0400; bg[2].char_base=0x2000 end",
+        "dma('fg', { char = 0x1000, map = 0x0000 })\n\
+         dma('bg', { char = 0x2000, map = 0x0400 })\n\
+         function frame(t,f) mode=3; bg[1].char_base=0x1000; bg[2].map_base=0x0400; bg[2].char_base=0x2000 end",
     )
     .unwrap();
     let lt = e.frame(0.0, 0).unwrap();
@@ -328,7 +329,7 @@ fn mode3_source_imports_bg1_as_8bpp_and_bg2_as_4bpp() {
     assert_eq!(m.vram[0x0400], 0x0001);
     assert_eq!(m.vram[0x1000 + 32], 0x00ff);
     assert_eq!(m.vram[0x2000 + 16], 0x00ff);
-    assert!(e.import_reports().is_empty()); // clean binds: no mismatch
+    assert!(e.import_reports().is_empty()); // clean placements: no mismatch
 }
 
 #[test]

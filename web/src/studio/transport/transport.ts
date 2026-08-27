@@ -267,7 +267,7 @@ export function useTransportRuntimeError(): LuaError | undefined {
   return useSyncExternalStore(transport.subscribe, () => transport.getSnapshot().runtimeError);
 }
 
-/** Subscribe only to bind-time source mismatches (identity-stable while
+/** Subscribe only to dma placement mismatches (identity-stable while
  *  unchanged) — the editor turns these into inline warnings. */
 export function useTransportBindMismatches(): TransportState["bindMismatches"] {
   return useSyncExternalStore(transport.subscribe, () => transport.getSnapshot().bindMismatches);

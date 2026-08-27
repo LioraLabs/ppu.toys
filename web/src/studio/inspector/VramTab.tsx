@@ -87,17 +87,8 @@ function TilePreview({
 }
 
 function reportLine(r: ImportReport): string {
-  if (r.mode === "mismatch") {
-    const who = r.layer === undefined ? "OBJ" : `BG${r.layer + 1}`;
-    return `${who}: "${r.slot}" not placed — needs ${r.expected}, found ${r.found}`;
-  }
-  if (r.mode === "m7") {
-    const overflow = r.report.overflow_tiles > 0 ? ` · overflow ${r.report.overflow_tiles}` : "";
-    return `M7 BG${r.layer + 1}: ${r.report.colors} colors · ${r.report.unique_tiles}/${r.report.tile_capacity} tiles · ${r.report.map_tiles_w}x${r.report.map_tiles_h} map${overflow}`;
-  }
-  const who = r.mode === "obj" ? "OBJ" : `BG${r.layer + 1}`;
-  const overflow = r.report.overflows.length > 0 ? ` · ${r.report.overflows.length} overflow` : "";
-  return `${who}: ${r.report.colors_used} colors · ${r.report.palettes_used} palettes · ${r.report.unique_tiles} tiles · ${r.report.vram_words} words${overflow}`;
+  const who = r.layer === undefined ? "OBJ" : `BG${r.layer + 1}`;
+  return `${who}: "${r.slot}" not placed — needs ${r.expected}, found ${r.found}`;
 }
 
 export function VramTab({

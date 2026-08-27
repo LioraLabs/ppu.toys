@@ -265,32 +265,21 @@ export const frameVram: Uint16Array = (() => {
   return vram;
 })();
 
-/** Two import-report entries covering both render paths the Import tab
- *  handles: a "tile" report with a non-empty overflow list (renders the
- *  warn path) and an "obj" report with no overflows (renders clean). */
+/** Two placement-mismatch reports (a BG layer and an OBJ placement whose
+ *  sources were removed after init) — the only report shape the engine emits. */
 export const frameImportReports: ImportReport[] = [
   {
-    mode: "tile",
+    mode: "mismatch",
     layer: 0,
-    report: {
-      colors_used: 15,
-      palettes_used: 4,
-      tile_cells: 512,
-      unique_tiles: 520,
-      vram_words: 8192,
-      overflows: [{ kind: "Tiles", unique: 520, kept: 512 }],
-    },
+    slot: "sky",
+    expected: "dma placement",
+    found: "no source with this name",
   },
   {
-    mode: "obj",
-    report: {
-      colors_used: 12,
-      palettes_used: 2,
-      tile_cells: 128,
-      unique_tiles: 96,
-      vram_words: 2048,
-      overflows: [],
-    },
+    mode: "mismatch",
+    slot: "hero",
+    expected: "dma placement",
+    found: "no source with this name",
   },
 ];
 

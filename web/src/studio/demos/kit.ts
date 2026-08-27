@@ -4,12 +4,12 @@ import { EMPTY_POKES } from "../pokes/pokes";
 import type { SourceKind, ConvertSourceOptions } from "../../ppu/core";
 
 export interface DemoAsset {
-  /** Literal slot id referenced from Lua (bg[n].source / obj.sheet). */
+  /** Literal source name referenced from Lua (`dma("<id>", ...)`). */
   id: string;
   width: number;
   height: number;
   data: Uint8ClampedArray; // width*height*4 RGBA
-  /** Format the generator commits to at bind time (matches the demo's mode). */
+  /** Format the generator commits to at convert time (matches the demo's mode). */
   kind: SourceKind;
   options: ConvertSourceOptions;
 }

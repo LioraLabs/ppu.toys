@@ -20,7 +20,7 @@ use self::tiles::{pack_planar, split_tiles_at, TileSet};
 /// from the cache key on purpose: mode only affects import output via
 /// bit-depth, so caching by bit-depth avoids spurious re-quantization.
 ///
-/// Bases (map_base/char_base) are NOT format — they're bind-time PLACEMENT,
+/// Bases (map_base/char_base) are NOT format — they're PLACEMENT,
 /// decided when a source is written into VRAM (see `crate::source::place_bg`),
 /// not when it's authored. They were dropped from this struct in the source-
 /// payload refactor.
@@ -153,7 +153,7 @@ fn fit_cell_palettes(
 /// bitplane pack + screen-ordered tilemap. Pure and deterministic: identical
 /// inputs yield identical outputs. Returns the render-data payload
 /// (`BgSource`) plus the dims/budget that travel alongside it (`SourceMeta`);
-/// placement (VRAM/CGRAM bases) is a bind-time concern handled separately by
+/// placement (VRAM/CGRAM bases) is a concern handled separately by
 /// `crate::source::place_bg`.
 pub fn import_tile_bg(
     rgba: &[u8],
@@ -207,7 +207,7 @@ pub fn import_tile_bg(
         &opts.remap,
     );
     let words_per_tile = bpp as usize * 4;
-    let max_tiles = 1024usize; // 10-bit tilemap tile field — placement-fit is a bind-time concern
+    let max_tiles = 1024usize; // 10-bit tilemap tile field — placement-fit is a placement concern
     let mut set = TileSet::new(true);
     set.insert([0u8; 64]);
     let mut cells: Vec<u16> = Vec::with_capacity(grids.len());

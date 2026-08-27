@@ -80,16 +80,11 @@ describe("wrapWasmCore", () => {
   it("forwards live VRAM words and import reports", () => {
     const reports: ImportReport[] = [
       {
-        mode: "tile",
+        mode: "mismatch",
         layer: 0,
-        report: {
-          colors_used: 2,
-          palettes_used: 1,
-          tile_cells: 1,
-          unique_tiles: 1,
-          vram_words: 17,
-          overflows: [],
-        },
+        slot: "sky",
+        expected: "dma placement",
+        found: "no source with this name",
       },
     ];
     const ppu = wrapWasmCore(
