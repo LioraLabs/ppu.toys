@@ -29,7 +29,7 @@ export function Layout() {
               {user.isAdmin && <Link to="/admin">Admin</Link>}
               <Link className="site-nav-user" to={`/u/${user.handle}`}>
                 <Avatar handle={user.handle} id={user.id} avatar={user.avatar} size={20} />
-                {user.handle}
+                <span>{user.handle}</span>
               </Link>
               <button className="linklike" onClick={() => void sessionStore.signOut()}>
                 Sign out

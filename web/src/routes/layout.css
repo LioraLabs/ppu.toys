@@ -98,16 +98,25 @@
 }
 @media (max-width: 560px) {
   .site-header {
-    align-items: flex-start;
+    min-height: 52px;
+    gap: 0.5rem;
+    padding: 0.4rem 0.75rem;
+  }
+  .site-header .brand {
+    font-size: 1rem;
   }
   .site-nav {
     gap: 0.5rem;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     justify-content: flex-end;
+    font-size: 0.875rem;
   }
-  .site-nav-user {
-    max-width: 110px;
-    overflow: hidden;
+  .site-nav a,
+  .site-nav .linklike {
+    min-height: 44px;
+  }
+  .site-nav-user span {
+    display: none;
   }
   .site-footer {
     align-items: flex-start;

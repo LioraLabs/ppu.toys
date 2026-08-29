@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
-import { render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { FileTabs } from "./FileTabs";
 
 const base = {
@@ -18,6 +18,8 @@ const base = {
   onReorder() {},
 };
 
+afterEach(cleanup);
+
 describe("FileTabs generated-tab glyph", () => {
   it("shows ⚙ on a poked generated tab, ⚡ otherwise", () => {
     const { rerender } = render(<FileTabs {...base} pokedFiles={new Set()} />);
@@ -25,5 +27,25 @@ describe("FileTabs generated-tab glyph", () => {
 
     rerender(<FileTabs {...base} pokedFiles={new Set(["pokes.lua"])} />);
     expect(screen.getByText("⚡")).toBeInTheDocument();
+  });
+
+  it("selects and reorders files from the keyboard", () => {
+    const onSelect = vi.fn();
+    const onReorder = vi.fn();
+    render(
+      <FileTabs
+        {...base}
+        files={["pokes.lua", "main.lua", "fx.lua"]}
+        onSelect={onSelect}
+        onReorder={onReorder}
+      />,
+    );
+
+    const main = screen.getByRole("tab", { name: /main.lua/i });
+    fireEvent.keyDown(main, { key: "ArrowLeft" });
+    expect(onSelect).toHaveBeenCalledWith("pokes.lua");
+
+    fireEvent.keyDown(main, { key: "ArrowRight", altKey: true });
+    expect(onReorder).toHaveBeenCalledWith(1, 2);
   });
 });

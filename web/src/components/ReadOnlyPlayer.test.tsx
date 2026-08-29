@@ -1,19 +1,25 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { render, cleanup } from "@testing-library/react";
 
 // vi.mock factories are hoisted above top-level code, so any variable they
 // reference must be created via vi.hoisted (plain `const`s declared above
 // vi.mock would still be in the TDZ when the factory runs).
-const { setSources, addSource, getSnapshot, subscribe } = vi.hoisted(() => ({
+const { setSources, addSource, getSnapshot, subscribe, toggle, setPlaying } = vi.hoisted(() => ({
   setSources: vi.fn(() => ({ ok: true })),
   addSource: vi.fn(() => ({ ok: true })),
-  getSnapshot: vi.fn(() => ({ frame: { framebuffer: new Uint8ClampedArray(256 * 224 * 4) } })),
+  getSnapshot: vi.fn(() => ({
+    playing: true,
+    frame: { framebuffer: new Uint8ClampedArray(256 * 224 * 4) },
+  })),
   subscribe: vi.fn(() => () => {}),
+  toggle: vi.fn(),
+  setPlaying: vi.fn(),
 }));
 vi.mock("../studio/transport/transport", () => ({
-  transport: { setSources, addSource, getSnapshot, subscribe },
+  transport: { setSources, addSource, getSnapshot, subscribe, toggle, setPlaying },
+  useTransport: () => getSnapshot(),
 }));
 // Presenter touches WebGL; stub it — this test asserts wiring, not pixels.
 // NOTE: a plain constructor-function + prototype is used here (not an ES
@@ -50,6 +56,13 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+beforeEach(() => {
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: vi.fn(() => ({ matches: false })),
+  });
+});
+
 describe("ReadOnlyPlayer", () => {
   const files = [{ name: "main.lua", source: "-- toy" }];
   const sources = [{ name: "sky", payload: new Uint8Array([1, 2, 3]) }];
@@ -67,5 +80,12 @@ describe("ReadOnlyPlayer", () => {
     const { container } = render(<ReadOnlyPlayer files={files} sources={[]} />);
     expect(container.querySelector("canvas")).toBeInTheDocument();
     expect(container.querySelector("input[type=range]")).toBeNull();
+    expect(container.querySelector("button")).toHaveTextContent("Pause");
+  });
+
+  it("starts paused when reduced motion is requested", () => {
+    vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true } as MediaQueryList);
+    render(<ReadOnlyPlayer files={files} sources={[]} />);
+    expect(setPlaying).toHaveBeenCalledWith(false);
   });
 });

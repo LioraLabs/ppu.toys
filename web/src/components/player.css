@@ -1,4 +1,5 @@
 .player {
+  position: relative;
   width: 100%;
   aspect-ratio: 256 / 224;
   background: #000;
@@ -9,4 +10,33 @@
 }
 .player-canvas {
   image-rendering: pixelated;
+}
+.player-toggle {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 999px;
+  background: rgba(11, 13, 19, 0.82);
+  color: #fff;
+  font: 600 13px/1 var(--font-sans);
+  cursor: pointer;
+}
+.player-toggle:hover {
+  background: rgba(11, 13, 19, 0.95);
+}
+.player-error {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 68px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--red) 65%, transparent);
+  border-radius: 6px;
+  background: rgba(11, 13, 19, 0.9);
+  color: #fff;
+  font: 13px/1.4 var(--font-sans);
 }

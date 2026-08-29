@@ -59,6 +59,9 @@ export function FileTabs(props: FileTabsProps) {
             key={name}
             role="tab"
             aria-selected={name === active}
+            aria-controls="code-editor"
+            tabIndex={name === active ? 0 : -1}
+            data-tab-index={i}
             className={
               "ftab" +
               (name === active ? " ftab--active" : "") +
@@ -87,6 +90,36 @@ export function FileTabs(props: FileTabsProps) {
             onDoubleClick={() => {
               if (!isLocked) setEditing(name);
             }}
+            onKeyDown={(event) => {
+              if (event.altKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+                if (isGenerated) return;
+                const to = Math.max(
+                  floor,
+                  Math.min(files.length - 1, i + (event.key === "ArrowLeft" ? -1 : 1)),
+                );
+                if (to !== i) props.onReorder(i, to);
+                return;
+              }
+              if (event.key === "F2" && !isLocked) {
+                event.preventDefault();
+                setEditing(name);
+                return;
+              }
+              const next =
+                event.key === "ArrowRight"
+                  ? Math.min(i + 1, files.length - 1)
+                  : event.key === "ArrowLeft"
+                    ? Math.max(i - 1, 0)
+                    : event.key === "Home"
+                      ? 0
+                      : event.key === "End"
+                        ? files.length - 1
+                        : i;
+              if (next === i) return;
+              event.preventDefault();
+              props.onSelect(files[next]);
+              document.querySelector<HTMLElement>(`[data-tab-index="${next}"]`)?.focus();
+            }}
           >
             {isGenerated &&
               (props.pokedFiles?.has(name) ? (
@@ -95,7 +128,12 @@ export function FileTabs(props: FileTabsProps) {
                 <span className="ftab-gen">⚙</span>
               ))}
             {name === active && <span className="ftab-dot" />}
-            {name !== active && errorFiles.has(name) && <span className="ftab-err" />}
+            {name !== active && errorFiles.has(name) && (
+              <>
+                <span className="ftab-err" aria-hidden="true" />
+                <span className="sr-only">Errors in {name}</span>
+              </>
+            )}
             {editing === name ? (
               <input
                 className="ftab-rename"

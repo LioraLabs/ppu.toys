@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useOpenSketch, openContextLabel } from "../sketches/openSketch";
 import { publishToy } from "../../api/apiClient";
 import { recordClip } from "./clip";
 import { transport } from "../transport/transport";
+import { useModalFocus } from "../useModalFocus";
 import "./cloud.css";
 
 type Phase = "idle" | "saving" | "recording" | "uploading";
@@ -36,13 +37,7 @@ export function PublishDialog({ onClose, save }: PublishDialogProps) {
   const navigate = useNavigate();
   const busy = phase !== "idle";
 
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape" && phase === "idle") onClose();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [phase, onClose]);
+  const dialogRef = useModalFocus(onClose, !busy);
 
   async function publish() {
     if (busy) return;
@@ -71,7 +66,9 @@ export function PublishDialog({ onClose, save }: PublishDialogProps) {
       <div
         className="cloud-dialog"
         role="dialog"
+        aria-modal="true"
         aria-label="Publish"
+        ref={dialogRef}
         onClick={(e) => e.stopPropagation()}
       >
         <header className="cloud-head">
@@ -125,8 +122,16 @@ export function PublishDialog({ onClose, save }: PublishDialogProps) {
             </span>
           </label>
 
-          {error && <div className="cloud-error">{error}</div>}
-          {!error && busy && <div className="cloud-status-line">{PHASE_LABEL[phase]}</div>}
+          {error && (
+            <div className="cloud-error" role="alert">
+              {error}
+            </div>
+          )}
+          {!error && busy && (
+            <div className="cloud-status-line" role="status">
+              {PHASE_LABEL[phase]}
+            </div>
+          )}
 
           <div className="cloud-actions">
             <button type="button" className="btn-ghost" onClick={close} disabled={busy}>

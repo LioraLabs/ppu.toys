@@ -74,6 +74,13 @@ describe("AddSourceDialog", () => {
     expect(screen.getByText(/pre-crop/i)).toBeInTheDocument();
   });
 
+  it("closes with Escape", () => {
+    const onClose = vi.fn();
+    render(<AddSourceDialog onClose={onClose} />);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalled();
+  });
+
   // PPU-94: the Tilesheet kind takes bit depth + the remap options, and has no
   // cell-size option at all — sheet cells are fixed 8x8.
   it("offers the Tilesheet kind: bit depth and remap options apply, no cell size", async () => {

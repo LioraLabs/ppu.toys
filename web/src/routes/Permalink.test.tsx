@@ -67,6 +67,22 @@ describe("Permalink", () => {
     expect(mockGetToy).toHaveBeenCalledWith("abc");
   });
 
+  it("switches source tabs with the keyboard", async () => {
+    mockGetToy.mockResolvedValue(
+      makeToyFull({
+        files: [
+          { name: "main.lua", source: "-- main" },
+          { name: "fx.lua", source: "-- effects" },
+        ],
+      }),
+    );
+    renderAt();
+    const main = await screen.findByRole("tab", { name: "main.lua" });
+    fireEvent.keyDown(main, { key: "ArrowRight" });
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("-- effects");
+    expect(screen.getByRole("tab", { name: "fx.lua" })).toHaveFocus();
+  });
+
   it("forks and navigates to /studio", async () => {
     mockGetToy.mockResolvedValue(toy);
     mockFork.mockResolvedValue({ id: "fork1" });
@@ -100,10 +116,12 @@ describe("Permalink", () => {
     expect(getForkOrder).toBeLessThan(openOrder);
   });
 
-  it("shows a not-found message when the toy 404s", async () => {
+  it("shows a retryable error when the toy cannot load", async () => {
     mockGetToy.mockRejectedValue(new Error("GET /api/toys/nope → 404"));
     renderAt("nope");
-    expect(await screen.findByText(/not found/i)).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/couldn’t load/i);
+    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+    await waitFor(() => expect(mockGetToy).toHaveBeenCalledTimes(2));
   });
 
   it("surfaces an error and stays on the page when fork fails", async () => {

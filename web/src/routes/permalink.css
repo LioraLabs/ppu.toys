@@ -59,6 +59,22 @@
   gap: 0.25rem;
   flex-wrap: wrap;
 }
+.code-view-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+.code-view-head h2 {
+  margin: 0;
+  font-size: 0.85rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.code-view-head span {
+  color: var(--dim);
+  font-size: 0.8rem;
+}
 .code-tab {
   background: none;
   border: 1px solid var(--line);
@@ -89,4 +105,35 @@
   padding: 2rem;
   color: var(--dim);
   font-family: var(--font-sans);
+}
+@media (max-width: 800px) {
+  .permalink {
+    gap: 0;
+    padding: 0;
+  }
+  .permalink-stage {
+    border-radius: 0;
+  }
+  .permalink-side {
+    min-width: 0;
+    padding: 1rem;
+  }
+  .permalink-head h1 {
+    font-size: 1.25rem;
+  }
+  .permalink-actions {
+    margin-bottom: 2rem;
+  }
+  .code-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+  .code-tab {
+    min-height: 44px;
+    flex: none;
+  }
+  .code-body {
+    max-height: none;
+  }
 }

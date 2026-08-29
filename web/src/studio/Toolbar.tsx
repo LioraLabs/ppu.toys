@@ -29,6 +29,7 @@ export interface ToolbarProps {
   /** Settings flyout toggle (vim mode etc.) — the gear lives here since the
    *  activity rail retired. */
   onToggleSettings?: () => void;
+  settingsOpen?: boolean;
   /** Layout controls (LayoutMenu over the dock api). */
   layoutSlot?: ReactNode;
   /** Injected wired cloud actions (WorkspaceActions in production). Slot for the
@@ -125,6 +126,7 @@ export function Toolbar({
   onSignOut,
   onNewToy,
   onToggleSettings,
+  settingsOpen = false,
   layoutSlot,
   workspaceSlot,
 }: ToolbarProps) {
@@ -157,7 +159,12 @@ export function Toolbar({
         ) : (
           <span className="project-name">{sketchName}</span>
         )}
-        {dirty && <span className="unsaved-dot" />}
+        {dirty && (
+          <span className="unsaved-status" role="status">
+            <span className="unsaved-dot" aria-hidden="true" />
+            <span className="sr-only">Unsaved changes</span>
+          </span>
+        )}
       </div>
       <div className="tb-spacer" />
       {layoutSlot}
@@ -175,6 +182,7 @@ export function Toolbar({
           className="btn-ghost"
           onClick={onToggleSettings}
           aria-label="Editor settings"
+          aria-expanded={settingsOpen}
           title="Editor settings"
         >
           ⚙

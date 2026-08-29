@@ -91,8 +91,17 @@ export function WorkspaceActions() {
 
   return (
     <div className="workspace-actions">
-      {status && <span className="cloud-status">{status}</span>}
-      {draftId && <span className="cloud-draft-dot" title="Saved to a cloud draft" />}
+      {status && (
+        <span className="cloud-status" role="status">
+          {status}
+        </span>
+      )}
+      {draftId && (
+        <span className="cloud-draft-status">
+          <span className="cloud-draft-dot" aria-hidden="true" />
+          <span className="sr-only">Saved to a cloud draft</span>
+        </span>
+      )}
       <button
         type="button"
         className="btn-ghost"

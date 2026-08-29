@@ -186,7 +186,7 @@ export function EditorPane({ onSources }: EditorPaneProps) {
         onReorder={(from, to) => openSketchStore.moveFile(from, to)}
       />
       <PokeFileBar active={active} />
-      <div className="editor-body" data-editor-slot>
+      <div id="code-editor" className="editor-body" data-editor-slot>
         <CodeEditor
           key={session}
           docKey={keyFor(active)}

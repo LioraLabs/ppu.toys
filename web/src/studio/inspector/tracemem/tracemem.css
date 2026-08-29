@@ -34,7 +34,7 @@
 }
 .tm-mode-badge {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.08em;
   color: var(--dim);
   background: var(--sunken);
@@ -85,7 +85,7 @@
 }
 .tm-stage-title {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--mid);
   margin-bottom: 6px;
 }
@@ -131,7 +131,7 @@
   flex-direction: column;
   gap: 2px;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
 }
 .tm-row {
   display: flex;
@@ -166,7 +166,7 @@
 }
 .tm-meta {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--dim2);
   line-height: 1.7;
 }
@@ -283,7 +283,7 @@
   padding: 0;
   cursor: pointer;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
 }
 .tm-legend button:hover {
   opacity: 0.75;
@@ -311,7 +311,7 @@
 }
 .tm-cgowner {
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 11px;
   color: var(--txt2);
   white-space: nowrap;
   overflow: hidden;
@@ -384,7 +384,7 @@
 }
 .tm-layername div:last-child {
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 11px;
   color: var(--dim2);
 }
 .tm-layerrow--absent .tm-layername div:first-child {
@@ -395,7 +395,7 @@
   border: none;
   cursor: pointer;
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 11px;
   padding: 2px 7px;
   border-radius: 4px;
 }
@@ -441,13 +441,13 @@
   flex-wrap: wrap;
   gap: 4px 8px;
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 11px;
   color: var(--dim);
 }
 .tm-health-warnline {
   margin-top: 6px;
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 11px;
   color: var(--red);
   line-height: 1.5;
 }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import type { ReactNode } from "react";
 import { Toolbar } from "./Toolbar";
 import { SettingsPanel } from "./SettingsPanel";
@@ -25,6 +25,7 @@ export function ToolbarWired({ sketchName, dirty, layoutSlot }: ToolbarWiredProp
   const { theme, toggleTheme } = useTheme();
   const vimMode = useVimMode();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const closeSettings = useCallback(() => setSettingsOpen(false), []);
   // session refresh is owned by WorkspaceActions (the studio's session seam);
   // this just mirrors the resolved user into the account menu.
   const { user } = useSession();
@@ -40,6 +41,7 @@ export function ToolbarWired({ sketchName, dirty, layoutSlot }: ToolbarWiredProp
         onSignOut={() => void sessionStore.signOut()}
         onNewToy={() => void openSketchStore.newSketch()}
         onToggleSettings={() => setSettingsOpen((o) => !o)}
+        settingsOpen={settingsOpen}
         layoutSlot={layoutSlot}
         workspaceSlot={<WorkspaceActions />}
       />
@@ -49,7 +51,7 @@ export function ToolbarWired({ sketchName, dirty, layoutSlot }: ToolbarWiredProp
           onToggleTheme={toggleTheme}
           vimMode={vimMode}
           onToggleVim={editorSettings.toggleVim}
-          onClose={() => setSettingsOpen(false)}
+          onClose={closeSettings}
         />
       )}
     </>

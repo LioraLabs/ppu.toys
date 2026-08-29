@@ -186,10 +186,26 @@ export function StudioDock({ slots, onApi }: StudioDockProps) {
 export function LayoutMenu({ api }: { api: DockviewApi }) {
   const [open, setOpen] = useState(false);
   const [, bump] = useState(0);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const d = api.onDidLayoutChange(() => bump((n) => n + 1));
     return () => d.dispose();
   }, [api]);
+  useEffect(() => {
+    if (!open) return;
+    popRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      if (popRef.current?.contains(document.activeElement)) triggerRef.current?.focus();
+    };
+  }, [open]);
   const item = (id: PanelId) => (
     <button
       key={id}
@@ -207,17 +223,24 @@ export function LayoutMenu({ api }: { api: DockviewApi }) {
   return (
     <div className="layout-menu">
       <button
+        ref={triggerRef}
         type="button"
         className="btn-ghost"
         aria-expanded={open}
+        aria-controls="layout-menu-pop"
         onClick={() => setOpen((o) => !o)}
       >
         + Panel ▾
       </button>
       {open && (
         <>
-          <div className="layout-menu-scrim" onClick={() => setOpen(false)} />
-          <div className="layout-menu-pop">
+          <div className="layout-menu-scrim" aria-hidden="true" onClick={() => setOpen(false)} />
+          <div
+            ref={popRef}
+            id="layout-menu-pop"
+            className="layout-menu-pop"
+            aria-label="Studio panels and layouts"
+          >
             <div className="layout-menu-head">PANELS</div>
             {(["editor", "assets", "output"] as PanelId[]).map(item)}
             <div className="layout-menu-head">INSPECTOR</div>

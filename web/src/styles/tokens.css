@@ -23,7 +23,7 @@
   --txt2: #c8ccd6;
   --mid: #9aa1ae;
   --dim: #858d9c;
-  --dim2: #5f6573;
+  --dim2: #7b8494;
   --faint: #3f4654;
 
   /* Accents */
@@ -54,8 +54,8 @@
   --txt: #1b2129;
   --txt2: #2f3542;
   --mid: #586171;
-  --dim: #7a8492;
-  --dim2: #98a1af;
+  --dim: #697382;
+  --dim2: #697382;
   --faint: #b6bec9;
 
   /* Accents darkened for contrast on light backgrounds */
@@ -118,6 +118,17 @@
 
 * {
   box-sizing: border-box;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 html,
 body,

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type Ref } from "react";
 import { WIDTH, HEIGHT } from "../ppu/core";
 import { ppuCore } from "../ppu/instance";
-import { transport } from "../studio/transport/transport";
+import { transport, useTransport } from "../studio/transport/transport";
 import { Presenter } from "../studio/output/presenter";
 import { integerScale } from "../studio/output/clock";
 import type { PresentFx } from "../studio/output/fx";
@@ -27,6 +27,13 @@ export function ReadOnlyPlayer({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const displayRef = useRef<HTMLDivElement>(null);
   const [forceCanvas2d, setForceCanvas2d] = useState(false);
+  const { playing, runtimeError } = useTransport();
+
+  useEffect(() => {
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      transport.setPlaying(false);
+    }
+  }, []);
 
   // Push the toy's program into the shared core: source payloads FIRST, then
   // the files — setSources runs the setup stage, whose dma() placements only
@@ -75,6 +82,9 @@ export function ReadOnlyPlayer({
       displayRef={displayRef}
       canvasRef={canvasRef}
       canvasKey={forceCanvas2d ? "canvas2d" : "webgl"}
+      playing={playing}
+      onToggle={transport.toggle}
+      error={ppuCore ? runtimeError?.message : undefined}
     />
   );
 }
@@ -87,10 +97,16 @@ export function PlayerFrame({
   displayRef,
   canvasRef,
   canvasKey,
+  playing,
+  onToggle,
+  error,
 }: {
   displayRef?: Ref<HTMLDivElement>;
   canvasRef?: Ref<HTMLCanvasElement>;
   canvasKey?: string;
+  playing?: boolean;
+  onToggle?: () => void;
+  error?: string;
 }) {
   return (
     <div className="player" ref={displayRef}>
@@ -100,7 +116,19 @@ export function PlayerFrame({
         className="player-canvas"
         width={WIDTH}
         height={HEIGHT}
+        role="img"
+        aria-label="Live SNES toy output"
       />
+      {onToggle && (
+        <button type="button" className="player-toggle" onClick={onToggle}>
+          {playing ? "Pause" : "Play"}
+        </button>
+      )}
+      {error && (
+        <div className="player-error" role="alert">
+          This toy stopped: {error}
+        </div>
+      )}
     </div>
   );
 }

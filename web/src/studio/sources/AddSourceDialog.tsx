@@ -6,6 +6,7 @@ import { transport } from "../transport/transport";
 import { openSketchStore } from "../sketches/openSketch";
 import { decodeImageFile, pngFiles } from "../assets/decode";
 import { SourcePreview } from "./SourcePreview";
+import { useModalFocus } from "../useModalFocus";
 import "./sources.css";
 
 const KINDS: { id: SourceKind; label: string }[] = [
@@ -23,6 +24,7 @@ const DITHERS: { id: Dither; label: string }[] = [
 ];
 
 export function AddSourceDialog({ onClose }: { onClose: () => void }) {
+  const dialogRef = useModalFocus(onClose);
   const [image, setImage] = useState<ImageData | null>(null);
   const [fileName, setFileName] = useState("");
   const [kind, setKind] = useState<SourceKind>("bg");
@@ -100,7 +102,9 @@ export function AddSourceDialog({ onClose }: { onClose: () => void }) {
       <div
         className="srcdlg"
         role="dialog"
+        aria-modal="true"
         aria-label="Add source"
+        ref={dialogRef}
         onClick={(e) => e.stopPropagation()}
       >
         <header className="srcdlg-head">

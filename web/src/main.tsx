@@ -25,7 +25,7 @@ initCore()
   .catch((err) => {
     console.error("Failed to load the PPU core:", err);
     root.innerHTML =
-      '<div style="max-width:34rem;margin:15vh auto;padding:0 1.5rem;font:15px/1.6 system-ui,sans-serif;color:#ddd">' +
+      '<div role="alert" style="max-width:34rem;margin:15vh auto;padding:0 1.5rem;font:15px/1.6 system-ui,sans-serif;color:#ddd">' +
       '<h1 style="font-size:1.25rem;margin:0 0 .5rem">The PPU core failed to load</h1>' +
       "<p>ppu.toys runs entirely on a WebAssembly build of the SNES PPU. Your browser " +
       "couldn't load it, so there's nothing to render. Try a hard refresh, and make sure " +

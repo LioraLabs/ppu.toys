@@ -27,7 +27,7 @@
   border-radius: 5px;
   background: var(--bg-grid);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.5;
   color: var(--text-dim2);
 }
@@ -35,7 +35,7 @@
 .insp-subhead {
   padding: 8px 4px 6px;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.12em;
   color: var(--text-dim2);
 }
@@ -64,7 +64,7 @@
 }
 .oam-idx {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-dim2);
 }
 
@@ -83,7 +83,7 @@
   border-radius: 4px;
   background: var(--bg-grid);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
 }
 .oam-field {
   color: var(--text-dim2);
@@ -104,7 +104,7 @@
   background: var(--bg-grid);
   color: var(--text-main);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
 }
 .vram-budget,
 .vram-meta {
@@ -113,7 +113,7 @@
   gap: 5px;
   margin-bottom: 8px;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
 }
 .vram-budget span,
 .vram-meta span {
@@ -142,7 +142,7 @@
   border-radius: 4px;
   background: var(--bg-grid);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 11px;
   color: var(--text-dim2);
 }
 .vram-tile-px {
@@ -167,7 +167,7 @@
   border-radius: 4px;
   background: var(--bg-grid);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 11px;
   color: var(--text-dim2);
 }
 .vram-map-cell--prio {
@@ -187,7 +187,7 @@
 }
 .palette-bank span {
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 11px;
   color: var(--text-dim2);
 }
 .palette-bank i {
@@ -220,7 +220,7 @@
   align-items: baseline;
   gap: 8px;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
 }
 .reg-m6-key {
   width: 38px;
@@ -260,7 +260,7 @@
 }
 .oam-badge {
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 11px;
   padding: 1px 5px;
   border-radius: 3px;
   letter-spacing: 0.04em;
@@ -316,7 +316,7 @@
   flex-direction: column;
   gap: 3px;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--dim);
 }
 .m7-field input[type="number"] {
@@ -342,7 +342,7 @@
   border: 1px solid var(--line);
   border-radius: 6px;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.5;
   color: var(--txt2);
   overflow-x: auto;

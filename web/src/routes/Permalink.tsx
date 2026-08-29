@@ -16,6 +16,7 @@ export function Permalink() {
   const navigate = useNavigate();
   const { user } = useSession();
   const [load, setLoad] = useState<Load>({ status: "loading" });
+  const [retry, setRetry] = useState(0);
   const [active, setActive] = useState(0);
   const [forking, setForking] = useState(false);
   const [forkFailed, setForkFailed] = useState(false);
@@ -33,7 +34,7 @@ export function Permalink() {
     return () => {
       live = false;
     };
-  }, [id]);
+  }, [id, retry]);
 
   // Decode M10 source payloads (base64 → bytes) for the player. Builtin
   // reference sources carry no payload and are skipped.
@@ -44,8 +45,21 @@ export function Permalink() {
       .map((s) => ({ name: s.name, payload: decodeBase64(s.payload as string) }));
   }, [load]);
 
-  if (load.status === "loading") return <p className="permalink-msg">Loading…</p>;
-  if (load.status === "error") return <p className="permalink-msg">Toy not found.</p>;
+  if (load.status === "loading")
+    return (
+      <p className="permalink-msg" role="status">
+        Loading toy…
+      </p>
+    );
+  if (load.status === "error")
+    return (
+      <div className="permalink-msg" role="alert">
+        <p>We couldn’t load this toy.</p>
+        <button type="button" className="fork-btn" onClick={() => setRetry((n) => n + 1)}>
+          Try again
+        </button>
+      </div>
+    );
 
   const toy = load.toy;
   const activeFile = toy.files[active] ?? toy.files[0];
@@ -136,18 +150,52 @@ export function Permalink() {
           )}
         </div>
         <div className="code-view">
-          <div className="code-tabs">
+          <div className="code-view-head">
+            <h2>Source</h2>
+            <span>
+              {toy.files.length} {toy.files.length === 1 ? "file" : "files"}
+            </span>
+          </div>
+          <div className="code-tabs" role="tablist" aria-label="Source files">
             {toy.files.map((f, i) => (
               <button
                 key={f.name}
+                id={`source-tab-${i}`}
+                type="button"
+                role="tab"
+                aria-selected={i === active}
+                aria-controls="source-code"
+                tabIndex={i === active ? 0 : -1}
                 className={`code-tab${i === active ? " code-tab--on" : ""}`}
                 onClick={() => setActive(i)}
+                onKeyDown={(event) => {
+                  const last = toy.files.length - 1;
+                  const next =
+                    event.key === "ArrowRight"
+                      ? Math.min(i + 1, last)
+                      : event.key === "ArrowLeft"
+                        ? Math.max(i - 1, 0)
+                        : event.key === "Home"
+                          ? 0
+                          : event.key === "End"
+                            ? last
+                            : i;
+                  if (next === i) return;
+                  event.preventDefault();
+                  setActive(next);
+                  document.getElementById(`source-tab-${next}`)?.focus();
+                }}
               >
                 {f.name}
               </button>
             ))}
           </div>
-          <pre className="code-body">
+          <pre
+            id="source-code"
+            className="code-body"
+            role="tabpanel"
+            aria-labelledby={`source-tab-${active}`}
+          >
             <code>{activeFile?.source ?? ""}</code>
           </pre>
         </div>

@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import type { Theme } from "./theme";
 import "./sketches/sketches.css"; // library-head/title/btn chrome shared with the panel flyouts
 
@@ -67,11 +68,29 @@ export function SettingsPanel({
   onToggleVim,
   onClose,
 }: SettingsPanelProps) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    closeRef.current?.focus();
+    const onKey = (event: KeyboardEvent) => event.key === "Escape" && onClose();
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      previous?.focus();
+    };
+  }, [onClose]);
+
   return (
     <aside className="settings-panel" aria-label="Settings">
       <header className="library-head">
         <span className="library-title">SETTINGS</span>
-        <button type="button" className="library-btn" aria-label="Close settings" onClick={onClose}>
+        <button
+          ref={closeRef}
+          type="button"
+          className="library-btn"
+          aria-label="Close settings"
+          onClick={onClose}
+        >
           ×
         </button>
       </header>
