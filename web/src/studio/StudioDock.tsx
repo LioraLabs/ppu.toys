@@ -195,7 +195,10 @@ export function LayoutMenu({ api }: { api: DockviewApi }) {
       key={id}
       type="button"
       className="layout-menu-item"
-      onClick={() => reopenPanel(api, id)}
+      onClick={() => {
+        reopenPanel(api, id);
+        setOpen(false);
+      }}
     >
       <span className="layout-menu-tick">{api.getPanel(id) ? "✓" : ""}</span>
       {PANEL_TITLES[id]}
@@ -203,13 +206,22 @@ export function LayoutMenu({ api }: { api: DockviewApi }) {
   );
   return (
     <div className="layout-menu">
-      <button type="button" className="btn-ghost" onClick={() => setOpen((o) => !o)}>
-        Layout ▾
+      <button
+        type="button"
+        className="btn-ghost"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        + Panel ▾
       </button>
       {open && (
         <>
           <div className="layout-menu-scrim" onClick={() => setOpen(false)} />
           <div className="layout-menu-pop">
+            <div className="layout-menu-head">PANELS</div>
+            {(["editor", "assets", "output"] as PanelId[]).map(item)}
+            <div className="layout-menu-head">INSPECTOR</div>
+            {INSPECTOR_PAGES.map(item)}
             <div className="layout-menu-head">PRESETS</div>
             {(["default", "code", "showcase"] as LayoutPreset[]).map((p) => (
               <button
@@ -224,10 +236,6 @@ export function LayoutMenu({ api }: { api: DockviewApi }) {
                 {p}
               </button>
             ))}
-            <div className="layout-menu-head">PANELS</div>
-            {(["editor", "assets", "output"] as PanelId[]).map(item)}
-            <div className="layout-menu-head">INSPECTOR</div>
-            {INSPECTOR_PAGES.map(item)}
           </div>
         </>
       )}

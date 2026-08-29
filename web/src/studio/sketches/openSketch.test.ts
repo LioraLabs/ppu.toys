@@ -26,4 +26,11 @@ describe("openSketchStore", () => {
       source: "",
     });
   });
+
+  it("keeps main.lua: no delete, no rename away", () => {
+    openSketchStore.addFile(); // a second real file, so the last-file guard isn't what holds
+    openSketchStore.deleteFile("main.lua");
+    expect(openSketchStore.renameFile("main.lua", "entry.lua")).toBe(false);
+    expect(openContextFiles(openSketchStore.state()).map((f) => f.name)).toContain("main.lua");
+  });
 });

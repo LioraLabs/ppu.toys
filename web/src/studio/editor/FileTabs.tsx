@@ -12,6 +12,10 @@ export interface FileTabsProps {
    *  draggable, not rename/delete-able, and pinned as a drop floor — nothing
    *  can be reordered before or onto a generated tab's position. */
   generated: ReadonlySet<string>;
+  /** Files that are otherwise normal (draggable, editable) but can't be
+   *  renamed or deleted: main.lua, the toy's entry file. Generated files are
+   *  locked too, implicitly. */
+  locked?: ReadonlySet<string>;
   /** Generated files that currently have pokes applied to them — swaps the
    *  ⚙ glyph for an accent ⚡ so a poked pokes.lua reads as "live". */
   pokedFiles?: ReadonlySet<string>;
@@ -49,6 +53,7 @@ export function FileTabs(props: FileTabsProps) {
     <div className="ftabs" role="tablist" aria-label="Toy files">
       {files.map((name, i) => {
         const isGenerated = generated.has(name);
+        const isLocked = isGenerated || !!props.locked?.has(name);
         return (
           <div
             key={name}
@@ -80,7 +85,7 @@ export function FileTabs(props: FileTabsProps) {
             }}
             onClick={() => props.onSelect(name)}
             onDoubleClick={() => {
-              if (!isGenerated) setEditing(name);
+              if (!isLocked) setEditing(name);
             }}
           >
             {isGenerated &&
@@ -107,7 +112,7 @@ export function FileTabs(props: FileTabsProps) {
             ) : (
               <span className="ftab-name">{name}</span>
             )}
-            {files.length - floor > 1 && !isGenerated && (
+            {files.length - floor > 1 && !isLocked && (
               <button
                 type="button"
                 className="ftab-close"

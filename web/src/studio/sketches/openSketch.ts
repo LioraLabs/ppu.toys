@@ -15,6 +15,11 @@ export const AUTOSAVE_MS = 800;
 
 export const NEW_SKETCH_SOURCE = "";
 
+/** The entry file. Not special-cased by the engine (any file can define
+ *  frame/init) but it IS the toy's front door — every tutorial, demo and
+ *  `ppu new` scaffold names it — so it can't be deleted or renamed away. */
+export const MAIN_FILE = "main.lua";
+
 /** pokes.lua is reserved: always present, always index 0. The ONLY generated
  *  file — every point where files enter or are read from the open context
  *  normalizes through this. */
@@ -41,7 +46,7 @@ export interface OpenSketchState {
 function emptySketch(): Sketch {
   return newSketchObject("untitled toy", [
     { name: POKES_FILE, source: EMPTY_POKES },
-    { name: "main.lua", source: "" },
+    { name: MAIN_FILE, source: "" },
   ]);
 }
 
@@ -161,7 +166,7 @@ export const openSketchStore = {
     await flush();
     const sketch = await createSketch("untitled toy", [
       { name: POKES_FILE, source: EMPTY_POKES },
-      { name: "main.lua", source: NEW_SKETCH_SOURCE },
+      { name: MAIN_FILE, source: NEW_SKETCH_SOURCE },
     ]);
     openContext({ kind: "sketch", sketch });
   },
@@ -197,11 +202,12 @@ export const openSketchStore = {
   },
 
   /** Rename a file. Returns false (and no-ops) on empty/unknown/duplicate
-   *  names, or on touching the reserved pokes.lua (as source or target).
-   *  Renaming a demo's file forks it. */
+   *  names, on touching the reserved pokes.lua (as source or target), or on
+   *  renaming main.lua away (that IS a delete). Renaming a demo's file forks it. */
   renameFile(from: string, to: string): boolean {
     const next = to.trim();
     if (from === POKES_FILE || next === POKES_FILE) return false;
+    if (from === MAIN_FILE) return false;
     const files = currentFiles();
     if (!next || next === from) return false;
     if (!files.some((f) => f.name === from)) return false;
@@ -210,10 +216,10 @@ export const openSketchStore = {
     return true;
   },
 
-  /** Delete a file. No-ops on the reserved pokes.lua. Refuses the last
-   *  REAL (non-pokes) file — a sketch always has >= 1 user file. */
+  /** Delete a file. No-ops on the reserved pokes.lua and on main.lua. Refuses
+   *  the last REAL (non-pokes) file — a sketch always has >= 1 user file. */
   deleteFile(name: string): void {
-    if (name === POKES_FILE) return;
+    if (name === POKES_FILE || name === MAIN_FILE) return;
     const files = currentFiles();
     const realCount = files.filter((f) => f.name !== POKES_FILE).length;
     if (realCount <= 1 || !files.some((f) => f.name === name)) return;

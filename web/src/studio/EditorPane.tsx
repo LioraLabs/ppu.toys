@@ -10,7 +10,7 @@ import {
   useTransportBindMismatches,
   useTransportRuntimeError,
 } from "./transport/transport";
-import { openSketchStore, useOpenSketch, openContextFiles } from "./sketches/openSketch";
+import { openSketchStore, useOpenSketch, openContextFiles, MAIN_FILE } from "./sketches/openSketch";
 import { restoreOpenContext } from "./sketches/restore";
 import { POKES_FILE } from "./pokes/pokes";
 import { usePokes } from "./pokes/pokeStore";
@@ -19,6 +19,10 @@ import { DialectToggle, PokeBar } from "./inspector/compose/chrome";
 /** The only machine-generated file — read-only tab, CRUD-guarded (see
  *  openSketchStore), never a default active-tab target. */
 const GENERATED = new Set([POKES_FILE]);
+
+/** Files the tab bar may not rename or delete: the generated one plus the
+ *  entry file (the store rejects both too — this just hides the affordances). */
+const LOCKED = new Set([POKES_FILE, MAIN_FILE]);
 
 /** Stable empty-set identity: reused whenever there are no pokes, so
  *  FileTabs doesn't see a new Set on every render. */
@@ -140,7 +144,7 @@ export function EditorPane({ onSources }: EditorPaneProps) {
   const rename = (from: string, to: string): boolean => {
     // belt-and-braces: the store already rejects touching the reserved
     // generated file, and FileTabs never wires up its dblclick for it.
-    if (GENERATED.has(from) || GENERATED.has(to)) return false;
+    if (LOCKED.has(from) || GENERATED.has(to)) return false;
     if (!openSketchStore.renameFile(from, to)) return false;
     const k = docKeys.get(from);
     if (k !== undefined) {
@@ -151,7 +155,7 @@ export function EditorPane({ onSources }: EditorPaneProps) {
     return true;
   };
   const remove = (name: string) => {
-    if (GENERATED.has(name)) return; // belt-and-braces, see rename above
+    if (LOCKED.has(name)) return; // belt-and-braces, see rename above
     openSketchStore.deleteFile(name);
     docKeys.delete(name); // key is never reused: a re-added name gets a fresh doc
     // re-anchor the NAMED active state too — a later rename to the deleted
@@ -171,6 +175,7 @@ export function EditorPane({ onSources }: EditorPaneProps) {
         active={active}
         errorFiles={errorFiles}
         generated={GENERATED}
+        locked={LOCKED}
         pokedFiles={pokedFiles}
         vimMode={vimMode}
         onToggleVim={editorSettings.toggleVim}
