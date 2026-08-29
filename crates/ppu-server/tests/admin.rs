@@ -4,6 +4,49 @@ use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
 
 #[tokio::test]
+async fn admin_selects_a_published_featured_toy() {
+    let app = common::test_app().await;
+    let admin = common::seed_session(&app.state, "9", "root", true).await;
+    sqlx::query("INSERT INTO toys(id,author_id,title,files_json,state,created_at) VALUES('featured','9','Feature','[]','published',1)")
+        .execute(&app.state.pool).await.unwrap();
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/featured")
+                .header("cookie", format!("ppu_sess={admin}"))
+                .header("x-ppu-csrf", "1")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"toy_id":"featured"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/featured")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(response.into_body(), 1024)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap()["id"],
+        "featured"
+    );
+}
+
+#[tokio::test]
 async fn admin_overview_lists_users_and_toys_and_can_unban() {
     let app = common::test_app().await;
     let admin = common::seed_session(&app.state, "9", "root", true).await;
@@ -35,6 +78,7 @@ async fn admin_overview_lists_users_and_toys_and_can_unban() {
     assert_eq!(json["toys"][0]["title"], "Toy");
     assert!(json["storage"]["usedBytes"].as_i64().unwrap() > 0);
     assert_eq!(json["storage"]["warning"], false);
+    assert_eq!(json["featuredToyId"], "");
     assert!(json["users"]
         .as_array()
         .unwrap()

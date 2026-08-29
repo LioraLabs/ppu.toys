@@ -37,6 +37,7 @@ export interface StarterTemplate {
 
 export interface AdminOverview {
   toys: { id: string; title: string; state: string; author: string; created_at: number }[];
+  featuredToys: { id: string; title: string; author: string }[];
   users: {
     id: string;
     handle: string;
@@ -46,6 +47,7 @@ export interface AdminOverview {
     storage_bytes: number;
   }[];
   storage: { usedBytes: number; limitBytes: number; warning: boolean };
+  featuredToyId: string;
 }
 
 export interface ToySource {
@@ -150,6 +152,18 @@ export function updateStarterTemplate(template: StarterTemplate): Promise<void> 
 
 export function getAdminOverview(): Promise<AdminOverview> {
   return request<AdminOverview>("/api/admin");
+}
+
+export function getFeaturedToy(): Promise<{ id: string | null }> {
+  return request<{ id: string | null }>("/api/featured");
+}
+
+export function setFeaturedToy(toy_id: string | null): Promise<void> {
+  return request<void>("/api/admin/featured", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ toy_id }),
+  });
 }
 
 export function adminDeleteToy(id: string): Promise<void> {

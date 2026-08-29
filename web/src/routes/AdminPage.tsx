@@ -5,6 +5,7 @@ import {
   adminUnbanUser,
   getAdminOverview,
   getStarterTemplate,
+  setFeaturedToy,
   updateStarterTemplate,
   type AdminOverview,
 } from "../api/apiClient";
@@ -40,6 +41,16 @@ export function AdminPage() {
       setStatus("Starter template saved.");
     } catch (error) {
       setStatus(`Could not save starter: ${String(error)}`);
+    }
+  }
+
+  async function featureToy(id: string) {
+    try {
+      await setFeaturedToy(id || null);
+      setData((current) => (current ? { ...current, featuredToyId: id } : current));
+      setStatus(id ? "Featured toy updated." : "Featured toy cleared.");
+    } catch (error) {
+      setStatus(`Could not update featured toy: ${String(error)}`);
     }
   }
 
@@ -98,6 +109,24 @@ export function AdminPage() {
             {data.storage.warning ? " — action required" : ""}
           </p>
           <progress value={data.storage.usedBytes} max={data.storage.limitBytes} />
+        </section>
+      )}
+
+      {data && (
+        <section className="admin-card">
+          <h2>Featured toy</h2>
+          <select
+            aria-label="Featured toy"
+            value={data.featuredToyId}
+            onChange={(event) => void featureToy(event.target.value)}
+          >
+            <option value="">None</option>
+            {data.featuredToys.map((toy) => (
+              <option key={toy.id} value={toy.id}>
+                {toy.title} — {toy.author}
+              </option>
+            ))}
+          </select>
         </section>
       )}
 

@@ -42,6 +42,38 @@ struct BanBody {
     discord_id: String,
 }
 
+#[derive(serde::Deserialize)]
+struct FeaturedBody {
+    toy_id: Option<String>,
+}
+
+async fn set_featured(
+    State(s): State<AppState>,
+    user: AuthUser,
+    Json(body): Json<FeaturedBody>,
+) -> AppResult<StatusCode> {
+    require_admin(&user)?;
+    if let Some(id) = &body.toy_id {
+        let published =
+            sqlx::query_as::<_, (i64,)>("SELECT 1 FROM toys WHERE id=? AND state='published'")
+                .bind(id)
+                .fetch_optional(&s.pool)
+                .await?
+                .is_some();
+        if !published {
+            return Err(AppError::status(
+                StatusCode::BAD_REQUEST,
+                "featured toy must be published",
+            ));
+        }
+    }
+    sqlx::query("UPDATE settings SET value=? WHERE key='featured_toy'")
+        .bind(body.toy_id.unwrap_or_default())
+        .execute(&s.pool)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn ban(
     State(s): State<AppState>,
     user: AuthUser,
@@ -100,6 +132,11 @@ async fn overview(State(s): State<AppState>, user: AuthUser) -> AppResult<Json<s
     )
     .fetch_all(&s.pool)
     .await?;
+    let featured_toys = sqlx::query_as::<_, AdminToy>(
+        "SELECT t.id,t.title,t.state,u.handle author,t.created_at FROM toys t JOIN users u ON u.id=t.author_id WHERE t.state='published' ORDER BY t.title",
+    )
+    .fetch_all(&s.pool)
+    .await?;
     let users = sqlx::query_as::<_, AdminUser>(
         "SELECT u.id,u.handle,u.is_admin != 0 is_admin,EXISTS(SELECT 1 FROM bans b WHERE b.discord_id=u.id) banned,u.created_at,COALESCE((SELECT SUM(length(title)+length(description)+length(files_json)+COALESCE(length(clip),0)+COALESCE(length(thumb),0)) FROM toys WHERE author_id=u.id),0)+COALESCE((SELECT SUM(length(s.name)+length(s.kind)+COALESCE(length(s.builtin_id),0)+COALESCE(length(s.options_json),0)+COALESCE(length(s.payload),0)+COALESCE(length(s.meta_json),0)) FROM toy_sources s JOIN toys t ON t.id=s.toy_id WHERE t.author_id=u.id),0) storage_bytes FROM users u ORDER BY u.created_at DESC LIMIT 200",
     )
@@ -110,12 +147,15 @@ async fn overview(State(s): State<AppState>, user: AuthUser) -> AppResult<Json<s
         .await?;
     Ok(Json(serde_json::json!({
         "toys": toys,
+        "featuredToys": featured_toys,
         "users": users,
         "storage": {
             "usedBytes": used,
             "limitBytes": crate::config::MAX_APP_STORAGE,
             "warning": used * 10 >= crate::config::MAX_APP_STORAGE * 7
-        }
+        },
+        "featuredToyId": sqlx::query_as::<_, (String,)>("SELECT value FROM settings WHERE key='featured_toy'")
+            .fetch_one(&s.pool).await?.0
     })))
 }
 
@@ -125,4 +165,5 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/toys/{id}", delete(delete_toy))
         .route("/admin/ban", post(ban))
         .route("/admin/ban/{id}", delete(unban))
+        .route("/admin/featured", post(set_featured))
 }

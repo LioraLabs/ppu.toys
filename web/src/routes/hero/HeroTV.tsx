@@ -6,7 +6,7 @@
  *  chunk — three.js stays out of every other bundle. */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { getWall, getToy, type ToyFull } from "../../api/apiClient";
+import { getFeaturedToy, getToy, type ToyFull } from "../../api/apiClient";
 import { decodeBase64 } from "../../api/base64";
 import { ppuCore } from "../../ppu/instance";
 import { transport } from "../../studio/transport/transport";
@@ -21,8 +21,10 @@ export default function HeroTV({ fallback }: { fallback: ReactNode }) {
 
   useEffect(() => {
     let live = true;
-    getWall("popular", 0)
-      .then((p) => (p.toys[0] ? getToy(p.toys[0].id) : Promise.reject(new Error("empty wall"))))
+    getFeaturedToy()
+      .then((featured) =>
+        featured.id ? getToy(featured.id) : Promise.reject(new Error("no featured toy")),
+      )
       .then((t) => live && setToy(t))
       .catch(() => live && setFailed(true));
     return () => {

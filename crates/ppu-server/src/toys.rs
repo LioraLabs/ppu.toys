@@ -578,6 +578,15 @@ pub struct WallQuery {
 
 const PAGE_SIZE: i64 = 24;
 
+async fn featured(State(state): State<AppState>) -> AppResult<Json<serde_json::Value>> {
+    let (id,): (String,) = sqlx::query_as("SELECT value FROM settings WHERE key='featured_toy'")
+        .fetch_one(&state.pool)
+        .await?;
+    Ok(Json(
+        serde_json::json!({ "id": if id.is_empty() { None } else { Some(id) } }),
+    ))
+}
+
 fn wall_card(
     id: &str,
     title: &str,
@@ -689,5 +698,6 @@ pub fn routes() -> Router<AppState> {
         .route("/toys/{id}", get(get_toy).put(update))
         .route("/toys/{id}/fork", post(fork))
         .route("/toys/{id}/publish", post(publish))
+        .route("/featured", get(featured))
         .route("/users/{handle}", get(profile))
 }

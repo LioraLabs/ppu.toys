@@ -4,9 +4,8 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import HeroTV from "./HeroTV";
-import { makeWallCard } from "../../fixtures";
 
-vi.mock("../../api/apiClient", () => ({ getWall: vi.fn(), getToy: vi.fn() }));
+vi.mock("../../api/apiClient", () => ({ getFeaturedToy: vi.fn(), getToy: vi.fn() }));
 // The stage needs real WebGL; wiring is what's under test.
 vi.mock("./HeroStage", () => ({ HeroStage: () => <div data-testid="stage" /> }));
 vi.mock("../../ppu/instance", () => ({ ppuCore: {} }));
@@ -18,10 +17,10 @@ vi.mock("../../studio/transport/transport", () => ({
     getSnapshot: vi.fn(() => ({ frame: { framebuffer: new Uint8ClampedArray(4) } })),
   },
 }));
-import { getWall, getToy } from "../../api/apiClient";
+import { getFeaturedToy, getToy } from "../../api/apiClient";
 import { transport } from "../../studio/transport/transport";
 
-const mockGetWall = getWall as ReturnType<typeof vi.fn>;
+const mockGetFeaturedToy = getFeaturedToy as ReturnType<typeof vi.fn>;
 const mockGetToy = getToy as ReturnType<typeof vi.fn>;
 
 const toy = {
@@ -56,12 +55,12 @@ function renderHero() {
 }
 
 describe("HeroTV", () => {
-  it("fetches the top popular toy, pushes its program, and links the stage to its permalink", async () => {
-    mockGetWall.mockResolvedValue({ toys: [makeWallCard({ id: "t1" })], nextPage: null });
+  it("fetches the featured toy, pushes its program, and links the stage to its permalink", async () => {
+    mockGetFeaturedToy.mockResolvedValue({ id: "t1" });
     mockGetToy.mockResolvedValue(toy);
     renderHero();
     expect(await screen.findByText(/Mode 7 Road/)).toBeInTheDocument();
-    expect(mockGetWall).toHaveBeenCalledWith("popular", 0);
+    expect(mockGetFeaturedToy).toHaveBeenCalled();
     expect(mockGetToy).toHaveBeenCalledWith("t1");
     expect(transport.setSources).toHaveBeenCalledWith(toy.files);
     expect(transport.addSource).toHaveBeenCalledTimes(1); // payload-less builtin skipped
@@ -74,8 +73,8 @@ describe("HeroTV", () => {
     expect(screen.getByTestId("stage")).toBeInTheDocument();
   });
 
-  it("renders the fallback when the wall is empty", async () => {
-    mockGetWall.mockResolvedValue({ toys: [], nextPage: null });
+  it("renders the fallback when no toy is featured", async () => {
+    mockGetFeaturedToy.mockResolvedValue({ id: null });
     renderHero();
     expect(await screen.findByTestId("fallback")).toBeInTheDocument();
   });
