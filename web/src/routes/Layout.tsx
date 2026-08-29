@@ -37,7 +37,7 @@ export function Layout() {
           )}
           {!loading && !user && (
             <a className="btn-discord" href={SIGN_IN_URL}>
-              Sign in with Discord
+              {import.meta.env.DEV ? "Sign in locally" : "Sign in with Discord"}
             </a>
           )}
         </nav>

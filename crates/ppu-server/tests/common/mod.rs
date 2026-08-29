@@ -13,19 +13,23 @@ pub struct TestApp {
 }
 
 pub async fn test_app() -> TestApp {
-    build(None, BlobMode::Db, None).await
+    build(None, BlobMode::Db, None, None).await
 }
 pub async fn test_app_with(discord: Option<DiscordConfig>, blob_mode: BlobMode) -> TestApp {
-    build(discord, blob_mode, None).await
+    build(discord, blob_mode, None, None).await
+}
+pub async fn test_app_dev() -> TestApp {
+    build(None, BlobMode::Db, None, Some("local-only".into())).await
 }
 pub async fn test_app_web(web_dir: &Path) -> TestApp {
-    build(None, BlobMode::Db, Some(web_dir.to_path_buf())).await
+    build(None, BlobMode::Db, Some(web_dir.to_path_buf()), None).await
 }
 
 async fn build(
     discord: Option<DiscordConfig>,
     blob_mode: BlobMode,
     web_dir: Option<std::path::PathBuf>,
+    dev_token: Option<String>,
 ) -> TestApp {
     let dir = tempfile::tempdir().unwrap();
     let mut cfg = Config::from_map(|_| None);
@@ -34,11 +38,18 @@ async fn build(
     cfg.blob_mode = blob_mode;
     cfg.discord = discord;
     cfg.base_url = "http://test.local".into();
+    cfg.dev_token = dev_token;
     if let Some(w) = web_dir {
         cfg.web_dir = w;
     }
     let pool = db::connect(&cfg.db_path).await.unwrap();
     db::migrate(&pool).await.unwrap();
+    if cfg.dev_token.is_some() {
+        sqlx::query("INSERT INTO users(id,handle,created_at) VALUES('sys:ppu','ppu',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
     let state = AppState::new(cfg, pool);
     let router = ppu_server::build_router(state.clone());
     TestApp { router, state, dir }

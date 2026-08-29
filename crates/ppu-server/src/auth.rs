@@ -235,6 +235,23 @@ fn urlencode(s: &str) -> String {
 }
 
 async fn discord_start(State(state): State<AppState>, jar: CookieJar) -> AppResult<Response> {
+    if state.cfg.dev_token.is_some() {
+        let now = crate::db::now();
+        let sid = rand_hex(16);
+        sqlx::query(
+            "INSERT INTO sessions(id,user_id,created_at,expires_at) VALUES(?,'sys:ppu',?,?)",
+        )
+        .bind(&sid)
+        .bind(now)
+        .bind(now + state.cfg.session_ttl_days * 86400)
+        .execute(&state.pool)
+        .await?;
+        return Ok((
+            CookieJar::new().add(build_cookie(sid, state.cfg.session_ttl_days)),
+            Redirect::to("/studio"),
+        )
+            .into_response());
+    }
     let d = state.cfg.discord.as_ref().ok_or_else(|| {
         AppError::status(
             StatusCode::SERVICE_UNAVAILABLE,

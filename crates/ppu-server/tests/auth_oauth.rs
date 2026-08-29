@@ -58,6 +58,27 @@ async fn auth_disabled_returns_503() {
 }
 
 #[tokio::test]
+async fn dev_mode_signs_in_locally() {
+    let app = common::test_app_dev().await;
+    let res = app
+        .router
+        .oneshot(
+            Request::builder()
+                .uri("/api/auth/discord")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(res.headers()["location"], "/studio");
+    assert!(res.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .contains("ppu_sess="));
+}
+
+#[tokio::test]
 async fn discord_redirects_to_authorize_with_state_cookie() {
     let base = mock_discord().await;
     let app = common::test_app_with(Some(discord_cfg(&base)), BlobMode::Db).await;

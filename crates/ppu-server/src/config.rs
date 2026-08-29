@@ -36,6 +36,9 @@ pub struct Config {
     pub admin_ids: Vec<String>,
     pub session_ttl_days: i64,
     pub base_url: String,
+    /// Explicit local-development credential. When set, startup ensures a
+    /// `ppu` system account can authenticate with this API token.
+    pub dev_token: Option<String>,
 }
 
 impl Config {
@@ -84,6 +87,7 @@ impl Config {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(30),
             base_url: get("PPU_BASE_URL").unwrap_or_else(|| "http://localhost:8080".into()),
+            dev_token: get("PPU_DEV_TOKEN").filter(|token| !token.is_empty()),
         }
     }
 }

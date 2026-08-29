@@ -167,7 +167,7 @@ chore db-nuke
 #    server.build is kept for a fast start and so compile errors surface as a
 #    build failure, not as a server that never binds.
 chore stack: wasm install server.build
-    PPU_DB_PATH=build/dev.db target/debug/ppu-server &
+    PPU_DB_PATH=build/dev.db PPU_DEV_TOKEN=ppu_local_demos target/debug/ppu-server &
     pnpm --filter web run dev
 
 chore stack-fresh: db-nuke stack

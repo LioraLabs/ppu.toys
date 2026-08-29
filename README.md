@@ -92,7 +92,8 @@ Studio at `http://localhost:5173/`. Ctrl-C stops both. Use `cook stack-fresh` to
 delete the database first, or `cook db-nuke` to delete it without starting the
 site. SQLite creates and migrates the next database automatically.
 
-No `.env` is needed for anonymous browsing; Discord is only needed for sign-in.
+No `.env` or Discord account is needed: **Sign in locally** uses the disposable
+`ppu` development account. A production build still uses Discord.
 
 ## Edit a toy on your machine
 
