@@ -120,7 +120,9 @@ export function PublishDialog({ onClose, save }: PublishDialogProps) {
               disabled={busy}
               onChange={(e) => setClipStart(Math.max(0, e.target.valueAsNumber || 0))}
             />
-            <span>t={clipStart.toFixed(1)}s–{(clipStart + 5).toFixed(1)}s</span>
+            <span>
+              t={clipStart.toFixed(1)}s–{(clipStart + 5).toFixed(1)}s
+            </span>
           </label>
 
           {error && <div className="cloud-error">{error}</div>}

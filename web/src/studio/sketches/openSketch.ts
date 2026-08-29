@@ -49,9 +49,7 @@ export interface OpenSketchState {
   session: number;
 }
 
-const FALLBACK_FILES = [
-  { name: MAIN_FILE, source: NEW_SKETCH_SOURCE },
-];
+const FALLBACK_FILES = [{ name: MAIN_FILE, source: NEW_SKETCH_SOURCE }];
 
 function starterSketch(name = "untitled toy", files: SketchFile[] = FALLBACK_FILES): Sketch {
   return newSketchObject(name, [

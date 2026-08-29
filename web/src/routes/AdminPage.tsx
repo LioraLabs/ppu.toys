@@ -79,7 +79,11 @@ export function AdminPage() {
           <p className="admin-kicker">REMOTE OPERATIONS</p>
           <h1>Admin</h1>
         </div>
-        {status && <div className="admin-status" role="status">{status}</div>}
+        {status && (
+          <div className="admin-status" role="status">
+            {status}
+          </div>
+        )}
       </header>
 
       <section className="admin-card admin-starter">
@@ -87,39 +91,95 @@ export function AdminPage() {
           <h2>Starter project</h2>
           <p>JSON served to every fresh Studio project.</p>
         </div>
-        <textarea aria-label="Starter project JSON" value={starter} onChange={(event) => setStarter(event.target.value)} spellCheck={false} />
-        <button className="admin-primary" onClick={() => void saveStarter()}>Save starter</button>
+        <textarea
+          aria-label="Starter project JSON"
+          value={starter}
+          onChange={(event) => setStarter(event.target.value)}
+          spellCheck={false}
+        />
+        <button className="admin-primary" onClick={() => void saveStarter()}>
+          Save starter
+        </button>
       </section>
 
       <section className="admin-card">
-        <h2>Users <span>{data?.users.length ?? 0}</span></h2>
+        <h2>
+          Users <span>{data?.users.length ?? 0}</span>
+        </h2>
         <div className="admin-table-wrap">
           <table>
-            <thead><tr><th>Handle</th><th>Discord ID</th><th>Status</th><th /></tr></thead>
-            <tbody>{data?.users.map((member) => (
-              <tr key={member.id}>
-                <td>{member.handle}{member.is_admin && <small> admin</small>}</td>
-                <td><code>{member.id}</code></td>
-                <td>{member.banned ? "Banned" : "Active"}</td>
-                <td><button className={member.banned ? "admin-secondary" : "admin-danger"} disabled={member.is_admin} onClick={() => void toggleBan(member.id, member.banned)}>{member.banned ? "Unban" : "Ban"}</button></td>
+            <thead>
+              <tr>
+                <th>Handle</th>
+                <th>Discord ID</th>
+                <th>Status</th>
+                <th />
               </tr>
-            ))}</tbody>
+            </thead>
+            <tbody>
+              {data?.users.map((member) => (
+                <tr key={member.id}>
+                  <td>
+                    {member.handle}
+                    {member.is_admin && <small> admin</small>}
+                  </td>
+                  <td>
+                    <code>{member.id}</code>
+                  </td>
+                  <td>{member.banned ? "Banned" : "Active"}</td>
+                  <td>
+                    <button
+                      className={member.banned ? "admin-secondary" : "admin-danger"}
+                      disabled={member.is_admin}
+                      onClick={() => void toggleBan(member.id, member.banned)}
+                    >
+                      {member.banned ? "Unban" : "Ban"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
           </table>
         </div>
       </section>
 
       <section className="admin-card">
-        <h2>Toys <span>{data?.toys.length ?? 0}</span></h2>
+        <h2>
+          Toys <span>{data?.toys.length ?? 0}</span>
+        </h2>
         <div className="admin-table-wrap">
           <table>
-            <thead><tr><th>Title</th><th>Author</th><th>State</th><th>ID</th><th /></tr></thead>
-            <tbody>{data?.toys.map((toy) => (
-              <tr key={toy.id}>
-                <td><a href={`/t/${toy.id}`}>{toy.title}</a></td>
-                <td>{toy.author}</td><td>{toy.state}</td><td><code>{toy.id}</code></td>
-                <td><button className="admin-danger" onClick={() => void removeToy(toy.id, toy.title)}>Delete</button></td>
+            <thead>
+              <tr>
+                <th>Title</th>
+                <th>Author</th>
+                <th>State</th>
+                <th>ID</th>
+                <th />
               </tr>
-            ))}</tbody>
+            </thead>
+            <tbody>
+              {data?.toys.map((toy) => (
+                <tr key={toy.id}>
+                  <td>
+                    <a href={`/t/${toy.id}`}>{toy.title}</a>
+                  </td>
+                  <td>{toy.author}</td>
+                  <td>{toy.state}</td>
+                  <td>
+                    <code>{toy.id}</code>
+                  </td>
+                  <td>
+                    <button
+                      className="admin-danger"
+                      onClick={() => void removeToy(toy.id, toy.title)}
+                    >
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
           </table>
         </div>
       </section>
