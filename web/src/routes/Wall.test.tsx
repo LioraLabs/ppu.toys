@@ -18,16 +18,8 @@ afterEach(() => {
 });
 
 it("shows curated highlights and the five latest contributions", async () => {
-  const openKofi = vi.fn();
-  const draw = vi.fn((_id, _config, containerId) => {
-    const trigger = document.createElement("button");
-    trigger.className = "floatingchat-donate-button";
-    trigger.addEventListener("click", openKofi);
-    document.getElementById(containerId!)?.appendChild(trigger);
-  });
-  window.kofiWidgetOverlay = {
-    draw,
-  };
+  const draw = vi.fn();
+  window.kofiWidgetOverlay = { draw };
   vi.mocked(getHighlights).mockResolvedValue({
     toys: [makeWallCard({ id: "featured", title: "Feature" })],
   });
@@ -47,5 +39,9 @@ it("shows curated highlights and the five latest contributions", async () => {
     'script[src="https://storage.ko-fi.com/cdn/scripts/overlay-widget.js"]',
   )!;
   fireEvent.load(script);
-  expect(draw).toHaveBeenCalledWith("X8X21XWLH3", expect.any(Object), "kofi-widget");
+  expect(draw).toHaveBeenCalledWith(
+    "X8X21XWLH3",
+    expect.any(Object),
+    "kofi-widget",
+  );
 });
