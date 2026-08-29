@@ -45,7 +45,7 @@ async fn build(
     let pool = db::connect(&cfg.db_path).await.unwrap();
     db::migrate(&pool).await.unwrap();
     if cfg.dev_token.is_some() {
-        sqlx::query("INSERT INTO users(id,handle,created_at) VALUES('sys:ppu','ppu',0)")
+        sqlx::query("INSERT INTO users(id,handle,is_admin,created_at) VALUES('sys:ppu','ppu',1,0)")
             .execute(&pool)
             .await
             .unwrap();

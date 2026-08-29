@@ -64,6 +64,23 @@
   font-size: 13px;
   color: var(--mid);
 }
+input.project-name {
+  width: min(28vw, 240px);
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+}
+input.project-name:hover,
+input.project-name:focus {
+  border-color: var(--line);
+  background: var(--panel);
+  color: var(--txt);
+  outline: none;
+}
+input.project-name:focus-visible {
+  border-color: var(--orange);
+}
 .unsaved-dot {
   width: 6px;
   height: 6px;

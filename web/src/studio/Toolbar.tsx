@@ -13,6 +13,8 @@ export interface ToolbarProps {
   sketchName?: string;
   /** Unsaved-changes marker — renders the unsaved dot when true. */
   dirty?: boolean;
+  /** Commit a new name for the open toy. */
+  onRename?: (name: string) => void;
   /** Active theme; picks the toggle button's label ("Light" while dark). */
   theme?: Theme;
   /** Signed-in user for the account menu; absent renders no account chrome
@@ -116,6 +118,7 @@ function AccountMenu({
 export function Toolbar({
   sketchName = "dusk-parallax",
   dirty = false,
+  onRename,
   theme = "dark",
   user = null,
   onToggleTheme,
@@ -135,7 +138,25 @@ export function Toolbar({
       </a>
       <div className="tb-divider" />
       <div className="project">
-        <span className="project-name">{sketchName}</span>
+        {onRename ? (
+          <input
+            key={sketchName}
+            className="project-name"
+            aria-label="Toy name"
+            defaultValue={sketchName}
+            maxLength={100}
+            onBlur={(e) => {
+              const name = e.currentTarget.value.trim();
+              if (name) onRename(name);
+              else e.currentTarget.value = sketchName;
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+            }}
+          />
+        ) : (
+          <span className="project-name">{sketchName}</span>
+        )}
         {dirty && <span className="unsaved-dot" />}
       </div>
       <div className="tb-spacer" />

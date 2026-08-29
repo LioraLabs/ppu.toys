@@ -60,6 +60,11 @@ async fn auth_disabled_returns_503() {
 #[tokio::test]
 async fn dev_mode_signs_in_locally() {
     let app = common::test_app_dev().await;
+    let (is_admin,): (bool,) = sqlx::query_as("SELECT is_admin != 0 FROM users WHERE id='sys:ppu'")
+        .fetch_one(&app.state.pool)
+        .await
+        .unwrap();
+    assert!(is_admin);
     let res = app
         .router
         .oneshot(

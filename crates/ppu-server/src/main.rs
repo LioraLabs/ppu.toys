@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 async fn ensure_dev_account(pool: &sqlx::SqlitePool, token: &str) -> anyhow::Result<()> {
     let now = db::now();
     let hash = format!("{:x}", Sha256::digest(token.as_bytes()));
-    sqlx::query("INSERT INTO users(id,handle,created_at) VALUES('sys:ppu','ppu',?) ON CONFLICT(id) DO UPDATE SET handle='ppu'")
+    sqlx::query("INSERT INTO users(id,handle,is_admin,created_at) VALUES('sys:ppu','ppu',1,?) ON CONFLICT(id) DO UPDATE SET handle='ppu', is_admin=1")
         .bind(now)
         .execute(pool)
         .await?;

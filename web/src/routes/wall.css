@@ -4,11 +4,11 @@
 .wall-hero {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr);
+  grid-template-columns: minmax(320px, 0.8fr) minmax(0, 1.2fr);
   align-items: center;
-  gap: clamp(2rem, 6vw, 6rem);
-  max-width: 1280px;
-  min-height: 520px;
+  gap: clamp(1rem, 3vw, 3rem);
+  max-width: 1440px;
+  min-height: 640px;
   margin: 0 auto;
   padding: clamp(4rem, 8vw, 7rem) clamp(1.25rem, 4vw, 3rem);
 }
@@ -86,7 +86,7 @@
   background: var(--hover);
 }
 .wall-hero-scene {
-  width: min(100%, 560px);
+  width: min(100%, 760px);
   justify-self: end;
 }
 .wall-hero-art {

@@ -33,6 +33,7 @@ export function ToolbarWired({ sketchName, dirty, layoutSlot }: ToolbarWiredProp
       <Toolbar
         sketchName={sketchName}
         dirty={dirty}
+        onRename={openSketchStore.rename}
         theme={theme}
         user={user && { id: user.id, handle: user.handle, avatar: user.avatar }}
         onToggleTheme={toggleTheme}
