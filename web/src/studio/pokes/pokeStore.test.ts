@@ -67,7 +67,7 @@ describe("pokeStore", () => {
   });
 
   it("hasApplyCall finds the call outside pokes.lua only", () => {
-    expect(hasApplyCall(openContextFiles(openSketchStore.state()))).toBe(false);
+    expect(hasApplyCall(openContextFiles(openSketchStore.state()))).toBe(true);
     openSketchStore.editFile("main.lua", "function frame() end");
     expect(hasApplyCall(openContextFiles(openSketchStore.state()))).toBe(false);
   });

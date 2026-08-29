@@ -4,7 +4,7 @@ use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 
 fn require_admin(u: &AuthUser) -> AppResult<()> {
@@ -61,8 +61,56 @@ async fn ban(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
+async fn unban(
+    State(s): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    require_admin(&user)?;
+    sqlx::query("DELETE FROM bans WHERE discord_id=?")
+        .bind(id)
+        .execute(&s.pool)
+        .await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+#[derive(serde::Serialize, sqlx::FromRow)]
+struct AdminToy {
+    id: String,
+    title: String,
+    state: String,
+    author: String,
+    created_at: i64,
+}
+
+#[derive(serde::Serialize, sqlx::FromRow)]
+struct AdminUser {
+    id: String,
+    handle: String,
+    is_admin: bool,
+    banned: bool,
+    created_at: i64,
+}
+
+async fn overview(State(s): State<AppState>, user: AuthUser) -> AppResult<Json<serde_json::Value>> {
+    require_admin(&user)?;
+    let toys = sqlx::query_as::<_, AdminToy>(
+        "SELECT t.id,t.title,t.state,u.handle author,t.created_at FROM toys t JOIN users u ON u.id=t.author_id ORDER BY t.created_at DESC LIMIT 200",
+    )
+    .fetch_all(&s.pool)
+    .await?;
+    let users = sqlx::query_as::<_, AdminUser>(
+        "SELECT u.id,u.handle,u.is_admin != 0 is_admin,EXISTS(SELECT 1 FROM bans b WHERE b.discord_id=u.id) banned,u.created_at FROM users u ORDER BY u.created_at DESC LIMIT 200",
+    )
+    .fetch_all(&s.pool)
+    .await?;
+    Ok(Json(serde_json::json!({ "toys": toys, "users": users })))
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .route("/admin", get(overview))
         .route("/admin/toys/{id}", delete(delete_toy))
         .route("/admin/ban", post(ban))
+        .route("/admin/ban/{id}", delete(unban))
 }

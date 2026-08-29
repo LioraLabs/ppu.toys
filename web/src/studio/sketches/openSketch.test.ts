@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IDBFactory } from "fake-indexeddb";
 import { openContextFiles, openSketchStore } from "./openSketch";
 import { _resetSketchStoreForTests } from "./sketchStore";
@@ -9,22 +9,36 @@ describe("openSketchStore", () => {
     _resetSketchStoreForTests();
     openSketchStore._resetForTests();
   });
+  afterEach(() => vi.unstubAllGlobals());
 
-  it("boots with an empty toy instead of bundled Lua", () => {
+  it("boots with a usable fallback toy", () => {
     expect(openContextFiles(openSketchStore.state())).toEqual([
       expect.objectContaining({ name: "pokes.lua" }),
-      { name: "main.lua", source: "" },
+      { name: "main.lua", source: expect.stringContaining("function frame(t, f)") },
     ]);
   });
 
-  it("creates a locally editable empty toy", async () => {
+  it("loads the server starter for the Studio and new toys", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            name: "server starter",
+            files: [{ name: "main.lua", source: "function frame() brightness = 8 end" }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    await openSketchStore.initializeStarter();
+    expect(openSketchStore.state().context.sketch.name).toBe("server starter");
+    const files = openContextFiles(openSketchStore.state());
+    expect(files[files.length - 1].source).toContain("brightness = 8");
+
     await openSketchStore.newSketch();
     expect(openSketchStore.state().context.kind).toBe("sketch");
-    const files = openContextFiles(openSketchStore.state());
-    expect(files[files.length - 1]).toEqual({
-      name: "main.lua",
-      source: "",
-    });
+    expect(openSketchStore.state().context.sketch.name).toBe("server starter");
   });
 
   it("keeps main.lua: no delete, no rename away", () => {

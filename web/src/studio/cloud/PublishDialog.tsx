@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useOpenSketch, openContextLabel } from "../sketches/openSketch";
 import { publishToy } from "../../api/apiClient";
 import { recordClip } from "./clip";
+import { transport } from "../transport/transport";
 import "./cloud.css";
 
 type Phase = "idle" | "saving" | "recording" | "uploading";
@@ -29,6 +30,7 @@ export function PublishDialog({ onClose, save }: PublishDialogProps) {
   const state = useOpenSketch();
   const [title, setTitle] = useState(() => openContextLabel(state));
   const [description, setDescription] = useState("");
+  const [clipStart, setClipStart] = useState(() => Math.floor(transport.getSnapshot().t));
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
@@ -49,7 +51,7 @@ export function PublishDialog({ onClose, save }: PublishDialogProps) {
       setPhase("saving");
       const id = await save({ title, description });
       setPhase("recording");
-      const { clip, thumb } = await recordClip();
+      const { clip, thumb } = await recordClip({ startTime: clipStart });
       setPhase("uploading");
       await publishToy(id, { title, description }, clip, thumb);
       navigate(`/t/${id}`);
@@ -107,6 +109,18 @@ export function PublishDialog({ onClose, save }: PublishDialogProps) {
               rows={3}
               onChange={(e) => setDescription(e.target.value)}
             />
+          </label>
+          <label className="cloud-field">
+            Clip time (5 seconds)
+            <input
+              type="number"
+              min={0}
+              step={0.1}
+              value={clipStart}
+              disabled={busy}
+              onChange={(e) => setClipStart(Math.max(0, e.target.valueAsNumber || 0))}
+            />
+            <span>t={clipStart.toFixed(1)}s–{(clipStart + 5).toFixed(1)}s</span>
           </label>
 
           {error && <div className="cloud-error">{error}</div>}

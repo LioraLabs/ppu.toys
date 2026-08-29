@@ -10,7 +10,7 @@ import type {
   ConvertSourceOptions,
   ConvertSourceResult,
 } from "../../ppu/core";
-import { advanceClock, scrubToClock, type Clock } from "../output/clock";
+import { advanceClock, seekClock, type Clock } from "../output/clock";
 import { WIDTH, HEIGHT } from "../../ppu/core";
 
 /** Power-on floor frame: black framebuffer, no registers (readers fall back to
@@ -90,7 +90,6 @@ export class Transport {
   private lastTs = 0;
   private fpsMs = 0;
   private fpsCount = 0;
-  private lastSources: SourceFile[] | null = null;
 
   constructor(private coreRef: () => PpuCore = () => ppuCore) {
     this.frame = powerOnFrame(); // floor for safeFrame's catch on the very first call
@@ -202,22 +201,20 @@ export class Transport {
   }
   toggle = () => this.setPlaying(!this.playing);
 
-  scrub(fraction: number) {
-    this.clock = scrubToClock(fraction);
-    this.renderOnce();
-  }
-
-  /** ▶ Run: deterministic restart — re-push the last sources so the core
-   *  builds a fresh program, rewind the clock to t=0/f=0, resume playback. */
-  restart = () => {
-    if (this.lastSources !== null) this.coreRef().setSources(this.lastSources);
+  stop = () => {
+    this.stopLoop();
+    this.playing = false;
+    this.fps = 0;
     this.clock = { t: 0, f: 0 };
-    this.setPlaying(true);
     this.renderOnce();
   };
 
+  seek(seconds: number) {
+    this.clock = seekClock(seconds);
+    this.renderOnce();
+  }
+
   setSources = (files: SourceFile[]): { ok: boolean; error?: LuaError } => {
-    this.lastSources = files;
     const res = this.coreRef().setSources(files);
     this.renderOnce(); // re-render at the CURRENT clock — recompile never resets t/f
     return res;

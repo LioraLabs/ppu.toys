@@ -107,7 +107,7 @@ export function DialectToggle() {
 /** Poke summary bar: one chip per poke (click = unpoke), copy the generated
  *  apply_pokes() source, clear-all, and a warning chip when pokes exist but
  *  nothing calls apply_pokes(). Rendered by both docked tabs and the overlay;
- *  hidden while nothing is poked. ▶ Run does NOT clear pokes. */
+ *  hidden while nothing is poked. Stopping playback does NOT clear pokes. */
 export function PokeBar() {
   const pokes = usePokes();
   const source = usePokesSource();

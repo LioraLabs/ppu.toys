@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { getStarterTemplate } from "../../api/apiClient";
 import { POKES_FILE, EMPTY_POKES } from "../pokes/pokes";
 import {
   newSketchObject,
@@ -13,7 +14,12 @@ import {
 /** Debounce window between the last change and the autosave write. */
 export const AUTOSAVE_MS = 800;
 
-export const NEW_SKETCH_SOURCE = "";
+export const NEW_SKETCH_SOURCE = `function frame(t, f)
+  apply_pokes()
+  brightness = 15
+  cgram[0] = rgb(80 + 60 * math.sin(t), 40, 140)
+end
+`;
 
 /** The entry file. Not special-cased by the engine (any file can define
  *  frame/init) but it IS the toy's front door — every tutorial, demo and
@@ -43,20 +49,35 @@ export interface OpenSketchState {
   session: number;
 }
 
-function emptySketch(): Sketch {
-  return newSketchObject("untitled toy", [
+const FALLBACK_FILES = [
+  { name: MAIN_FILE, source: NEW_SKETCH_SOURCE },
+];
+
+function starterSketch(name = "untitled toy", files: SketchFile[] = FALLBACK_FILES): Sketch {
+  return newSketchObject(name, [
     { name: POKES_FILE, source: EMPTY_POKES },
-    { name: MAIN_FILE, source: "" },
+    ...files.filter((file) => file.name !== POKES_FILE),
   ]);
 }
 
-let context: OpenContext = { kind: "sketch", sketch: emptySketch() };
+let context: OpenContext = { kind: "sketch", sketch: starterSketch() };
 let dirty = false;
 let session = 0;
 /** Mutation counter: lets an in-flight flush detect edits that raced it. */
 let gen = 0;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let snapshot: OpenSketchState = { context, dirty, session };
+let starterPromise: ReturnType<typeof getStarterTemplate> | null = null;
+
+function loadStarter() {
+  if (!starterPromise) {
+    starterPromise = getStarterTemplate().catch(() => {
+      starterPromise = null;
+      return { name: "untitled toy", files: FALLBACK_FILES };
+    });
+  }
+  return starterPromise;
+}
 
 const listeners = new Set<() => void>();
 function emit() {
@@ -153,6 +174,16 @@ export const openSketchStore = {
     return () => void listeners.delete(cb);
   },
 
+  /** Replace only the untouched boot fallback with the server-owned starter. */
+  async initializeStarter(): Promise<void> {
+    const initialGen = gen;
+    const starter = await loadStarter();
+    if (gen === initialGen && session === 0 && !dirty) {
+      context = { kind: "sketch", sketch: starterSketch(starter.name, starter.files) };
+      emit();
+    }
+  },
+
   /** Open a stored sketch from the library. */
   async openSketch(id: string): Promise<void> {
     await flush();
@@ -161,12 +192,13 @@ export const openSketchStore = {
     openContext({ kind: "sketch", sketch });
   },
 
-  /** Create a blank sketch and open it. */
+  /** Create a sketch from the server-owned starter and open it. */
   async newSketch(): Promise<void> {
     await flush();
-    const sketch = await createSketch("untitled toy", [
+    const starter = await loadStarter();
+    const sketch = await createSketch(starter.name, [
       { name: POKES_FILE, source: EMPTY_POKES },
-      { name: MAIN_FILE, source: NEW_SKETCH_SOURCE },
+      ...starter.files.filter((file) => file.name !== POKES_FILE),
     ]);
     openContext({ kind: "sketch", sketch });
   },
@@ -278,10 +310,11 @@ export const openSketchStore = {
       clearTimeout(timer);
       timer = null;
     }
-    context = { kind: "sketch", sketch: emptySketch() };
+    context = { kind: "sketch", sketch: starterSketch() };
     dirty = false;
     session = 0;
     gen++;
+    starterPromise = null;
     emit();
   },
 };

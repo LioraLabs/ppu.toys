@@ -4,6 +4,64 @@ use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
 
 #[tokio::test]
+async fn admin_overview_lists_users_and_toys_and_can_unban() {
+    let app = common::test_app().await;
+    let admin = common::seed_session(&app.state, "9", "root", true).await;
+    common::seed_session(&app.state, "1", "ann", false).await;
+    sqlx::query("INSERT INTO toys(id,author_id,title,files_json,state,created_at) VALUES('t','1','Toy','[]','draft',1)")
+        .execute(&app.state.pool).await.unwrap();
+    sqlx::query("INSERT INTO bans(discord_id,created_at) VALUES('1',1)")
+        .execute(&app.state.pool)
+        .await
+        .unwrap();
+
+    let overview = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin")
+                .header("cookie", format!("ppu_sess={admin}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(overview.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(overview.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["toys"][0]["title"], "Toy");
+    assert!(json["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|u| u["handle"] == "ann" && u["banned"] == true));
+
+    let unban = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/admin/ban/1")
+                .header("cookie", format!("ppu_sess={admin}"))
+                .header("x-ppu-csrf", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unban.status(), StatusCode::NO_CONTENT);
+    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM bans WHERE discord_id='1'")
+        .fetch_one(&app.state.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
 async fn admin_can_delete_any_toy_but_user_cannot() {
     let app = common::test_app().await;
     let admin = common::seed_session(&app.state, "9", "root", true).await;

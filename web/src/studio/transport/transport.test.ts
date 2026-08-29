@@ -1,12 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { transport, Transport } from "./transport";
-import type { PpuCore, FrameResult, SourceFile } from "../../ppu/core";
-import { LOOP_SECONDS } from "../output/clock";
+import type { PpuCore, FrameResult } from "../../ppu/core";
 
 describe("transport store", () => {
   beforeEach(() => {
     transport.setPlaying(true);
-    transport.scrub(0);
+    transport.seek(0);
   });
 
   it("getSnapshot is stable until something changes", () => {
@@ -17,7 +16,7 @@ describe("transport store", () => {
   });
 
   it("step advances the clock and produces a frame", () => {
-    transport.scrub(0);
+    transport.seek(0);
     const t0 = transport.getSnapshot().t;
     transport.step(100);
     const s = transport.getSnapshot();
@@ -33,9 +32,9 @@ describe("transport store", () => {
     expect(transport.getSnapshot().playing).toBe(true);
   });
 
-  it("scrub maps a 0..1 fraction onto the loop", () => {
-    transport.scrub(0.5);
-    expect(transport.getSnapshot().t).toBeCloseTo(LOOP_SECONDS * 0.5, 5);
+  it("seeks to an absolute time", () => {
+    transport.seek(12.5);
+    expect(transport.getSnapshot().t).toBe(12.5);
   });
 
   it("setSources forwards to the core and refreshes the snapshot", () => {
@@ -49,7 +48,7 @@ describe("transport store", () => {
   });
 
   it("setLayerVisible reaches the shared core (hiding bg1 darkens output)", () => {
-    transport.scrub(0.05);
+    transport.seek(0.05);
     transport.setLayerVisible("bg1", false);
     const fb = transport.getSnapshot().frame.framebuffer;
     expect(fb[0]).toBe(0);
@@ -157,49 +156,11 @@ describe("transport multi-file recompile", () => {
   });
 });
 
-describe("transport restart (▶ Run)", () => {
-  it("rewinds the clock to t=0/f=0 and re-pushes the last sources", () => {
-    const seen: SourceFile[][] = [];
-    const core: PpuCore = {
-      ...makeCore({ throwing: false }),
-      setSources: (files: SourceFile[]) => {
-        seen.push(files);
-        return { ok: true };
-      },
-    };
-    const tr = new Transport(() => core);
-    tr.setSources([{ name: "main.lua", source: "function frame() end" }]);
-    tr.step(500);
-    expect(tr.getSnapshot().t).toBeGreaterThan(0);
-    tr.restart();
-    expect(tr.getSnapshot().t).toBe(0);
-    expect(tr.getSnapshot().f).toBe(0);
-    expect(seen).toEqual([
-      [{ name: "main.lua", source: "function frame() end" }],
-      [{ name: "main.lua", source: "function frame() end" }],
-    ]);
-  });
-
-  it("without prior sources it only rewinds (no setSources call)", () => {
-    const seen: SourceFile[][] = [];
-    const core: PpuCore = {
-      ...makeCore({ throwing: false }),
-      setSources: (files: SourceFile[]) => {
-        seen.push(files);
-        return { ok: true };
-      },
-    };
-    const tr = new Transport(() => core);
-    tr.step(100);
-    tr.restart();
-    expect(tr.getSnapshot().t).toBe(0);
-    expect(seen).toEqual([]);
-  });
-
-  it("resumes playback when paused", () => {
+describe("transport stop", () => {
+  it("pauses and rewinds to t=0/f=0", () => {
     const tr = new Transport(() => makeCore({ throwing: false }));
-    tr.setPlaying(false);
-    tr.restart();
-    expect(tr.getSnapshot().playing).toBe(true);
+    tr.step(100);
+    tr.stop();
+    expect(tr.getSnapshot()).toMatchObject({ t: 0, f: 0, playing: false, fps: 0 });
   });
 });

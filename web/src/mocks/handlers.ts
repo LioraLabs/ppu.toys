@@ -7,6 +7,13 @@ import { http, HttpResponse } from "msw";
 import { me, profile, toyFull, wallPage } from "../fixtures";
 
 export const handlers = [
+  http.get("/api/starter", () =>
+    HttpResponse.json({
+      name: "untitled toy",
+      files: [{ name: "main.lua", source: "function frame(t, f)\n  apply_pokes()\nend\n" }],
+    }),
+  ),
+
   http.get("/api/me", () => HttpResponse.json(me)),
 
   http.get("/api/toys", () => HttpResponse.json(wallPage)),

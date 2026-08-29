@@ -26,6 +26,7 @@ export function Layout() {
           <Link to="/studio">Studio</Link>
           {!loading && user && (
             <>
+              {user.isAdmin && <Link to="/admin">Admin</Link>}
               <Link className="site-nav-user" to={`/u/${user.handle}`}>
                 <Avatar handle={user.handle} id={user.id} avatar={user.avatar} size={20} />
                 {user.handle}

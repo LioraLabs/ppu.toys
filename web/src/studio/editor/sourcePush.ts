@@ -8,7 +8,7 @@ export const SOURCE_PUSH_MS = 200;
 export interface SourcePusher {
   /** Debounced push — coalesces bursts of keystrokes. */
   push(files: SourceFile[]): void;
-  /** Immediate push (session open, ▶ Run); cancels any pending debounce. */
+  /** Immediate push (for example, session open); cancels any pending debounce. */
   pushNow(files: SourceFile[]): void;
   dispose(): void;
 }

@@ -1,13 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { WIDTH, HEIGHT } from "../../ppu/core";
-import { clockToScrub, integerScale } from "./clock";
+import { integerScale } from "./clock";
 import { transport, useTransport } from "../transport/transport";
 import { Presenter } from "./presenter";
 import { loadFx, saveFx, type PresentFx } from "./fx";
 
 /** Right-column Output: presents the SHARED core's framebuffer through a WebGL
  *  present pass (integer upscale + toggleable CRT/scanline/pixel-grid FX) and
- *  drives the SHARED transport (play/pause + scrubber). No private core or clock.
+ *  drives the SHARED transport (play/pause/stop). No private core or clock.
  *
  *  No story (wired): owns the rAF present loop and reads live transport frames
  *  (the wasm rasterizer's framebuffer) onto a real WebGL/Canvas2D surface — a
@@ -71,8 +71,6 @@ export function OutputCanvas() {
     saveFx(fx);
   }, [fx]);
 
-  const scrub = clockToScrub({ t, f });
-
   return (
     <div className="output">
       <div className="output-header">
@@ -114,27 +112,9 @@ export function OutputCanvas() {
         >
           {playing ? "⏸" : "▶"}
         </button>
-        <div className="scrubber">
-          <div className="scrubber-fill" style={{ width: `${scrub * 100}%` }} />
-          <div className="scrubber-handle" style={{ left: `${scrub * 100}%` }} />
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.001}
-            value={scrub}
-            onChange={(e) => transport.scrub(Number(e.target.value))}
-            aria-label="Timeline scrubber"
-            style={{
-              position: "absolute",
-              inset: 0,
-              width: "100%",
-              margin: 0,
-              opacity: 0,
-              cursor: "pointer",
-            }}
-          />
-        </div>
+        <button className="play-btn" aria-label="Stop" onClick={() => transport.stop()}>
+          ■
+        </button>
         <div className="readout">
           <span>t={t.toFixed(1)}s</span>
           <span>frame {f}</span>

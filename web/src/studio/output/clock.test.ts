@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { FPS, LOOP_SECONDS, advanceClock, scrubToClock, clockToScrub, integerScale } from "./clock";
+import { FPS, advanceClock, seekClock, integerScale } from "./clock";
 import { WIDTH, HEIGHT } from "../../ppu/core";
 
 describe("advanceClock", () => {
@@ -15,28 +15,17 @@ describe("advanceClock", () => {
     expect(c.t).toBeCloseTo(0.1, 5);
   });
 
-  it("wraps around LOOP_SECONDS so the timeline is bounded", () => {
-    const c = advanceClock({ t: LOOP_SECONDS - 0.08, f: 0 }, 100); // 9.92 + 0.1 -> 0.02
-    expect(c.t).toBeCloseTo(0.02, 5);
-    expect(c.f).toBe(1); // floor(0.02 * 60) = 1
+  it("keeps increasing instead of wrapping", () => {
+    const c = advanceClock({ t: 9.92, f: 0 }, 100);
+    expect(c.t).toBeCloseTo(10.02, 5);
+    expect(c.f).toBe(601);
   });
 });
 
-describe("scrubToClock / clockToScrub", () => {
-  it("maps a 0..1 fraction onto the loop and back", () => {
-    const c = scrubToClock(0.5);
-    expect(c.t).toBeCloseTo(LOOP_SECONDS / 2, 5);
-    expect(c.f).toBe(Math.floor((LOOP_SECONDS / 2) * FPS));
-    expect(clockToScrub({ t: LOOP_SECONDS / 2, f: 0 })).toBeCloseTo(0.5, 5);
-  });
-
-  it("clamps out-of-range fractions", () => {
-    expect(scrubToClock(-1).t).toBe(0);
-    expect(scrubToClock(2).t).toBeCloseTo(LOOP_SECONDS, 5);
-  });
-
-  it("maps the right edge to 1, not back to 0 (clamp, not wrap)", () => {
-    expect(clockToScrub(scrubToClock(1))).toBeCloseTo(1, 5);
+describe("seekClock", () => {
+  it("seeks to an absolute time and clamps before zero", () => {
+    expect(seekClock(12.5)).toEqual({ t: 12.5, f: 750 });
+    expect(seekClock(-1)).toEqual({ t: 0, f: 0 });
   });
 });
 

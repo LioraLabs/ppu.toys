@@ -2,7 +2,6 @@ import { useState } from "react";
 import type { ReactNode } from "react";
 import { Toolbar } from "./Toolbar";
 import { SettingsPanel } from "./SettingsPanel";
-import { transport } from "./transport/transport";
 import { useTheme } from "./theme";
 import { editorSettings, useVimMode } from "./editor/editorSettings";
 import { useSession, sessionStore } from "../api/session";
@@ -36,7 +35,6 @@ export function ToolbarWired({ sketchName, dirty, layoutSlot }: ToolbarWiredProp
         dirty={dirty}
         theme={theme}
         user={user && { id: user.id, handle: user.handle, avatar: user.avatar }}
-        onRun={() => transport.restart()}
         onToggleTheme={toggleTheme}
         onSignOut={() => void sessionStore.signOut()}
         onNewToy={() => void openSketchStore.newSketch()}

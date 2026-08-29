@@ -18,8 +18,6 @@ export interface ToolbarProps {
   /** Signed-in user for the account menu; absent renders no account chrome
    *  (the workspace slot already carries the sign-in link). */
   user?: ToolbarUser | null;
-  /** ▶ Run handler (restart the transport in production). */
-  onRun?: () => void;
   /** Theme toggle handler. */
   onToggleTheme?: () => void;
   /** Account-menu sign out. */
@@ -120,7 +118,6 @@ export function Toolbar({
   dirty = false,
   theme = "dark",
   user = null,
-  onRun,
   onToggleTheme,
   onSignOut,
   onNewToy,
@@ -143,14 +140,6 @@ export function Toolbar({
       </div>
       <div className="tb-spacer" />
       {layoutSlot}
-      <button
-        type="button"
-        className="btn-solid"
-        onClick={() => onRun?.()}
-        title="Restart from t=0 (Ctrl+Enter)"
-      >
-        ▶ Run
-      </button>
       <button
         type="button"
         className="btn-ghost"

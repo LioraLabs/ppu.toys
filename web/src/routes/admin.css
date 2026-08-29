@@ -1,0 +1,26 @@
+.admin-page { max-width: 1180px; margin: 0 auto; padding: clamp(1rem, 3vw, 2rem); font-family: var(--font-sans); color: var(--txt); }
+.admin-heading { display: flex; align-items: end; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+.admin-heading h1 { margin: 0; font: 600 clamp(2rem, 5vw, 3.5rem)/1 var(--font-display); }
+.admin-kicker { margin: 0 0 .4rem; color: var(--orange); font: 600 .75rem var(--font-mono); letter-spacing: .14em; }
+.admin-status { max-width: 34rem; padding: .7rem 1rem; border: 1px solid var(--line); border-radius: 8px; background: var(--panel2); }
+.admin-card { margin-bottom: 1rem; padding: 1rem; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.admin-card h2 { display: flex; gap: .5rem; align-items: baseline; margin: 0 0 .8rem; font-size: 1rem; }
+.admin-card h2 span, .admin-card p { color: var(--dim); font-weight: 400; }
+.admin-starter { display: grid; grid-template-columns: minmax(12rem, 18rem) 1fr auto; align-items: end; gap: 1rem; }
+.admin-starter p { margin: 0; line-height: 1.5; }
+.admin-starter textarea { min-height: 11rem; resize: vertical; padding: .75rem; border: 1px solid var(--line); border-radius: 7px; background: var(--base); color: var(--txt); font: .8rem/1.5 var(--font-mono); }
+.admin-page button { min-height: 40px; padding: .5rem .8rem; border: 1px solid transparent; border-radius: 7px; cursor: pointer; font-weight: 650; }
+.admin-page button:disabled { cursor: not-allowed; opacity: .4; }
+.admin-primary { background: var(--orange); color: #17100a; }
+.admin-secondary { border-color: var(--line) !important; background: var(--raised); color: var(--txt); }
+.admin-danger { border-color: color-mix(in srgb, var(--red) 55%, transparent) !important; background: color-mix(in srgb, var(--red) 14%, transparent); color: var(--txt); }
+.admin-table-wrap { overflow-x: auto; }
+.admin-page table { width: 100%; border-collapse: collapse; text-align: left; }
+.admin-page th, .admin-page td { padding: .6rem .5rem; border-top: 1px solid var(--line2); white-space: nowrap; }
+.admin-page th { color: var(--dim); font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; }
+.admin-page td:last-child { text-align: right; }
+.admin-page code { font-family: var(--font-mono); color: var(--cyan); }
+.admin-page small { color: var(--orange); }
+.admin-page a { color: var(--txt); }
+.admin-state { padding: 4rem 1rem; text-align: center; color: var(--dim); font-family: var(--font-sans); }
+@media (max-width: 760px) { .admin-heading { align-items: stretch; flex-direction: column; } .admin-starter { grid-template-columns: 1fr; } }

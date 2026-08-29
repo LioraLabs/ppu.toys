@@ -30,6 +30,22 @@ export interface ToyFile {
   source: string;
 }
 
+export interface StarterTemplate {
+  name: string;
+  files: ToyFile[];
+}
+
+export interface AdminOverview {
+  toys: { id: string; title: string; state: string; author: string; created_at: number }[];
+  users: {
+    id: string;
+    handle: string;
+    is_admin: boolean;
+    banned: boolean;
+    created_at: number;
+  }[];
+}
+
 export interface ToySource {
   name: string;
   kind: string;
@@ -116,6 +132,38 @@ export function getWall(sort: WallSort, page: number): Promise<WallPage> {
 
 export function getToy(id: string): Promise<ToyFull> {
   return request<ToyFull>(`/api/toys/${id}`);
+}
+
+export function getStarterTemplate(): Promise<StarterTemplate> {
+  return request<StarterTemplate>("/api/starter");
+}
+
+export function updateStarterTemplate(template: StarterTemplate): Promise<void> {
+  return request<void>("/api/starter", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(template),
+  });
+}
+
+export function getAdminOverview(): Promise<AdminOverview> {
+  return request<AdminOverview>("/api/admin");
+}
+
+export function adminDeleteToy(id: string): Promise<void> {
+  return request<void>(`/api/admin/toys/${id}`, { method: "DELETE" });
+}
+
+export function adminBanUser(discord_id: string): Promise<void> {
+  return request<void>("/api/admin/ban", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ discord_id }),
+  });
+}
+
+export function adminUnbanUser(id: string): Promise<void> {
+  return request<void>(`/api/admin/ban/${id}`, { method: "DELETE" });
 }
 
 export function getProfile(handle: string): Promise<Profile> {

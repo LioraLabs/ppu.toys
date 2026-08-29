@@ -342,31 +342,6 @@
   display: grid;
   place-items: center;
 }
-.scrubber {
-  position: relative;
-  flex: 1;
-  height: 5px;
-  border-radius: 3px;
-  background: var(--raised);
-}
-.scrubber-fill {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  border-radius: 3px;
-  background: linear-gradient(90deg, var(--orange), var(--magenta));
-}
-.scrubber-handle {
-  position: absolute;
-  top: 50%;
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  background: #fff;
-  transform: translate(-50%, -50%);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--orange) 25%, transparent);
-}
 .readout {
   display: flex;
   gap: 10px;

@@ -8,6 +8,7 @@ export interface RecordedClip {
 export interface RecordOptions {
   durationMs?: number;
   fps?: number;
+  startTime?: number;
 }
 
 export function isRecordingSupported(): boolean {
@@ -18,9 +19,9 @@ export function isRecordingSupported(): boolean {
   );
 }
 
-/** Record the live loop: paint each transport frame into an offscreen 256x224
+/** Record live output: paint each transport frame into an offscreen 256x224
  *  2D canvas, capture it as a WebM stream, and grab one frame as a PNG thumb.
- *  Rewinds to t=0 so the clip starts at the loop head. */
+ *  Seeks to the selected time before recording. */
 export async function recordClip(opts: RecordOptions = {}): Promise<RecordedClip> {
   if (!isRecordingSupported()) throw new Error("Loop recording isn't supported in this browser.");
   const durationMs = opts.durationMs ?? 5000;
@@ -36,7 +37,8 @@ export async function recordClip(opts: RecordOptions = {}): Promise<RecordedClip
     ctx.putImageData(new ImageData(new Uint8ClampedArray(fb), WIDTH, HEIGHT), 0, 0);
   };
 
-  transport.restart(); // rewind clock to t=0, resume playback
+  transport.seek(opts.startTime ?? 0);
+  transport.setPlaying(false);
   paint();
   const thumb = await new Promise<Blob>((res, rej) =>
     canvas.toBlob((b) => (b ? res(b) : rej(new Error("thumb encode failed"))), "image/png"),
@@ -57,6 +59,7 @@ export async function recordClip(opts: RecordOptions = {}): Promise<RecordedClip
     rec.onstop = () => resolve(new Blob(chunks, { type: "video/webm" }));
   });
   rec.start();
+  transport.setPlaying(true);
   await new Promise((r) => setTimeout(r, durationMs));
   rec.stop();
   unsub();

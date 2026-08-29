@@ -5,6 +5,7 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod hearts;
+pub mod starter;
 pub mod state;
 pub mod toys;
 pub mod web;
@@ -21,6 +22,7 @@ pub fn build_router(state: AppState) -> Router {
             get(|| async { axum::Json(serde_json::json!({ "ok": true })) }),
         )
         .merge(auth::routes())
+        .merge(starter::routes())
         .merge(toys::routes())
         .merge(hearts::routes())
         .merge(admin::routes())

@@ -9,7 +9,7 @@ import { WIRED_INSPECTOR_PANELS } from "./inspector/panels";
 import { AssetsPanel } from "./sources/AssetsPanel";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { transport } from "./transport/transport";
-import { useOpenSketch, openContextLabel } from "./sketches/openSketch";
+import { openSketchStore, useOpenSketch, openContextLabel } from "./sketches/openSketch";
 import { useDocumentTitle } from "../routes/useDocumentTitle";
 
 /** The wired studio: a toolbar over the dockable shell (StudioDock). Every
@@ -24,18 +24,8 @@ export function Studio() {
   const [dockApi, setDockApi] = useState<DockviewApi | null>(null);
   useDocumentTitle(`${sketchName} · Studio`);
 
-  // Ctrl/Cmd+Enter = ▶ Run, everywhere in the studio. Capture phase so it wins
-  // over CodeMirror's own Enter handling while focus is in the editor.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
-        e.stopPropagation();
-        transport.restart();
-      }
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
+    void openSketchStore.initializeStarter();
   }, []);
 
   const slots: DockSlots = {

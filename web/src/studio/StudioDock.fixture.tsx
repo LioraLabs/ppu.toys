@@ -199,10 +199,9 @@ function OutputMock({ f }: { f: FrameResult }) {
         <button className="play-btn" aria-label="Play">
           ▶
         </button>
-        <div className="scrubber">
-          <div className="scrubber-fill" style={{ width: "35%" }} />
-          <div className="scrubber-handle" style={{ left: "35%" }} />
-        </div>
+        <button className="play-btn" aria-label="Stop">
+          ■
+        </button>
         <div className="readout">
           <span>t=2.1s</span>
           <span>frame 126</span>
