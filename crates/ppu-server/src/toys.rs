@@ -319,7 +319,9 @@ async fn publish(
     Path(id): Path<String>,
     mut mp: Multipart,
 ) -> AppResult<Response> {
-    if !state.limiter.check_publish(&user.id) {
+    // Browser publishing is human-rate-limited; API tokens are automation
+    // credentials and may publish a batch (the official demo repo does this).
+    if !user.api_token && !state.limiter.check_publish(&user.id) {
         return Err(AppError::status(
             StatusCode::TOO_MANY_REQUESTS,
             "publish rate limit",
