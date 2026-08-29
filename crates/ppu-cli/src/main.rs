@@ -1,4 +1,5 @@
 use anyhow::{anyhow, bail, Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use reqwest::{Client, Response, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -6,7 +7,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 const MANIFEST: &str = "ppu.json";
-const STARTER: &str = "function frame(t, f)\n  brightness = 15\nend\n";
+const STARTER: &str = "function frame(t, f)\n  brightness = 15\n  -- Both screens power on empty: designate a layer to see it,\n  -- e.g. screen.main.bg1 = true (TM) after pointing bg[1] at VRAM.\nend\n";
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +29,20 @@ struct SourceDto {
     meta: serde_json::Value,
     #[serde(default)]
     payload: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ManifestSource {
+    name: String,
+    kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    builtin_id: Option<String>,
+    #[serde(default)]
+    options: serde_json::Value,
+    #[serde(default)]
+    meta: serde_json::Value,
+    payload: String,
 }
 
 #[derive(Deserialize)]
@@ -53,6 +68,12 @@ struct Manifest {
     #[serde(default)]
     description: String,
     files: Vec<String>,
+    #[serde(default)]
+    sources: Vec<ManifestSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    clip: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thumb: Option<String>,
     #[serde(default)]
     hashes: BTreeMap<String, String>,
 }
@@ -95,6 +116,16 @@ fn valid_file_name(name: &str) -> bool {
         && !matches!(name, "." | "..")
 }
 
+fn safe_relative(name: &str) -> bool {
+    !name.is_empty()
+        && Path::new(name).components().all(|part| {
+            matches!(
+                part,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        })
+}
+
 fn api(server: &str, path: &str) -> String {
     format!("{}/api{}", server.trim_end_matches('/'), path)
 }
@@ -114,6 +145,30 @@ fn local_files(dir: &Path, manifest: &Manifest) -> Result<Vec<FileDto>> {
                 name: name.clone(),
                 source: std::fs::read_to_string(dir.join(name))
                     .with_context(|| format!("cannot read {name}"))?,
+            })
+        })
+        .collect()
+}
+
+fn local_sources(dir: &Path, manifest: &Manifest) -> Result<Vec<SourceDto>> {
+    manifest
+        .sources
+        .iter()
+        .map(|source| {
+            if !safe_relative(&source.payload) {
+                bail!("unsafe source payload path {:?}", source.payload);
+            }
+            Ok(SourceDto {
+                name: source.name.clone(),
+                kind: source.kind.clone(),
+                builtin_id: source.builtin_id.clone(),
+                options: source.options.clone(),
+                meta: source.meta.clone(),
+                payload: Some(BASE64.encode(
+                    std::fs::read(dir.join(&source.payload)).with_context(|| {
+                        format!("cannot read source payload {}", source.payload)
+                    })?,
+                )),
             })
         })
         .collect()
@@ -166,11 +221,34 @@ fn apply_remote(dir: &Path, manifest: &mut Manifest, toy: Toy) -> Result<()> {
     for file in &toy.files {
         std::fs::write(dir.join(&file.name), &file.source)?;
     }
+    let source_dir = dir.join(".ppu/sources");
+    std::fs::create_dir_all(&source_dir)?;
+    let mut sources = Vec::with_capacity(toy.sources.len());
+    for (i, source) in toy.sources.iter().enumerate() {
+        let payload_path = format!(".ppu/sources/{i}.bin");
+        let payload = source
+            .payload
+            .as_deref()
+            .ok_or_else(|| anyhow!("source {:?} has no payload", source.name))?;
+        std::fs::write(
+            dir.join(&payload_path),
+            BASE64.decode(payload).context("bad source payload")?,
+        )?;
+        sources.push(ManifestSource {
+            name: source.name.clone(),
+            kind: source.kind.clone(),
+            builtin_id: source.builtin_id.clone(),
+            options: source.options.clone(),
+            meta: source.meta.clone(),
+            payload: payload_path,
+        });
+    }
     manifest.toy = Some(toy.id);
     manifest.revision = Some(toy.revision);
     manifest.title = toy.title;
     manifest.description = toy.description;
     manifest.files = toy.files.iter().map(|file| file.name.clone()).collect();
+    manifest.sources = sources;
     manifest.hashes = hashes(&toy.files);
     write_manifest(dir, manifest)
 }
@@ -232,6 +310,9 @@ fn new_toy(directory: &str) -> Result<()> {
             title,
             description: String::new(),
             files: vec!["main.lua".into()],
+            sources: vec![],
+            clip: None,
+            thumb: None,
             hashes: hashes(&files),
         },
     )?;
@@ -291,6 +372,9 @@ async fn pull(url: &str, destination: Option<&str>, force: bool) -> Result<()> {
             title: String::new(),
             description: String::new(),
             files: vec![],
+            sources: vec![],
+            clip: None,
+            thumb: None,
             hashes: BTreeMap::new(),
         };
         apply_remote(&dir, &mut manifest, toy)?;
@@ -299,7 +383,7 @@ async fn pull(url: &str, destination: Option<&str>, force: bool) -> Result<()> {
     Ok(())
 }
 
-async fn push(directory: Option<&str>, force: bool) -> Result<()> {
+async fn push(directory: Option<&str>, force: bool, recreate: bool) -> Result<()> {
     let dir = Path::new(directory.unwrap_or("."));
     let mut manifest = read_manifest(dir)?;
     let config = read_config()?;
@@ -311,7 +395,23 @@ async fn push(directory: Option<&str>, force: bool) -> Result<()> {
         );
     }
     let files = local_files(dir, &manifest)?;
+    let sources = local_sources(dir, &manifest)?;
     let client = Client::new();
+    if recreate {
+        if let Some(id) = manifest.toy.as_deref() {
+            let response = client
+                .get(api(&manifest.server, &format!("/toys/{id}")))
+                .bearer_auth(&read_config()?.token)
+                .send()
+                .await?;
+            if response.status() == StatusCode::NOT_FOUND {
+                manifest.toy = None;
+                manifest.revision = None;
+            } else {
+                response_error(response, "fetch").await?;
+            }
+        }
+    }
     if let Some(id) = manifest.toy.clone() {
         let remote = fetch_toy(&client, &config, &id).await?;
         let expected = if force {
@@ -333,7 +433,7 @@ async fn push(directory: Option<&str>, force: bool) -> Result<()> {
             .bearer_auth(&config.token)
             .json(&serde_json::json!({
                 "title": manifest.title, "description": manifest.description, "files": files,
-                "sources": remote.sources, "expectedRevision": expected,
+            "sources": sources, "expectedRevision": expected,
             }))
             .send()
             .await?;
@@ -347,7 +447,7 @@ async fn push(directory: Option<&str>, force: bool) -> Result<()> {
         println!("Pushed {id} at revision {}", manifest.revision.unwrap());
     } else {
         let response = client.post(api(&manifest.server, "/toys")).bearer_auth(&config.token).json(&serde_json::json!({
-            "title": manifest.title, "description": manifest.description, "files": files, "sources": [],
+            "title": manifest.title, "description": manifest.description, "files": files, "sources": sources,
         })).send().await?;
         let value: serde_json::Value = response_error(response, "create").await?.json().await?;
         manifest.toy = value["id"].as_str().map(str::to_string);
@@ -360,6 +460,57 @@ async fn push(directory: Option<&str>, force: bool) -> Result<()> {
             manifest.toy.as_deref().unwrap()
         );
     }
+    Ok(())
+}
+
+async fn publish(directory: Option<&str>) -> Result<()> {
+    let dir = Path::new(directory.unwrap_or("."));
+    let manifest = read_manifest(dir)?;
+    let id = manifest
+        .toy
+        .as_deref()
+        .ok_or_else(|| anyhow!("push the toy first"))?;
+    let clip = manifest
+        .clip
+        .as_deref()
+        .ok_or_else(|| anyhow!("ppu.json has no clip"))?;
+    let thumb = manifest
+        .thumb
+        .as_deref()
+        .ok_or_else(|| anyhow!("ppu.json has no thumb"))?;
+    if !safe_relative(clip) || !safe_relative(thumb) {
+        bail!("unsafe preview path");
+    }
+    let config = read_config()?;
+    if config.server.trim_end_matches('/') != manifest.server.trim_end_matches('/') {
+        bail!(
+            "logged into {}, but this toy belongs to {}",
+            config.server,
+            manifest.server
+        );
+    }
+    let form = reqwest::multipart::Form::new()
+        .text(
+            "meta",
+            serde_json::json!({ "title": manifest.title, "description": manifest.description })
+                .to_string(),
+        )
+        .part(
+            "clip",
+            reqwest::multipart::Part::bytes(std::fs::read(dir.join(clip))?).file_name("clip.webm"),
+        )
+        .part(
+            "thumb",
+            reqwest::multipart::Part::bytes(std::fs::read(dir.join(thumb))?).file_name("thumb.png"),
+        );
+    let response = Client::new()
+        .post(api(&manifest.server, &format!("/toys/{id}/publish")))
+        .bearer_auth(config.token)
+        .multipart(form)
+        .send()
+        .await?;
+    response_error(response, "publish").await?;
+    println!("Published {}/t/{id}", manifest.server);
     Ok(())
 }
 
@@ -406,7 +557,7 @@ async fn sync(directory: Option<&str>) -> Result<()> {
     let dir = Path::new(directory.unwrap_or("."));
     let mut manifest = read_manifest(dir)?;
     if manifest.toy.is_none() {
-        return push(directory, false).await;
+        return push(directory, false, false).await;
     }
     let local = local_changed(dir, &manifest)?;
     let remote = fetch_toy(
@@ -417,7 +568,7 @@ async fn sync(directory: Option<&str>) -> Result<()> {
     .await?;
     match (local, Some(remote.revision) != manifest.revision) {
         (false, false) => println!("Already in sync"),
-        (true, false) => return push(directory, false).await,
+        (true, false) => return push(directory, false, false).await,
         (false, true) => {
             apply_remote(dir, &mut manifest, remote)?;
             println!("Pulled remote changes");
@@ -431,7 +582,7 @@ async fn sync(directory: Option<&str>) -> Result<()> {
 }
 
 fn usage() -> ! {
-    eprintln!("usage:\n  ppu login <token> [server]\n  ppu new <directory>\n  ppu status [directory]\n  ppu pull <toy-url> [directory] [--force]\n  ppu push [directory] [--force]\n  ppu sync [directory]");
+    eprintln!("usage:\n  ppu login <token> [server]\n  ppu new <directory>\n  ppu status [directory]\n  ppu pull <toy-url> [directory] [--force]\n  ppu push [directory] [--force] [--recreate]\n  ppu sync [directory]\n  ppu publish [directory]");
     std::process::exit(2)
 }
 
@@ -439,7 +590,9 @@ fn usage() -> ! {
 async fn main() -> Result<()> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let force = args.iter().any(|arg| arg == "--force");
+    let recreate = args.iter().any(|arg| arg == "--recreate");
     args.retain(|arg| arg != "--force");
+    args.retain(|arg| arg != "--recreate");
     match args
         .iter()
         .map(String::as_str)
@@ -453,10 +606,12 @@ async fn main() -> Result<()> {
         ["status", dir] => status(Some(dir)).await,
         ["pull", url] => pull(url, None, force).await,
         ["pull", url, dir] => pull(url, Some(dir), force).await,
-        ["push"] => push(None, force).await,
-        ["push", dir] => push(Some(dir), force).await,
+        ["push"] => push(None, force, recreate).await,
+        ["push", dir] => push(Some(dir), force, recreate).await,
         ["sync"] => sync(None).await,
         ["sync", dir] => sync(Some(dir)).await,
+        ["publish"] => publish(None).await,
+        ["publish", dir] => publish(Some(dir)).await,
         _ => usage(),
     }
 }
@@ -478,11 +633,45 @@ mod tests {
             title: "t".into(),
             description: String::new(),
             files: vec!["main.lua".into()],
+            sources: vec![],
+            clip: None,
+            thumb: None,
             hashes: BTreeMap::new(),
         };
         manifest.hashes = hashes(&local_files(dir.path(), &manifest).unwrap());
         assert!(!local_changed(dir.path(), &manifest).unwrap());
         std::fs::write(dir.path().join("main.lua"), "two").unwrap();
         assert!(local_changed(dir.path(), &manifest).unwrap());
+    }
+
+    #[test]
+    fn reads_manifest_source_payloads() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("payload.bin"), [1, 2, 3]).unwrap();
+        let manifest = Manifest {
+            server: "http://test".into(),
+            toy: None,
+            revision: None,
+            title: "t".into(),
+            description: String::new(),
+            files: vec![],
+            clip: None,
+            thumb: None,
+            hashes: BTreeMap::new(),
+            sources: vec![ManifestSource {
+                name: "art".into(),
+                kind: "bg".into(),
+                builtin_id: None,
+                options: serde_json::json!({}),
+                meta: serde_json::json!({}),
+                payload: "payload.bin".into(),
+            }],
+        };
+        assert_eq!(
+            local_sources(dir.path(), &manifest).unwrap()[0]
+                .payload
+                .as_deref(),
+            Some("AQID")
+        );
     }
 }
