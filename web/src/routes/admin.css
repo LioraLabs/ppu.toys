@@ -36,6 +36,14 @@
   border-radius: 10px;
   background: var(--panel);
 }
+
+.admin-card progress {
+  width: 100%;
+}
+
+.admin-storage-warning {
+  border-color: #f05454;
+}
 .admin-card h2 {
   display: flex;
   gap: 0.5rem;

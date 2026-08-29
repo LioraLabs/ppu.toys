@@ -185,6 +185,16 @@ async fn create_token(
             "token name must be 1-80 characters",
         ));
     }
+    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM api_tokens WHERE user_id=?")
+        .bind(&user.id)
+        .fetch_one(&state.pool)
+        .await?;
+    if count >= crate::config::MAX_TOKENS_PER_USER {
+        return Err(AppError::status(
+            StatusCode::CONFLICT,
+            "token quota reached",
+        ));
+    }
     let id = rand_hex(8);
     let token = format!("ppu_{}", rand_hex(32));
     sqlx::query("INSERT INTO api_tokens(id,user_id,name,token_hash,created_at) VALUES(?,?,?,?,?)")

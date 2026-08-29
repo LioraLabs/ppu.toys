@@ -16,6 +16,10 @@ export function AdminPage() {
   const [data, setData] = useState<AdminOverview | null>(null);
   const [starter, setStarter] = useState("");
   const [status, setStatus] = useState("");
+  const formatBytes = (bytes: number) =>
+    bytes >= 1024 ** 3
+      ? `${(bytes / 1024 ** 3).toFixed(1)} GiB`
+      : `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
 
   useEffect(() => {
     if (!user?.isAdmin) return;
@@ -86,6 +90,17 @@ export function AdminPage() {
         )}
       </header>
 
+      {data && (
+        <section className={`admin-card ${data.storage.warning ? "admin-storage-warning" : ""}`}>
+          <h2>Storage</h2>
+          <p>
+            {formatBytes(data.storage.usedBytes)} of {formatBytes(data.storage.limitBytes)} used
+            {data.storage.warning ? " — action required" : ""}
+          </p>
+          <progress value={data.storage.usedBytes} max={data.storage.limitBytes} />
+        </section>
+      )}
+
       <section className="admin-card admin-starter">
         <div>
           <h2>Starter project</h2>
@@ -113,6 +128,7 @@ export function AdminPage() {
                 <th>Handle</th>
                 <th>Discord ID</th>
                 <th>Status</th>
+                <th>Storage</th>
                 <th />
               </tr>
             </thead>
@@ -127,6 +143,7 @@ export function AdminPage() {
                     <code>{member.id}</code>
                   </td>
                   <td>{member.banned ? "Banned" : "Active"}</td>
+                  <td>{formatBytes(member.storage_bytes)}</td>
                   <td>
                     <button
                       className={member.banned ? "admin-secondary" : "admin-danger"}

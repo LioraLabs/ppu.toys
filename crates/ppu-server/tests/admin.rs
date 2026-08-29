@@ -33,11 +33,15 @@ async fn admin_overview_lists_users_and_toys_and_can_unban() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["toys"][0]["title"], "Toy");
+    assert!(json["storage"]["usedBytes"].as_i64().unwrap() > 0);
+    assert_eq!(json["storage"]["warning"], false);
     assert!(json["users"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|u| u["handle"] == "ann" && u["banned"] == true));
+        .any(|u| u["handle"] == "ann"
+            && u["banned"] == true
+            && u["storage_bytes"].as_i64().is_some()));
 
     let unban = app
         .router

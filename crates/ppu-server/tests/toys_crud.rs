@@ -14,8 +14,16 @@ fn authed(method: &str, uri: &str, sid: &str, body: serde_json::Value) -> Reques
         .unwrap()
 }
 
+fn authed_get(uri: &str, sid: &str) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .header("cookie", format!("ppu_sess={sid}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
 #[tokio::test]
-async fn create_get_update_snapshots_revision() {
+async fn create_get_update_does_not_accumulate_hidden_snapshots() {
     let app = common::test_app().await;
     let sid = common::seed_session(&app.state, "1", "ann", false).await;
 
@@ -45,12 +53,7 @@ async fn create_get_update_snapshots_revision() {
     let res = app
         .router
         .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/api/toys/{id}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(authed_get(&format!("/api/toys/{id}"), &sid))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -81,7 +84,7 @@ async fn create_get_update_snapshots_revision() {
         .fetch_one(&app.state.pool)
         .await
         .unwrap();
-    assert_eq!(n, 2, "create + update each snapshot a revision");
+    assert_eq!(n, 0, "saves must not accumulate unused full-file copies");
 }
 
 #[tokio::test]
@@ -180,12 +183,7 @@ async fn source_payload_roundtrips_through_get() {
     let res = app
         .router
         .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/api/toys/{id}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(authed_get(&format!("/api/toys/{id}"), &sid))
         .await
         .unwrap();
     let b = axum::body::to_bytes(res.into_body(), 1 << 20)
@@ -304,12 +302,7 @@ async fn builtin_id_round_trips_as_camel_case() {
     let res = app
         .router
         .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/api/toys/{id}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(authed_get(&format!("/api/toys/{id}"), &sid))
         .await
         .unwrap();
     let b = axum::body::to_bytes(res.into_body(), 1 << 20)
@@ -317,6 +310,72 @@ async fn builtin_id_round_trips_as_camel_case() {
         .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
     assert_eq!(v["sources"][0]["builtinId"], "mode7-photo");
+}
+
+#[tokio::test]
+async fn drafts_are_visible_only_to_their_owner() {
+    let app = common::test_app().await;
+    let owner = common::seed_session(&app.state, "1", "ann", false).await;
+    let other = common::seed_session(&app.state, "2", "bob", false).await;
+    sqlx::query("INSERT INTO toys(id,author_id,title,files_json,state,created_at) VALUES('draft','1','D','[]','draft',1)")
+        .execute(&app.state.pool).await.unwrap();
+
+    let anonymous = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/toys/draft")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let stranger = app
+        .router
+        .clone()
+        .oneshot(authed_get("/api/toys/draft", &other))
+        .await
+        .unwrap();
+    let owner_response = app
+        .router
+        .clone()
+        .oneshot(authed_get("/api/toys/draft", &owner))
+        .await
+        .unwrap();
+    assert_eq!(anonymous.status(), StatusCode::NOT_FOUND);
+    assert_eq!(stranger.status(), StatusCode::NOT_FOUND);
+    assert_eq!(owner_response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn create_enforces_input_bounds_and_per_user_quota() {
+    let app = common::test_app().await;
+    let sid = common::seed_session(&app.state, "1", "ann", false).await;
+    let duplicate = app.router.clone().oneshot(authed("POST", "/api/toys", &sid, serde_json::json!({
+        "title":"x", "files":[{"name":"main.lua","source":""},{"name":"main.lua","source":""}], "sources":[]
+    }))).await.unwrap();
+    assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
+
+    for i in 0..ppu_server::config::MAX_TOYS_PER_USER {
+        sqlx::query("INSERT INTO toys(id,author_id,title,files_json,state,created_at) VALUES(?, '1','T','[]','draft',1)")
+            .bind(format!("t{i}"))
+            .execute(&app.state.pool).await.unwrap();
+    }
+    let over_quota = app
+        .router
+        .clone()
+        .oneshot(authed(
+            "POST",
+            "/api/toys",
+            &sid,
+            serde_json::json!({
+                "title":"x", "files":[], "sources":[]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(over_quota.status(), StatusCode::CONFLICT);
 }
 
 #[tokio::test]

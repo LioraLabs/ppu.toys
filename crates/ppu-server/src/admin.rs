@@ -90,6 +90,7 @@ struct AdminUser {
     is_admin: bool,
     banned: bool,
     created_at: i64,
+    storage_bytes: i64,
 }
 
 async fn overview(State(s): State<AppState>, user: AuthUser) -> AppResult<Json<serde_json::Value>> {
@@ -100,11 +101,22 @@ async fn overview(State(s): State<AppState>, user: AuthUser) -> AppResult<Json<s
     .fetch_all(&s.pool)
     .await?;
     let users = sqlx::query_as::<_, AdminUser>(
-        "SELECT u.id,u.handle,u.is_admin != 0 is_admin,EXISTS(SELECT 1 FROM bans b WHERE b.discord_id=u.id) banned,u.created_at FROM users u ORDER BY u.created_at DESC LIMIT 200",
+        "SELECT u.id,u.handle,u.is_admin != 0 is_admin,EXISTS(SELECT 1 FROM bans b WHERE b.discord_id=u.id) banned,u.created_at,COALESCE((SELECT SUM(length(title)+length(description)+length(files_json)+COALESCE(length(clip),0)+COALESCE(length(thumb),0)) FROM toys WHERE author_id=u.id),0)+COALESCE((SELECT SUM(length(s.name)+length(s.kind)+COALESCE(length(s.builtin_id),0)+COALESCE(length(s.options_json),0)+COALESCE(length(s.payload),0)+COALESCE(length(s.meta_json),0)) FROM toy_sources s JOIN toys t ON t.id=s.toy_id WHERE t.author_id=u.id),0) storage_bytes FROM users u ORDER BY u.created_at DESC LIMIT 200",
     )
     .fetch_all(&s.pool)
     .await?;
-    Ok(Json(serde_json::json!({ "toys": toys, "users": users })))
+    let (used,): (i64,) = sqlx::query_as("SELECT (page_count - freelist_count) * page_size FROM pragma_page_count(), pragma_freelist_count(), pragma_page_size()")
+        .fetch_one(&s.pool)
+        .await?;
+    Ok(Json(serde_json::json!({
+        "toys": toys,
+        "users": users,
+        "storage": {
+            "usedBytes": used,
+            "limitBytes": crate::config::MAX_APP_STORAGE,
+            "warning": used * 10 >= crate::config::MAX_APP_STORAGE * 7
+        }
+    })))
 }
 
 pub fn routes() -> Router<AppState> {

@@ -36,6 +36,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --locked
+      - name: Audit Rust dependencies
+        # rsa is locked by sqlx's disabled MySQL feature; it is absent from cargo tree --target all.
+        run: cargo install cargo-audit --locked --version 0.22.2 && cargo audit --ignore RUSTSEC-2023-0071
 
   web:
     name: wasm + vite build + vitest
@@ -56,6 +59,8 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       - name: Install web deps
         run: pnpm install --frozen-lockfile
+      - name: Audit web dependencies
+        run: pnpm audit --audit-level moderate
       - name: Build wasm module
         run: pnpm --filter web run build:wasm
       - name: Build web app (tsc + vite)

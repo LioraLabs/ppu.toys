@@ -78,3 +78,27 @@ async fn fork_missing_toy_404() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn another_users_draft_cannot_be_forked() {
+    let app = common::test_app().await;
+    common::seed_session(&app.state, "1", "ann", false).await;
+    let sid = common::seed_session(&app.state, "2", "bob", false).await;
+    sqlx::query("INSERT INTO toys(id,author_id,title,files_json,state,created_at) VALUES('private','1','P','[]','draft',1)")
+        .execute(&app.state.pool).await.unwrap();
+    let res = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/toys/private/fork")
+                .header("cookie", format!("ppu_sess={sid}"))
+                .header("x-ppu-csrf", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}

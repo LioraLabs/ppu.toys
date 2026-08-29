@@ -43,7 +43,9 @@ export interface AdminOverview {
     is_admin: boolean;
     banned: boolean;
     created_at: number;
+    storage_bytes: number;
   }[];
+  storage: { usedBytes: number; limitBytes: number; warning: boolean };
 }
 
 export interface ToySource {

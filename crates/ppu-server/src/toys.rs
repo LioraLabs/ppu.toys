@@ -9,6 +9,7 @@ use axum::{Json, Router};
 use base64::Engine;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 #[derive(Serialize, Deserialize)]
 pub struct FileDto {
@@ -62,18 +63,59 @@ fn unb64(s: &str) -> AppResult<Vec<u8>> {
 /// Validate a save BEFORE any row is written: per-file cap, per-source-payload cap,
 /// and the aggregate ≤1MB toy-total cap. Doing it up front means a cap violation on a
 /// later item can't leave a half-written toy behind.
-fn validate_save(files: &[FileDto], sources: &[SourceDto]) -> AppResult<()> {
-    let mut total = 0usize;
-    for f in files {
+fn validate_save(body: &SaveBody) -> AppResult<i64> {
+    if body.title.trim().is_empty() || body.title.len() > crate::config::CAP_TITLE {
+        return Err(AppError::status(StatusCode::BAD_REQUEST, "invalid title"));
+    }
+    if body.description.len() > crate::config::CAP_DESCRIPTION {
+        return Err(AppError::status(
+            StatusCode::BAD_REQUEST,
+            "description too long",
+        ));
+    }
+    if body.files.len() > crate::config::MAX_FILES
+        || body.sources.len() > crate::config::MAX_SOURCES
+    {
+        return Err(AppError::status(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "too many files or sources",
+        ));
+    }
+    let mut file_names = HashSet::new();
+    let mut source_names = HashSet::new();
+    let mut total = body.title.len() + body.description.len();
+    for f in &body.files {
+        if f.name.trim().is_empty()
+            || f.name.len() > crate::config::CAP_NAME
+            || !file_names.insert(&f.name)
+        {
+            return Err(AppError::status(
+                StatusCode::BAD_REQUEST,
+                "invalid file name",
+            ));
+        }
         if f.source.len() > crate::config::CAP_LUA_FILE {
             return Err(AppError::status(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "lua file too large",
             ));
         }
-        total += f.source.len();
+        total += f.name.len() + f.source.len();
     }
-    for s in sources {
+    for s in &body.sources {
+        if s.name.trim().is_empty()
+            || s.name.len() > crate::config::CAP_NAME
+            || s.kind.trim().is_empty()
+            || s.kind.len() > crate::config::CAP_NAME
+            || s.builtin_id
+                .as_ref()
+                .is_some_and(|id| id.len() > crate::config::CAP_NAME)
+            || !source_names.insert(&s.name)
+        {
+            return Err(AppError::status(StatusCode::BAD_REQUEST, "invalid source"));
+        }
+        total +=
+            s.name.len() + s.kind.len() + s.options.to_string().len() + s.meta.to_string().len();
         if let Some(p) = &s.payload {
             let bytes = unb64(p)?;
             if bytes.len() > crate::config::CAP_SOURCE_PAYLOAD {
@@ -90,6 +132,71 @@ fn validate_save(files: &[FileDto], sources: &[SourceDto]) -> AppResult<()> {
             StatusCode::PAYLOAD_TOO_LARGE,
             "toy exceeds total size cap",
         ));
+    }
+    Ok(total as i64)
+}
+
+pub(crate) async fn user_storage(state: &AppState, user_id: &str) -> AppResult<i64> {
+    let (bytes,): (i64,) = sqlx::query_as(
+        "SELECT COALESCE((SELECT SUM(length(title)+length(description)+length(files_json)+COALESCE(length(clip),0)+COALESCE(length(thumb),0)) FROM toys WHERE author_id=?),0)+COALESCE((SELECT SUM(length(s.name)+length(s.kind)+COALESCE(length(s.builtin_id),0)+COALESCE(length(s.options_json),0)+COALESCE(length(s.payload),0)+COALESCE(length(s.meta_json),0)) FROM toy_sources s JOIN toys t ON t.id=s.toy_id WHERE t.author_id=?),0)",
+    )
+    .bind(user_id)
+    .bind(user_id)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(bytes)
+}
+
+async fn ensure_storage(
+    state: &AppState,
+    user_id: &str,
+    removed: i64,
+    added: i64,
+) -> AppResult<()> {
+    let used = user_storage(state, user_id).await?;
+    if storage_exceeded(used, removed, added, crate::config::MAX_STORAGE_PER_USER) {
+        return Err(AppError::status(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "storage quota reached",
+        ));
+    }
+    let (total,): (i64,) = sqlx::query_as("SELECT (page_count - freelist_count) * page_size FROM pragma_page_count(), pragma_freelist_count(), pragma_page_size()")
+        .fetch_one(&state.pool)
+        .await?;
+    if total * 10 >= crate::config::MAX_APP_STORAGE * 7 {
+        tracing::warn!(used_bytes = total, "application storage is above 70%");
+    }
+    if storage_exceeded(total, removed, added, crate::config::MAX_APP_STORAGE) {
+        return Err(AppError::status(
+            StatusCode::INSUFFICIENT_STORAGE,
+            "site storage full",
+        ));
+    }
+    Ok(())
+}
+
+fn storage_exceeded(used: i64, removed: i64, added: i64, limit: i64) -> bool {
+    used.saturating_sub(removed).saturating_add(added) > limit
+}
+
+#[cfg(test)]
+mod storage_tests {
+    use super::storage_exceeded;
+
+    #[test]
+    fn replacements_count_only_the_growth() {
+        assert!(!storage_exceeded(90, 20, 30, 100));
+        assert!(storage_exceeded(90, 10, 30, 100));
+    }
+}
+
+async fn ensure_toy_capacity(state: &AppState, user_id: &str) -> AppResult<()> {
+    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM toys WHERE author_id=?")
+        .bind(user_id)
+        .fetch_one(&state.pool)
+        .await?;
+    if count >= crate::config::MAX_TOYS_PER_USER {
+        return Err(AppError::status(StatusCode::CONFLICT, "toy quota reached"));
     }
     Ok(())
 }
@@ -123,36 +230,21 @@ async fn write_sources(state: &AppState, toy_id: &str, sources: &[SourceDto]) ->
     Ok(())
 }
 
-async fn snapshot_revision(state: &AppState, toy_id: &str, files_json: &str) -> AppResult<()> {
-    let now = crate::db::now();
-    let (rev,): (i64,) =
-        sqlx::query_as("SELECT COALESCE(MAX(rev),0)+1 FROM toy_revisions WHERE toy_id=?")
-            .bind(toy_id)
-            .fetch_one(&state.pool)
-            .await?;
-    sqlx::query("INSERT INTO toy_revisions(toy_id,rev,files_json,saved_at) VALUES(?,?,?,?)")
-        .bind(toy_id)
-        .bind(rev)
-        .bind(files_json)
-        .bind(now)
-        .execute(&state.pool)
-        .await?;
-    Ok(())
-}
-
 async fn create(
     State(state): State<AppState>,
     user: AuthUser,
     Json(body): Json<SaveBody>,
 ) -> AppResult<Response> {
-    validate_save(&body.files, &body.sources)?;
+    let save_bytes = validate_save(&body)?;
+    let _write = state.toy_writes.lock().await;
+    ensure_toy_capacity(&state, &user.id).await?;
+    ensure_storage(&state, &user.id, 0, save_bytes).await?;
     let id = slug();
     let files_json = serde_json::to_string(&body.files)?;
     let now = crate::db::now();
     sqlx::query("INSERT INTO toys(id,author_id,title,description,files_json,state,created_at) VALUES(?,?,?,?,?, 'draft', ?)")
         .bind(&id).bind(&user.id).bind(&body.title).bind(&body.description).bind(&files_json).bind(now).execute(&state.pool).await?;
     write_sources(&state, &id, &body.sources).await?;
-    snapshot_revision(&state, &id, &files_json).await?;
     Ok(Json(serde_json::json!({ "id": id, "revision": 1 })).into_response())
 }
 
@@ -193,7 +285,15 @@ async fn update(
             "save rate limit",
         ));
     }
-    validate_save(&body.files, &body.sources)?;
+    let save_bytes = validate_save(&body)?;
+    let (old_bytes,): (i64,) = sqlx::query_as(
+        "SELECT length(title)+length(description)+length(files_json)+COALESCE((SELECT SUM(length(name)+length(kind)+COALESCE(length(builtin_id),0)+COALESCE(length(options_json),0)+COALESCE(length(payload),0)+COALESCE(length(meta_json),0)) FROM toy_sources WHERE toy_id=?),0) FROM toys WHERE id=?",
+    )
+    .bind(&id)
+    .bind(&id)
+    .fetch_one(&state.pool)
+    .await?;
+    ensure_storage(&state, &user.id, old_bytes, save_bytes).await?;
     let files_json = serde_json::to_string(&body.files)?;
     let changed = sqlx::query("UPDATE toys SET title=?, description=?, files_json=?, revision=revision+1 WHERE id=? AND revision=?")
         .bind(&body.title)
@@ -217,7 +317,6 @@ async fn update(
         .execute(&state.pool)
         .await?;
     write_sources(&state, &id, &body.sources).await?;
-    snapshot_revision(&state, &id, &files_json).await?;
     Ok(Json(serde_json::json!({ "revision": expected + 1 })).into_response())
 }
 
@@ -241,6 +340,9 @@ async fn get_toy(
         author_id,
         avatar,
     ) = row.ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such toy"))?;
+    if tstate != "published" && maybe.as_ref().is_none_or(|user| user.id != author_id) {
+        return Err(AppError::status(StatusCode::NOT_FOUND, "no such toy"));
+    }
     let files: serde_json::Value = serde_json::from_str(&files_json)?;
     let src_rows: Vec<(
         String,
@@ -291,13 +393,29 @@ async fn fork(
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let _write = state.toy_writes.lock().await;
-    let src: Option<(String, String, String)> =
-        sqlx::query_as("SELECT title,description,files_json FROM toys WHERE id=?")
+    ensure_toy_capacity(&state, &user.id).await?;
+    let src: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT title,description,files_json FROM toys WHERE id=? AND (state='published' OR author_id=?)",
+    )
             .bind(&id)
+            .bind(&user.id)
             .fetch_optional(&state.pool)
             .await?;
     let (title, description, files_json) =
         src.ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such toy"))?;
+    let (source_bytes,): (i64,) = sqlx::query_as(
+        "SELECT COALESCE(SUM(length(name)+length(kind)+COALESCE(length(builtin_id),0)+COALESCE(length(options_json),0)+COALESCE(length(payload),0)+COALESCE(length(meta_json),0)),0) FROM toy_sources WHERE toy_id=?",
+    )
+    .bind(&id)
+    .fetch_one(&state.pool)
+    .await?;
+    ensure_storage(
+        &state,
+        &user.id,
+        0,
+        (title.len() + description.len() + files_json.len()) as i64 + source_bytes,
+    )
+    .await?;
     let nid = slug();
     let now = crate::db::now();
     sqlx::query("INSERT INTO toys(id,author_id,title,description,files_json,state,forked_from,created_at) VALUES(?,?,?,?,?, 'draft', ?, ?)")
@@ -305,7 +423,6 @@ async fn fork(
     sqlx::query("INSERT INTO toy_sources(toy_id,name,kind,builtin_id,options_json,payload,meta_json)
                  SELECT ?, name,kind,builtin_id,options_json,payload,meta_json FROM toy_sources WHERE toy_id=?")
         .bind(&nid).bind(&id).execute(&state.pool).await?;
-    snapshot_revision(&state, &nid, &files_json).await?;
     Ok(Json(serde_json::json!({ "id": nid })).into_response())
 }
 
@@ -379,6 +496,12 @@ async fn publish(
     }
     let clip = clip.ok_or_else(|| AppError::status(StatusCode::BAD_REQUEST, "missing clip"))?;
     let thumb = thumb.ok_or_else(|| AppError::status(StatusCode::BAD_REQUEST, "missing thumb"))?;
+    if meta_title
+        .as_ref()
+        .is_some_and(|title| title.trim().is_empty() || title.len() > crate::config::CAP_TITLE)
+    {
+        return Err(AppError::status(StatusCode::BAD_REQUEST, "invalid title"));
+    }
     if clip.len() > crate::config::CAP_CLIP {
         return Err(AppError::status(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -391,6 +514,19 @@ async fn publish(
             "thumb too large",
         ));
     }
+    let (old_media,): (i64,) = sqlx::query_as(
+        "SELECT COALESCE(length(clip),0)+COALESCE(length(thumb),0) FROM toys WHERE id=?",
+    )
+    .bind(&id)
+    .fetch_one(&state.pool)
+    .await?;
+    ensure_storage(
+        &state,
+        &user.id,
+        old_media,
+        (clip.len() + thumb.len()) as i64,
+    )
+    .await?;
 
     crate::blobs::store(&state, crate::blobs::BlobKey::Clip(&id), &clip).await?;
     crate::blobs::store(&state, crate::blobs::BlobKey::Thumb(&id), &thumb).await?;
