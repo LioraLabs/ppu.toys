@@ -10,6 +10,7 @@ export interface DecodedBg {
 }
 export interface DecodedM7 {
   kind: "m7";
+  extbg?: boolean;
   palette: number[]; // flat BGR555, 0-based; chunky byte 0 = transparent, byte i+1 = palette[i]
   tiles: number[][]; // 64 chunky bytes each
   tilesW: number;
@@ -21,6 +22,7 @@ export interface DecodedObj {
   cellSize: number;
   palettes: number[][];
   tiles: number[][]; // 64 idx each (4bpp)
+  cells?: ObjCellMeta[];
 }
 /** Tilesheet: chars in row-major sheet order, no tilemap and no reserved blank
  *  — tile N is the Nth 8x8 cell of the source PNG. */
@@ -91,13 +93,14 @@ function unpackTiles(words: number[], count: number, bpp: number): number[][] {
   return tiles;
 }
 
-/** Decode a v1 source payload. Returns null on version!=1, unknown kind, or
+/** Decode a v1/v2 source payload. Returns null on an unknown version/kind or
  *  truncation (mock stub / transport fake) - callers degrade to source-image
  *  preview + budget only. */
 export function decodeSourcePayload(bytes: Uint8Array): Decoded | null {
   try {
     const rd = new Rd(bytes);
-    if (rd.u8() !== 1) return null;
+    const version = rd.u8();
+    if (version !== 1 && version !== 2) return null;
     const kind = rd.u8();
     if (kind === 0) {
       const bitDepth = rd.u8() as 2 | 4 | 8;
@@ -119,7 +122,8 @@ export function decodeSourcePayload(bytes: Uint8Array): Decoded | null {
     }
     if (kind === 1) {
       const optsLen = rd.u8();
-      rd.bytes(optsLen);
+      const opts = rd.bytes(optsLen);
+      const extbg = opts[0] === 1;
       const palLen = rd.u8();
       const palette = rd.u16s(palLen);
       const count = rd.u16();
@@ -128,14 +132,24 @@ export function decodeSourcePayload(bytes: Uint8Array): Decoded | null {
       const tilesW = rd.u8();
       const tilesH = rd.u8();
       const map = rd.bytes(tilesW * tilesH);
-      return { kind: "m7", palette, tiles, tilesW, tilesH, map };
+      return { kind: "m7", extbg, palette, tiles, tilesW, tilesH, map };
     }
     if (kind === 2) {
       const cellSize = rd.u8();
       const palettes = rd.palettes();
       const count = rd.u16();
       const words = rd.u16s(count * 16);
-      return { kind: "obj", cellSize, palettes, tiles: unpackTiles(words, count, 4) };
+      const cells: ObjCellMeta[] = [];
+      if (version >= 2) {
+        const cellCount = rd.u16();
+        for (let i = 0; i < cellCount; i++) {
+          const tile = rd.u16(),
+            pal = rd.u8(),
+            flags = rd.u8();
+          cells.push({ tile, pal, flip_x: (flags & 1) !== 0, flip_y: (flags & 2) !== 0 });
+        }
+      }
+      return { kind: "obj", cellSize, palettes, tiles: unpackTiles(words, count, 4), cells };
     }
     if (kind === 3) {
       // sheet: bit depth, palettes, char words. No tile_size, no screen size,
@@ -182,6 +196,7 @@ export function quantizedRgba(
   height: number,
   cells?: ObjCellMeta[],
 ): { pixels: Uint8ClampedArray; width: number; height: number } {
+  if (d.kind === "obj" && (!cells || cells.length === 0)) cells = d.cells;
   const px = new Uint8ClampedArray(width * height * 4);
   const put = (x: number, y: number, rgb: [number, number, number] | null) => {
     if (x >= width || y >= height) return;
@@ -218,7 +233,12 @@ export function quantizedRgba(
         for (let y = 0; y < 8; y++)
           for (let x = 0; x < 8; x++) {
             const b = tile[y * 8 + x] ?? 0;
-            put(tx * 8 + x, ty * 8 + y, b === 0 ? null : rgbaFrom555(d.palette[b - 1] ?? 0));
+            const color = d.extbg ? b & 0x7f : b;
+            put(
+              tx * 8 + x,
+              ty * 8 + y,
+              color === 0 ? null : rgbaFrom555(d.palette[color - 1] ?? 0),
+            );
           }
       }
   } else if (d.kind === "obj" && cells && cells.length) {

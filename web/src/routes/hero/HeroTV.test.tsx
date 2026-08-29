@@ -49,7 +49,7 @@ afterEach(() => {
 function renderHero() {
   return render(
     <MemoryRouter>
-      <HeroTV fallback={<div data-testid="fallback" />} />
+      <HeroTV />
     </MemoryRouter>,
   );
 }
@@ -73,9 +73,10 @@ describe("HeroTV", () => {
     expect(screen.getByTestId("stage")).toBeInTheDocument();
   });
 
-  it("renders the fallback when no toy is featured", async () => {
+  it("keeps the blank CRT scene when no toy is featured", async () => {
     mockGetFeaturedToy.mockResolvedValue({ id: null });
     renderHero();
-    expect(await screen.findByTestId("fallback")).toBeInTheDocument();
+    expect(await screen.findByText("NO SIGNAL")).toBeInTheDocument();
+    expect(screen.getByTestId("stage")).toBeInTheDocument();
   });
 });

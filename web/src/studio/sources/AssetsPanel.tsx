@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import type { SketchSource } from "../sketches/sketchStore";
 import { openSketchStore, useOpenSketch, openContextLabel } from "../sketches/openSketch";
 import { transport } from "../transport/transport";
@@ -26,6 +26,8 @@ export const KIND_LABEL: Record<SketchSource["kind"], string> = {
 export function AssetsPanel({ onClose }: { onClose?: () => void } = {}) {
   const state = useOpenSketch();
   const [adding, setAdding] = useState(false);
+  // stable so the memoized dialog is inert to this panel's re-renders
+  const closeAdding = useCallback(() => setAdding(false), []);
   const [openRow, setOpenRow] = useState<string | null>(null);
 
   const ctx = state.context;
@@ -100,7 +102,7 @@ export function AssetsPanel({ onClose }: { onClose?: () => void } = {}) {
             </div>
           ) : null;
         })()}
-      {adding && <AddSourceDialog onClose={() => setAdding(false)} />}
+      {adding && <AddSourceDialog onClose={closeAdding} />}
     </aside>
   );
 }

@@ -47,7 +47,7 @@ describe("read endpoints", () => {
     );
     const result = await getWall("popular", 2);
     expect(result).toEqual(wallPage);
-    expect(new URL(captured!.url).search).toBe("?sort=popular&page=2");
+    expect(new URL(captured!.url).search).toBe("?sort=popular&page=2&q=");
   });
 
   it("getToy hits /api/toys/:id", async () => {

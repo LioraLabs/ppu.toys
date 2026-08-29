@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import type { ConvertSourceOptions, SourceKind } from "../../ppu/core";
 import { ppuCore } from "../../ppu/instance";
@@ -23,11 +23,18 @@ const DITHERS: { id: Dither; label: string }[] = [
   { id: "diffusion", label: "diffusion · Floyd-Steinberg" },
 ];
 
-export function AddSourceDialog({ onClose }: { onClose: () => void }) {
+/** memo + a stable onClose: open-sketch store emits (autosave flush, poke
+ *  writes) re-render the studio while this dialog is up, and a re-commit of a
+ *  controlled <select> closes Chrome's open picker. Outside renders must not
+ *  reach it. */
+export const AddSourceDialog = memo(function AddSourceDialog({ onClose }: { onClose: () => void }) {
   const dialogRef = useModalFocus(onClose);
   const [image, setImage] = useState<ImageData | null>(null);
   const [fileName, setFileName] = useState("");
   const [kind, setKind] = useState<SourceKind>("bg");
+  const [extbg, setExtbg] = useState(false);
+  const [priorityMask, setPriorityMask] = useState<ImageData | null>(null);
+  const [priorityName, setPriorityName] = useState("");
   const [bitDepth, setBitDepth] = useState<2 | 4 | 8>(4);
   const [cellSize, setCellSize] = useState<8 | 16 | 32 | 64>(16);
   const [dither, setDither] = useState<Dither>("none");
@@ -36,24 +43,46 @@ export function AddSourceDialog({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const priorityRef = useRef<HTMLInputElement>(null);
 
   const options: ConvertSourceOptions = useMemo(() => {
-    if (kind === "m7") return {}; // fixed pipeline, no remap options
+    if (kind === "m7") return extbg ? { extbg: true } : {};
     const remap = { dither, dither_strength: strength, alpha_threshold: alphaT };
     // bg and sheet are both BG char data: bit depth, 8px tiles. Only obj sizes cells.
     return kind === "obj"
       ? { cell_size: cellSize, ...remap }
       : { bit_depth: bitDepth, tile_size: 8, ...remap };
-  }, [kind, bitDepth, cellSize, dither, strength, alphaT]);
+  }, [kind, bitDepth, cellSize, dither, strength, alphaT, extbg]);
 
   const converted = useMemo(() => {
     if (!image) return null;
     try {
-      return ppuCore.convertSource(kind, options, image);
+      return ppuCore.convertSource(
+        kind,
+        options,
+        image,
+        extbg ? (priorityMask ?? undefined) : undefined,
+      );
     } catch (e) {
       return { error: String((e as Error)?.message ?? e) } as const;
     }
-  }, [image, kind, options]);
+  }, [image, kind, options, extbg, priorityMask]);
+
+  const takePriority = useCallback(async (files: FileList) => {
+    const png = pngFiles(files)[0];
+    if (!png) {
+      setError("priority mask must be a PNG");
+      return;
+    }
+    try {
+      const d = await decodeImageFile(png);
+      setPriorityMask(d.imageData);
+      setPriorityName(d.name);
+      setError(null);
+    } catch {
+      setError("could not decode priority mask");
+    }
+  }, []);
 
   const take = useCallback(
     async (files: FileList) => {
@@ -95,7 +124,12 @@ export function AddSourceDialog({ onClose }: { onClose: () => void }) {
     onClose();
   };
 
-  const ok = !!image && !!converted && !("error" in converted) && name.trim().length > 0;
+  const ok =
+    !!image &&
+    (!extbg || !!priorityMask) &&
+    !!converted &&
+    !("error" in converted) &&
+    name.trim().length > 0;
 
   return (
     <div className="srcdlg-scrim" onClick={onClose}>
@@ -200,9 +234,43 @@ export function AddSourceDialog({ onClose }: { onClose: () => void }) {
               </div>
             )}
             {kind === "m7" && (
-              <div className="srcpv-note">
-                Fixed: 8bpp chunky, ≤256 tiles, flat palette. No options.
-              </div>
+              <>
+                <label className="srcdlg-field">
+                  <span>
+                    <input
+                      type="checkbox"
+                      checked={extbg}
+                      onChange={(e) => setExtbg(e.target.checked)}
+                    />{" "}
+                    EXTBG priority mask
+                  </span>
+                </label>
+                {extbg && (
+                  <label className="srcdlg-field">
+                    priority mask
+                    <button type="button" onClick={() => priorityRef.current?.click()}>
+                      {priorityMask
+                        ? `${priorityName} · ${priorityMask.width}×${priorityMask.height}`
+                        : "choose black/white PNG"}
+                    </button>
+                    <input
+                      ref={priorityRef}
+                      type="file"
+                      accept="image/png"
+                      hidden
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                        if (e.target.files) void takePriority(e.target.files);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                )}
+                <div className="srcpv-note">
+                  {extbg
+                    ? "127 colors. Black mask pixels use BG1; white mask pixels use BG2 priority."
+                    : "Fixed: 8bpp chunky, ≤256 tiles, flat palette."}
+                </div>
+              </>
             )}
 
             {kind !== "m7" && (
@@ -290,4 +358,4 @@ export function AddSourceDialog({ onClose }: { onClose: () => void }) {
       </div>
     </div>
   );
-}
+});

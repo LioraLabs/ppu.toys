@@ -287,6 +287,7 @@ impl PpuCore {
         kind: &str,
         options: JsValue,
         image_data: JsValue,
+        priority_image: JsValue,
     ) -> Result<JsValue, JsValue> {
         let kind: crate::SourceKind = kind.parse().map_err(|e: String| JsValue::from_str(&e))?;
         let opts: crate::ConvertOptions = if options.is_undefined() || options.is_null() {
@@ -300,8 +301,36 @@ impl PpuCore {
         let rgba = get("data")
             .map(|d| Uint8ClampedArray::new(&d).to_vec())
             .unwrap_or_default();
-        let (payload, meta) = crate::convert_source(kind, &opts, &rgba, width, height)
-            .map_err(|e| JsValue::from_str(&e))?;
+        let priority = if priority_image.is_undefined() || priority_image.is_null() {
+            None
+        } else {
+            let get_priority = |k: &str| Reflect::get(&priority_image, &JsValue::from_str(k)).ok();
+            let pw = get_priority("width")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0) as u32;
+            let ph = get_priority("height")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0) as u32;
+            if (pw, ph) != (width, height) {
+                return Err(JsValue::from_str(
+                    "priority mask dimensions must match color image",
+                ));
+            }
+            Some(
+                get_priority("data")
+                    .map(|d| Uint8ClampedArray::new(&d).to_vec())
+                    .unwrap_or_default(),
+            )
+        };
+        let (payload, meta) = crate::convert_source_with_priority(
+            kind,
+            &opts,
+            &rgba,
+            width,
+            height,
+            priority.as_deref(),
+        )
+        .map_err(|e| JsValue::from_str(&e))?;
         let out = Object::new();
         Reflect::set(
             &out,

@@ -24,6 +24,7 @@ export function Layout() {
         </Link>
         <nav className="site-nav">
           <Link to="/studio">Studio</Link>
+          <Link to="/browse">Browse</Link>
           {!loading && user && (
             <>
               {user.isAdmin && <Link to="/admin">Admin</Link>}

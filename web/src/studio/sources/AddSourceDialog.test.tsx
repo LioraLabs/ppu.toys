@@ -18,7 +18,7 @@ function fakeImageData(w = 16, h = 8): ImageData {
 }
 
 /** Records what the dialog asks the core to convert, delegating to the stub. */
-let converts: { kind: SourceKind; options: ConvertSourceOptions }[] = [];
+let converts: { kind: SourceKind; options: ConvertSourceOptions; priority?: ImageData }[] = [];
 
 describe("AddSourceDialog", () => {
   let realCore: PpuCore;
@@ -32,9 +32,9 @@ describe("AddSourceDialog", () => {
     converts = [];
     realCore = ppuCore;
     const rec: PpuCore = Object.create(realCore);
-    rec.convertSource = (kind, options, imageData) => {
-      converts.push({ kind, options });
-      return realCore.convertSource(kind, options, imageData);
+    rec.convertSource = (kind, options, imageData, priority) => {
+      converts.push({ kind, options, priority });
+      return realCore.convertSource(kind, options, imageData, priority);
     };
     setPpuCore(rec);
   });
@@ -103,6 +103,24 @@ describe("AddSourceDialog", () => {
         dither_strength: 50,
         alpha_threshold: 200,
       },
+      priority: undefined,
     });
+  });
+
+  it("accepts a second PNG as the Mode 7 EXTBG priority mask", async () => {
+    render(<AddSourceDialog onClose={() => {}} />);
+    await dropPng();
+    fireEvent.change(screen.getByLabelText(/kind/i), { target: { value: "m7" } });
+    fireEvent.click(screen.getByLabelText(/extbg priority mask/i));
+
+    const maskInput = screen
+      .getByText(/choose black\/white png/i)
+      .parentElement!.querySelector("input[type=file]")!;
+    fireEvent.change(maskInput, {
+      target: { files: [new File([new Uint8Array([1])], "priority.png", { type: "image/png" })] },
+    });
+
+    await waitFor(() => expect(converts[converts.length - 1]?.priority).toBeDefined());
+    expect(converts[converts.length - 1]?.options).toEqual({ extbg: true });
   });
 });

@@ -95,7 +95,8 @@ fn m7_and_tile_bg_coexist_in_one_split_screen_frame() {
         "main.lua",
         r#"
 local m = dma("track")
-if m.char ~= 0 or m.map ~= 0 or m.pal ~= 0 then error("bad m7 return") end
+if m.char ~= 0 or m.map ~= 0 or m.pal ~= 1 then error("bad m7 return") end
+if m.tiles_w ~= 1 or m.tiles_h ~= 1 then error("bad m7 dimensions") end
 local city = dma("city", { char = 0x4000, map = 0x7000 })
 function frame(t, f)
   mode = 1
@@ -326,4 +327,62 @@ end
         bg2_only, nothing,
         "designating an unconfigured BG2 should expose the stale VRAM it reads"
     );
+}
+
+#[test]
+fn dma_returns_composable_obj_placement_and_cells() {
+    let mut e = LuaEngine::new();
+    common::add_obj(&mut e, "hero", solid(8, 8, [255, 0, 0]), 8, 8);
+    common::add_obj(&mut e, "foe", solid(8, 8, [0, 0, 255]), 8, 8);
+    e.set_sources(&[(
+        "main.lua",
+        r#"
+local hero = dma("hero", { char = 0x6000, pal = 0 })
+local foe = dma("foe", { char = hero.next_char, pal = hero.next_pal })
+if hero.tile ~= 0 or foe.tile <= hero.tile then error("bad tile offsets") end
+if #hero.cells ~= 1 or hero.cells[1].tile ~= 1 then error("bad cells") end
+function frame(t, f)
+  obj.char_base = hero.char; screen.main.obj = true
+  obj[0].tile = foe.tile + foe.cells[1].tile
+  obj[0].pal = foe.pal + foe.cells[1].pal
+  obj[0].on = true
+end
+"#,
+    )])
+    .unwrap();
+    e.frame(0.0, 0).unwrap();
+}
+
+#[test]
+fn replacing_a_source_reruns_setup_for_new_next_addresses() {
+    let mut e = LuaEngine::new();
+    common::add_obj(&mut e, "sheet", solid(8, 8, [255, 0, 0]), 8, 8);
+    e.set_source(
+        "local s = dma('sheet', { char = 0x2000 })\nfunction frame(t,f) cgram[0] = s.next_char end",
+    )
+    .unwrap();
+    e.frame(0.0, 0).unwrap();
+    let old_next = e.memory().cgram[0];
+
+    let mut two = solid(16, 8, [255, 0, 0]);
+    for px in two[8 * 4..]
+        .chunks_mut(16 * 4)
+        .flat_map(|row| row[8 * 4..].chunks_mut(4))
+    {
+        px[..3].copy_from_slice(&[0, 0, 255]);
+    }
+    common::add_obj(&mut e, "sheet", two, 16, 8);
+    e.frame(0.0, 1).unwrap();
+    assert!(e.memory().cgram[0] > old_next);
+}
+
+#[test]
+fn dma_rejects_vram_overlap() {
+    let mut e = LuaEngine::new();
+    common::add_bg(&mut e, "a", solid(8, 8, [255, 0, 0]), 8, 8, 4);
+    common::add_bg(&mut e, "b", solid(8, 8, [0, 0, 255]), 8, 8, 4);
+    let err = e
+        .set_source("dma('a', { char=0x1000, map=0 }) dma('b', { char=0x1000, map=0x400 })")
+        .unwrap_err();
+    assert!(err.message.contains("overlaps VRAM"));
 }

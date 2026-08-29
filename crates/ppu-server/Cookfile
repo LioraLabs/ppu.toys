@@ -4,10 +4,9 @@
 # `server`, so the targets below are `cook server.build` / `cook server.test`
 # / `cook server.run`.
 #
-# Modelled on the dogfood services/api module: a compiled build is cached via a
-# stamp + `local` (a native binary with absolute rpaths isn't remote-portable),
-# and `test` fences on `build` (order-only) so compile errors surface once and
-# the test run doesn't contend with the build on the shared target/ tree.
+# The native binary itself is the local cached output; `test` fences on `build`
+# so compile errors surface once and the two cargo invocations don't contend on
+# the shared target/ tree.
 
 tools rust:tools
     cargo
@@ -24,10 +23,7 @@ files server:tests
 #    is a host-specific binary.
 recipe build
     seal rust:tools server:src
-    cook "build/ppu-server.stamp" {
-        cargo build -p ppu-server
-        mkdir -p build && echo ok > $<out>
-    } local
+    cook "../../target/debug/ppu-server" { cargo build -p ppu-server } local
 
 # ── TEST: cargo test for the crate. `: build` is a deliberate order-only fence
 #    (tests recompile the crate themselves and never read build's stamp), kept

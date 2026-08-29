@@ -7,6 +7,7 @@ import { Tos } from "./Tos";
 import { Privacy } from "./Privacy";
 import { Studio } from "../studio/Studio";
 import { AdminPage } from "./AdminPage";
+import { Browse } from "./Browse";
 
 export function AppRoutes() {
   return (
@@ -18,6 +19,7 @@ export function AppRoutes() {
         <Route path="/tos" element={<Tos />} />
         <Route path="/privacy" element={<Privacy />} />
         <Route path="/admin" element={<AdminPage />} />
+        <Route path="/browse" element={<Browse />} />
       </Route>
       {/* Studio owns the full viewport — outside the nav shell so its layout is unchanged. */}
       <Route path="/studio" element={<Studio />} />

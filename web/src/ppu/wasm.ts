@@ -46,7 +46,12 @@ export interface WasmCoreLike {
   m7Scanlines(): ArrayLike<number>;
   m7MapView(): ArrayLike<number>;
   winScanlines(): ArrayLike<number>;
-  convertSource(kind: SourceKind, options: ConvertSourceOptions, imageData: ImageData): unknown;
+  convertSource(
+    kind: SourceKind,
+    options: ConvertSourceOptions,
+    imageData: ImageData,
+    priorityMask?: ImageData,
+  ): unknown;
   addSource(name: string, payload: Uint8Array): unknown;
   removeSource(name: string): boolean;
 }
@@ -115,8 +120,9 @@ export function wrapWasmCore(core: WasmCoreLike): PpuCore {
       kind: SourceKind,
       options: ConvertSourceOptions,
       imageData: ImageData,
+      priorityMask?: ImageData,
     ): ConvertSourceResult {
-      return core.convertSource(kind, options, imageData) as ConvertSourceResult;
+      return core.convertSource(kind, options, imageData, priorityMask) as ConvertSourceResult;
     },
     addSource(name: string, payload: Uint8Array) {
       return core.addSource(name, payload) as { ok: boolean; error?: string };

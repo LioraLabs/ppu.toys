@@ -25,6 +25,7 @@ export function makeWallCard(overrides?: Partial<WallCard>): WallCard {
     clipUrl: "/blobs/clip/abc123",
     heartCount: 3,
     hearted: false,
+    createdAt: 1_700_000_000,
     ...overrides,
   };
 }

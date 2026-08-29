@@ -47,6 +47,50 @@ async fn admin_selects_a_published_featured_toy() {
 }
 
 #[tokio::test]
+async fn admin_selects_ordered_community_highlights() {
+    let app = common::test_app().await;
+    let admin = common::seed_session(&app.state, "9", "root", true).await;
+    for (id, title) in [("one", "One"), ("two", "Two")] {
+        sqlx::query("INSERT INTO toys(id,author_id,title,files_json,state,created_at) VALUES(?, '9', ?, '[]', 'published', 1)")
+            .bind(id).bind(title).execute(&app.state.pool).await.unwrap();
+    }
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/featured-toys")
+                .header("cookie", format!("ppu_sess={admin}"))
+                .header("x-ppu-csrf", "1")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"toy_ids":["two","one"]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/highlights")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["toys"][0]["id"], "two");
+    assert_eq!(json["toys"][1]["id"], "one");
+}
+
+#[tokio::test]
 async fn admin_overview_lists_users_and_toys_and_can_unban() {
     let app = common::test_app().await;
     let admin = common::seed_session(&app.state, "9", "root", true).await;

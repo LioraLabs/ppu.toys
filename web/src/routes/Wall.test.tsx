@@ -1,107 +1,51 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { Wall } from "./Wall";
-import type { WallCard } from "../api/apiClient";
 import { makeWallCard } from "../fixtures";
+import { Wall } from "./Wall";
 
-vi.mock("../api/apiClient", () => ({ getWall: vi.fn() }));
-vi.mock("../api/session", () => ({ useSession: () => ({ user: null, loading: false }) }));
-// The 3D hero has its own test (hero/HeroTV.test.tsx); here it would drag
-// three.js + transport into every Wall test via the lazy chunk.
+vi.mock("../api/apiClient", () => ({ getHighlights: vi.fn(), getWall: vi.fn() }));
+vi.mock("../api/session", () => ({ useSession: () => ({ user: null }) }));
 vi.mock("./hero/HeroTV", () => ({ default: () => null }));
-import { getWall } from "../api/apiClient";
+import { getHighlights, getWall } from "../api/apiClient";
 
-function card(id: string): WallCard {
-  return makeWallCard({ id, title: `Toy ${id}`, heartCount: 0 });
-}
-const mockGetWall = getWall as ReturnType<typeof vi.fn>;
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  delete window.kofiWidgetOverlay;
 });
 
-describe("Wall", () => {
-  it("loads recent toys on mount and renders the grid", async () => {
-    mockGetWall.mockResolvedValue({ toys: [card("a"), card("b")], nextPage: null });
-    render(
-      <MemoryRouter>
-        <Wall />
-      </MemoryRouter>,
-    );
-    expect(await screen.findByText("Toy a")).toBeInTheDocument();
-    expect(screen.getByText("Toy b")).toBeInTheDocument();
-    expect(mockGetWall).toHaveBeenCalledWith("recent", 0);
+it("shows curated highlights and the five latest contributions", async () => {
+  const openKofi = vi.fn();
+  const draw = vi.fn((_id, _config, containerId) => {
+    const trigger = document.createElement("button");
+    trigger.className = "floatingchat-donate-button";
+    trigger.addEventListener("click", openKofi);
+    document.getElementById(containerId!)?.appendChild(trigger);
   });
-
-  it("switching to popular refetches with sort=popular", async () => {
-    mockGetWall.mockResolvedValue({ toys: [card("a")], nextPage: null });
-    render(
-      <MemoryRouter>
-        <Wall />
-      </MemoryRouter>,
-    );
-    await screen.findByText("Toy a");
-    fireEvent.click(screen.getByRole("button", { name: /popular/i }));
-    await waitFor(() => expect(mockGetWall).toHaveBeenCalledWith("popular", 0));
+  window.kofiWidgetOverlay = {
+    draw,
+  };
+  vi.mocked(getHighlights).mockResolvedValue({
+    toys: [makeWallCard({ id: "featured", title: "Feature" })],
   });
-
-  it("shows Load more only when nextPage is set, and appends the next page", async () => {
-    mockGetWall
-      .mockResolvedValueOnce({ toys: [card("a")], nextPage: 1 })
-      .mockResolvedValueOnce({ toys: [card("b")], nextPage: null });
-    render(
-      <MemoryRouter>
-        <Wall />
-      </MemoryRouter>,
-    );
-    await screen.findByText("Toy a");
-    fireEvent.click(screen.getByRole("button", { name: /load more/i }));
-    expect(await screen.findByText("Toy b")).toBeInTheDocument();
-    expect(mockGetWall).toHaveBeenLastCalledWith("recent", 1);
-    await waitFor(() =>
-      expect(screen.queryByRole("button", { name: /load more/i })).not.toBeInTheDocument(),
-    );
+  vi.mocked(getWall).mockResolvedValue({
+    toys: Array.from({ length: 6 }, (_, i) => makeWallCard({ id: `${i}`, title: `Latest ${i}` })),
+    nextPage: null,
   });
-
-  it("shows an empty state when there are no toys", async () => {
-    mockGetWall.mockResolvedValue({ toys: [], nextPage: null });
-    render(
-      <MemoryRouter>
-        <Wall />
-      </MemoryRouter>,
-    );
-    expect(await screen.findByText(/no toys yet/i)).toBeInTheDocument();
-  });
-
-  it("disables Load more while a page is in flight (no double-append)", async () => {
-    // First page resolves; the load-more fetch hangs so we can observe the
-    // pending guard.
-    let releaseSecond: (v: { toys: WallCard[]; nextPage: number | null }) => void = () => {};
-    mockGetWall.mockResolvedValueOnce({ toys: [card("a")], nextPage: 1 }).mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          releaseSecond = resolve;
-        }),
-    );
-    render(
-      <MemoryRouter>
-        <Wall />
-      </MemoryRouter>,
-    );
-    await screen.findByText("Toy a");
-
-    const btn = screen.getByRole("button", { name: /load more/i });
-    fireEvent.click(btn);
-    // While pending, the button is disabled — a second click can't fire a
-    // duplicate fetch.
-    await waitFor(() => expect(screen.getByRole("button", { name: /loading/i })).toBeDisabled());
-    fireEvent.click(screen.getByRole("button", { name: /loading/i }));
-    expect(mockGetWall).toHaveBeenCalledTimes(2); // still just mount + one loadMore
-
-    releaseSecond({ toys: [card("b")], nextPage: null });
-    expect(await screen.findByText("Toy b")).toBeInTheDocument();
-  });
+  render(
+    <MemoryRouter>
+      <Wall />
+    </MemoryRouter>,
+  );
+  expect(await screen.findByText("Feature")).toBeInTheDocument();
+  expect(await screen.findByText("Latest 4")).toBeInTheDocument();
+  expect(screen.queryByText("Latest 5")).not.toBeInTheDocument();
+  const script = document.querySelector(
+    'script[src="https://storage.ko-fi.com/cdn/scripts/overlay-widget.js"]',
+  )!;
+  fireEvent.load(script);
+  expect(draw).toHaveBeenCalledWith("X8X21XWLH3", expect.any(Object), "kofi-widget");
 });

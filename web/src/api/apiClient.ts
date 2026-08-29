@@ -18,6 +18,7 @@ export interface WallCard {
   clipUrl: string;
   heartCount: number;
   hearted: boolean;
+  createdAt: number;
 }
 
 export interface WallPage {
@@ -48,6 +49,7 @@ export interface AdminOverview {
   }[];
   storage: { usedBytes: number; limitBytes: number; warning: boolean };
   featuredToyId: string;
+  featuredToyIds: string[];
 }
 
 export interface ToySource {
@@ -130,8 +132,14 @@ export async function getMe(): Promise<Me | null> {
   return res.json() as Promise<Me>;
 }
 
-export function getWall(sort: WallSort, page: number): Promise<WallPage> {
-  return request<WallPage>(`/api/toys?sort=${sort}&page=${page}`);
+export function getWall(sort: WallSort, page: number, query = ""): Promise<WallPage> {
+  return request<WallPage>(
+    `/api/toys?sort=${sort}&page=${page}&q=${encodeURIComponent(query.trim())}`,
+  );
+}
+
+export function getHighlights(): Promise<{ toys: WallCard[] }> {
+  return request<{ toys: WallCard[] }>("/api/highlights");
 }
 
 export function getToy(id: string): Promise<ToyFull> {
@@ -163,6 +171,14 @@ export function setFeaturedToy(toy_id: string | null): Promise<void> {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ toy_id }),
+  });
+}
+
+export function setFeaturedToys(toy_ids: string[]): Promise<void> {
+  return request<void>("/api/admin/featured-toys", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ toy_ids }),
   });
 }
 

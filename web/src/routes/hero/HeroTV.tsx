@@ -1,10 +1,6 @@
-/** Wired landing hero: fetches the featured toy (top of the popular wall),
- *  pushes it into the SHARED transport/core exactly like ReadOnlyPlayer, and
- *  hands live framebuffers to the 3D stage. Renders `fallback` (the CSS hero
- *  art) when there's nothing to show: reduced motion, WebGL missing, fetch
- *  failure, or an empty wall. Default export so Wall can React.lazy this
- *  chunk — three.js stays out of every other bundle. */
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+/** Wired landing hero: always renders the CRT scene, then tunes it to the
+ *  featured toy when one is available. */
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { getFeaturedToy, getToy, type ToyFull } from "../../api/apiClient";
 import { decodeBase64 } from "../../api/base64";
@@ -13,20 +9,15 @@ import { transport } from "../../studio/transport/transport";
 import { HeroStage } from "./HeroStage";
 import "./hero.css";
 
-export default function HeroTV({ fallback }: { fallback: ReactNode }) {
+export default function HeroTV() {
   const [toy, setToy] = useState<ToyFull | null>(null);
-  const [failed, setFailed] = useState(
-    () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false,
-  );
 
   useEffect(() => {
     let live = true;
     getFeaturedToy()
-      .then((featured) =>
-        featured.id ? getToy(featured.id) : Promise.reject(new Error("no featured toy")),
-      )
-      .then((t) => live && setToy(t))
-      .catch(() => live && setFailed(true));
+      .then((featured) => (featured.id ? getToy(featured.id) : null))
+      .then((featured) => featured && live && setToy(featured))
+      .catch(() => {});
     return () => {
       live = false;
     };
@@ -51,9 +42,7 @@ export default function HeroTV({ fallback }: { fallback: ReactNode }) {
     [ready],
   );
 
-  if (failed) return <>{fallback}</>;
-
-  const stage = <HeroStage getFrame={getFrame} onFail={() => setFailed(true)} />;
+  const stage = <HeroStage getFrame={getFrame} onFail={() => {}} />;
   return (
     <div className="hero3d">
       {toy ? (
@@ -70,7 +59,7 @@ export default function HeroTV({ fallback }: { fallback: ReactNode }) {
             NOW PLAYING&ensp;{toy.title} — {toy.author.handle}
           </>
         ) : (
-          "TUNING IN…"
+          "NO SIGNAL"
         )}
       </span>
     </div>

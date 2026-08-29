@@ -18,6 +18,8 @@ export const handlers = [
 
   http.get("/api/toys", () => HttpResponse.json(wallPage)),
 
+  http.get("/api/highlights", () => HttpResponse.json({ toys: wallPage.toys })),
+
   http.get("/api/toys/:id", () => HttpResponse.json(toyFull)),
 
   http.get("/api/users/:handle", () => HttpResponse.json(profile)),

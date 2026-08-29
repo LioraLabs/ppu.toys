@@ -44,6 +44,14 @@ async fn wall_recent_and_popular_sorts() {
         .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
     assert_eq!(v["toys"][0]["id"], "bbbbbbbb");
+
+    let res = get("/api/toys?q=aaaaaaaa").await.unwrap();
+    let b = axum::body::to_bytes(res.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+    assert_eq!(v["toys"].as_array().unwrap().len(), 1);
+    assert_eq!(v["toys"][0]["id"], "aaaaaaaa");
 }
 
 #[tokio::test]

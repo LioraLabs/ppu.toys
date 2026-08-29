@@ -231,8 +231,9 @@ export class Transport {
     kind: SourceKind,
     options: ConvertSourceOptions,
     image: ImageData,
+    priorityMask?: ImageData,
   ): ConvertSourceResult => {
-    return this.coreRef().convertSource(kind, options, image);
+    return this.coreRef().convertSource(kind, options, image, priorityMask);
   };
 
   /** Register a source payload for rendering under `name`, then refresh the frame. */

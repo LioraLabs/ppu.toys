@@ -68,6 +68,8 @@ pub struct LuaEngine {
     dma: Rc<DmaRecorder>,
     /// Per-layer import/diagnostic reports produced by the most recent `frame()`.
     reports: Vec<ImportBudget>,
+    program_sources: Vec<(String, String)>,
+    source_dirty: bool,
 }
 
 /// The resolved result of one init-stage `dma(name, opts?)` call. Replay
@@ -89,6 +91,9 @@ struct DmaPlacement {
 struct DmaRecorder {
     active: Cell<bool>,
     placements: RefCell<Vec<DmaPlacement>>,
+    vram_ranges: RefCell<Vec<(String, usize, usize)>>,
+    cgram_ranges: RefCell<Vec<(usize, usize)>>,
+    obj_base: Cell<Option<u16>>,
 }
 
 impl Default for LuaEngine {
@@ -116,6 +121,8 @@ impl LuaEngine {
             source_store,
             dma,
             reports: Vec::new(),
+            program_sources: Vec::new(),
+            source_dirty: false,
         }
     }
 
@@ -134,14 +141,17 @@ impl LuaEngine {
     ) -> Result<(), crate::source::PayloadError> {
         let p = crate::source::SourcePayload::decode(payload)?;
         self.source_store.borrow_mut().insert(name.to_string(), p);
+        self.source_dirty = !self.program_sources.is_empty();
         Ok(())
     }
 
     /// Forget the source registered under `name` (the `removeSource` core).
-    /// An existing `dma()` placement of this name degrades to an
-    /// `ImportBudget::Mismatch` on the next frame's replay and places nothing.
+    /// The next frame reruns setup, so a remaining `dma()` reference fails
+    /// loudly like any other missing source.
     pub fn remove_source(&mut self, name: &str) -> bool {
-        self.source_store.borrow_mut().remove(name).is_some()
+        let removed = self.source_store.borrow_mut().remove(name).is_some();
+        self.source_dirty |= removed && !self.program_sources.is_empty();
+        removed
     }
 
     /// Per-layer import budgets from the most recent `frame()` (m4/inspector).
@@ -226,6 +236,11 @@ impl LuaEngine {
         } else {
             rec.active.set(false);
         }
+        self.program_sources = files
+            .iter()
+            .map(|(name, source)| ((*name).to_string(), (*source).to_string()))
+            .collect();
+        self.source_dirty = false;
         Ok(())
     }
 
@@ -233,6 +248,14 @@ impl LuaEngine {
     /// `hdma` -> registered hooks), read CGRAM/OAM, then resolve the 224-row
     /// LineTable by applying each covering hook per scanline (later call wins).
     pub fn frame(&mut self, t: f64, f: u32) -> Result<LineTable, LuaError> {
+        if self.source_dirty {
+            let files = self.program_sources.clone();
+            let refs: Vec<_> = files
+                .iter()
+                .map(|(n, s)| (n.as_str(), s.as_str()))
+                .collect();
+            self.set_sources(&refs)?;
+        }
         // Reset the per-frame hook registry, then run frame(t,f) once.
         {
             let mut l = self.lua.borrow_mut();
@@ -624,7 +647,7 @@ fn lua_err<'gc>(ctx: piccolo::Context<'gc>, msg: &str) -> piccolo::Error<'gc> {
 /// so registers wire from it. An m7 source takes NO opts — its chars+map live
 /// interleaved at the fixed 0x0000 region (palette at CGRAM 1) on real
 /// hardware, so explicit addresses are an error; it returns
-/// `{char = 0, map = 0, pal = 0}`.
+/// `{char = 0, map = 0, pal = 1, tiles_w, tiles_h}`.
 fn install_dma(
     ctx: piccolo::Context<'_>,
     store: Rc<RefCell<HashMap<String, crate::source::SourcePayload>>>,
@@ -647,10 +670,11 @@ fn install_dma(
                 ))
             }
         };
-        let kind = match store.borrow().get(&name) {
-            Some(p) => p.kind(),
+        let source = match store.borrow().get(&name) {
+            Some(p) => p.clone(),
             None => return Err(lua_err(ctx, &format!("dma: no source named '{name}'"))),
         };
+        let kind = source.kind();
         let opts = match stack.get(1) {
             Value::Table(t) => Some(t),
             Value::Nil => None,
@@ -684,9 +708,160 @@ fn install_dma(
             (
                 int_opt("char", 0x1000, 0x7fff)?,
                 int_opt("map", 0x0000, 0x7fff)?,
-                int_opt("pal", 0, 0xff)?,
+                int_opt("pal", 0, if kind == SourceKind::Obj { 7 } else { 0xff })?,
             )
         };
+
+        let align_up = |n: usize, align: usize| (n + align - 1) & !(align - 1);
+        let mut vram = Vec::<(usize, usize)>::new();
+        let cgram;
+        let cgram_end;
+        let ret = Table::new(&ctx);
+        match &source {
+            crate::source::SourcePayload::Bg(src) => {
+                if char_base & 0x0fff != 0 || map_base & 0x03ff != 0 {
+                    return Err(lua_err(
+                        ctx,
+                        "dma: bg char must align to 0x1000 and map to 0x400",
+                    ));
+                }
+                let char_end = char_base as usize + src.char_words.len();
+                let map_end = map_base as usize + src.tilemap_words.len();
+                let stride = if src.bit_depth == 2 {
+                    4
+                } else if src.bit_depth == 8 {
+                    256
+                } else {
+                    16
+                };
+                let pal_end = cgram_base as usize + stride * src.palettes.len();
+                vram.extend([(char_base as usize, char_end), (map_base as usize, map_end)]);
+                cgram_end = pal_end;
+                cgram = (cgram_base as usize, pal_end);
+                ret.set(ctx, "char", char_base).unwrap();
+                ret.set(ctx, "map", map_base).unwrap();
+                ret.set(ctx, "pal", cgram_base).unwrap();
+                ret.set(ctx, "next_char", align_up(char_end, 0x1000) as i64)
+                    .unwrap();
+                ret.set(ctx, "next_map", align_up(map_end, 0x400) as i64)
+                    .unwrap();
+                ret.set(ctx, "next_pal", pal_end as i64).unwrap();
+                ret.set(ctx, "bit_depth", src.bit_depth as i64).unwrap();
+                ret.set(ctx, "screen_size", src.screen_size as i64).unwrap();
+            }
+            crate::source::SourcePayload::Sheet(src) => {
+                if char_base & 0x0fff != 0 {
+                    return Err(lua_err(ctx, "dma: sheet char must align to 0x1000"));
+                }
+                let char_end = char_base as usize + src.char_words.len();
+                let stride = if src.bit_depth == 2 {
+                    4
+                } else if src.bit_depth == 8 {
+                    256
+                } else {
+                    16
+                };
+                let pal_end = cgram_base as usize + stride * src.palettes.len();
+                vram.push((char_base as usize, char_end));
+                cgram_end = pal_end;
+                cgram = (cgram_base as usize, pal_end);
+                ret.set(ctx, "char", char_base).unwrap();
+                ret.set(ctx, "pal", cgram_base).unwrap();
+                ret.set(ctx, "next_char", align_up(char_end, 0x1000) as i64)
+                    .unwrap();
+                ret.set(ctx, "next_pal", pal_end as i64).unwrap();
+                ret.set(ctx, "bit_depth", src.bit_depth as i64).unwrap();
+            }
+            crate::source::SourcePayload::Obj(src) => {
+                let base = match rec.obj_base.get() {
+                    Some(base) => base,
+                    None => {
+                        if char_base & 0x1fff != 0 {
+                            return Err(lua_err(ctx, "dma: first obj char must align to 0x2000"));
+                        }
+                        rec.obj_base.set(Some(char_base as u16));
+                        char_base as u16
+                    }
+                };
+                let char_end = char_base as usize + src.char_words.len();
+                if char_base < base as i64
+                    || (char_base - base as i64) % 16 != 0
+                    || char_end > base as usize + 0x2000
+                {
+                    return Err(lua_err(
+                        ctx,
+                        "dma: obj chars must fit the shared 512-tile region",
+                    ));
+                }
+                let pal_end = cgram_base as usize + src.palettes.len();
+                vram.push((char_base as usize, char_end));
+                cgram_end = 128 + pal_end * 16;
+                cgram = (128 + cgram_base as usize * 16, cgram_end);
+                ret.set(ctx, "char", char_base).unwrap();
+                ret.set(ctx, "pal", cgram_base).unwrap();
+                ret.set(ctx, "tile", (char_base - base as i64) / 16)
+                    .unwrap();
+                ret.set(ctx, "next_char", align_up(char_end, 16) as i64)
+                    .unwrap();
+                ret.set(ctx, "next_pal", pal_end as i64).unwrap();
+                ret.set(ctx, "cell_size", src.cell_size as i64).unwrap();
+                let cells = Table::new(&ctx);
+                for (i, cell) in src.cells.iter().enumerate() {
+                    let t = Table::new(&ctx);
+                    t.set(ctx, "tile", cell.tile as i64).unwrap();
+                    t.set(ctx, "pal", cell.pal as i64).unwrap();
+                    t.set(ctx, "flip_x", cell.flip_x).unwrap();
+                    t.set(ctx, "flip_y", cell.flip_y).unwrap();
+                    cells.set(ctx, i as i64 + 1, t).unwrap();
+                }
+                ret.set(ctx, "cells", cells).unwrap();
+            }
+            crate::source::SourcePayload::M7(src) => {
+                vram.push((0, 0x4000));
+                cgram_end = 256;
+                cgram = (0, 256);
+                ret.set(ctx, "char", 0).unwrap();
+                ret.set(ctx, "map", 0).unwrap();
+                ret.set(ctx, "pal", 1).unwrap();
+                ret.set(ctx, "tiles_w", src.tiles_w as i64).unwrap();
+                ret.set(ctx, "tiles_h", src.tiles_h as i64).unwrap();
+            }
+        }
+        if vram.iter().any(|&(s, e)| e > 0x8000 || s >= e) || cgram_end > 256 {
+            return Err(lua_err(
+                ctx,
+                &format!("dma: '{name}' placement exceeds PPU memory"),
+            ));
+        }
+        for (i, &(s, e)) in vram.iter().enumerate() {
+            if vram[..i].iter().any(|&(a, b)| s < b && a < e)
+                || rec
+                    .vram_ranges
+                    .borrow()
+                    .iter()
+                    .any(|(_, a, b)| s < *b && *a < e)
+            {
+                return Err(lua_err(
+                    ctx,
+                    &format!("dma: '{name}' overlaps VRAM already in use"),
+                ));
+            }
+        }
+        if rec
+            .cgram_ranges
+            .borrow()
+            .iter()
+            .any(|&(start, end)| cgram.0 != start && cgram.0 < end && start < cgram.1)
+        {
+            return Err(lua_err(
+                ctx,
+                &format!("dma: '{name}' conflicts with CGRAM already in use"),
+            ));
+        }
+        rec.vram_ranges
+            .borrow_mut()
+            .extend(vram.into_iter().map(|(s, e)| (name.clone(), s, e)));
+        rec.cgram_ranges.borrow_mut().push(cgram);
         rec.placements.borrow_mut().push(DmaPlacement {
             name,
             char_base: char_base as u16,
@@ -694,10 +869,6 @@ fn install_dma(
             cgram_base: cgram_base as u8,
         });
         stack.clear();
-        let ret = Table::new(&ctx);
-        ret.set(ctx, "char", char_base).unwrap();
-        ret.set(ctx, "map", map_base).unwrap();
-        ret.set(ctx, "pal", cgram_base).unwrap();
         stack.replace(ctx, ret);
         Ok(CallbackReturn::Return)
     });
@@ -727,7 +898,9 @@ fn replay_dma(
                 crate::source::place_sheet(src, mem, p.char_base, p.cgram_base as usize)
             }
             Some(SourcePayload::M7(src)) => crate::source::place_m7(src, mem),
-            Some(SourcePayload::Obj(src)) => crate::source::place_obj(src, mem, p.char_base),
+            Some(SourcePayload::Obj(src)) => {
+                crate::source::place_obj(src, mem, p.char_base, p.cgram_base as usize)
+            }
             None => reports.push(ImportBudget::Mismatch {
                 layer: None,
                 slot: p.name.clone(),

@@ -6,6 +6,7 @@ import {
   getAdminOverview,
   getStarterTemplate,
   setFeaturedToy,
+  setFeaturedToys,
   updateStarterTemplate,
   type AdminOverview,
 } from "../api/apiClient";
@@ -51,6 +52,16 @@ export function AdminPage() {
       setStatus(id ? "Featured toy updated." : "Featured toy cleared.");
     } catch (error) {
       setStatus(`Could not update featured toy: ${String(error)}`);
+    }
+  }
+
+  async function featureToys(ids: string[]) {
+    try {
+      await setFeaturedToys(ids);
+      setData((current) => (current ? { ...current, featuredToyIds: ids } : current));
+      setStatus("Community highlights updated.");
+    } catch (error) {
+      setStatus(`Could not update community highlights: ${String(error)}`);
     }
   }
 
@@ -114,7 +125,7 @@ export function AdminPage() {
 
       {data && (
         <section className="admin-card">
-          <h2>Featured toy</h2>
+          <h2>Toy of the Week</h2>
           <select
             aria-label="Featured toy"
             value={data.featuredToyId}
@@ -127,6 +138,37 @@ export function AdminPage() {
               </option>
             ))}
           </select>
+        </section>
+      )}
+
+      {data && (
+        <section className="admin-card">
+          <h2>Community highlights</h2>
+          {Array.from({ length: 5 }, (_, index) => (
+            <select
+              key={index}
+              aria-label={`Community highlight ${index + 1}`}
+              value={data.featuredToyIds[index] ?? ""}
+              onChange={(event) => {
+                const ids = [...data.featuredToyIds];
+                ids[index] = event.target.value;
+                void featureToys(ids.filter(Boolean));
+              }}
+            >
+              <option value="">None</option>
+              {data.featuredToys.map((toy) => (
+                <option
+                  key={toy.id}
+                  value={toy.id}
+                  disabled={
+                    data.featuredToyIds.includes(toy.id) && data.featuredToyIds[index] !== toy.id
+                  }
+                >
+                  {toy.title} — {toy.author}
+                </option>
+              ))}
+            </select>
+          ))}
         </section>
       )}
 

@@ -88,7 +88,7 @@ export function HeroStage({
 
     // --- scene -------------------------------------------------------------
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 40);
+    const camera = new THREE.PerspectiveCamera(27, 1, 0.1, 40);
     const camBase = new THREE.Vector3(0.7, 2.1, 10.6);
     camera.position.copy(camBase);
 
@@ -103,12 +103,12 @@ export function HeroStage({
       },
     });
     const tv = buildTv(screenMat);
-    tv.group.position.set(-0.95, 0, 0);
+    tv.group.position.set(-0.8, 0, 0);
     tv.group.rotation.y = 0.12;
     scene.add(tv.group);
 
     const console3d = buildConsole();
-    console3d.position.set(1.75, 0, 1.1);
+    console3d.position.set(1.45, 0, 1.1);
     console3d.rotation.y = -0.35;
     scene.add(console3d);
 

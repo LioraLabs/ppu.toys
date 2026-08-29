@@ -10,6 +10,7 @@ vi.mock("../studio/Studio", () => ({ Studio: () => <div>studio-stub</div> }));
 // Data pages fetch on mount; stub the client so routing tests stay pure.
 vi.mock("../api/apiClient", () => ({
   getWall: vi.fn(async () => ({ toys: [], nextPage: null })),
+  getHighlights: vi.fn(async () => ({ toys: [] })),
   getToy: vi.fn(async () => ({ files: [], sources: [], author: {}, title: "", description: "" })),
   getProfile: vi.fn(async () => ({ user: { handle: "x", avatar: null }, toys: [] })),
   SIGN_IN_URL: "/api/auth/discord",

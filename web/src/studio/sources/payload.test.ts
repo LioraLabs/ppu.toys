@@ -66,6 +66,29 @@ describe("decodeSourcePayload", () => {
     expect(d.tiles[0][0]).toBe(7);
   });
 
+  it("decodes and previews v2 EXTBG pixels through their low 7-bit color", () => {
+    const bytes = new Uint8Array([
+      2,
+      1, // version, kind=m7
+      1,
+      1, // options length, extbg=true
+      1,
+      ...u16le(0x001f), // one red color
+      ...u16le(1),
+      0x81,
+      ...Array(63).fill(1), // high-priority red, then low-priority red
+      1,
+      1,
+      0,
+    ]);
+    const d = decodeSourcePayload(bytes);
+    if (d?.kind !== "m7") throw new Error("kind");
+    expect(d.extbg).toBe(true);
+    const { pixels } = quantizedRgba(d, 8, 8);
+    expect([...pixels.slice(0, 3)]).toEqual([255, 0, 0]);
+    expect([...pixels.slice(4, 7)]).toEqual([255, 0, 0]);
+  });
+
   it("decodes an obj payload (1 tile 4bpp, 1 pal)", () => {
     const bytes = new Uint8Array([
       1,

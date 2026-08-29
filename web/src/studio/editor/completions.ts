@@ -57,7 +57,7 @@ const GLOBALS: Completion[] = [
     label: "dma",
     type: "function",
     detail:
-      "dma(name, { char =, map =, pal = }) init-only VRAM placement — the payload kind decides the layout, returns the resolved {char,map,pal}; m7 sources take no opts",
+      "dma(name, { char =, map =, pal = }) init-only placement — returns kind-specific bases/next_*; OBJ tile/cells; m7 fixed {char=0,map=0,pal=1,tiles_w,tiles_h}",
   },
   { label: "hdma", type: "function", detail: "hdma(y0,y1,fn) per-scanline hook · HDMA" },
   { label: "scanline", type: "function", detail: "alias of hdma · HDMA" },

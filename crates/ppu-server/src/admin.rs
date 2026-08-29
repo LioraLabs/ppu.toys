@@ -47,6 +47,11 @@ struct FeaturedBody {
     toy_id: Option<String>,
 }
 
+#[derive(serde::Deserialize)]
+struct FeaturedToysBody {
+    toy_ids: Vec<String>,
+}
+
 async fn set_featured(
     State(s): State<AppState>,
     user: AuthUser,
@@ -69,6 +74,45 @@ async fn set_featured(
     }
     sqlx::query("UPDATE settings SET value=? WHERE key='featured_toy'")
         .bind(body.toy_id.unwrap_or_default())
+        .execute(&s.pool)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn set_featured_toys(
+    State(s): State<AppState>,
+    user: AuthUser,
+    Json(body): Json<FeaturedToysBody>,
+) -> AppResult<StatusCode> {
+    require_admin(&user)?;
+    let ids: Vec<_> = body
+        .toy_ids
+        .into_iter()
+        .filter(|id| !id.is_empty())
+        .collect();
+    let unique: std::collections::HashSet<_> = ids.iter().collect();
+    if ids.len() > 5 || unique.len() != ids.len() {
+        return Err(AppError::status(
+            StatusCode::BAD_REQUEST,
+            "choose up to five unique toys",
+        ));
+    }
+    for id in &ids {
+        let published =
+            sqlx::query_as::<_, (i64,)>("SELECT 1 FROM toys WHERE id=? AND state='published'")
+                .bind(id)
+                .fetch_optional(&s.pool)
+                .await?
+                .is_some();
+        if !published {
+            return Err(AppError::status(
+                StatusCode::BAD_REQUEST,
+                "featured toys must be published",
+            ));
+        }
+    }
+    sqlx::query("UPDATE settings SET value=? WHERE key='featured_toys'")
+        .bind(serde_json::to_string(&ids)?)
         .execute(&s.pool)
         .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -155,7 +199,11 @@ async fn overview(State(s): State<AppState>, user: AuthUser) -> AppResult<Json<s
             "warning": used * 10 >= crate::config::MAX_APP_STORAGE * 7
         },
         "featuredToyId": sqlx::query_as::<_, (String,)>("SELECT value FROM settings WHERE key='featured_toy'")
-            .fetch_one(&s.pool).await?.0
+            .fetch_one(&s.pool).await?.0,
+        "featuredToyIds": serde_json::from_str::<Vec<String>>(
+            &sqlx::query_as::<_, (String,)>("SELECT value FROM settings WHERE key='featured_toys'")
+                .fetch_one(&s.pool).await?.0
+        )?
     })))
 }
 
@@ -166,4 +214,5 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/ban", post(ban))
         .route("/admin/ban/{id}", delete(unban))
         .route("/admin/featured", post(set_featured))
+        .route("/admin/featured-toys", post(set_featured_toys))
 }
