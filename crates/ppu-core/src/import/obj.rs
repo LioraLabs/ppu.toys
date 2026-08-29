@@ -173,6 +173,7 @@ fn import_obj_cells8(
             cell_size: 8,
             palettes: fit.palettes,
             char_words,
+            cells: cells.clone(),
         },
         crate::source::SourceMeta {
             width,
@@ -328,6 +329,7 @@ fn import_obj_blocks(
             cell_size,
             palettes: fit.palettes,
             char_words,
+            cells: cells.clone(),
         },
         crate::source::SourceMeta {
             width,
@@ -398,7 +400,7 @@ mod tests {
     fn place_obj_writes_char_words_and_obj_cgram() {
         let (src, _meta) = import_obj_sheet(&two_tile_rgba(), 16, 8, 8, &RemapOptions::default());
         let mut mem = Memory::new();
-        crate::source::place_obj(&src, &mut mem, 0x2000);
+        crate::source::place_obj(&src, &mut mem, 0x2000, 0);
         assert_eq!(mem.vram[0x2000 + 16], 0x00ff);
         assert_eq!(mem.cgram[129], 0x001f);
         assert_eq!(mem.cgram[130], 0x7c00);

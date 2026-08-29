@@ -181,18 +181,39 @@ pub fn import_mode7(
     width: usize,
     height: usize,
 ) -> (crate::source::M7Source, crate::source::SourceMeta) {
+    import_mode7_with_priority(rgba, None, width, height).expect("plain Mode 7 input is valid")
+}
+
+/// Mode 7 import with an optional same-sized black/white EXTBG priority mask.
+/// Mask luminance below 128 selects BG1; 128+ sets pixel bit 7 and selects BG2.
+pub fn import_mode7_with_priority(
+    rgba: &[u8],
+    priority_rgba: Option<&[u8]>,
+    width: usize,
+    height: usize,
+) -> Result<(crate::source::M7Source, crate::source::SourceMeta), String> {
     assert_eq!(
         rgba.len(),
         width * height * 4,
         "rgba buffer/dimensions mismatch"
     );
-    let palette = median_cut(rgba, 255);
+    if priority_rgba.is_some_and(|mask| mask.len() != rgba.len()) {
+        return Err("priority mask dimensions/buffer mismatch".into());
+    }
+    let extbg = priority_rgba.is_some();
+    let palette = median_cut(rgba, if extbg { 127 } else { 255 });
     // Index every pixel: 0 = transparent, palette entry i -> index i+1.
     let mut indexed = vec![0u8; width * height];
     if !palette.is_empty() {
         for (i, px) in rgba.chunks_exact(4).enumerate() {
             if px[3] >= 128 {
                 indexed[i] = nearest_color(&palette, [px[0], px[1], px[2]]) + 1;
+                if priority_rgba.is_some_and(|mask| {
+                    let p = &mask[i * 4..i * 4 + 4];
+                    p[0] as u16 + p[1] as u16 + p[2] as u16 >= 128 * 3
+                }) {
+                    indexed[i] |= 0x80;
+                }
             }
         }
     }
@@ -210,9 +231,9 @@ pub fn import_mode7(
         map_tiles_w: tiles_w as u16,
         map_tiles_h: tiles_h as u16,
     };
-    (
+    Ok((
         crate::source::M7Source {
-            options: crate::source::M7Options::default(),
+            options: crate::source::M7Options { extbg },
             palette: palette_bgr,
             tiles,
             tiles_w: tiles_w as u8,
@@ -225,7 +246,7 @@ pub fn import_mode7(
             report: crate::source::SourceReport::Mode7 { report },
             cells: None,
         },
-    )
+    ))
 }
 
 #[cfg(test)]
@@ -388,6 +409,17 @@ mod tests {
         assert_eq!(report.colors, 1);
         assert_eq!(mem.vram[0] >> 8, 1); // opaque -> palette index 1
         assert_eq!(mem.vram[4] >> 8, 0); // transparent -> index 0
+    }
+
+    #[test]
+    fn extbg_mask_sets_priority_bit_without_changing_transparency() {
+        let rgba = rgba_of(&[[255, 0, 0]; 64]);
+        let mut mask = rgba_of(&[[0, 0, 0]; 64]);
+        mask[4 * 4..5 * 4].copy_from_slice(&[255, 255, 255, 255]);
+        let (src, _) = import_mode7_with_priority(&rgba, Some(&mask), 8, 8).unwrap();
+        assert!(src.options.extbg);
+        assert_eq!(src.tiles[0][0], 1);
+        assert_eq!(src.tiles[0][4], 0x81);
     }
 
     #[test]

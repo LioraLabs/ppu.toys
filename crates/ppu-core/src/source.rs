@@ -7,18 +7,19 @@
 //! Byte layout v1 (little-endian):
 //!
 //! ```text
-//! common:  u8 version=1 | u8 kind (0=bg 1=m7 2=obj 3=sheet)
+//! common:  u8 version=2 | u8 kind (0=bg 1=m7 2=obj 3=sheet)
 //! bg:      u8 bit_depth (2|4|8) | u8 tile_size (8)
 //!          u8 pal_count, per palette: u8 len + len*u16 BGR555
 //!          u16 tile_count, tile_count*(bit_depth*4)*u16 char words (bitplane-packed, tile 0 blank)
 //!          u8 screen_size (0..=3), then n_screens(screen_size)*0x400 u16 tilemap words
-//! m7:      u8 opts_len (0 in v1) + opts_len bytes   <- extensible M7Options block
+//! m7:      u8 opts_len (1 in v2) + u8 extbg
 //!          u8 pal_len + pal_len*u16 BGR555 (flat, CGRAM 0 implicit transparent)
 //!          u16 tile_count (<=256), tile_count*64 chunky 8bpp bytes
 //!          u8 tiles_w (<=128) | u8 tiles_h (<=128), tiles_w*tiles_h map bytes
 //! obj:     u8 cell_size (8|16|32|64)
 //!          u8 pal_count, per palette: u8 len + len*u16 BGR555
 //!          u16 tile_count, tile_count*16 u16 char words (4bpp fixed)
+//!          u16 cell_count, cell_count*(u16 tile|u8 pal|u8 flip flags)
 //! sheet:   u8 bit_depth (2|4|8)                     <- tile size is fixed 8x8
 //!          u8 pal_count, per palette: u8 len + len*u16 BGR555
 //!          u16 tile_count, tile_count*(bit_depth*4)*u16 char words (sheet order,
@@ -36,7 +37,7 @@ use crate::import_m7::Mode7ImportReport;
 use crate::memory::Memory;
 use serde::Serialize;
 
-pub const PAYLOAD_VERSION: u8 = 1;
+pub const PAYLOAD_VERSION: u8 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SourceKind {
@@ -60,11 +61,11 @@ impl std::str::FromStr for SourceKind {
     }
 }
 
-/// Extensible Mode 7 format options. v1 is empty; encoded as a length-prefixed
-/// block so a future EXTBG variant (7bpp color + 1bpp priority in bit 7) only
-/// appends option bytes + bumps PAYLOAD_VERSION — the shape never breaks.
+/// Mode 7 payload options, encoded as a length-prefixed block.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct M7Options {}
+pub struct M7Options {
+    pub extbg: bool,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct BgSource {
@@ -98,6 +99,9 @@ pub struct ObjSource {
     pub palettes: Vec<Vec<u16>>,
     /// 4bpp char words, 16/tile, OBJ name-table order.
     pub char_words: Vec<u16>,
+    /// Source cells in row-major order, retained so Lua can address imported
+    /// animation frames without redoing the importer's dedup/palette mapping.
+    pub cells: Vec<ObjCell>,
 }
 
 /// A tilesheet: chars in row-major sheet order with NO reserved blank tile and
@@ -293,7 +297,10 @@ impl SourcePayload {
                 }
             }
             SourcePayload::M7(s) => {
-                debug_assert!(s.palette.len() <= 255, "m7: palette longer than 255");
+                debug_assert!(
+                    s.palette.len() <= if s.options.extbg { 127 } else { 255 },
+                    "m7: palette exceeds pixel index capacity"
+                );
                 debug_assert!(s.tiles.len() <= 256, "m7: more than 256 tiles");
                 debug_assert!(
                     s.tiles_w <= 128 && s.tiles_h <= 128,
@@ -304,7 +311,8 @@ impl SourcePayload {
                     "m7: map length doesn't match tiles_w*tiles_h"
                 );
                 b.push(1);
-                b.push(0); // opts_len: M7Options is empty in v1 (EXTBG room)
+                b.push(1);
+                b.push(s.options.extbg as u8);
                 b.push(s.palette.len() as u8);
                 for &c in &s.palette {
                     push_u16(&mut b, c);
@@ -334,6 +342,12 @@ impl SourcePayload {
                 push_u16(&mut b, (s.char_words.len() / 16) as u16);
                 for &w in &s.char_words {
                     push_u16(&mut b, w);
+                }
+                push_u16(&mut b, s.cells.len() as u16);
+                for c in &s.cells {
+                    push_u16(&mut b, c.tile);
+                    b.push(c.pal);
+                    b.push(c.flip_x as u8 | ((c.flip_y as u8) << 1));
                 }
             }
             SourcePayload::Sheet(s) => {
@@ -367,7 +381,7 @@ impl SourcePayload {
     pub fn decode(bytes: &[u8]) -> Result<SourcePayload, PayloadError> {
         let mut r = Rd { b: bytes, i: 0 };
         let version = r.u8()?;
-        if version != PAYLOAD_VERSION {
+        if !matches!(version, 1 | PAYLOAD_VERSION) {
             return Err(PayloadError::BadVersion(version));
         }
         let kind = r.u8()?;
@@ -405,13 +419,22 @@ impl SourcePayload {
                 })
             }
             1 => {
-                // v1 options block must be empty; a future EXTBG bumps the
-                // version byte, so nonzero here is an unknown-format error.
                 let opts_len = r.u8()?;
-                if opts_len != 0 {
+                if opts_len > 1 || (version == 1 && opts_len != 0) {
                     return Err(PayloadError::BadParam("m7_options"));
                 }
+                let options = M7Options {
+                    extbg: opts_len == 1
+                        && match r.u8()? {
+                            0 => false,
+                            1 => true,
+                            _ => return Err(PayloadError::BadParam("m7_options")),
+                        },
+                };
                 let pal_len = r.u8()? as usize;
+                if pal_len > if options.extbg { 127 } else { 255 } {
+                    return Err(PayloadError::BadParam("palette"));
+                }
                 let palette = r.u16s(pal_len)?;
                 let tile_count = r.u16()? as usize;
                 if tile_count > 256 {
@@ -431,7 +454,7 @@ impl SourcePayload {
                 }
                 let map = r.bytes(tiles_w as usize * tiles_h as usize)?.to_vec();
                 SourcePayload::M7(M7Source {
-                    options: M7Options::default(),
+                    options,
                     palette,
                     tiles,
                     tiles_w,
@@ -448,10 +471,32 @@ impl SourcePayload {
                 let palettes = r.palettes(8, 15)?;
                 let tile_count = r.u16()? as usize;
                 let char_words = r.u16s(tile_count * 16)?;
+                let cells = if version >= 2 {
+                    let count = r.u16()? as usize;
+                    let mut cells = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        let tile = r.u16()?;
+                        let pal = r.u8()?;
+                        let flags = r.u8()?;
+                        if tile >= 512 || pal >= 8 || flags & !3 != 0 {
+                            return Err(PayloadError::BadParam("obj_cell"));
+                        }
+                        cells.push(ObjCell {
+                            tile,
+                            pal,
+                            flip_x: flags & 1 != 0,
+                            flip_y: flags & 2 != 0,
+                        });
+                    }
+                    cells
+                } else {
+                    Vec::new()
+                };
                 SourcePayload::Obj(ObjSource {
                     cell_size,
                     palettes,
                     char_words,
+                    cells,
                 })
             }
             3 => {
@@ -584,13 +629,13 @@ pub fn place_m7(src: &M7Source, mem: &mut Memory) {
 /// `src` must be decode-valid; an out-of-range struct (too many palettes, or
 /// a palette longer than 15 colors) may alias CGRAM entries outside its
 /// intended band.
-pub fn place_obj(src: &ObjSource, mem: &mut Memory, char_base: u16) {
+pub fn place_obj(src: &ObjSource, mem: &mut Memory, char_base: u16, pal_base: usize) {
     for (i, &w) in src.char_words.iter().enumerate() {
         mem.vram[(char_base as usize + i) & 0x7fff] = w;
     }
     for (pi, p) in src.palettes.iter().enumerate() {
         for (ci, &c) in p.iter().enumerate() {
-            mem.cgram[(128 + pi * 16 + ci + 1) & 0xff] = c;
+            mem.cgram[(128 + (pal_base + pi) * 16 + ci + 1) & 0xff] = c;
         }
     }
 }
@@ -603,6 +648,8 @@ pub struct ConvertOptions {
     pub bit_depth: Option<u8>,
     pub tile_size: Option<u8>,
     pub cell_size: Option<u8>,
+    /// Mode 7: reserve pixel bit 7 for an external black/white priority mask.
+    pub extbg: Option<bool>,
     /// "none" (default) | "bayer" | "diffusion". bg + obj; ignored for m7.
     pub dither: Option<String>,
     /// Dither intensity 0-100 (default 50).
@@ -644,6 +691,18 @@ pub fn convert_source(
     width: u32,
     height: u32,
 ) -> Result<(SourcePayload, SourceMeta), String> {
+    convert_source_with_priority(kind, opts, rgba, width, height, None)
+}
+
+/// [`convert_source`] with an optional same-sized RGBA Mode 7 EXTBG priority mask.
+pub fn convert_source_with_priority(
+    kind: SourceKind,
+    opts: &ConvertOptions,
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    priority_rgba: Option<&[u8]>,
+) -> Result<(SourcePayload, SourceMeta), String> {
     if width == 0 || height == 0 || rgba.len() != (width as usize) * (height as usize) * 4 {
         return Err("imageData dimensions/buffer mismatch".into());
     }
@@ -662,7 +721,20 @@ pub fn convert_source(
             Ok((SourcePayload::Bg(src), meta))
         }
         SourceKind::M7 => {
-            let (src, meta) = crate::import_m7::import_mode7(rgba, width as usize, height as usize);
+            let extbg = opts.extbg.unwrap_or(false);
+            if extbg != priority_rgba.is_some() {
+                return Err(if extbg {
+                    "m7 extbg requires a priority mask".into()
+                } else {
+                    "priority mask requires m7 extbg=true".into()
+                });
+            }
+            let (src, meta) = crate::import_m7::import_mode7_with_priority(
+                rgba,
+                priority_rgba,
+                width as usize,
+                height as usize,
+            )?;
             Ok((SourcePayload::M7(src), meta))
         }
         SourceKind::Obj => {
@@ -740,7 +812,7 @@ mod tests {
         let b = p.encode();
         assert_eq!(SourcePayload::decode(&b).unwrap(), p);
         // version, kind=3, bit_depth, pal_count, pal0 len, color lo/hi ...
-        assert_eq!(&b[..6], &[1, 3, 2, 2, 2, 0x1f]);
+        assert_eq!(&b[..6], &[2, 3, 2, 2, 2, 0x1f]);
         // header(2) + bit_depth(1) + pal block(1 + (1+4) + (1+2) = 9) = 12, then u16 tile_count
         assert_eq!(&b[12..14], &[2, 0]);
         // ...and the payload ENDS with the char words: no screen_size byte, no tilemap.
@@ -789,6 +861,12 @@ mod tests {
             cell_size: 8,
             palettes: vec![vec![0x001f]],
             char_words: vec![0x00ffu16; 2 * 16],
+            cells: vec![crate::import::obj::ObjCell {
+                tile: 1,
+                pal: 0,
+                flip_x: false,
+                flip_y: false,
+            }],
         }
     }
 
@@ -805,9 +883,9 @@ mod tests {
 
     #[test]
     fn payload_self_describes_version_and_kind() {
-        assert_eq!(SourcePayload::Bg(sample_bg()).encode()[..2], [1, 0]);
-        assert_eq!(SourcePayload::M7(sample_m7()).encode()[..2], [1, 1]);
-        assert_eq!(SourcePayload::Obj(sample_obj()).encode()[..2], [1, 2]);
+        assert_eq!(SourcePayload::Bg(sample_bg()).encode()[..2], [2, 0]);
+        assert_eq!(SourcePayload::M7(sample_m7()).encode()[..2], [2, 1]);
+        assert_eq!(SourcePayload::Obj(sample_obj()).encode()[..2], [2, 2]);
     }
 
     #[test]
@@ -822,26 +900,29 @@ mod tests {
         };
         let b = SourcePayload::Bg(s).encode();
         // version, kind, bit_depth, tile_size, pal_count, pal0 len, color lo, hi
-        assert_eq!(&b[..8], &[1, 0, 2, 8, 1, 1, 0x1f, 0x00]);
+        assert_eq!(&b[..8], &[2, 0, 2, 8, 1, 1, 0x1f, 0x00]);
         assert_eq!(&b[8..10], &[1, 0]); // u16 LE tile_count = 1
         assert_eq!(b[10 + 16], 0); // screen_size byte after 8 char words
         assert_eq!(b.len(), 10 + 16 + 1 + 0x400 * 2);
     }
 
     #[test]
-    fn m7_options_block_is_length_prefixed_extbg_room() {
-        // Forward-compat assertion (spec): the byte after the m7 kind is the
-        // options length — a future EXTBG variant appends option bytes there
-        // and bumps PAYLOAD_VERSION, no format break. v1 writes 0.
+    fn m7_options_block_carries_extbg_and_v1_stays_readable() {
         let b = SourcePayload::M7(sample_m7()).encode();
-        assert_eq!(b[2], 0);
-        // and a v1 decoder honestly rejects a nonzero options block
+        assert_eq!(&b[2..4], &[1, 0]);
         let mut evil = b.clone();
-        evil[2] = 1;
-        evil.insert(3, 0xff);
+        evil[3] = 2;
         assert_eq!(
             SourcePayload::decode(&evil),
             Err(PayloadError::BadParam("m7_options"))
+        );
+        let mut v1 = b;
+        v1[0] = 1;
+        v1[2] = 0;
+        v1.remove(3);
+        assert_eq!(
+            SourcePayload::decode(&v1).unwrap(),
+            SourcePayload::M7(sample_m7())
         );
     }
 
@@ -849,8 +930,8 @@ mod tests {
     fn decode_rejects_garbage() {
         assert_eq!(SourcePayload::decode(&[]), Err(PayloadError::Truncated));
         assert_eq!(
-            SourcePayload::decode(&[2, 0]),
-            Err(PayloadError::BadVersion(2))
+            SourcePayload::decode(&[3, 0]),
+            Err(PayloadError::BadVersion(3))
         );
         assert_eq!(
             SourcePayload::decode(&[1, 9]),
@@ -1004,7 +1085,7 @@ mod tests {
     fn place_obj_writes_char_at_base_and_obj_palettes() {
         let s = sample_obj();
         let mut mem = Memory::new();
-        place_obj(&s, &mut mem, 0x2000);
+        place_obj(&s, &mut mem, 0x2000, 0);
         assert_eq!(mem.vram[0x2000], 0x00ff);
         assert_eq!(mem.cgram[129], 0x001f);
         assert_eq!(mem.cgram[1], 0); // BG half untouched
