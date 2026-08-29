@@ -54,10 +54,13 @@ describe("ReadOnlyPlayer", () => {
   const files = [{ name: "main.lua", source: "-- toy" }];
   const sources = [{ name: "sky", payload: new Uint8Array([1, 2, 3]) }];
 
-  it("pushes files then each source into the shared transport on mount", () => {
+  it("pushes sources BEFORE files — setup-stage dma() only sees registered sources", () => {
     render(<ReadOnlyPlayer files={files} sources={sources} />);
     expect(setSources).toHaveBeenCalledWith(files);
     expect(addSource).toHaveBeenCalledWith("sky", sources[0].payload);
+    expect(addSource.mock.invocationCallOrder[0]).toBeLessThan(
+      setSources.mock.invocationCallOrder[0],
+    );
   });
 
   it("renders a canvas and no editing controls", () => {

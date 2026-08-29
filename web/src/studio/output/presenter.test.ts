@@ -61,6 +61,7 @@ function workingGl(): WebGLRenderingContext & { _lost: boolean } {
     linkProgram: () => {},
     getProgramParameter: () => !gl._lost,
     getProgramInfoLog: () => "",
+    bindAttribLocation: () => {},
     useProgram: () => {},
     createBuffer: () => ({}),
     bindBuffer: () => {},
@@ -163,6 +164,62 @@ describe("Presenter — a WebGL failure is non-fatal", () => {
     // null log and forced the Canvas2D fallback even on healthy GPUs.
     const p2 = new Presenter();
     expect(p2.init(canvas)).toBe(true);
+  });
+
+  it("degrades to a persistence-free CRT when FBO support is missing — init still true, crt render still draws", () => {
+    // workingGl has no framebuffer API at all: setupPhosphor must fail inside
+    // its own guard without demoting the context to Canvas2D.
+    const gl = workingGl();
+    let draws = 0;
+    Object.assign(gl, {
+      activeTexture: () => {},
+      texImage2D: () => {},
+      drawArrays: () => {
+        draws++;
+      },
+      viewport: () => {},
+    });
+    const p = new Presenter();
+    expect(p.init(fakeCanvas(gl))).toBe(true);
+    const fb = new Uint8ClampedArray(256 * 224 * 4);
+    expect(() => p.render(fb, { crt: true, scanline: false, pixelGrid: false })).not.toThrow();
+    expect(draws).toBe(1); // present pass only, no feedback pass
+  });
+
+  it("runs the phosphor feedback pass before presenting when FBOs work", () => {
+    const gl = workingGl();
+    let draws = 0;
+    let fbosMade = 0;
+    Object.assign(gl, {
+      FRAMEBUFFER: 10,
+      COLOR_ATTACHMENT0: 11,
+      FRAMEBUFFER_COMPLETE: 12,
+      uniform3f: () => {},
+      activeTexture: () => {},
+      texImage2D: () => {},
+      viewport: () => {},
+      drawArrays: () => {
+        draws++;
+      },
+      createFramebuffer: () => {
+        fbosMade++;
+        return {};
+      },
+      bindFramebuffer: () => {},
+      framebufferTexture2D: () => {},
+      checkFramebufferStatus: () => 12,
+      deleteFramebuffer: () => {},
+    });
+    const p = new Presenter();
+    expect(p.init(fakeCanvas(gl))).toBe(true);
+    expect(fbosMade).toBe(2); // ping-pong pair
+    const fb = new Uint8ClampedArray(256 * 224 * 4);
+    p.render(fb, { crt: true, scanline: false, pixelGrid: false });
+    expect(draws).toBe(2); // decay pass + present pass
+    draws = 0;
+    p.render(fb, { crt: false, scanline: false, pixelGrid: false });
+    expect(draws).toBe(1); // crt off: single present draw
+    expect(() => p.dispose()).not.toThrow();
   });
 
   it("renders without throwing in the 2D fallback", () => {

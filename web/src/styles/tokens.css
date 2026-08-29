@@ -5,24 +5,24 @@
 
 :root {
   /* Backgrounds */
-  --bg: #0e1015;
-  --panel: #101218;
-  --panel2: #12141a;
+  --bg: #0b0d13;
+  --panel: #12151e;
+  --panel2: #10131b;
   --editor: #0d0f14;
   --sunken: #0b0d12;
-  --raised: #1d2129;
+  --raised: #202532;
   --chipbg: #1d2129;
   --hover: #171a21;
 
   /* Lines */
-  --line: #262a33;
-  --line2: #1e222b;
+  --line: #2a3040;
+  --line2: #202532;
 
   /* Text */
   --txt: #e7e9ef;
   --txt2: #c8ccd6;
   --mid: #9aa1ae;
-  --dim: #6b7280;
+  --dim: #858d9c;
   --dim2: #5f6573;
   --faint: #3f4654;
 

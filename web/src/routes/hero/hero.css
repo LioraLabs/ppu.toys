@@ -1,0 +1,48 @@
+.hero3d {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 5 / 4;
+}
+.hero3d-link {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.hero3d-mount {
+  width: 100%;
+  height: 100%;
+}
+.hero3d-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+/* Same pill language as the old .hero-status badge. */
+.hero3d-caption {
+  position: absolute;
+  right: 12px;
+  bottom: 2px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 90%;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel2);
+  color: var(--mid);
+  font: 600 0.65rem var(--font-mono);
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.hero3d-caption i {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 10px var(--green);
+}

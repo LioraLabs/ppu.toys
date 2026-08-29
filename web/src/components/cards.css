@@ -1,32 +1,50 @@
 .wall-grid {
   display: grid;
-  gap: 1rem;
-  padding: 1.5rem;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: clamp(1rem, 2vw, 1.5rem);
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 1.5rem clamp(1.25rem, 4vw, 3rem) 3rem;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
   font-family: var(--font-sans);
 }
 .toy-card {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 12px;
   overflow: hidden;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease;
+}
+.toy-card:hover {
+  border-color: color-mix(in srgb, var(--orange) 50%, var(--line));
+  transform: translateY(-4px);
+  box-shadow: 0 18px 38px rgba(0, 0, 0, 0.2);
 }
 .toy-card-clip {
   display: block;
   aspect-ratio: 256 / 224;
   background: #000;
+  overflow: hidden;
 }
 .toy-card-video {
   width: 100%;
   height: 100%;
   object-fit: contain;
   image-rendering: pixelated;
+  transition: transform 240ms ease;
+}
+.toy-card:hover .toy-card-video {
+  transform: scale(1.025);
 }
 .toy-card-meta {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.5rem 0.7rem;
+  min-height: 68px;
+  padding: 0.7rem 0.85rem;
 }
 .toy-card-text {
   display: flex;
@@ -64,6 +82,13 @@
   color: var(--txt2);
   cursor: pointer;
   font: inherit;
+  min-width: 44px;
+  min-height: 44px;
+  justify-content: center;
+  border-radius: 8px;
+}
+.heart:hover {
+  background: var(--hover);
 }
 .heart--on {
   color: var(--red);
@@ -71,4 +96,13 @@
 .heart-icon {
   font-size: 1.05rem;
   line-height: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .toy-card,
+  .toy-card-video {
+    transition: none;
+  }
+  .toy-card:hover {
+    transform: none;
+  }
 }

@@ -28,14 +28,16 @@ export function ReadOnlyPlayer({
   const displayRef = useRef<HTMLDivElement>(null);
   const [forceCanvas2d, setForceCanvas2d] = useState(false);
 
-  // Push the toy's program into the shared core: files first, then each M10
-  // source payload by name (mirrors sketches/restore.ts, minus demo replay).
-  // Skip when no core is loaded (e.g. a fixture never calls initCore) so the
-  // frame renders blank instead of throwing on the unset singleton.
+  // Push the toy's program into the shared core: source payloads FIRST, then
+  // the files — setSources runs the setup stage, whose dma() placements only
+  // see sources already registered (same order as the Studio's restore path
+  // and the core's own tests). Skip when no core is loaded (e.g. a fixture
+  // never calls initCore) so the frame renders blank instead of throwing on
+  // the unset singleton.
   useEffect(() => {
     if (!ppuCore) return;
-    transport.setSources(files);
     for (const s of sources) transport.addSource(s.name, s.payload);
+    transport.setSources(files);
   }, [files, sources]);
 
   // Init the presenter, size to the container, paint the shared frame; repaint

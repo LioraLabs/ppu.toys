@@ -9,6 +9,9 @@ import { makeWallCard } from "../fixtures";
 
 vi.mock("../api/apiClient", () => ({ getWall: vi.fn() }));
 vi.mock("../api/session", () => ({ useSession: () => ({ user: null, loading: false }) }));
+// The 3D hero has its own test (hero/HeroTV.test.tsx); here it would drag
+// three.js + transport into every Wall test via the lazy chunk.
+vi.mock("./hero/HeroTV", () => ({ default: () => null }));
 import { getWall } from "../api/apiClient";
 
 function card(id: string): WallCard {
