@@ -178,7 +178,11 @@ fn fixture() -> (LineTable, Memory) {
     }
 
     // ── Registers ────────────────────────────────────────────────────────
-    let mut def = LineTableRow::default(); // Mode 1, brightness 15
+    let mut def = LineTableRow {
+        // Power-on designates nothing; this fixture wants every layer drawn.
+        tm: 0x1f,
+        ..LineTableRow::default() // Mode 1, brightness 15
+    };
     def.bg[0].char_base = 0x1000;
     def.bg[0].screen_size = 1; // 64x32
     def.bg[0].scroll_x = -5.0; // negative wrap
@@ -274,8 +278,11 @@ fn mode3_renders_8bpp_bg1_over_4bpp_bg2_through_transparency() {
     }
     mem.vram[0x0400] = entry(1, 1, false, false, false); // BG2 map(0,0) -> tile 1, pal 1
 
-    let mut def = LineTableRow::default();
-    def.mode = 3;
+    let mut def = LineTableRow {
+        tm: 0x1f, // power-on designates nothing; this fixture wants every layer drawn
+        mode: 3,
+        ..LineTableRow::default()
+    };
     def.bg[0].char_base = 0x1000;
     def.bg[0].map_base = 0x0000;
     def.bg[1].char_base = 0x2000;

@@ -39,8 +39,9 @@ export const REG = {
   COLDATA: 0x2132,
 } as const;
 
-/** Power-on defaults (core LineTableRow::default): TM = all five layers, rest 0. */
-const POWER_ON = new Map<number, number>([[REG.TM, 0x1f]]);
+/** Power-on defaults (core LineTableRow::default): every compose register is
+ *  0 — both screens start empty, a layer draws once it is designated. */
+const POWER_ON = new Map<number, number>();
 
 /** What a control displays for `addr`: the live value the core reports, else
  *  the power-on default (a core may omit registers — the test stub reports

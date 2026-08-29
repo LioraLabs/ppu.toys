@@ -375,10 +375,10 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     ctx.set_global("mosaic", 0).unwrap();
     ctx.set_global("direct_color", false).unwrap();
     ctx.set_global("force_blank", false).unwrap();
-    // TM/TS main/sub screen designation ($212C/$212D). Playground defaults:
-    // all five layers on the main screen (like brightness=15/visible=true),
-    // nothing on the sub screen (authentic power-on).
-    ctx.set_global("TM", 0x1f).unwrap();
+    // TM/TS main/sub screen designation ($212C/$212D). Both screens start
+    // EMPTY (authentic power-on): a layer draws only once you designate it,
+    // so a layer you never set up can never leak whatever VRAM holds.
+    ctx.set_global("TM", 0x00).unwrap();
     ctx.set_global("TS", 0x00).unwrap();
 
     // Window-mask registers ($2123-$212F). Power-on: all zero -> no window
@@ -587,7 +587,7 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     screen.set(ctx, "sub", Table::new(&ctx)).unwrap();
     ctx.set_global("screen", screen).unwrap();
     ctx.set_global("__screen_base", Table::new(&ctx)).unwrap();
-    sync_screen(ctx, 0x1f, 0x00); // decode of the playground power-on TM/TS
+    sync_screen(ctx, 0x00, 0x00); // decode of the power-on TM/TS (both empty)
 
     // Friendly window namespace over WH0-3, W12SEL/W34SEL/WOBJSEL, WBGLOG/
     // WOBJLOG, TMW/TSW. Same baseline change-detection pattern as `color`/

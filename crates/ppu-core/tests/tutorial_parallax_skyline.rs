@@ -39,6 +39,13 @@ function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15
 
+  -- DESIGNATE THE LAYERS. Both screens power on EMPTY: TM (screen.main) says
+  -- which layers reach the main screen — the picture — and TS (screen.sub)
+  -- which reach the sub screen, the one colour math blends in (stage-lights,
+  -- lesson 6). A layer you never designate never draws, so a layer you never
+  -- set up can never rasterize whatever VRAM happens to hold.
+  screen.main.bg1 = true; screen.main.bg2 = true
+
   -- Point each layer at the VRAM the setup stage filled. In mode 1, bg1
   -- draws over bg2, so the near image went to bg1 and is transparent
   -- (alpha 0) wherever the sky and far towers must show through.

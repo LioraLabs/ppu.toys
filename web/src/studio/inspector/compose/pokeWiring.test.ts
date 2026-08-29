@@ -49,11 +49,11 @@ describe("poke wiring", () => {
 
   it("a matrix-cell toggle lands the friendly field line in pokes.lua", () => {
     // the handler: read live TM (power-on fallback), flip one bit, poke the friendly field
-    const tm = liveReg([], REG.TM); // stub core omits TM -> 0x1f
+    const tm = liveReg([], REG.TM); // stub core omits TM -> 0x00
     poke(fieldPoke(toggleDesignation("screen.main.bg3", REG.TM, tm, 2)));
-    expect(pokesSource()).toContain("  screen.main.bg3 = false -- $212C");
+    expect(pokesSource()).toContain("  screen.main.bg3 = true -- $212C");
     expect(currentPokes(openSketchStore.state())).toEqual([
-      { lvalue: "screen.main.bg3", expr: "false", note: "$212C" },
+      { lvalue: "screen.main.bg3", expr: "true", note: "$212C" },
     ]);
   });
 
@@ -111,7 +111,7 @@ describe("poke wiring", () => {
   });
 
   it("the HexPoke path (poke + regPoke) evicts too — hex-editing a register wins over stale fields", () => {
-    poke(fieldPoke(toggleDesignation("screen.main.bg3", REG.TM, 0x1f, 2)));
+    poke(fieldPoke(toggleDesignation("screen.main.bg3", REG.TM, 0x00, 2)));
     poke(regPoke(REG.TM, 0x13)); // what HexPoke commits
     expect(currentPokes(openSketchStore.state())).toEqual([
       { lvalue: "TM", expr: "0x13", note: "$212C" },
@@ -188,10 +188,10 @@ describe("scanline dialect wiring", () => {
   });
 
   it("a non-numeric field has no curve, so it stays a frame-wide poke", () => {
-    // TM power-on is 0x1f (all layers on), so toggling bit 0 clears BG1.
-    compositorWrite([toggleDesignation("screen.main.bg1", REG.TM, 0x1f, 0)], 112);
+    // TM power-on is 0x00 (nothing designated), so toggling bit 0 sets BG1.
+    compositorWrite([toggleDesignation("screen.main.bg1", REG.TM, 0x00, 0)], 112);
     const p = currentPokes(openSketchStore.state())[0];
-    expect(p.expr).toBe("false");
+    expect(p.expr).toBe("true");
     expect(p.note).not.toContain("per-scanline");
   });
 
@@ -273,7 +273,7 @@ describe("pokeMatchesLive (solid/hollow marker decision)", () => {
   });
 
   it("true against the power-on default when the core omits the register", () => {
-    expect(pokeMatchesLive({ lvalue: "TM", expr: "0x1f" }, [])).toBe(true);
+    expect(pokeMatchesLive({ lvalue: "TM", expr: "0x00" }, [])).toBe(true);
   });
 
   it("false when a script write overrode the poke (hollow)", () => {
@@ -292,9 +292,9 @@ describe("pokeMatchesLive (solid/hollow marker decision)", () => {
   });
 
   it("friendly field poke: solid against the power-on default, hollow after a script override", () => {
-    expect(pokeMatchesLive({ lvalue: "screen.main.bg3", expr: "true" }, [])).toBe(true); // TM=0x1f
+    expect(pokeMatchesLive({ lvalue: "screen.main.bg3", expr: "false" }, [])).toBe(true); // TM=0x00
     expect(
-      pokeMatchesLive({ lvalue: "screen.main.bg3", expr: "true" }, [rv(REG.TM, "TM", 0x1b)]),
+      pokeMatchesLive({ lvalue: "screen.main.bg3", expr: "false" }, [rv(REG.TM, "TM", 0x04)]),
     ).toBe(false);
   });
 });

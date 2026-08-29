@@ -168,7 +168,11 @@ fn fixture() -> (ppu_core::LineTable, Memory) {
     };
 
     // ── Registers / HDMA ───────────────────────────────────────────────────
-    let mut def = LineTableRow::default(); // Mode 1, brightness 15
+    let mut def = LineTableRow {
+        // Power-on designates nothing; this fixture wants every layer drawn.
+        tm: 0x1f,
+        ..LineTableRow::default() // Mode 1, brightness 15
+    };
     def.bg[0].char_base = 0x4000;
     def.bg[0].map_base = 0x7000;
     def.bg[1].char_base = 0x4000;

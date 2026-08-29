@@ -34,6 +34,7 @@ local vista = dma("vista", { char = 0x1000, map = 0x0000 })
 function frame(t, f)
   apply_pokes()
   mode = 3                       -- 8bpp BG1: one full-colour scene to transition over
+  screen.main.bg1 = true         -- ...designated onto the main screen (TM)
   bg[1].char_base = vista.char
   bg[1].map_base = vista.map
   bg[1].mosaic = true            -- enabling is free: size 0 below means "off"

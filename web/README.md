@@ -105,7 +105,10 @@ The authoring surface is two-tier by design:
   Fields are per-bit-group (`screen.main.bg1 = true`, `color.op = "add"`,
   `win.w1.lo = 40`), so a write moves only the bits it names; the core packs
   them into the real registers (`crates/ppu-core/src/lua.rs`), preserving
-  neighboring bits. The bundled demos author compositing this way.
+  neighboring bits. The bundled demos author compositing this way. **Both
+  screens power on empty** (`TM`/`TS` = 0, `LineTableRow::default`): a layer
+  draws only where a toy designates it, so a layer the toy never set up can
+  never rasterize whatever VRAM happens to hold.
 - **Raw hardware mnemonics** (`TM = 0x03`, `CGADSUB = 0x41`, `WH0 = 10`, …)
   are the kept low-level layer: whole-register byte writes, always valid,
   never going away — they are the pedagogy bridge to real SNES docs and the

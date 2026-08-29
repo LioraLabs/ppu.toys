@@ -83,7 +83,13 @@ fn size_pair_fixture() -> (ppu_core::LineTable, Memory) {
         ..Obj::default()
     }; // 64x64
     (
-        LineTableBuilder::new(LineTableRow::default()).build(HEIGHT),
+        LineTableBuilder::new(LineTableRow {
+            // Power-on designates nothing; these register-level tests are about
+            // what the layers draw, so put all five on the main screen.
+            tm: 0x1f,
+            ..LineTableRow::default()
+        })
+        .build(HEIGHT),
         mem,
     )
 }
@@ -159,7 +165,13 @@ fn storm_fixture(rotate: bool) -> (ppu_core::LineTable, Memory) {
         mem.oam_addr = 8 << 1; // obj_first_sprite(16) = 8 -> eval starts at index 8
     }
     (
-        LineTableBuilder::new(LineTableRow::default()).build(HEIGHT),
+        LineTableBuilder::new(LineTableRow {
+            // Power-on designates nothing; these register-level tests are about
+            // what the layers draw, so put all five on the main screen.
+            tm: 0x1f,
+            ..LineTableRow::default()
+        })
+        .build(HEIGHT),
         mem,
     )
 }

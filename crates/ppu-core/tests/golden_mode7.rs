@@ -62,7 +62,12 @@ fn track() -> Memory {
 ///                        bg[1].scroll.y = (t*80)*d
 fn floor_framebuffer() -> Vec<u8> {
     let t = 1.0f32;
-    let mut b = LineTableBuilder::new(LineTableRow::default());
+    let mut b = LineTableBuilder::new(LineTableRow {
+        // Power-on designates nothing; these register-level tests are about
+        // what the layers draw, so put all five on the main screen.
+        tm: 0x1f,
+        ..LineTableRow::default()
+    });
     b.hdma(96, 223, move |y, r| {
         let d = 64.0 / (y as f32 - 95.0);
         r.m7.a = d;

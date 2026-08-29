@@ -34,6 +34,9 @@ dma("hero", { char = 0x6000 })
 function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15
+  -- Both screens power on EMPTY: a layer draws only where you designate it.
+  -- screen.main is TM (what you see), screen.sub is TS (the colour-math layer).
+  screen.main.bg1 = true; screen.main.bg2 = true; screen.main.obj = true
   bg[1].char_base = 0x1000; bg[1].map_base = 0x0000
   bg[2].char_base = 0x4000; bg[2].map_base = 0x0800
   bg[1].scroll.x = t * SPEED
@@ -65,6 +68,7 @@ dma("track")
 function frame(t, f)
   apply_pokes()
   mode = 7; brightness = 15
+  screen.main.bg1 = true    -- the Mode 7 plane is BG1; both screens start empty
   hdma(96, 223, function(y)
     local d = 64 / (y - 95)
     m7.a, m7.d = d, d
@@ -88,6 +92,7 @@ end
 function frame(t, f)
   apply_pokes()
   mode = 2; brightness = 15
+  screen.main.bg1 = true    -- BG1 only: BG3 here is the offset TABLE, not a picture
   bg[1].char_base = 0x1000; bg[1].map_base = 0x0000
   bg[3].map_base = 0x0800
   for col = 0, 31 do
@@ -102,6 +107,7 @@ dma("gradient", { char = 0x1000, map = 0x0000 })
 function frame(t, f)
   apply_pokes()
   mode = 3; brightness = 15
+  screen.main.bg1 = true
   bg[1].char_base = 0x1000; bg[1].map_base = 0x0000
 end
 "#;
@@ -113,6 +119,7 @@ dma("mode0_bg1", { char = 0x1000, map = 0x0000, pal = 0 })
 dma("mode0_bg2", { char = 0x2000, map = 0x0400, pal = 32 })
 function frame(t, f)
   mode = 0; brightness = 15
+  screen.main.bg1 = true; screen.main.bg2 = true
   bg[1].char_base = 0x1000; bg[1].map_base = 0x0000
   bg[2].char_base = 0x2000; bg[2].map_base = 0x0400
 end
@@ -127,7 +134,6 @@ function frame(t, f)
   bg[1].char_base = 0x1000; bg[1].map_base = 0x0000   -- the glass panel (main only)
   bg[2].char_base = 0x2000; bg[2].map_base = 0x0800   -- scene, on main AND sub
   screen.main.bg1 = true; screen.main.bg2 = true      -- panel + scene on the main screen
-  screen.main.bg3 = false; screen.main.bg4 = false; screen.main.obj = false  -- power-on defaults ALL layers on: drop the rest
   screen.sub.bg2 = true    -- scene on the sub screen -> the addend under the glass
   color.op = "add"; color.half = true; color.on.bg1 = true  -- ½-add math on BG1 (the glass)
   color.addend = "sub"     -- addend = subscreen (not fixed colour)
@@ -141,8 +147,6 @@ function frame(t, f)
   mode = 1; brightness = 15
   bg[1].char_base = 0x1000; bg[1].map_base = 0x0000
   screen.main.bg1 = true    -- BG1 only on the main screen
-  screen.main.bg2 = false; screen.main.bg3 = false   -- power-on defaults ALL layers on: drop the rest
-  screen.main.bg4 = false; screen.main.obj = false
   win.color.w1 = true       -- COLOR window follows window 1
   win.color.combine = "OR"  -- COLOR window logic = OR
   -- clip-to-black = 01 (outside the window -> black); raw on purpose: CGWSEL
@@ -171,8 +175,6 @@ function frame(t, f)
   mode = 1; brightness = 15
   bg[1].char_base = 0x1000; bg[1].map_base = 0x0000
   screen.main.bg1 = true    -- BG1 only on the main screen
-  screen.main.bg2 = false; screen.main.bg3 = false   -- power-on defaults ALL layers on: drop the rest
-  screen.main.bg4 = false; screen.main.obj = false
   color.op = "add"; color.on.bg1 = true   -- add at full strength (half stays off)
   color.addend = "fixed"    -- addend = the fixed colour, not the sub screen
   color.fixed = rgb(120, 60, 0)  -- warm glow added to every BG1 pixel
@@ -186,7 +188,7 @@ function frame(t, f)
   mode = 0; brightness = 15
   bg[1].char_base = 0x1000; bg[1].map_base = 0x0000
   bg[2].char_base = 0x2000; bg[2].map_base = 0x0400
-  TM = 0x01   -- BG1 only; BG2 is masked off the main screen
+  TM = 0x01   -- raw TM: designate BG1 alone; BG2 never reaches the main screen
 end
 "#;
 
@@ -206,6 +208,7 @@ const SPRITE_STORM_SRC: &str = r#"-- ppu.toys :: sprite-storm (authentic OBJ fli
 function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15
+  screen.main.obj = true     -- sprites only; no BG is designated
   obj.char_base = 0x4000
   obj.size_sel = 7           -- small 16x32 (non-square), large 32x32
   -- solid 4bpp OBJ tiles (index 1) so large sprites fill fully
@@ -231,6 +234,7 @@ dma("ramp", { char = 0x1000, map = 0x0000 })
 function frame(t, f)
   apply_pokes()
   mode = 3; brightness = 15
+  screen.main.bg1 = true
   bg[1].char_base = 0x1000; bg[1].map_base = 0x0000
   bg[1].mosaic = true
   mosaic = floor(f / 8) % 16
@@ -241,6 +245,8 @@ const EXTBG_SRC: &str = r#"-- ppu.toys :: mode7-extbg (per-pixel floor priority;
 function frame(t, f)
   apply_pokes()
   mode = 7; brightness = 15
+  -- EXTBG splits the plane in two: BG1 is the low-priority half, BG2 the high.
+  screen.main.bg1 = true; screen.main.bg2 = true; screen.main.obj = true
   m7.a, m7.d = 1, 1
   m7.extbg = true
   cgram[1] = rgb(216, 64, 64)          -- Mode 7 floor colour 1 = red
@@ -273,6 +279,7 @@ const DIRECT_SRC: &str = r#"-- ppu.toys :: direct-color (8bpp Mode 7, CGRAM bypa
 function frame(t, f)
   apply_pokes()
   mode = 7; brightness = 15
+  screen.main.bg1 = true
   m7.a, m7.d = 1, 1
   direct_color = true
   local done = {}
@@ -369,6 +376,7 @@ local ANIM = {
 function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15
+  screen.main.bg1 = true; screen.main.bg2 = true   -- both screens power on empty
 
   -- BG1 = the tilesheet. The dma placed its chars and palette; the map geometry
   -- is all yours -- and BG1 rasterizes at map_base 0 by default, so say what

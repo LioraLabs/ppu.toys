@@ -99,7 +99,13 @@ fn fixture() -> (ppu_core::LineTable, Memory) {
         ..Obj::default()
     };
 
-    let lt = LineTableBuilder::new(LineTableRow::default()).build(HEIGHT);
+    let lt = LineTableBuilder::new(LineTableRow {
+        // Power-on designates nothing; these register-level tests are about
+        // what the layers draw, so put all five on the main screen.
+        tm: 0x1f,
+        ..LineTableRow::default()
+    })
+    .build(HEIGHT);
     (lt, mem)
 }
 

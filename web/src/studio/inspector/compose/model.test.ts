@@ -61,7 +61,7 @@ import {
 const read =
   (vals: Record<number, number>): ReadReg =>
   (addr) =>
-    vals[addr] ?? (addr === REG.TM ? 0x1f : 0);
+    vals[addr] ?? 0;
 
 const rv = (addr: number, name: string, value: number): RegisterView => ({
   addr,
@@ -76,7 +76,7 @@ describe("liveReg", () => {
   });
 
   it("falls back to power-on defaults when the core omits the register (stub)", () => {
-    expect(liveReg([], REG.TM)).toBe(0x1f);
+    expect(liveReg([], REG.TM)).toBe(0);
     expect(liveReg([], REG.TS)).toBe(0);
     expect(liveReg([], REG.CGADSUB)).toBe(0);
   });
@@ -427,7 +427,7 @@ describe("FIELD_SPECS + friendly pokeMatchesLive", () => {
     expect(
       pokeMatchesLive({ lvalue: "color.op", expr: '"sub"' }, [rv(REG.CGADSUB, "CGADSUB", 0x80)]),
     ).toBe(true);
-    expect(pokeMatchesLive({ lvalue: "screen.main.bg2", expr: "true" }, [])).toBe(true); // power-on TM=0x1f
+    expect(pokeMatchesLive({ lvalue: "screen.main.bg2", expr: "false" }, [])).toBe(true); // power-on TM=0x00
     expect(
       pokeMatchesLive({ lvalue: "color.region", expr: '"inside"' }, [
         rv(REG.CGWSEL, "CGWSEL", 0x12),
@@ -449,7 +449,7 @@ describe("FIELD_SPECS + friendly pokeMatchesLive", () => {
     expect(
       pokeMatchesLive({ lvalue: "color.op", expr: '"sub"' }, [rv(REG.CGADSUB, "CGADSUB", 0x00)]),
     ).toBe(false);
-    expect(pokeMatchesLive({ lvalue: "screen.main.bg1", expr: "false" }, [])).toBe(false); // TM=0x1f has bg1 on
+    expect(pokeMatchesLive({ lvalue: "screen.main.bg1", expr: "true" }, [])).toBe(false); // TM=0x00 has bg1 off
   });
 
   it("numeric fields compare by value across hex/decimal spellings", () => {
@@ -527,7 +527,7 @@ describe("preview buffers", () => {
 
 describe("emission/decode invariants", () => {
   const sample = (): FieldWrite[] => [
-    toggleDesignation("screen.main.bg1", REG.TM, 0x1f, 0),
+    toggleDesignation("screen.main.bg1", REG.TM, 0x00, 0),
     toggleDesignation("screen.sub.obj", REG.TS, 0, 4),
     toggleDesignation("color.on.bg3", REG.CGADSUB, 0, 2),
     toggleDesignation("color.on.backdrop", REG.CGADSUB, 0, 5),
@@ -711,9 +711,9 @@ describe("regeneratePokes", () => {
     expect(roundTripped).not.toEqual([{ lvalue: "CGWSEL", expr: "0xff", note: "$2130" }]);
   });
 
-  it("friendly->raw folds over TM's non-zero power-on default", () => {
-    expect(regeneratePokes([{ lvalue: "screen.main.bg1", expr: "false" }], "raw")).toEqual([
-      { lvalue: "TM", expr: "0x1e", note: "$212C" },
+  it("friendly->raw folds over TM's empty power-on default", () => {
+    expect(regeneratePokes([{ lvalue: "screen.main.bg1", expr: "true" }], "raw")).toEqual([
+      { lvalue: "TM", expr: "0x01", note: "$212C" },
     ]);
   });
 

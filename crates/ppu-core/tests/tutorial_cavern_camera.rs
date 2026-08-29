@@ -62,6 +62,7 @@ local ANIM_HZ = 6                    -- lava steps per second
 function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15
+  screen.main.bg1 = true    -- the level, alone on the main screen (TM)
 
   -- Step 2: geometry is YOURS. dma placed chars and palette, nothing more;
   -- every register below is you telling the chip how to read the tilemap

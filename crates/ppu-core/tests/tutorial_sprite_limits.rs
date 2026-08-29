@@ -21,6 +21,7 @@ const MAIN_SRC: &str = r#"-- ppu.toys tutorial 10/10 :: sprite-limits — why 90
 function frame(t, f)
   apply_pokes()
   mode = 1; brightness = 15
+  screen.main.obj = true   -- sprites only: no BG is designated (TM)
   local ROTATE = true   -- flip to false: the SAME sprites vanish forever
   obj.char_base = 0x4000
   obj.size_sel = 1      -- OBSEL pair 1: small = 8x8, large = 32x32

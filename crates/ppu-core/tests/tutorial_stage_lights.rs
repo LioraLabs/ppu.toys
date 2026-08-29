@@ -31,8 +31,6 @@ function frame(t, f)
   mode = 1; brightness = 15
   bg[1].char_base = stage.char; bg[1].map_base = stage.map
   screen.main.bg1 = true    -- the stage, alone on the main screen
-  screen.main.bg2 = false; screen.main.bg3 = false   -- power-on defaults ALL layers on: drop the rest
-  screen.main.bg4 = false; screen.main.obj = false
 
   -- The COLOUR window follows BOTH windows. XOR = lit where exactly ONE beam is:
   -- watch the dark lens where the beams cross.
