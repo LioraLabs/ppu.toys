@@ -25,6 +25,10 @@ recipe build
     seal rust:tools server:src
     cook "../../target/debug/ppu-server" { cargo build -p ppu-server } local
 
+recipe release
+    seal rust:tools server:src
+    cook "../../target/release/ppu-server" { cargo build --release --locked -p ppu-server } local
+
 # ── TEST: cargo test for the crate. `: build` is a deliberate order-only fence
 #    (tests recompile the crate themselves and never read build's stamp), kept
 #    so compile errors surface under `build` first and the two cargo invocations

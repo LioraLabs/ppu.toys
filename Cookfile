@@ -38,7 +38,7 @@
 #   cook db-nuke     delete the ephemeral db
 #
 #   ── deploy/ops (production operations) ────────────────────────────────────
-#   cook deploy.ship / rollback / health / logs
+#   cook ship / deploy.rollback / deploy.health / deploy.logs
 #
 #   ── verify ─────────────────────────────────────────────────────────────────
 #   cook test-core   cargo test (core unit + golden framebuffer compare)
@@ -131,6 +131,10 @@ recipe web: wasm "web:build"
 #    fence (it produces nothing the web build reads) kept so `cook build` compiles
 #    the backend too.
 recipe build: web server.build cli
+
+# Build locally with Cook's cache, then atomically replace production.
+chore ship: web server.release
+    deploy/ship.sh
 
 # ── DEV SERVER: long-running, interactive. Builds the WASM core first — the app
 #    has no mock fallback, so it can't render without it.

@@ -1,19 +1,12 @@
 # Cookfile for deploy/ production operations, imported by the root Cookfile as
-# `deploy` (so: cook deploy.ship / deploy.rollback / deploy.health / deploy.logs).
+# `deploy` (so: cook deploy.rollback / deploy.health / deploy.logs).
 #
-# These are thin, env-driven wrappers around production operations. CI
-# (.github/workflows/deploy.yml) owns the native x86_64 build and shipping;
-# `deploy.ship` only triggers that workflow. Discord, Cloudflare, R2, and GitHub
-# secret setup is manual dashboard work. Database restore is an operator procedure
-# and is not automated here.
+# These are thin, env-driven wrappers around production operations. `cook ship`
+# at the workspace root builds and deploys. Discord, Cloudflare, R2, and GitHub
+# secret setup is manual dashboard work. Database restore is an operator procedure.
 #
 # Guards fail LOUDLY on missing env (`${VAR:?message}`) rather than running a
 # broken ssh/curl — a missing input should never look like success.
-
-# ── SHIP: trigger the CI deploy (build x86_64 + ship + restart runs on GitHub).
-#    Requires `gh` auth and the workflow present on the default branch.
-chore ship
-    gh workflow run deploy.yml
 
 # ── ROLLBACK: swap back to the previous binary kept by the last deploy. Needs
 #    DEPLOY_HOST + DEPLOY_USER (same values as the GitHub deploy secrets).
