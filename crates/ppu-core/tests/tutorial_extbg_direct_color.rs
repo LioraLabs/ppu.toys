@@ -21,6 +21,9 @@ const MAIN_SRC: &str = r#"-- ppu.toys tutorial 9/10 :: extbg-direct-color — Mo
 function frame(t, f)
   apply_pokes()
   mode = 7; brightness = 15
+  -- EXTBG splits the ONE plane into two designatable halves: BG1 carries the
+  -- low-priority pixels, BG2 the high ones — so both go on the main screen.
+  screen.main.bg1 = true; screen.main.bg2 = true; screen.main.obj = true
   m7.a, m7.d = 1, 1
   m7.extbg = true                        -- bit 7 = priority (SETINI.6)
   direct_color = true                    -- low 7 bits = colour (CGWSEL.0)

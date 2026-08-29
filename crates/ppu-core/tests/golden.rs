@@ -7,7 +7,12 @@ const GOLDEN: &str = "tests/fixtures/golden_basic.png";
 /// Hand-authored fixture: three horizontal bands, each a distinct resolved
 /// register state, exercising defaults -> per-line override resolution.
 fn fixture() -> LineTable {
-    let mut b = LineTableBuilder::new(LineTableRow::default());
+    let mut b = LineTableBuilder::new(LineTableRow {
+        // Power-on designates nothing; these register-level tests are about
+        // what the layers draw, so put all five on the main screen.
+        tm: 0x1f,
+        ..LineTableRow::default()
+    });
     b.hdma(0, 73, |_, r| {
         r.mode = 1;
         r.brightness = 4;

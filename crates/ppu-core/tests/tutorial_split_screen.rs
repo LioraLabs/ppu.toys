@@ -44,9 +44,8 @@ function frame(t, f)
   -- Top band: point BG1 at the city's VRAM home from the setup stage.
   bg[1].char_base = city.char  -- clear of the mode 7 words (0x0000-0x3FFF)
   bg[1].map_base = city.map
-  screen.main.bg1 = true
-  screen.main.bg2 = false; screen.main.bg3 = false  -- power-on defaults ALL layers
-  screen.main.bg4 = false; screen.main.obj = false  -- on; they'd show garbage here
+  screen.main.bg1 = true       -- BG1 is the whole main screen, both halves:
+                               -- mode 7's plane is BG1 too (below the split)
 
   cgram[0] = rgb(16, 8, 40)    -- backdrop, should anything miss
 

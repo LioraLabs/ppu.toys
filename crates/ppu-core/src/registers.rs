@@ -197,8 +197,8 @@ impl Default for LineTableRow {
             bg: std::array::from_fn(|_| Bg::default()),
             m7: Mode7::default(),
             bg3_priority: false,
-            tm: 0x1f, // all five layers on the main screen (playground full-visibility)
-            ts: 0x00, // sub screen empty at power-on
+            tm: 0x00, // both screens empty at power-on: a layer draws once you
+            ts: 0x00, // designate it (screen.main.bgN / screen.sub.bgN)
             wh0: 0,
             wh1: 0,
             wh2: 0,
@@ -648,11 +648,11 @@ mod tests {
 
     #[test]
     fn tm_ts_defaults_and_quantize_on_write() {
-        // Playground power-on: main = all five layers, sub = empty.
+        // Power-on: both screens empty — a layer draws once designated.
         let d = LineTableRow::default();
-        assert_eq!((d.tm, d.ts), (0x1f, 0x00));
+        assert_eq!((d.tm, d.ts), (0x00, 0x00));
         let reg = RegRow::from(&d);
-        assert_eq!((reg.tm, reg.ts), (0x1f, 0x00));
+        assert_eq!((reg.tm, reg.ts), (0x00, 0x00));
         // 5-bit mask (wraps) on write, like brightness/mode.
         let mut src = LineTableRow::default();
         src.tm = 0x13; // BG1+BG2+OBJ

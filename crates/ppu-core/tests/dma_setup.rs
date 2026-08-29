@@ -46,8 +46,7 @@ function frame(t, f)
   mode = 1
   bg[1].char_base = g.char
   bg[1].map_base = g.map
-  screen.main.bg2 = false; screen.main.bg3 = false
-  screen.main.bg4 = false; screen.main.obj = false
+  screen.main.bg1 = true
 end
 "#,
     );
@@ -73,8 +72,7 @@ function frame(t, f)
   mode = 1
   bg[1].char_base = g.char
   bg[1].map_base = g.map
-  screen.main.bg2 = false; screen.main.bg3 = false
-  screen.main.bg4 = false; screen.main.obj = false
+  screen.main.bg1 = true
 end
 "#,
     );
@@ -103,8 +101,7 @@ function frame(t, f)
   mode = 1
   bg[1].char_base = city.char
   bg[1].map_base = city.map
-  screen.main.bg2 = false; screen.main.bg3 = false
-  screen.main.bg4 = false; screen.main.obj = false
+  screen.main.bg1 = true
   hdma(112, 223, function(y)
     mode = 7
   end)
@@ -157,7 +154,7 @@ function frame(t, f)
   mode = 0
   bg[1].char_base = 0x2000; bg[1].map_base = 0x1000
   bg[2].char_base = 0x3000; bg[2].map_base = 0x1400
-  screen.main.bg3 = false; screen.main.bg4 = false; screen.main.obj = false
+  screen.main.bg1 = true; screen.main.bg2 = true
 end
 "#,
     )])
@@ -224,6 +221,7 @@ function frame(t, f)
   mode = 1
   bg[1].char_base = g.char
   bg[1].map_base = g.map
+  screen.main.bg1 = true
 end
 "#,
     );
@@ -266,4 +264,66 @@ end
     assert_eq!(e.memory().vram[0x2010], 0x1234);
     e.frame(1.0, 60).unwrap();
     assert_eq!(e.memory().vram[0x2010], 0x1234);
+}
+
+/// The power-on guarantee behind the empty TM/TS default: a toy that sets up
+/// ONE layer cannot leak the layers it never touched. BG2..BG4 sit at
+/// map_base = char_base = 0, so a designated-but-unconfigured BG2 rasterizes
+/// BG1's TILEMAP as character data — pinstripe garbage over the whole screen.
+/// Undesignated, they contribute nothing.
+#[test]
+fn undesignated_layers_never_rasterize_stale_vram() {
+    // 64x64 of four flat colours in 8x8 blocks: a real tilemap (several
+    // distinct entries) over art that covers only the top-left of the screen.
+    let checker = || {
+        let mut rgba = Vec::with_capacity(64 * 64 * 4);
+        for y in 0..64 {
+            for x in 0..64usize {
+                let c = ((x / 8 + y / 8) % 4) as u8;
+                rgba.extend_from_slice(&[40 + c * 60, 80, 200 - c * 40, 255]);
+            }
+        }
+        rgba
+    };
+    let script = r#"
+local a = dma("art", { char = 0x1000, map = 0x0000 })
+function frame(t, f)
+  mode = 1; brightness = 15
+  bg[1].char_base = a.char; bg[1].map_base = a.map
+  DESIGNATE
+end
+"#;
+    let render = |designate: &str| {
+        let mut e = LuaEngine::new();
+        common::add_bg(&mut e, "art", checker(), 64, 64, 4);
+        e.set_sources(&[("main.lua", &script.replace("DESIGNATE", designate))])
+            .unwrap();
+        let lt = e.frame(0.0, 0).unwrap();
+        render_frame(&lt, e.memory())
+    };
+
+    // Nothing designated: the flat backdrop, with VRAM full of placed art.
+    let nothing = render("");
+    let backdrop = common::px(&nothing, 0, 0).to_vec();
+    assert!(
+        nothing.chunks(4).all(|p| p == backdrop),
+        "an undesignated frame must be the flat backdrop"
+    );
+
+    // BG1 designated: its art shows where the tilemap covers.
+    let bg1 = render("screen.main.bg1 = true");
+    assert_ne!(
+        common::px(&bg1, 4, 4),
+        &backdrop[..],
+        "BG1 should draw its art"
+    );
+
+    // BG2, never pointed anywhere, draws only once designated — and what it
+    // draws then is BG1's tilemap read as chars. That leak is exactly what the
+    // empty power-on default keeps off screen.
+    let bg2_only = render("screen.main.bg2 = true");
+    assert_ne!(
+        bg2_only, nothing,
+        "designating an unconfigured BG2 should expose the stale VRAM it reads"
+    );
 }

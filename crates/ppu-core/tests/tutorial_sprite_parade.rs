@@ -50,9 +50,9 @@ function frame(t, f)
   -- Its palette sits at CGRAM 0; sprites never touch it — OBJ palettes live
   -- in the 128+ half.
   bg[1].char_base = street.char; bg[1].map_base = street.map
-  -- Power-on defaults turn every layer on, and an unpointed layer rasterizes
-  -- whatever VRAM holds. Keep BG1 + OBJ, drop the rest (screen.main = TM).
-  screen.main.bg2 = false; screen.main.bg3 = false; screen.main.bg4 = false
+  -- Designate what you want on the main screen (screen.main = TM). Both
+  -- screens power on empty, so BG1 + OBJ is the whole picture here.
+  screen.main.bg1 = true; screen.main.obj = true
 
   -- 1. THE SHEET. dma placed the chars during setup; OBSEL (obj.char_base)
   -- points the sprite engine at them. The cell_size-8 OBJ importer reserves

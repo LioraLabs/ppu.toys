@@ -454,6 +454,16 @@ pub fn render_layer_view(lt: &LineTable, mem: &Memory, plane: u8) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    /// Power-on TM is empty (a layer draws only once designated). These tests
+    /// are about what the layers DO once on screen, so they start from a row
+    /// with all five designated on the main screen.
+    fn all_on() -> LineTableRow {
+        LineTableRow {
+            tm: 0x1f,
+            ..LineTableRow::default()
+        }
+    }
+
     use super::*;
     use crate::linetable::LineTableBuilder;
     use crate::memory::rgb15;
@@ -468,7 +478,7 @@ mod tests {
         m.cgram[2 * 16 + 1] = rgb15(0, 255, 0);
         m.vram[0x1000 + 16] = 0x0080;
         m.vram[0x0001] = 1 | (2 << 10) | (1 << 13);
-        let mut row = LineTableRow::default();
+        let mut row = all_on();
         row.bg[0].scroll_x = 8.0;
         row.bg[0].char_base = 0x1000;
         (m, RegRow::from(&row))
@@ -506,7 +516,7 @@ mod tests {
         // Chain honesty: the traced bgr555 is exactly the framebuffer pixel
         // (brightness 15, no math in this scene).
         let (m, _) = bg_scene();
-        let mut src = LineTableRow::default();
+        let mut src = all_on();
         src.bg[0].scroll_x = 8.0;
         src.bg[0].char_base = 0x1000;
         let lt = LineTableBuilder::new(src).build(HEIGHT);
@@ -543,7 +553,7 @@ mod tests {
         let mut m = Memory::new();
         m.cgram[5] = rgb15(255, 0, 255);
         m.vram[0] = 5 << 8; // map tile 0; char (0,0) idx 5
-        let mut src = LineTableRow::default();
+        let mut src = all_on();
         src.mode = 7;
         let row = RegRow::from(&src);
         let t = trace_bg_screen(&row, &m, 0, 0, 0).unwrap();
@@ -592,7 +602,7 @@ mod tests {
     #[test]
     fn layer_view_isolates_one_plane() {
         let (m, _) = bg_scene();
-        let mut src = LineTableRow::default();
+        let mut src = all_on();
         src.bg[0].scroll_x = 8.0;
         src.bg[0].char_base = 0x1000;
         // BG2 defaults char_base/map_base to 0, which would otherwise alias
@@ -626,7 +636,7 @@ mod tests {
             prio: 0,
             ..Obj::default()
         };
-        let lt = LineTableBuilder::new(LineTableRow::default()).build(HEIGHT);
+        let lt = LineTableBuilder::new(all_on()).build(HEIGHT);
         let v = render_layer_view(&lt, &m, 4);
         assert_eq!(&v[0..4], &unpack_rgb15(rgb15(255, 255, 0)));
         assert_eq!(v[7], 0);

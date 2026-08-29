@@ -36,6 +36,7 @@ dma("road")                        -- the ground image — swap in your own here
 function frame(t, f)
   apply_pokes()
   mode = 7; brightness = 15        -- mode 7: BG1 is now the affine layer
+  screen.main.bg1 = true           -- ...and BG1 is what you designate (TM)
 
   local HORIZON = 96               -- screen row where ground meets sky
   local SCALE   = 128              -- eye height, in effect: bigger = higher up

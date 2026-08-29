@@ -53,7 +53,7 @@ fn quadrant_rgba() -> Vec<u8> {
 fn bg_payload_renders_from_the_source_store() {
     let rgba = two_tile_rgba();
     let script = "dma('art', { char = 0x1000, map = 0x0000 })\n\
-                  function frame(t, f) bg[1].char_base = 0x1000 end";
+                  function frame(t, f) bg[1].char_base = 0x1000 screen.main.bg1 = true end";
 
     let mut b = LuaEngine::new();
     let (p, _m) = convert_source(SourceKind::Bg, &ConvertOptions::default(), &rgba, 16, 8).unwrap();
@@ -66,7 +66,7 @@ fn bg_payload_renders_from_the_source_store() {
 #[test]
 fn m7_payload_renders_from_the_source_store() {
     let rgba = quadrant_rgba();
-    let script = "dma('floor')\nfunction frame(t, f) mode = 7 end";
+    let script = "dma('floor')\nfunction frame(t, f) mode = 7 screen.main.bg1 = true end";
 
     let mut b = LuaEngine::new();
     let (p, _m) =
@@ -84,7 +84,7 @@ fn obj_payload_renders_from_the_source_store() {
         convert_source(SourceKind::Obj, &ConvertOptions::default(), &rgba, 16, 8).unwrap();
     let cells = meta.cells.as_ref().unwrap();
     let script = format!(
-        "dma('sheet', {{ char = 0x2000 }})\nfunction frame(t, f)\n  obj.char_base = 0x2000\n  obj[0].on = true obj[0].x = 0 obj[0].y = 0 obj[0].tile = {} obj[0].pal = {}\n  obj[1].on = true obj[1].x = 8 obj[1].y = 0 obj[1].tile = {} obj[1].pal = {}\nend",
+        "dma('sheet', {{ char = 0x2000 }})\nfunction frame(t, f)\n  obj.char_base = 0x2000\n  screen.main.obj = true\n  obj[0].on = true obj[0].x = 0 obj[0].y = 0 obj[0].tile = {} obj[0].pal = {}\n  obj[1].on = true obj[1].x = 8 obj[1].y = 0 obj[1].tile = {} obj[1].pal = {}\nend",
         cells[0].tile, cells[0].pal, cells[1].tile, cells[1].pal
     );
 
@@ -116,7 +116,7 @@ fn obj_cell16_payload_renders_the_whole_cell_from_one_tile() {
     let mut e = LuaEngine::new();
     e.add_source("sheet", &p.encode()).unwrap();
     let script = format!(
-        "dma('sheet', {{ char = 0x2000 }})\nfunction frame(t, f)\n  obj.char_base = 0x2000\n  obj.size_sel = 0\n  obj[0].on = true obj[0].large = true obj[0].x = 8 obj[0].y = 8 obj[0].tile = {} obj[0].pal = {}\nend",
+        "dma('sheet', {{ char = 0x2000 }})\nfunction frame(t, f)\n  obj.char_base = 0x2000\n  screen.main.obj = true\n  obj.size_sel = 0\n  obj[0].on = true obj[0].large = true obj[0].x = 8 obj[0].y = 8 obj[0].tile = {} obj[0].pal = {}\nend",
         cell.tile, cell.pal
     );
     let render = fb(&mut e, &script);
@@ -168,6 +168,7 @@ function frame(t, f)
   bg[1].map[0] = {{}} bg[1].map[0][0] = {{tile = 3, pal = {}}}
   bg[1].map[1] = {{}} bg[1].map[1][0] = {{tile = 0, pal = {}}}
   bg[1].map[0][1] = {{tile = 1, pal = {}}}
+  screen.main.bg1 = true
 end"#,
         cells[3].pal, cells[0].pal, cells[1].pal
     );

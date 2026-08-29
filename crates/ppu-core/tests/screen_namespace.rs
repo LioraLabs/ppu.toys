@@ -5,17 +5,17 @@ use ppu_core::LuaEngine;
 
 #[test]
 fn friendly_only_packs_both_registers() {
-    // Power-on TM = 0x1f (all five on): clear bg1+obj on main, set bg3 on sub.
+    // Power-on TM = 0x00 (nothing designated): set bg1+obj on main, bg3 on sub.
     let mut e = LuaEngine::new();
     e.set_source(
         "function frame(t,f) \
-           screen.main.bg1 = false; screen.main.obj = false; \
+           screen.main.bg1 = true; screen.main.obj = true; \
            screen.sub.bg3 = true \
          end",
     )
     .unwrap();
     let lt = e.frame(0.0, 0).unwrap();
-    assert_eq!(lt.rows[0].tm, 0x0e); // 0x1f minus bg1(0x01) and obj(0x10)
+    assert_eq!(lt.rows[0].tm, 0x11); // bg1(0x01) + obj(0x10)
     assert_eq!(lt.rows[0].ts, 0x04);
 }
 
@@ -44,7 +44,7 @@ fn both_off_is_byte_identical_to_power_on() {
     let mut e = LuaEngine::new();
     e.set_source("function frame(t,f) mode = 1 end").unwrap();
     let lt = e.frame(0.0, 0).unwrap();
-    assert_eq!((lt.rows[0].tm, lt.rows[0].ts), (0x1f, 0x00));
+    assert_eq!((lt.rows[0].tm, lt.rows[0].ts), (0x00, 0x00));
 }
 
 #[test]
@@ -82,7 +82,7 @@ fn write_state_round_trip_exposes_friendly_fields_to_hooks() {
     let mut e = LuaEngine::new();
     e.set_source(
         "function frame(t,f) \
-           screen.main.bg1 = false; screen.sub.bg2 = true; \
+           screen.main.bg2 = true; screen.sub.bg2 = true; \
            hdma(10, 20, function(y) \
              if screen.main.bg1 == false and screen.main.bg2 == true \
                 and screen.sub.bg2 == true and screen.sub.obj == false \
@@ -92,7 +92,7 @@ fn write_state_round_trip_exposes_friendly_fields_to_hooks() {
     )
     .unwrap();
     let lt = e.frame(0.0, 0).unwrap();
-    assert_eq!(lt.rows[0].tm, 0x1e);
+    assert_eq!(lt.rows[0].tm, 0x02);
     assert_eq!(lt.rows[0].ts, 0x02);
     assert_eq!(lt.rows[10].ts, 0x12); // hook saw every round-tripped field
 }
@@ -104,14 +104,14 @@ fn friendly_state_is_sticky_across_frames() {
     let mut e = LuaEngine::new();
     e.set_source(
         "function frame(t,f) \
-           if f == 0 then screen.main.bg4 = false; screen.sub.bg1 = true end \
+           if f == 0 then screen.main.bg4 = true; screen.sub.bg1 = true end \
          end",
     )
     .unwrap();
     let a = e.frame(0.0, 0).unwrap();
-    assert_eq!((a.rows[0].tm, a.rows[0].ts), (0x17, 0x01));
+    assert_eq!((a.rows[0].tm, a.rows[0].ts), (0x08, 0x01));
     let b = e.frame(0.0, 1).unwrap();
-    assert_eq!((b.rows[0].tm, b.rows[0].ts), (0x17, 0x01));
+    assert_eq!((b.rows[0].tm, b.rows[0].ts), (0x08, 0x01));
 }
 
 #[test]

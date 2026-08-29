@@ -528,6 +528,16 @@ pub fn render_frame_stats(lt: &LineTable, mem: &Memory) -> (Vec<u8>, ObjOverflow
 
 #[cfg(test)]
 mod tests {
+    /// Power-on TM is empty (a layer draws only once designated). These tests
+    /// are about what the layers DO once on screen, so they start from a row
+    /// with all five designated on the main screen.
+    fn all_on() -> LineTableRow {
+        LineTableRow {
+            tm: 0x1f,
+            ..LineTableRow::default()
+        }
+    }
+
     use super::*;
     use crate::linetable::LineTableBuilder;
     use crate::registers::{LineTableRow, Obj};
@@ -597,7 +607,7 @@ mod tests {
         m.cgram[1] = rgb15(0, 255, 0); // BG2 sub-palette 0, index 1
         put_px(&mut m, 0x1000, 1); // shared char 1
         m.vram[0x0000] = 1 | (1 << 10); // BG1 map(0,0): tile 1, pal 1, prio 0
-        let mut src = LineTableRow::default();
+        let mut src = all_on();
         src.bg[0].char_base = 0x1000;
         src.bg[1].char_base = 0x1000;
         src.bg[1].map_base = 0x0400;
@@ -630,7 +640,7 @@ mod tests {
         m.vram[0x2000 + 8] = 0x0080; // BG3 2bpp char 1 (8 words/char), pixel (0,0) = 1
         m.vram[0x0000] = 1; // BG1 map(0,0): tile 1, pal 0, prio 0
         m.vram[0x0800] = 1 | (1 << 10) | (1 << 13); // BG3 map: tile 1, pal 1, prio 1
-        let mut src = LineTableRow::default();
+        let mut src = all_on();
         src.bg[0].char_base = 0x1000;
         src.bg[2].char_base = 0x2000;
         src.bg[2].map_base = 0x0800;
@@ -662,7 +672,7 @@ mod tests {
         m.vram[0x0000] = 1 | (1 << 13); // BG1 map(0,0): tile 1, priority 1
         m.obsel.char_base = 0x4000;
         m.vram[0x4000 + 16] = 0x0080; // OBJ char 1 (16 words), pixel (0,0) = 1
-        let mut src = LineTableRow::default();
+        let mut src = all_on();
         src.bg[0].char_base = 0x1000;
         m.oam[0] = Obj {
             on: true,
@@ -696,7 +706,7 @@ mod tests {
             put_px(&mut mem, 0x1000, 1);
             mem.vram[0] = 1;
 
-            let mut src = LineTableRow::default();
+            let mut src = all_on();
             src.mode = mode;
             src.bg[layer].char_base = 0x1000;
             let lt = LineTableBuilder::new(src).build(HEIGHT);
@@ -717,7 +727,7 @@ mod tests {
         mem.vram[0x1000 + 8] = 0x0080;
         mem.vram[0] = 1;
 
-        let mut src = LineTableRow::default();
+        let mut src = all_on();
         src.mode = 4;
         src.bg[1].char_base = 0x1000;
         let lt = LineTableBuilder::new(src).build(HEIGHT);
@@ -736,7 +746,7 @@ mod tests {
         mem.vram[0x3000 + 8] = 0x0080;
         mem.vram[0] = 1;
 
-        let mut src = LineTableRow::default();
+        let mut src = all_on();
         src.mode = 0;
         src.bg[3].char_base = 0x3000;
         let lt = LineTableBuilder::new(src).build(HEIGHT);
@@ -763,7 +773,7 @@ mod tests {
             ..Obj::default()
         };
 
-        let mut src = LineTableRow::default();
+        let mut src = all_on();
         src.mode = 5;
         let lt = LineTableBuilder::new(src).build(HEIGHT);
 
@@ -790,7 +800,7 @@ mod tests {
             prio: 3,
             ..Obj::default()
         };
-        let mut src = LineTableRow::default();
+        let mut src = all_on();
         src.tm = 0x10; // main: OBJ only
         src.mosaic_size = 3;
         src.mosaic_enable = [true, true, true, true]; // all BG enabled (irrelevant to OBJ)
@@ -803,7 +813,7 @@ mod tests {
 
     #[test]
     fn frame_is_full_size_and_opaque() {
-        let lt = LineTableBuilder::new(LineTableRow::default()).build(HEIGHT);
+        let lt = LineTableBuilder::new(all_on()).build(HEIGHT);
         let fb = render_frame(&lt, &Memory::new());
         assert_eq!(fb.len(), WIDTH * HEIGHT * 4);
         assert!(fb.chunks(4).all(|px| px[3] == 255));
@@ -813,7 +823,7 @@ mod tests {
     fn empty_memory_is_backdrop_everywhere() {
         let mut mem = Memory::new();
         mem.cgram[0] = rgb15(10, 20, 30);
-        let lt = LineTableBuilder::new(LineTableRow::default()).build(HEIGHT);
+        let lt = LineTableBuilder::new(all_on()).build(HEIGHT);
         let fb = render_frame(&lt, &mem);
         let bd = unpack_rgb15(rgb15(10, 20, 30));
         assert_eq!(&fb[0..4], &bd);
@@ -896,7 +906,7 @@ mod tests {
             prio: obj_prio,
             ..Obj::default()
         };
-        let mut src = LineTableRow::default();
+        let mut src = all_on();
         src.mode = 7;
         if extbg {
             src.setini = 0x40;
@@ -967,7 +977,7 @@ mod tests {
             prio: 2,
             ..Obj::default()
         };
-        let mut src = LineTableRow::default();
+        let mut src = all_on();
         src.mode = 7;
         src.setini = 0x40; // EXTBG
         src.cgwsel = 0x01; // direct colour
@@ -992,7 +1002,7 @@ mod tests {
     fn brightness_applied_once_to_backdrop() {
         let mut mem = Memory::new();
         mem.cgram[0] = rgb15(200, 200, 200);
-        let mut def = LineTableRow::default();
+        let mut def = all_on();
         def.brightness = 0;
         let lt = LineTableBuilder::new(def.clone()).build(HEIGHT);
         let fb = render_frame(&lt, &mem);
@@ -1012,7 +1022,7 @@ mod tests {
         m.cgram[1] = rgb15(255, 0, 0); // BG1 pal 0, index 1
         put_px(&mut m, 0x1000, 1);
         m.vram[0x0000] = 1; // BG1 map(0,0): tile 1
-        let mut src = LineTableRow::default();
+        let mut src = all_on();
         src.bg[0].char_base = 0x1000;
         src.tm = 0x1e; // main: BG1 (bit 0) masked off, others on
         src.ts = 0x01; // sub: BG1 enabled
@@ -1039,7 +1049,7 @@ mod tests {
         for tx in 0..32 {
             m.vram[tx] = 1; // BG1 map row 0: tile 1 across the width
         }
-        let mut src = LineTableRow::default();
+        let mut src = all_on();
         src.bg[0].char_base = 0x1000;
         // Window 1 = [0,7] (first tile-column band). BG1 W1 enable.
         src.wh0 = 0;
@@ -1070,7 +1080,7 @@ mod tests {
         for tx in 0..32 {
             m.vram[tx] = 1;
         }
-        let mut src = LineTableRow::default();
+        let mut src = all_on();
         src.bg[0].char_base = 0x1000;
         src.ts = 0x01; // BG1 enabled on the sub screen
         src.wh0 = 0;
@@ -1112,7 +1122,7 @@ mod tests {
             prio: 3,
             ..Obj::default()
         };
-        let mut src = LineTableRow::default();
+        let mut src = all_on();
         src.bg[0].char_base = 0x1000;
         let row = RegRow::from(&src);
         let mut line = vec![[0u8; 4]; WIDTH];
@@ -1138,7 +1148,7 @@ mod tests {
         put_px(&mut m, 0x1000, 1); // shared char 1
         m.vram[0x0000] = 1; // BG1 map(0,0): tile1 pal0
         m.vram[0x0400] = 1 | (1 << 10); // BG2 map(0,0): tile1 pal1
-        let mut src = LineTableRow::default();
+        let mut src = all_on();
         src.bg[0].char_base = 0x1000;
         src.bg[1].char_base = 0x1000;
         src.bg[1].map_base = 0x0400;
@@ -1300,7 +1310,7 @@ mod tests {
                 prio: 3,
                 ..Obj::default()
             };
-            let mut src = LineTableRow::default();
+            let mut src = all_on();
             src.bg[1].char_base = 0x1000;
             src.bg[1].map_base = 0x0400;
             src.tm = 0x10; // main: OBJ only
@@ -1336,7 +1346,7 @@ mod tests {
             };
         }
         // OBJ on BOTH screens: default row has OBJ on main (tm bit4); add it to sub.
-        let mut def = LineTableRow::default();
+        let mut def = all_on();
         def.ts = 0x10; // OBJ on the sub screen
         let lt = LineTableBuilder::new(def).build(HEIGHT);
         let (fb, ov) = render_frame_stats(&lt, &m);
@@ -1353,7 +1363,7 @@ mod tests {
     #[test]
     fn force_blank_line_outputs_black_over_bright_content() {
         // BG1 index 1 = red across the row, brightness 15 -> visible red normally.
-        let mut def = LineTableRow::default();
+        let mut def = all_on();
         def.force_blank = true;
         let mut m = Memory::new();
         m.cgram[1] = rgb15(255, 0, 0);
