@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type Ref } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type Ref } from "react";
 import { WIDTH, HEIGHT } from "../ppu/core";
 import { ppuCore } from "../ppu/instance";
 import { transport, useTransport } from "../studio/transport/transport";
@@ -26,7 +26,10 @@ export function ReadOnlyPlayer({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const displayRef = useRef<HTMLDivElement>(null);
+  const presenterRef = useRef<Presenter | null>(null);
   const [forceCanvas2d, setForceCanvas2d] = useState(false);
+  const [crt, setCrt] = useState(true);
+  const crtRef = useRef(crt);
   const { playing, runtimeError } = useTransport();
 
   useEffect(() => {
@@ -60,8 +63,9 @@ export function ReadOnlyPlayer({
       setForceCanvas2d(true);
       return;
     }
-    const fx: PresentFx = { crt: false, scanline: false, pixelGrid: false };
-    const draw = () => presenter.render(transport.getSnapshot().frame.framebuffer, fx);
+    presenterRef.current = presenter;
+    const fx = (): PresentFx => ({ crt: crtRef.current, scanline: false, pixelGrid: false });
+    const draw = () => presenter.render(transport.getSnapshot().frame.framebuffer, fx());
     const resize = () => {
       presenter.resize(integerScale(container.clientWidth, container.clientHeight));
       draw();
@@ -74,8 +78,19 @@ export function ReadOnlyPlayer({
       ro.disconnect();
       unsub();
       presenter.dispose();
+      presenterRef.current = null;
     };
   }, [forceCanvas2d]);
+
+  // repaint on CRT toggle without re-initing the presenter
+  useLayoutEffect(() => {
+    crtRef.current = crt;
+    presenterRef.current?.render(transport.getSnapshot().frame.framebuffer, {
+      crt,
+      scanline: false,
+      pixelGrid: false,
+    });
+  }, [crt]);
 
   return (
     <PlayerFrame
@@ -84,6 +99,9 @@ export function ReadOnlyPlayer({
       canvasKey={forceCanvas2d ? "canvas2d" : "webgl"}
       playing={playing}
       onToggle={transport.toggle}
+      crt={crt}
+      // CRT is a WebGL pass; the Canvas2D fallback ignores fx, so hide the toggle there.
+      onCrtToggle={forceCanvas2d ? undefined : () => setCrt((v) => !v)}
       error={ppuCore ? runtimeError?.message : undefined}
     />
   );
@@ -99,6 +117,8 @@ export function PlayerFrame({
   canvasKey,
   playing,
   onToggle,
+  crt,
+  onCrtToggle,
   error,
 }: {
   displayRef?: Ref<HTMLDivElement>;
@@ -106,6 +126,8 @@ export function PlayerFrame({
   canvasKey?: string;
   playing?: boolean;
   onToggle?: () => void;
+  crt?: boolean;
+  onCrtToggle?: () => void;
   error?: string;
 }) {
   return (
@@ -122,6 +144,16 @@ export function PlayerFrame({
       {onToggle && (
         <button type="button" className="player-toggle" onClick={onToggle}>
           {playing ? "Pause" : "Play"}
+        </button>
+      )}
+      {onCrtToggle && (
+        <button
+          type="button"
+          className="player-toggle player-crt"
+          aria-pressed={crt}
+          onClick={onCrtToggle}
+        >
+          CRT
         </button>
       )}
       {error && (

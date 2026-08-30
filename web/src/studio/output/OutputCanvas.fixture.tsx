@@ -1,6 +1,6 @@
-import { CoreStage } from "../cosmos/FixtureStage";
-import { OutputCanvas } from "./output/OutputCanvas";
-import "./studio.css";
+import { CoreStage } from "../../cosmos/FixtureStage";
+import { OutputCanvas } from "./OutputCanvas";
+import "../studio.css";
 
 // The real WASM-backed output composition used by Studio.
 export default (

@@ -6,6 +6,7 @@ import { getFeaturedToy, getToy, type ToyFull } from "../../api/apiClient";
 import { decodeBase64 } from "../../api/base64";
 import { ppuCore } from "../../ppu/instance";
 import { transport } from "../../studio/transport/transport";
+import { discordAvatarUrl } from "../../components/Avatar";
 import { HeroStage } from "./HeroStage";
 import "./hero.css";
 
@@ -42,7 +43,20 @@ export default function HeroTV() {
     [ready],
   );
 
-  const stage = <HeroStage getFrame={getFrame} onFail={() => {}} />;
+  // Same /blobs/thumb/{id} convention the server uses for og:image.
+  const stage = (
+    <HeroStage
+      getFrame={getFrame}
+      onFail={() => {}}
+      cart={
+        toy && {
+          thumbUrl: `/blobs/thumb/${toy.id}`,
+          avatarUrl: discordAvatarUrl(toy.author.id, toy.author.avatar, 128),
+          handle: toy.author.handle,
+        }
+      }
+    />
+  );
   return (
     <div className="hero3d">
       {toy ? (

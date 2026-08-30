@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
-import { render, cleanup } from "@testing-library/react";
+import { render, cleanup, fireEvent } from "@testing-library/react";
 
 // vi.mock factories are hoisted above top-level code, so any variable they
 // reference must be created via vi.hoisted (plain `const`s declared above
@@ -28,12 +28,15 @@ vi.mock("../studio/transport/transport", () => ({
 // flush (i.e. actually mounted via render()) trips a bogus
 // "Cannot access '__vi_import_N__' before initialization" at module load.
 // The constructor-function form is behaviorally identical and avoids it.
-const { init } = vi.hoisted(() => ({ init: vi.fn(() => true) }));
+const { init, presentRender } = vi.hoisted(() => ({
+  init: vi.fn(() => true),
+  presentRender: vi.fn(),
+}));
 vi.mock("../studio/output/presenter", () => {
   function Presenter() {}
   Presenter.prototype.init = init;
   Presenter.prototype.resize = vi.fn();
-  Presenter.prototype.render = vi.fn();
+  Presenter.prototype.render = presentRender;
   Presenter.prototype.dispose = vi.fn();
   return { Presenter };
 });
@@ -81,6 +84,22 @@ describe("ReadOnlyPlayer", () => {
     expect(container.querySelector("canvas")).toBeInTheDocument();
     expect(container.querySelector("input[type=range]")).toBeNull();
     expect(container.querySelector("button")).toHaveTextContent("Pause");
+  });
+
+  it("CRT filter is on by default and toggles off with a repaint", () => {
+    const { getByRole } = render(<ReadOnlyPlayer files={files} sources={[]} />);
+    const btn = getByRole("button", { name: "CRT" });
+    expect(btn).toHaveAttribute("aria-pressed", "true");
+    expect(presentRender).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ crt: true }),
+    );
+    fireEvent.click(btn);
+    expect(btn).toHaveAttribute("aria-pressed", "false");
+    expect(presentRender).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ crt: false }),
+    );
   });
 
   it("starts paused when reduced motion is requested", () => {

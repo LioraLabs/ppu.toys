@@ -2,6 +2,7 @@
  *  no transport. The plasma exercises the living-phosphor look: bright moving
  *  blobs leave green-tinted decay trails and fat scanlines. */
 import { useMemo } from "react";
+import { useFixtureInput } from "react-cosmos/client";
 import { HeroStage } from "./HeroStage";
 import { WIDTH, HEIGHT } from "../../ppu/core";
 
@@ -38,13 +39,35 @@ function usePlasmaFrame(): () => Uint8ClampedArray {
   }, []);
 }
 
-const Fixture = () => {
+/** "tune" (control panel toggle) overlays a lil-gui panel on the live scene;
+ *  its "dump" button logs a LAYOUTS-shaped block to paste into HeroStage. */
+/** Synthetic clip-thumb for the cart label: a gradient data URL, no network. */
+function fakeThumb(): string {
+  const c = document.createElement("canvas");
+  c.width = 256;
+  c.height = 224;
+  const ctx = c.getContext("2d")!;
+  const grad = ctx.createLinearGradient(0, 0, 256, 224);
+  grad.addColorStop(0, "#7b3fe4");
+  grad.addColorStop(0.5, "#e04a7a");
+  grad.addColorStop(1, "#e8a33c");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 256, 224);
+  return c.toDataURL();
+}
+
+const Fixture = ({ width, height }: { width: number; height: number }) => {
   const getFrame = usePlasmaFrame();
+  const [tune] = useFixtureInput("tune", false);
+  const cart = useMemo(() => ({ thumbUrl: fakeThumb(), avatarUrl: null, handle: "ada" }), []);
   return (
-    <div style={{ width: 640, height: 512 }}>
-      <HeroStage getFrame={getFrame} onFail={() => {}} />
+    <div style={{ width, height }}>
+      <HeroStage getFrame={getFrame} onFail={() => {}} cart={cart} tune={tune} />
     </div>
   );
 };
 
-export default <Fixture />;
+export default {
+  desktop: <Fixture width={640} height={512} />,
+  mobile: <Fixture width={320} height={600} />,
+};

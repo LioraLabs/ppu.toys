@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { WIDTH, HEIGHT } from "../ppu/core";
 import { PlayerFrame } from "./ReadOnlyPlayer";
 
@@ -23,7 +24,10 @@ function paintGradient(canvas: HTMLCanvasElement | null) {
   ctx.putImageData(img, 0, 0);
 }
 
-const Default = () => <PlayerFrame canvasRef={paintGradient} />;
+const Default = () => {
+  const [crt, setCrt] = useState(true);
+  return <PlayerFrame canvasRef={paintGradient} crt={crt} onCrtToggle={() => setCrt((v) => !v)} />;
+};
 
 const Empty = () => <PlayerFrame />;
 

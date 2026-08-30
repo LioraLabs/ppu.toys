@@ -1,0 +1,34 @@
+diff --git a/dist/corePlugins/pluginEndpointPlugin.js b/dist/corePlugins/pluginEndpointPlugin.js
+index 7472216757724862506f63fd2f486da75e5ebec1..c9d8161f1cbbbc0e601814f51ab5ad5d9c4101ec 100644
+--- a/dist/corePlugins/pluginEndpointPlugin.js
++++ b/dist/corePlugins/pluginEndpointPlugin.js
+@@ -16,7 +16,7 @@ export const pluginEndpointPlugin = {
+                 res.sendStatus(404);
+                 return;
+             }
+-            res.sendFile(resolvedPath);
++            res.sendFile(resolvedPath, { dotfiles: 'allow' });
+         });
+     },
+ };
+diff --git a/dist/devServer/expressApp.js b/dist/devServer/expressApp.js
+index 20cc7ad64ed6a930dcde2bdddf0a06534e1c8a3b..7ac44b4db8aa56e7c37d7f27c59ef442ff771581 100644
+--- a/dist/devServer/expressApp.js
++++ b/dist/devServer/expressApp.js
+@@ -8,13 +8,13 @@ export async function createExpressApp(platform, config, pluginConfigs) {
+         res.send(await getDevPlaygroundHtml(platform, config, pluginConfigs));
+     });
+     app.get('/playground.bundle.js', (_, res) => {
+-        res.sendFile(resolve('react-cosmos-ui/dist/playground.bundle.js'));
++        res.sendFile(resolve('react-cosmos-ui/dist/playground.bundle.js'), { dotfiles: 'allow' });
+     });
+     app.get('/playground.bundle.js.map', (_, res) => {
+-        res.sendFile(resolve('react-cosmos-ui/dist/playground.bundle.js.map'));
++        res.sendFile(resolve('react-cosmos-ui/dist/playground.bundle.js.map'), { dotfiles: 'allow' });
+     });
+     app.get('/_cosmos.ico', (_, res) => {
+-        res.sendFile(getStaticPath('favicon.ico'));
++        res.sendFile(getStaticPath('favicon.ico'), { dotfiles: 'allow' });
+     });
+     return app;
+ }

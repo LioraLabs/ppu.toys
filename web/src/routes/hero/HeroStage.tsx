@@ -10,7 +10,20 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { WIDTH, HEIGHT } from "../../ppu/core";
 import { CRT_LIB, DECAY_FRAG_BODY, CRT_DECAY } from "../../studio/output/crt.glsl";
-import { buildTv, buildConsole, buildBlobShadow } from "./heroModels";
+import {
+  buildTv,
+  buildConsole,
+  buildCart,
+  buildBlobShadow,
+  makeCartLabel,
+  type CartIdentity,
+  type CartBuild,
+} from "./heroModels";
+// This component creates the .hero3d-mount/.hero3d-canvas elements, so it owns
+// the CSS import: without it a standalone mount (e.g. the cosmos fixture) has
+// an unstyled canvas whose attribute size (dpr > 1) inflates its container,
+// re-triggering the ResizeObserver in a growth loop.
+import "./hero.css";
 
 const SCREEN_VERT = `\
 varying vec2 vUv;
@@ -35,6 +48,43 @@ void main() {
   gl_Position = vec4(position.xy, 0.0, 1.0);
 }`;
 
+export interface HeroLayout {
+  fov: number;
+  cam: [number, number, number];
+  lookAt: [number, number, number];
+  tvPos: [number, number, number];
+  tvRotY: number;
+  consolePos: [number, number, number];
+  consoleRotY: number;
+  /** Mobile hides the console: the TV alone, front and center. */
+  console: boolean;
+}
+
+/** Composition presets, picked by container aspect. Tune via the cosmos
+ *  fixture's "tune" toggle (lil-gui) and paste the dumped values here. */
+export const LAYOUTS: { desktop: HeroLayout; mobile: HeroLayout } = {
+  desktop: {
+    fov: 27,
+    cam: [0.25, 2.1, 10.35],
+    lookAt: [0, 1.25, -0.3],
+    tvPos: [-0.8, 0, 0],
+    tvRotY: 0.09,
+    consolePos: [0.95, 0, 1.95],
+    consoleRotY: -0.35,
+    console: true,
+  },
+  mobile: {
+    fov: 30,
+    cam: [0, 2.0, 13.5],
+    lookAt: [0, 1.75, 0],
+    tvPos: [0, 0, 0],
+    tvRotY: 0,
+    consolePos: [1.0, 0, 1.35],
+    consoleRotY: -0.45,
+    console: false,
+  },
+};
+
 /** Average framebuffer color (sparse stride), for the screen-glow light. */
 function avgColor(fb: Uint8ClampedArray, out: THREE.Color): number {
   let r = 0,
@@ -55,17 +105,26 @@ function avgColor(fb: Uint8ClampedArray, out: THREE.Color): number {
 export function HeroStage({
   getFrame,
   onFail,
+  cart = null,
+  tune = false,
 }: {
   /** Latest native framebuffer (RGBA, 256x224) or null while loading. */
   getFrame: () => Uint8ClampedArray | null;
   /** Called once if WebGL is unavailable — parent swaps in a 2D fallback. */
   onFail: () => void;
+  /** Toy identity for the cartridge label (clip thumb + author avatar);
+   *  null leaves a blank cart. */
+  cart?: CartIdentity | null;
+  /** Dev-only: lil-gui panel over the live scene + a dump button that logs
+   *  values in LAYOUTS shape. Set from the cosmos fixture, never in the app. */
+  tune?: boolean;
 }) {
   const mountRef = useRef<HTMLDivElement>(null);
   const getFrameRef = useRef(getFrame);
   getFrameRef.current = getFrame;
   const onFailRef = useRef(onFail);
   onFailRef.current = onFail;
+  const cartLabelRef = useRef<CartBuild["label"] | null>(null);
 
   useEffect(() => {
     const container = mountRef.current;
@@ -88,9 +147,9 @@ export function HeroStage({
 
     // --- scene -------------------------------------------------------------
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(27, 1, 0.1, 40);
-    const camBase = new THREE.Vector3(0.7, 2.1, 10.6);
-    camera.position.copy(camBase);
+    const camera = new THREE.PerspectiveCamera(LAYOUTS.desktop.fov, 1, 0.1, 40);
+    const camBase = new THREE.Vector3();
+    const lookAt = new THREE.Vector3();
 
     const screenMat = new THREE.ShaderMaterial({
       vertexShader: SCREEN_VERT,
@@ -103,14 +162,37 @@ export function HeroStage({
       },
     });
     const tv = buildTv(screenMat);
-    tv.group.position.set(-0.8, 0, 0);
-    tv.group.rotation.y = 0.12;
     scene.add(tv.group);
 
     const console3d = buildConsole();
-    console3d.position.set(1.45, 0, 1.1);
-    console3d.rotation.y = -0.35;
     scene.add(console3d);
+    const cart3d = buildCart();
+    cartLabelRef.current = cart3d.label;
+
+    const applyLayout = (l: HeroLayout) => {
+      camera.fov = l.fov;
+      camBase.set(...l.cam);
+      lookAt.set(...l.lookAt);
+      tv.group.position.set(...l.tvPos);
+      tv.group.rotation.y = l.tvRotY;
+      console3d.position.set(...l.consolePos);
+      console3d.rotation.y = l.consoleRotY;
+      console3d.visible = l.console;
+      // The cart rides in the console slot, or — console hidden — leans
+      // against the TV's face. add() reparents, removing from the old parent.
+      if (l.console) {
+        console3d.add(cart3d.group);
+        cart3d.group.position.set(0, 0.49, -0.58);
+        cart3d.group.rotation.set(0, 0, 0);
+        cart3d.group.scale.setScalar(1);
+      } else {
+        tv.group.add(cart3d.group);
+        cart3d.group.position.set(0.78, 0.02, 1.62);
+        cart3d.group.rotation.set(-0.34, -0.08, 0);
+        cart3d.group.scale.setScalar(1.35);
+      }
+    };
+    applyLayout(LAYOUTS.desktop);
 
     scene.add(buildBlobShadow(7, 3.4));
 
@@ -161,6 +243,9 @@ export function HeroStage({
       const h = container.clientHeight;
       if (!w || !h) return;
       renderer.setSize(w, h, false);
+      // Portrait-ish containers get the mobile composition. While tuning,
+      // leave whatever the gui has set alone.
+      if (!tune) applyLayout(w / h < 0.9 ? LAYOUTS.mobile : LAYOUTS.desktop);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
     };
@@ -208,12 +293,59 @@ export function HeroStage({
         camBase.y + Math.cos(t * 0.3) * 0.05 - pointer.y * 0.25,
         camBase.z,
       );
-      camera.lookAt(0.1, 1.25, 0);
+      camera.lookAt(lookAt);
       renderer.render(scene, camera);
     };
     tick();
 
+    // --- dev tuning panel ----------------------------------------------------
+    let gui: { destroy(): void } | undefined;
+    if (tune) {
+      import("three/examples/jsm/libs/lil-gui.module.min.js").then(({ GUI }) => {
+        const g = new GUI({ title: "hero layout" });
+        gui = g;
+        const onFov = () => camera.updateProjectionMatrix();
+        const vec = (folder: string, v: THREE.Vector3, range = 6) => {
+          const f = g.addFolder(folder);
+          f.add(v, "x", -range, range, 0.05);
+          f.add(v, "y", -range, range, 0.05);
+          f.add(v, "z", -range, 3 * range, 0.05);
+          return f;
+        };
+        g.add(camera, "fov", 10, 60, 1).onChange(onFov);
+        vec("camera", camBase);
+        vec("lookAt", lookAt, 3);
+        vec("tv", tv.group.position, 4).add(tv.group.rotation, "y", -1, 1, 0.01).name("rotY");
+        vec("console", console3d.position, 4)
+          .add(console3d.rotation, "y", -1, 1, 0.01)
+          .name("rotY");
+        g.add(
+          {
+            dump: () =>
+              console.log(
+                JSON.stringify(
+                  {
+                    fov: camera.fov,
+                    cam: camBase.toArray(),
+                    lookAt: lookAt.toArray(),
+                    tvPos: tv.group.position.toArray(),
+                    tvRotY: tv.group.rotation.y,
+                    consolePos: console3d.position.toArray(),
+                    consoleRotY: console3d.rotation.y,
+                    console: console3d.visible,
+                  } satisfies HeroLayout,
+                  null,
+                  2,
+                ),
+              ),
+          },
+          "dump",
+        );
+      });
+    }
+
     return () => {
+      gui?.destroy();
       cancelAnimationFrame(raf);
       ro.disconnect();
       container.removeEventListener("pointermove", onPointer);
@@ -231,7 +363,23 @@ export function HeroStage({
       renderer.dispose();
       renderer.domElement.remove();
     };
-  }, []);
+  }, [tune]);
+
+  // The cart identity lands after mount (featured toy is fetched); texture the
+  // label whenever it changes. `tune` is a dep because toggling it rebuilds
+  // the scene — and with it a fresh, unlabeled cart.
+  useEffect(() => {
+    const label = cartLabelRef.current;
+    if (!cart || !label) return;
+    const tex = makeCartLabel(cart);
+    label.material.map = tex;
+    label.material.color.set(0xffffff);
+    label.material.needsUpdate = true;
+    return () => {
+      label.material.map = null;
+      tex.dispose();
+    };
+  }, [cart?.thumbUrl, cart?.avatarUrl, cart?.handle, tune]);
 
   return <div ref={mountRef} className="hero3d-mount" />;
 }

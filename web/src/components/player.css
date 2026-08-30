@@ -28,6 +28,15 @@
 .player-toggle:hover {
   background: rgba(11, 13, 19, 0.95);
 }
+.player-crt {
+  right: auto;
+  left: 12px;
+}
+.player-crt[aria-pressed="true"] {
+  color: #15100a;
+  background: var(--orange);
+  border-color: var(--orange);
+}
 .player-error {
   position: absolute;
   left: 12px;

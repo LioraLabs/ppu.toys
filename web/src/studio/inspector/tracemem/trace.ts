@@ -2,8 +2,8 @@ import type { ObjTrace, PpuCore } from "../../../ppu/core";
 
 /** Pure helpers for the Trace chain. No React, no DOM (node-env testable). */
 
-export type TracePlane = "bg1" | "bg2" | "bg3" | "obj";
-export const TRACE_PLANES: TracePlane[] = ["bg1", "bg2", "bg3", "obj"];
+export type TracePlane = "bg1" | "bg2" | "bg3" | "bg4" | "obj";
+export const TRACE_PLANES: TracePlane[] = ["bg1", "bg2", "bg3", "bg4", "obj"];
 
 /** Packed BGR555 -> "#rrggbb" (same 5->8 bit expansion as format.cgram15ToCss). */
 export function bgr555ToHex(c: number): string {

@@ -6,7 +6,7 @@ export function discordAvatarUrl(id: string, hash: string | null, size = 64): st
 }
 
 /** Deterministic hue from a handle, for the letter-tile fallback. */
-function hueOf(handle: string): number {
+export function hueOf(handle: string): number {
   let h = 0;
   for (const c of handle) h = (h * 31 + c.charCodeAt(0)) % 360;
   return h;

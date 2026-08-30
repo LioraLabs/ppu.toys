@@ -12,7 +12,7 @@ export function Privacy() {
       </p>
       <p>
         To delete your account and toys, email
-        <a href="mailto:takedown@ppu.toys"> takedown@ppu.toys</a>.
+        <a href="mailto:hello@lioralabs.dev"> hello@lioralabs.dev</a>.
       </p>
     </article>
   );

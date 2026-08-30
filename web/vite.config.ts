@@ -6,6 +6,12 @@ import { shouldBypassApiProxy } from "./src/viteProxy";
 
 export default defineConfig({
   plugins: [react()],
+  optimizeDeps: {
+    // Lazy-imported by HeroStage's dev tune toggle. Pre-bundle it so the first
+    // toggle doesn't trigger a mid-session re-optimize, which 504s the hashed
+    // dep URL (surfaced through MSW's worker as NS_ERROR_CORRUPTED_CONTENT).
+    include: ["three/examples/jsm/libs/lil-gui.module.min.js"],
+  },
   // Cosmos changes Vite's root to src. Keep the MSW worker on the renderer's
   // origin instead of letting /mockServiceWorker.js fall through to index.html.
   publicDir: fileURLToPath(new URL("public", import.meta.url)),

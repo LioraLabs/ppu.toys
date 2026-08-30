@@ -32,6 +32,8 @@ test("rejects an unknown component path", () => {
   assert.throws(() => resolveFixtureRef(manifest, "studio/Missing#Default"), /Unknown fixture/);
 });
 
+// Stock cosmos drops the navigator node when X.fixture.tsx collides with a
+// directory X/ — fixtures live inside their directory, named for the component.
 function fixtureDirs(dir) {
   const entries = readdirSync(dir, { withFileTypes: true });
   const nested = entries
@@ -45,17 +47,12 @@ function fixtureDirs(dir) {
 for (const dir of fixtureDirs(resolve("src"))) {
   if (dir === resolve("src")) continue;
   const branch = dir.slice(resolve("src").length + 1);
-  test(`${branch} is an expandable, selectable site composition`, () => {
-    assert.equal(existsSync(`${dir}.fixture.tsx`), true);
-    assert.equal(existsSync(resolve(dir, "__COMPOSITION.fixture.tsx")), false);
-    assert.equal(existsSync(resolve(dir, "Composition.fixture.tsx")), false);
+  test(`${branch} does not collide with a same-name fixture`, () => {
+    assert.equal(existsSync(`${dir}.fixture.tsx`), false);
   });
 }
 
-for (const fixture of [
-  "studio/sources.fixture.tsx",
-  "studio/sources/AddSourceDialog.fixture.tsx",
-]) {
+for (const fixture of ["studio/sources/AddSourceDialog.fixture.tsx"]) {
   test(`${fixture} boots the real core before interactive source conversion`, () => {
     const source = readFileSync(resolve("src", fixture), "utf8");
     assert.match(source, /<CoreStage>/);

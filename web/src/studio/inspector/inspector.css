@@ -97,7 +97,8 @@
 .vram-toolbar .insp-subhead {
   flex: 1;
 }
-.vram-toolbar select {
+.vram-toolbar select,
+.vram-section-head select {
   height: 24px;
   border: 1px solid var(--border-subtle);
   border-radius: 4px;
@@ -105,6 +106,14 @@
   color: var(--text-main);
   font-family: var(--font-mono);
   font-size: 11px;
+}
+.vram-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.vram-section-head .insp-subhead {
+  flex: 1;
 }
 .vram-budget,
 .vram-meta {
@@ -144,6 +153,67 @@
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-dim2);
+  cursor: pointer;
+}
+.vram-tile:hover,
+.vram-tile:focus-visible {
+  border-color: var(--accent);
+}
+.vram-editor {
+  margin-bottom: 8px;
+  padding: 8px;
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  background: var(--bg-grid);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.vram-editor-head,
+.vram-editor-body,
+.vram-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.vram-editor-head strong {
+  flex: 1;
+}
+.vram-editor-body {
+  align-items: stretch;
+  margin-top: 8px;
+}
+.vram-pixel-editor {
+  display: grid;
+  grid-template-columns: repeat(8, 24px);
+  grid-template-rows: repeat(8, 24px);
+  border: 1px solid var(--border-subtle);
+  touch-action: none;
+}
+.vram-pixel-editor button {
+  min-width: 0;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 55%, transparent);
+}
+.vram-editor-tools {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text-dim2);
+}
+.vram-editor-tools label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.vram-editor-tools input {
+  width: 68px;
+}
+@media (max-width: 560px) {
+  .vram-editor-body {
+    flex-direction: column;
+  }
 }
 .vram-tile-px {
   display: grid;

@@ -13,7 +13,7 @@ export function Tos() {
       </p>
       <h2>Takedown</h2>
       <p>
-        To report content, email <a href="mailto:takedown@ppu.toys">takedown@ppu.toys</a>. Include
+        To report content, email <a href="mailto:hello@lioralabs.dev">hello@lioralabs.dev</a>. Include
         the permalink. We remove violating toys promptly.
       </p>
     </article>

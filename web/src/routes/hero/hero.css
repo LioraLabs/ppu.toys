@@ -3,6 +3,13 @@
   width: 100%;
   aspect-ratio: 5 / 4;
 }
+/* Matches the wall's single-column breakpoint. Portrait aspect here is what
+ * flips HeroStage to its mobile layout (it keys off container w/h < 0.9). */
+@media (max-width: 760px) {
+  .hero3d {
+    aspect-ratio: 4 / 5;
+  }
+}
 .hero3d-link {
   display: block;
   width: 100%;
