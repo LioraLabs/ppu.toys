@@ -86,6 +86,43 @@ fn unpack_rejects_bad_payload_before_writing_anything() {
     assert!(!dir.path().join("ppu.json").exists());
 }
 
+fn copy_dir_all(src: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst).unwrap();
+    for entry in std::fs::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let dst_path = dst.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir_all(&entry.path(), &dst_path);
+        } else {
+            std::fs::copy(entry.path(), &dst_path).unwrap();
+        }
+    }
+}
+
+#[test]
+fn pack_rejects_manifest_without_main_lua() {
+    let dir = tempfile::tempdir().unwrap();
+    copy_dir_all(Path::new(SAMPLE_DIR), dir.path());
+
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.path().join("ppu.json")).unwrap())
+            .unwrap();
+    manifest["files"] = serde_json::json!(["pokes.lua"]);
+    std::fs::write(
+        dir.path().join("ppu.json"),
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+
+    let err = ppu_cli::pack(dir.path()).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("main.lua"), "unexpected error: {msg}");
+    assert!(
+        msg.contains(&dir.path().join("ppu.json").display().to_string()),
+        "unexpected error: {msg}"
+    );
+}
+
 #[test]
 fn pack_rejects_unsafe_source_payload_path() {
     let dir = tempfile::tempdir().unwrap();
