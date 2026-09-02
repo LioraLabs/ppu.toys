@@ -8,60 +8,72 @@ import { MemoryRouter } from "react-router-dom";
 import { WorkspaceActions } from "./WorkspaceActions";
 import { openSketchStore } from "../sketches/openSketch";
 import { _resetSketchStoreForTests } from "../sketches/sketchStore";
+import { serializeToFile, _resetLocalFileForTests, PPU_FILE_VERSION } from "./localFile";
 import type { Me } from "../../api/apiClient";
 
 vi.mock("../../api/apiClient", () => ({
   SIGN_IN_URL: "/api/auth/discord",
-  createToy: vi.fn(),
-  updateToy: vi.fn(),
 }));
 vi.mock("../../api/session", () => ({
   useSession: vi.fn(),
   sessionStore: { refresh: vi.fn() },
 }));
-vi.mock("./serialize", () => ({
-  serializeWorkspace: () => ({
-    files: [{ name: "main.lua", source: "x" }],
-    sources: [{ name: "sky", kind: "bg", builtinId: null, options: {}, meta: {}, payload: "AQ==" }],
-  }),
-}));
 
-import { createToy, updateToy, SIGN_IN_URL } from "../../api/apiClient";
+import { SIGN_IN_URL } from "../../api/apiClient";
 import { useSession } from "../../api/session";
 
 const mockUseSession = useSession as unknown as ReturnType<typeof vi.fn>;
-const mockCreateToy = createToy as unknown as ReturnType<typeof vi.fn>;
-const mockUpdateToy = updateToy as unknown as ReturnType<typeof vi.fn>;
 
 const USER: Me = { id: "u1", handle: "ada", avatar: null, isAdmin: false };
+
+function makePicker() {
+  let written = "";
+  const writable = { write: vi.fn(async (t: string) => void (written = t)), close: vi.fn() };
+  const handle = { createWritable: vi.fn(async () => writable) };
+  const picker = vi.fn(async () => handle);
+  (window as unknown as { showSaveFilePicker: typeof picker }).showSaveFilePicker = picker;
+  return { picker, writable, getWritten: () => written };
+}
+
+function queryFileInput(container: HTMLElement): HTMLInputElement {
+  return container.querySelector('input[type="file"]') as HTMLInputElement;
+}
 
 beforeEach(() => {
   (globalThis as { indexedDB: IDBFactory }).indexedDB = new IDBFactory();
   _resetSketchStoreForTests();
   openSketchStore._resetForTests();
-  mockCreateToy.mockReset();
-  mockUpdateToy.mockReset();
+  _resetLocalFileForTests();
   mockUseSession.mockReset();
+  delete (window as unknown as { showSaveFilePicker?: unknown }).showSaveFilePicker;
 });
 afterEach(() => cleanup());
 
 describe("WorkspaceActions", () => {
-  it("signed-out: shows a Sign in to publish link, no Save button", () => {
+  it("signed-out: Sign in link, Save and Open… present, no Publish…; Ctrl+S writes a versioned file", async () => {
     mockUseSession.mockReturnValue({ user: null, loading: false });
+    const { picker, getWritten } = makePicker();
     render(
       <MemoryRouter>
         <WorkspaceActions />
       </MemoryRouter>,
     );
+
     const link = screen.getByRole("link", { name: /sign in to publish/i });
     expect(link).toHaveAttribute("href", SIGN_IN_URL);
-    expect(screen.queryByRole("button", { name: /^save$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^open…$/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^publish…$/i })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+    await waitFor(() => expect(picker).toHaveBeenCalledTimes(1));
+    const written = getWritten();
+    expect(JSON.parse(written).version).toBe(PPU_FILE_VERSION);
   });
 
-  it("signed-in: Save creates the toy, then updates it with the revision the previous save returned", async () => {
+  it("signed-in: Save twice reuses the same picker handle but writes twice", async () => {
     mockUseSession.mockReturnValue({ user: USER, loading: false });
-    mockCreateToy.mockResolvedValue({ id: "toy1", revision: 1 });
-    mockUpdateToy.mockResolvedValueOnce({ revision: 2 }).mockResolvedValueOnce({ revision: 3 });
+    const { picker, writable } = makePicker();
     render(
       <MemoryRouter>
         <WorkspaceActions />
@@ -70,67 +82,112 @@ describe("WorkspaceActions", () => {
 
     const saveBtn = screen.getByRole("button", { name: /^save$/i });
     fireEvent.click(saveBtn);
-
-    await waitFor(() => expect(mockCreateToy).toHaveBeenCalledTimes(1));
-    const body = mockCreateToy.mock.calls[0][0];
-    expect(
-      body.sources.every(
-        (s: { payload: unknown }) => typeof s.payload === "string" && s.payload.length > 0,
-      ),
-    ).toBe(true);
-    expect(typeof body.description).toBe("string");
-    expect(body.description).toBe("");
-
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Saved"));
     fireEvent.click(saveBtn);
-    await waitFor(() => expect(mockUpdateToy).toHaveBeenCalledTimes(1));
-    expect(mockUpdateToy.mock.calls[0][1]).toBe(1);
-    expect(mockCreateToy).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(writable.write).toHaveBeenCalledTimes(2));
 
-    fireEvent.click(saveBtn);
-    await waitFor(() => expect(mockUpdateToy).toHaveBeenCalledTimes(2));
-    expect(mockUpdateToy.mock.calls[1][1]).toBe(2);
-    expect(mockCreateToy).toHaveBeenCalledTimes(1);
+    expect(picker).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status")).toHaveTextContent("Saved");
   });
 
-  it("shows unlinked, then linked to t/<id> after a save, then unlinked again after Unlink; the next save creates a new toy", async () => {
+  it("signed-in: Open… with a bad file shows an error and leaves the open sketch untouched", async () => {
     mockUseSession.mockReturnValue({ user: USER, loading: false });
-    mockCreateToy.mockResolvedValueOnce({ id: "toy1", revision: 1 }).mockResolvedValueOnce({
-      id: "toy2",
-      revision: 1,
-    });
+    const before = openSketchStore.state().context.sketch.id;
+    const { container } = render(
+      <MemoryRouter>
+        <WorkspaceActions />
+      </MemoryRouter>,
+    );
+
+    const input = queryFileInput(container);
+    expect(input).toBeTruthy();
+    const bad = new File(['{"version":"ppu.toys/0"}'], "bad.ppu.json");
+    fireEvent.change(input, { target: { files: [bad] } });
+
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(/version/i));
+    expect(openSketchStore.state().context.sketch.id).toBe(before);
+  });
+
+  it.each([
+    ["signed-out", null],
+    ["signed-in", USER],
+  ])(
+    "%s: Open… a good file with an origin shows the link chip, changes the sketch id, and Unlink clears it",
+    async (_label, user) => {
+      mockUseSession.mockReturnValue({ user, loading: false });
+      openSketchStore.editFile("main.lua", "-- hello");
+      openSketchStore.setOrigin({ id: "toy9", revision: 2, authorId: "u1" });
+      const text = serializeToFile(openSketchStore.state());
+      const beforeId = openSketchStore.state().context.sketch.id;
+      openSketchStore._resetForTests();
+
+      const { container } = render(
+        <MemoryRouter>
+          <WorkspaceActions />
+        </MemoryRouter>,
+      );
+
+      const input = queryFileInput(container);
+      fireEvent.change(input, { target: { files: [new File([text], "good.ppu.json")] } });
+
+      await waitFor(() => expect(screen.getByText(/linked to t\/toy9/)).toBeInTheDocument());
+      expect(openSketchStore.state().context.sketch.id).not.toBe(beforeId);
+
+      fireEvent.click(screen.getByRole("button", { name: /unlink/i }));
+      await waitFor(() => expect(screen.getByText("unlinked")).toBeInTheDocument());
+    },
+  );
+
+  it("signed-in: shows linked to t/<id> after setOrigin, then unlinked after Unlink", async () => {
+    mockUseSession.mockReturnValue({ user: USER, loading: false });
+    openSketchStore.setOrigin({ id: "abc", revision: 1, authorId: "u1" });
     render(
       <MemoryRouter>
         <WorkspaceActions />
       </MemoryRouter>,
     );
 
-    expect(screen.getByText("unlinked")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
-    await waitFor(() => expect(mockCreateToy).toHaveBeenCalledTimes(1));
-    const unlinkBtn = await screen.findByRole("button", { name: /unlink/i });
-    expect(screen.getByText(/linked to t\/toy1/)).toBeInTheDocument();
-
+    expect(screen.getByText(/linked to t\/abc/)).toBeInTheDocument();
+    const unlinkBtn = screen.getByRole("button", { name: /unlink/i });
     fireEvent.click(unlinkBtn);
     await waitFor(() => expect(screen.getByText("unlinked")).toBeInTheDocument());
-
-    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
-    await waitFor(() => expect(mockCreateToy).toHaveBeenCalledTimes(2));
-    expect(mockUpdateToy).not.toHaveBeenCalled();
   });
 
-  it("an origin authored by someone else always creates a new toy, never updates", async () => {
-    mockUseSession.mockReturnValue({ user: USER, loading: false });
-    openSketchStore.setOrigin({ id: "other", revision: 7, authorId: "someone-else" });
-    mockCreateToy.mockResolvedValue({ id: "toy1", revision: 1 });
+  it("signed-out: an edit after mount is still what Ctrl+S writes (no stale closure)", async () => {
+    mockUseSession.mockReturnValue({ user: null, loading: false });
+    const { picker, getWritten } = makePicker();
     render(
       <MemoryRouter>
         <WorkspaceActions />
       </MemoryRouter>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
-    await waitFor(() => expect(mockCreateToy).toHaveBeenCalledTimes(1));
-    expect(mockUpdateToy).not.toHaveBeenCalled();
+    openSketchStore.editFile("main.lua", "-- edited");
+    fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+
+    await waitFor(() => expect(picker).toHaveBeenCalledTimes(1));
+    expect(getWritten()).toContain("-- edited");
+  });
+
+  it("signed-in: a cancelled picker (AbortError) shows no Saved status", async () => {
+    mockUseSession.mockReturnValue({ user: USER, loading: false });
+    const abort = Object.assign(new Error("cancelled"), { name: "AbortError" });
+    const picker = vi.fn(async () => {
+      throw abort;
+    });
+    (window as unknown as { showSaveFilePicker: typeof picker }).showSaveFilePicker = picker;
+    render(
+      <MemoryRouter>
+        <WorkspaceActions />
+      </MemoryRouter>,
+    );
+
+    const saveBtn = screen.getByRole("button", { name: /^save$/i });
+    fireEvent.click(saveBtn);
+    await waitFor(() => expect(picker).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(saveBtn).toBeEnabled());
+
+    expect(screen.queryByText("Saved")).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 });

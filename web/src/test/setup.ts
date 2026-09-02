@@ -131,6 +131,20 @@ class StubPpuCore implements PpuCore {
 
 setPpuCore(new StubPpuCore());
 
+// jsdom's File doesn't implement .text() (used by openLocalFile), and its
+// Blob doesn't implement arrayBuffer()/stream() either, so Response(file)
+// can't read it — FileReader is the one thing jsdom does implement fully.
+if (typeof File !== "undefined" && !File.prototype.text) {
+  File.prototype.text = function (this: File) {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(this);
+    });
+  };
+}
+
 // MSW node server: intercepts real `fetch` calls in tests so api/session tests
 // exercise the actual request path against the shared handlers.
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));

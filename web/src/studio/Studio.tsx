@@ -30,7 +30,11 @@ export function Studio() {
 
   const slots: DockSlots = {
     editor: <EditorPane onSources={transport.setSources} />,
-    assets: <AssetsPanel />,
+    assets: (
+      <ErrorBoundary label="Assets">
+        <AssetsPanel />
+      </ErrorBoundary>
+    ),
     output: (
       <ErrorBoundary label="Output">
         <OutputCanvas />
