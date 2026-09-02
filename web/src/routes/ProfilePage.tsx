@@ -1,16 +1,14 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import {
   createToken,
   deleteToken,
   getProfile,
   getTokens,
-  getToy,
   type ApiToken,
   type Profile,
 } from "../api/apiClient";
 import { useSession } from "../api/session";
-import { openCloudToy } from "../studio/cloud/openCloudToy";
 import { Avatar } from "../components/Avatar";
 import { ToyCard } from "../components/ToyCard";
 import { useDocumentTitle } from "./useDocumentTitle";
@@ -20,25 +18,11 @@ import "./profile.css";
 export function ProfilePage() {
   const { handle } = useParams<{ handle: string }>();
   const { user } = useSession();
-  const navigate = useNavigate();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [missing, setMissing] = useState(false);
-  const [opening, setOpening] = useState<string | null>(null);
   const [tokens, setTokens] = useState<ApiToken[]>([]);
   const [newToken, setNewToken] = useState<string | null>(null);
   useDocumentTitle(handle);
-
-  async function editDraft(id: string) {
-    if (opening) return;
-    setOpening(id);
-    try {
-      await openCloudToy(await getToy(id));
-      navigate("/studio");
-    } catch (e) {
-      console.error("open draft failed", e);
-      setOpening(null);
-    }
-  }
 
   useEffect(() => {
     if (!handle) return;
@@ -119,28 +103,6 @@ export function ProfilePage() {
               ))}
             </ul>
           )}
-        </section>
-      )}
-      {own && profile.drafts && profile.drafts.length > 0 && (
-        <section className="profile-drafts">
-          <h2>
-            Drafts <span className="profile-drafts-note">only you see these</span>
-          </h2>
-          <ul>
-            {profile.drafts.map((d) => (
-              <li key={d.id}>
-                <span className="profile-draft-title">{d.title || "untitled toy"}</span>
-                <button
-                  type="button"
-                  className="profile-draft-edit"
-                  disabled={opening !== null}
-                  onClick={() => void editDraft(d.id)}
-                >
-                  {opening === d.id ? "Opening…" : "Edit"}
-                </button>
-              </li>
-            ))}
-          </ul>
         </section>
       )}
       {toyCount === 0 ? (

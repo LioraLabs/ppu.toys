@@ -1,5 +1,5 @@
 # Cookfile for ppu-server — the single axum binary that IS the S1 backend
-# (Discord OAuth + sessions, toys/sources/revisions/fork, publish + webhook,
+# (Discord OAuth + sessions, toys/sources/revisions, publish + webhook,
 # wall, hearts, moderation) over SQLite. Imported by the root Cookfile as
 # `server`, so the targets below are `cook server.build` / `cook server.test`
 # / `cook server.run`.

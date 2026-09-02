@@ -578,6 +578,63 @@ async fn create_sweeps_callers_stale_drafts() {
     assert_eq!(sources, 0, "swept draft's toy_sources row should cascade");
 }
 
+/// The removed legacy fork route let a user fork their own draft, so a deployed
+/// DB can hold `forked_from` edges pointing at draft rows. Migration
+/// 0008_detach_draft_forks.sql detaches them so the stale-draft sweep in
+/// `create()` never trips the `forked_from` FK. This runs that migration's SQL
+/// directly against rows shaped like the legacy state to prove it.
+#[tokio::test]
+async fn stale_draft_fork_target_is_detached_before_sweep() {
+    let app = common::test_app().await;
+    let sid = common::seed_session(&app.state, "1", "ann", false).await;
+    let now = ppu_server::db::now();
+    sqlx::query("INSERT INTO toys(id,author_id,title,files_json,state,created_at) VALUES('old','1','Old','[]','draft',?)")
+        .bind(now - 2 * ppu_server::config::DRAFT_SWEEP_SECS)
+        .execute(&app.state.pool).await.unwrap();
+    sqlx::query("INSERT INTO toys(id,author_id,title,files_json,state,forked_from,created_at) VALUES('child','1','Child','[]','published','old',?)")
+        .bind(now)
+        .execute(&app.state.pool).await.unwrap();
+
+    sqlx::query(include_str!("../migrations/0008_detach_draft_forks.sql"))
+        .execute(&app.state.pool)
+        .await
+        .unwrap();
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(authed(
+            "POST",
+            "/api/toys",
+            &sid,
+            serde_json::json!({
+                "title":"n","files":[],"sources":[]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let ids: Vec<(String,)> = sqlx::query_as("SELECT id FROM toys ORDER BY id")
+        .fetch_all(&app.state.pool)
+        .await
+        .unwrap();
+    let ids: Vec<&str> = ids.iter().map(|(i,)| i.as_str()).collect();
+    assert!(
+        !ids.contains(&"old"),
+        "detached stale draft should be swept: {ids:?}"
+    );
+    assert!(ids.contains(&"child"));
+
+    let forked_from: Option<String> =
+        sqlx::query_as::<_, (Option<String>,)>("SELECT forked_from FROM toys WHERE id='child'")
+            .fetch_one(&app.state.pool)
+            .await
+            .unwrap()
+            .0;
+    assert_eq!(forked_from, None, "legacy fork edge should be detached");
+}
+
 #[tokio::test]
 async fn stale_drafts_do_not_eat_the_quota() {
     let app = common::test_app().await;

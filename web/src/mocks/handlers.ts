@@ -24,8 +24,6 @@ export const handlers = [
 
   http.get("/api/users/:handle", () => HttpResponse.json(profile)),
 
-  http.post("/api/toys/:id/fork", () => HttpResponse.json({ id: "fork1" })),
-
   http.put("/api/toys/:id/heart", () => new HttpResponse(null, { status: 204 })),
 
   http.delete("/api/toys/:id/heart", () => new HttpResponse(null, { status: 204 })),

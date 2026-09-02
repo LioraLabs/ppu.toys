@@ -113,69 +113,36 @@ async fn profile_lists_only_that_users_published_toys() {
 }
 
 #[tokio::test]
-async fn profile_drafts_are_owner_only() {
+async fn profile_has_no_drafts_field() {
     let app = common::test_app().await;
     let sid = common::seed_session(&app.state, "1", "ann", false).await;
-    common::seed_session(&app.state, "2", "bob", false).await;
+    let sid2 = common::seed_session(&app.state, "2", "bob", false).await;
     seed_published(&app.state, "aaaaaaaa", "1", 0, 100).await;
     sqlx::query("INSERT INTO toys(id,author_id,title,files_json,state,created_at) VALUES('dddddddd','1','wip','[]','draft',150)")
         .execute(&app.state.pool).await.unwrap();
 
-    // owner: drafts present, newest first
-    let res = app
-        .router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api/users/ann")
-                .header("cookie", format!("ppu_sess={sid}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let b = axum::body::to_bytes(res.into_body(), 1 << 20)
-        .await
-        .unwrap();
-    let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
-    assert_eq!(v["drafts"][0]["id"], "dddddddd");
-    assert_eq!(v["drafts"][0]["title"], "wip");
-
-    // signed-out viewer: no drafts key at all
-    let res = app
-        .router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api/users/ann")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let b = axum::body::to_bytes(res.into_body(), 1 << 20)
-        .await
-        .unwrap();
-    let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
-    assert!(v.get("drafts").is_none());
-
-    // another signed-in viewer: still none
-    let sid2 = "sess_2";
-    let res = app
-        .router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api/users/ann")
-                .header("cookie", format!("ppu_sess={sid2}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let b = axum::body::to_bytes(res.into_body(), 1 << 20)
-        .await
-        .unwrap();
-    let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
-    assert!(v.get("drafts").is_none());
+    // owner, signed-out, and another signed-in viewer all get the same shape:
+    // drafts are a studio concern now, never part of the profile.
+    for cookie in [Some(sid.as_str()), None, Some(sid2.as_str())] {
+        let mut req = Request::builder().uri("/api/users/ann");
+        if let Some(c) = cookie {
+            req = req.header("cookie", format!("ppu_sess={c}"));
+        }
+        let res = app
+            .router
+            .clone()
+            .oneshot(req.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let b = axum::body::to_bytes(res.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+        assert!(
+            v.get("drafts").is_none(),
+            "viewer {cookie:?} saw drafts: {v}"
+        );
+        assert_eq!(v["toys"].as_array().unwrap().len(), 1);
+    }
 }

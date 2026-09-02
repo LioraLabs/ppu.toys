@@ -50,60 +50,6 @@
 .profile-cta:hover {
   filter: brightness(1.08);
 }
-.profile-drafts {
-  padding: 0.5rem 1.5rem 0;
-  font-family: var(--font-sans);
-}
-.profile-drafts h2 {
-  margin: 0 0 6px;
-  font-size: 0.95rem;
-  color: var(--text-hi);
-}
-.profile-drafts-note {
-  margin-left: 8px;
-  font-size: 0.75rem;
-  font-weight: 400;
-  color: var(--text-dim);
-}
-.profile-drafts ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  max-width: 460px;
-}
-.profile-drafts li {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 10px;
-  border: 1px solid var(--line2);
-  border-radius: 6px;
-  background: var(--panel);
-}
-.profile-draft-title {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--txt2);
-}
-.profile-draft-edit {
-  border: 1px solid var(--line);
-  background: none;
-  color: var(--txt2);
-  border-radius: 5px;
-  padding: 2px 10px;
-  font: inherit;
-  font-size: 0.85rem;
-  cursor: pointer;
-}
-.profile-draft-edit:hover {
-  background: var(--hover);
-}
 .profile-tokens {
   margin: 24px 0;
 }

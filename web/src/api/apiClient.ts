@@ -75,12 +75,6 @@ export interface ToyFull {
   author: { id: string; handle: string; avatar: string | null };
 }
 
-export interface DraftInfo {
-  id: string;
-  title: string;
-  createdAt: number;
-}
-
 export interface ApiToken {
   id: string;
   name: string;
@@ -90,8 +84,6 @@ export interface ApiToken {
 export interface Profile {
   user: { id: string; handle: string; avatar: string | null };
   toys: WallCard[];
-  /** Present ONLY when the viewer is this profile's owner. */
-  drafts?: DraftInfo[];
 }
 
 export type WallSort = "recent" | "popular";
@@ -212,10 +204,6 @@ export function adminUnbanUser(id: string): Promise<void> {
 
 export function getProfile(handle: string): Promise<Profile> {
   return request<Profile>(`/api/users/${handle}`);
-}
-
-export function forkToy(id: string): Promise<{ id: string }> {
-  return request<{ id: string }>(`/api/toys/${id}/fork`, { method: "POST" });
 }
 
 export function addHeart(id: string): Promise<void> {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
-import { getToy, forkToy, goToSignIn, type ToyFull } from "../api/apiClient";
+import { getToy, goToSignIn, type ToyFull } from "../api/apiClient";
 import { useSession } from "../api/session";
 import { openCloudToy } from "../studio/cloud/openCloudToy";
 import { decodeBase64 } from "../api/base64";
@@ -64,24 +64,13 @@ export function Permalink() {
   const toy = load.toy;
   const activeFile = toy.files[active] ?? toy.files[0];
 
-  /** Owner path: reopen this toy in the Studio bound to the SAME cloud id, so
-   *  Save/Publish update it in place instead of minting a fork. */
-  async function edit() {
+  /** Open this toy in the Studio. Owner: reopens it bound to the SAME cloud
+   *  id, so Save/Publish update it in place instead of minting a fork.
+   *  Non-owner: opens the same toy with its origin owned by someone else, so
+   *  the publish dialog offers the forked branch — no server call until
+   *  publish. */
+  async function openInStudio() {
     if (load.status !== "ok") return;
-    setForking(true);
-    setForkFailed(false);
-    try {
-      await openCloudToy(load.toy);
-      navigate("/studio");
-    } catch {
-      setForkFailed(true);
-    } finally {
-      setForking(false);
-    }
-  }
-
-  async function fork() {
-    if (!id) return;
     if (!user) {
       // Live sign-in ask instead of a dead disabled button — forking is the
       // loop we want visitors to enter.
@@ -91,9 +80,7 @@ export function Permalink() {
     setForking(true);
     setForkFailed(false);
     try {
-      const { id: forkId } = await forkToy(id);
-      const toy = await getToy(forkId);
-      await openCloudToy(toy);
+      await openCloudToy(load.toy);
       navigate("/studio");
     } catch {
       // Surface the failure instead of leaving the click silently dead — the
@@ -127,7 +114,7 @@ export function Permalink() {
           {user && user.id === toy.author.id ? (
             <button
               className="fork-btn"
-              onClick={() => void edit()}
+              onClick={() => void openInStudio()}
               disabled={forking}
               title="Open your toy in the Studio"
             >
@@ -136,7 +123,7 @@ export function Permalink() {
           ) : (
             <button
               className="fork-btn"
-              onClick={() => void fork()}
+              onClick={() => void openInStudio()}
               disabled={forking}
               title={user ? "Fork into your Studio" : "Sign in with Discord to fork this toy"}
             >

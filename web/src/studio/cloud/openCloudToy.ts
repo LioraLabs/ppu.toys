@@ -4,12 +4,13 @@ import { openSketchStore } from "../sketches/openSketch";
 import type { ToyFull } from "../../api/apiClient";
 import type { SourceKind, ConvertSourceOptions, SourceMeta } from "../../ppu/core";
 
-/** Load a cloud toy (own draft or a fresh fork) into the Studio: mint a local
- *  sketch from its files + payload-bearing sources, open it, and set its origin
- *  so Save/Publish target the same server toy. Flushes immediately so a reload
- *  right after opening still shows the link. The toy is self-contained (every
- *  source has a payload — see serializer), so no demo replay is needed:
- *  forkedFrom stays unset. */
+/** Open a published toy from its permalink into the Studio — the owner's own
+ *  (Edit) or someone else's (Fork): mint a local sketch from its files +
+ *  payload-bearing sources, open it, and set its origin so Save/Publish target
+ *  the same server toy. Flushes immediately so a reload right after opening
+ *  still shows the link. The toy is self-contained (every source has a
+ *  payload — see serializer), so no demo replay is needed: forkedFrom stays
+ *  unset. */
 export async function openCloudToy(toy: ToyFull): Promise<void> {
   const sources: SketchSource[] = toy.sources
     .filter((s) => s.payload)

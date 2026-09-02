@@ -8,7 +8,6 @@ import {
   getWall,
   getToy,
   getProfile,
-  forkToy,
   addHeart,
   removeHeart,
   logout,
@@ -78,18 +77,6 @@ describe("read endpoints", () => {
 });
 
 describe("mutations send X-PPU-CSRF", () => {
-  it("forkToy POSTs with the CSRF header and returns the new id", async () => {
-    let captured: Request | undefined;
-    server.use(
-      http.post("/api/toys/:id/fork", async ({ request }) => {
-        captured = request.clone();
-        return HttpResponse.json({ id: "fork1" });
-      }),
-    );
-    expect(await forkToy("abc")).toEqual({ id: "fork1" });
-    expect(captured!.headers.get("X-PPU-CSRF")).toBe("1");
-  });
-
   it("addHeart PUTs, removeHeart DELETEs, both with CSRF", async () => {
     let putCaptured: Request | undefined;
     let deleteCaptured: Request | undefined;

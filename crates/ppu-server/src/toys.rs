@@ -233,8 +233,7 @@ async fn write_sources(state: &AppState, toy_id: &str, sources: &[SourceDto]) ->
 }
 
 /// Sweeps the caller's drafts older than `DRAFT_SWEEP_SECS` before the quota check;
-/// `forkedFrom` must name a published toy (404 otherwise) — stricter than the legacy
-/// fork route, which also accepts the caller's own drafts.
+/// `forkedFrom` must name a published toy (404 otherwise).
 async fn create(
     State(state): State<AppState>,
     user: AuthUser,
@@ -244,18 +243,14 @@ async fn create(
     let _write = state.toy_writes.lock().await;
     // A failed/abandoned upload leaves a draft row behind; sweep the caller's own
     // drafts older than an hour first so they never count against the toy quota.
-    // The NOT IN guard skips any draft still named as a fork source, so the
-    // RESTRICT-like forked_from FK never blocks this delete.
-    // ponytail: the NOT IN subquery is a full scan of toys per create; ceiling is
-    // fine while only the legacy /toys/{id}/fork route can fork a draft — drop the
-    // guard once that route goes.
-    sqlx::query(
-        "DELETE FROM toys WHERE author_id=? AND state='draft' AND created_at < ? AND id NOT IN (SELECT forked_from FROM toys WHERE forked_from IS NOT NULL)",
-    )
-    .bind(&user.id)
-    .bind(crate::db::now() - crate::config::DRAFT_SWEEP_SECS)
-    .execute(&state.pool)
-    .await?;
+    // create() only accepts a published forkedFrom, so no draft created from now
+    // on is ever a fork target; migration 0008 detached the legacy edges left by
+    // the removed fork route, so this delete never trips the forked_from FK.
+    sqlx::query("DELETE FROM toys WHERE author_id=? AND state='draft' AND created_at < ?")
+        .bind(&user.id)
+        .bind(crate::db::now() - crate::config::DRAFT_SWEEP_SECS)
+        .execute(&state.pool)
+        .await?;
     ensure_toy_capacity(&state, &user.id).await?;
     ensure_storage(&state, &user.id, 0, save_bytes).await?;
     if let Some(src) = &body.forked_from {
@@ -410,49 +405,6 @@ async fn get_toy(
         "files": files, "sources": sources, "heartCount": heart_count, "hearted": hearted, "forkedFrom": forked_from,
         "author": { "id": author_id, "handle": handle, "avatar": avatar },
     })).into_response())
-}
-
-/// Fork a toy into a new draft owned by the caller: copies title/description/files
-/// plus all toy_sources rows (payloads included, via INSERT...SELECT — this only
-/// copies the payload column, so in disk blob mode the on-disk blob itself is not
-/// duplicated; out of scope here, S1 default is db mode).
-async fn fork(
-    State(state): State<AppState>,
-    user: AuthUser,
-    Path(id): Path<String>,
-) -> AppResult<Response> {
-    let _write = state.toy_writes.lock().await;
-    ensure_toy_capacity(&state, &user.id).await?;
-    let src: Option<(String, String, String)> = sqlx::query_as(
-        "SELECT title,description,files_json FROM toys WHERE id=? AND (state='published' OR author_id=?)",
-    )
-            .bind(&id)
-            .bind(&user.id)
-            .fetch_optional(&state.pool)
-            .await?;
-    let (title, description, files_json) =
-        src.ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such toy"))?;
-    let (source_bytes,): (i64,) = sqlx::query_as(
-        "SELECT COALESCE(SUM(length(name)+length(kind)+COALESCE(length(builtin_id),0)+COALESCE(length(options_json),0)+COALESCE(length(payload),0)+COALESCE(length(meta_json),0)),0) FROM toy_sources WHERE toy_id=?",
-    )
-    .bind(&id)
-    .fetch_one(&state.pool)
-    .await?;
-    ensure_storage(
-        &state,
-        &user.id,
-        0,
-        (title.len() + description.len() + files_json.len()) as i64 + source_bytes,
-    )
-    .await?;
-    let nid = slug();
-    let now = crate::db::now();
-    sqlx::query("INSERT INTO toys(id,author_id,title,description,files_json,state,forked_from,created_at) VALUES(?,?,?,?,?, 'draft', ?, ?)")
-        .bind(&nid).bind(&user.id).bind(&title).bind(&description).bind(&files_json).bind(&id).bind(now).execute(&state.pool).await?;
-    sqlx::query("INSERT INTO toy_sources(toy_id,name,kind,builtin_id,options_json,payload,meta_json)
-                 SELECT ?, name,kind,builtin_id,options_json,payload,meta_json FROM toy_sources WHERE toy_id=?")
-        .bind(&nid).bind(&id).execute(&state.pool).await?;
-    Ok(Json(serde_json::json!({ "id": nid })).into_response())
 }
 
 /// Publish a draft: validates author + caps, stores clip/thumb blobs, flips
@@ -747,30 +699,13 @@ async fn profile(
             &id, &title, created, &uid, &handle, &avatar, hc, hearted,
         ));
     }
-    // Owner-only: unpublished drafts, so the creator page is the one place a
-    // user finds ALL their toys. Never present for other viewers.
-    let drafts = if viewer.as_deref() == Some(uid.as_str()) {
-        let rows: Vec<(String,String,i64)> = sqlx::query_as(
-            "SELECT id,title,created_at FROM toys WHERE author_id=? AND state='draft' ORDER BY created_at DESC")
-            .bind(&uid).fetch_all(&state.pool).await?;
-        Some(rows.into_iter()
-            .map(|(id,title,created)| serde_json::json!({ "id": id, "title": title, "createdAt": created }))
-            .collect::<Vec<_>>())
-    } else {
-        None
-    };
-    let mut body = serde_json::json!({ "user": { "id": uid, "handle": handle, "avatar": avatar }, "toys": cards });
-    if let Some(d) = drafts {
-        body["drafts"] = serde_json::Value::Array(d);
-    }
-    Ok(Json(body).into_response())
+    Ok(Json(serde_json::json!({ "user": { "id": uid, "handle": handle, "avatar": avatar }, "toys": cards })).into_response())
 }
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/toys", get(wall).post(create))
         .route("/toys/{id}", get(get_toy).put(update))
-        .route("/toys/{id}/fork", post(fork))
         .route("/toys/{id}/publish", post(publish))
         .route("/featured", get(featured))
         .route("/highlights", get(highlights))
