@@ -19,8 +19,8 @@
 #   cook "web:build" production web build -> web/dist   (minted by cook_pnpm.task)
 #   cook install     pnpm install --frozen-lockfile (cached by lockfile hash)
 #   cook server.build  compile the axum backend (crates/ppu-server)
-#   cook cli         compile the ppu sync client
-#   cook cli-install install the ppu sync client locally
+#   cook cli         compile the ppu pack/unpack CLI
+#   cook cli-install install the ppu pack/unpack CLI locally
 #
 #   ── run ──────────────────────────────────────────────────────────────────────
 #   cook dev         Vite dev server (builds the WASM core first)
@@ -112,7 +112,7 @@ recipe wasm
         wasm-pack build crates/ppu-core --target web --out-dir ../../web/src/wasm/pkg
     }
 
-# ── CLI: the local toy directory ↔ ppu.toys sync client.
+# ── CLI: offline pack/unpack between a toy directory and a `.ppu.json` file.
 files cli:src
     "crates/ppu-cli/src/**/*.rs" "crates/ppu-cli/Cargo.toml" "Cargo.toml" "Cargo.lock"
 
@@ -165,13 +165,14 @@ chore db-nuke
 
 # ── STACK: the local testing bed — backend + studio dev server against the
 #    ephemeral db, torn down together on Ctrl-C. `stack-fresh` throws the db away
-#    first; content belongs in toy directories and arrives through `ppu sync`.
+#    first; content belongs in toy directories and arrives by opening a packed
+#    `.ppu.json` in the Studio.
 #    The backend backgrounds into the next step and cook drains it when the chore
 #    ends — success, failure, or Ctrl-C (COOK-544, cook >= 0.16.1). No trap.
 #    server.build is kept for a fast start and so compile errors surface as a
 #    build failure, not as a server that never binds.
 chore stack: wasm install server.build
-    PPU_PORT=18080 PPU_DB_PATH=build/dev.db PPU_DEV_TOKEN=ppu_local_demos target/debug/ppu-server &
+    PPU_PORT=18080 PPU_DB_PATH=build/dev.db PPU_DEV_SEED=1 target/debug/ppu-server &
     PPU_API_TARGET=http://127.0.0.1:18080 pnpm --filter web run dev
 
 chore stack-fresh: db-nuke stack
