@@ -42,6 +42,8 @@ pub struct SaveBody {
     pub sources: Vec<SourceDto>,
     #[serde(default, rename = "expectedRevision")]
     pub expected_revision: Option<i64>,
+    #[serde(default, rename = "forkedFrom")]
+    pub forked_from: Option<String>,
 }
 
 fn slug() -> String {
@@ -230,6 +232,9 @@ async fn write_sources(state: &AppState, toy_id: &str, sources: &[SourceDto]) ->
     Ok(())
 }
 
+/// Sweeps the caller's drafts older than `DRAFT_SWEEP_SECS` before the quota check;
+/// `forkedFrom` must name a published toy (404 otherwise) — stricter than the legacy
+/// fork route, which also accepts the caller's own drafts.
 async fn create(
     State(state): State<AppState>,
     user: AuthUser,
@@ -237,13 +242,37 @@ async fn create(
 ) -> AppResult<Response> {
     let save_bytes = validate_save(&body)?;
     let _write = state.toy_writes.lock().await;
+    // A failed/abandoned upload leaves a draft row behind; sweep the caller's own
+    // drafts older than an hour first so they never count against the toy quota.
+    // The NOT IN guard skips any draft still named as a fork source, so the
+    // RESTRICT-like forked_from FK never blocks this delete.
+    // ponytail: the NOT IN subquery is a full scan of toys per create; ceiling is
+    // fine while only the legacy /toys/{id}/fork route can fork a draft — drop the
+    // guard once that route goes.
+    sqlx::query(
+        "DELETE FROM toys WHERE author_id=? AND state='draft' AND created_at < ? AND id NOT IN (SELECT forked_from FROM toys WHERE forked_from IS NOT NULL)",
+    )
+    .bind(&user.id)
+    .bind(crate::db::now() - crate::config::DRAFT_SWEEP_SECS)
+    .execute(&state.pool)
+    .await?;
     ensure_toy_capacity(&state, &user.id).await?;
     ensure_storage(&state, &user.id, 0, save_bytes).await?;
+    if let Some(src) = &body.forked_from {
+        let published: Option<(i64,)> =
+            sqlx::query_as("SELECT 1 FROM toys WHERE id=? AND state='published'")
+                .bind(src)
+                .fetch_optional(&state.pool)
+                .await?;
+        if published.is_none() {
+            return Err(AppError::status(StatusCode::NOT_FOUND, "no such toy"));
+        }
+    }
     let id = slug();
     let files_json = serde_json::to_string(&body.files)?;
     let now = crate::db::now();
-    sqlx::query("INSERT INTO toys(id,author_id,title,description,files_json,state,created_at) VALUES(?,?,?,?,?, 'draft', ?)")
-        .bind(&id).bind(&user.id).bind(&body.title).bind(&body.description).bind(&files_json).bind(now).execute(&state.pool).await?;
+    sqlx::query("INSERT INTO toys(id,author_id,title,description,files_json,state,forked_from,created_at) VALUES(?,?,?,?,?, 'draft', ?, ?)")
+        .bind(&id).bind(&user.id).bind(&body.title).bind(&body.description).bind(&files_json).bind(&body.forked_from).bind(now).execute(&state.pool).await?;
     write_sources(&state, &id, &body.sources).await?;
     Ok(Json(serde_json::json!({ "id": id, "revision": 1 })).into_response())
 }
@@ -427,34 +456,29 @@ async fn fork(
 }
 
 /// Publish a draft: validates author + caps, stores clip/thumb blobs, flips
-/// state, and (if configured) fires the Discord announce webhook in the
-/// background — a webhook failure only logs a warning and never fails the
-/// publish response itself.
+/// state, and (if this is the toy's first publish and Discord is configured)
+/// fires the announce webhook in the background — a webhook failure only
+/// logs a warning and never fails the publish response itself. Republishing
+/// an already-published toy replaces its clip/thumb/title but never
+/// re-announces.
 async fn publish(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<String>,
     mut mp: Multipart,
 ) -> AppResult<Response> {
-    // Browser publishing is human-rate-limited; API tokens are automation
-    // credentials and may publish a batch (the official demo repo does this).
-    if !user.api_token && !state.limiter.check_publish(&user.id) {
-        return Err(AppError::status(
-            StatusCode::TOO_MANY_REQUESTS,
-            "publish rate limit",
-        ));
-    }
     let _write = state.toy_writes.lock().await;
-    let author: Option<(String,)> = sqlx::query_as("SELECT author_id FROM toys WHERE id=?")
-        .bind(&id)
-        .fetch_optional(&state.pool)
-        .await?;
-    let author = author
-        .ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such toy"))?
-        .0;
+    let author: Option<(String, Option<i64>)> =
+        sqlx::query_as("SELECT author_id, published_at FROM toys WHERE id=?")
+            .bind(&id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let (author, published_at) =
+        author.ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such toy"))?;
     if author != user.id {
         return Err(AppError::status(StatusCode::FORBIDDEN, "not your toy"));
     }
+    let first_publish = published_at.is_none();
 
     let mut clip: Option<Vec<u8>> = None;
     let mut thumb: Option<Vec<u8>> = None;
@@ -538,31 +562,35 @@ async fn publish(
             .execute(&state.pool)
             .await?;
     }
-    sqlx::query("UPDATE toys SET state='published', published_at=? WHERE id=?")
-        .bind(now)
-        .bind(&id)
-        .execute(&state.pool)
-        .await?;
+    sqlx::query(
+        "UPDATE toys SET state='published', published_at=COALESCE(published_at, ?) WHERE id=?",
+    )
+    .bind(now)
+    .bind(&id)
+    .execute(&state.pool)
+    .await?;
 
-    if let Some(d) = state.cfg.discord.as_ref() {
-        if let Some(url) = d.webhook_url.clone() {
-            let http = state.http.clone();
-            let permalink = format!("{}/t/{}", state.cfg.base_url, id);
-            let title = meta_title.clone().unwrap_or_else(|| id.clone());
-            tokio::spawn(async move {
-                let form = reqwest::multipart::Form::new()
-                    .text("content", format!("New toy: {title}\n{permalink}"))
-                    .part(
-                        "files[0]",
-                        reqwest::multipart::Part::bytes(clip)
-                            .file_name("clip.webm")
-                            .mime_str("video/webm")
-                            .unwrap(),
-                    );
-                if let Err(e) = http.post(&url).multipart(form).send().await {
-                    tracing::warn!(error=%e, "discord webhook failed");
-                }
-            });
+    if first_publish {
+        if let Some(d) = state.cfg.discord.as_ref() {
+            if let Some(url) = d.webhook_url.clone() {
+                let http = state.http.clone();
+                let permalink = format!("{}/t/{}", state.cfg.base_url, id);
+                let title = meta_title.clone().unwrap_or_else(|| id.clone());
+                tokio::spawn(async move {
+                    let form = reqwest::multipart::Form::new()
+                        .text("content", format!("New toy: {title}\n{permalink}"))
+                        .part(
+                            "files[0]",
+                            reqwest::multipart::Part::bytes(clip)
+                                .file_name("clip.webm")
+                                .mime_str("video/webm")
+                                .unwrap(),
+                        );
+                    if let Err(e) = http.post(&url).multipart(form).send().await {
+                        tracing::warn!(error=%e, "discord webhook failed");
+                    }
+                });
+            }
         }
     }
     Ok(Json(serde_json::json!({ "id": id, "state": "published" })).into_response())

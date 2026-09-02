@@ -14,8 +14,8 @@ pub const MAX_TOYS_PER_USER: i64 = 25;
 pub const MAX_TOKENS_PER_USER: i64 = 5;
 pub const MAX_STORAGE_PER_USER: i64 = 100 * 1024 * 1024;
 pub const MAX_APP_STORAGE: i64 = 20 * 1024 * 1024 * 1024;
-pub const RATE_PUBLISH_PER_DAY: usize = 10;
 pub const RATE_SAVE_MIN_SECS: u64 = 60;
+pub const DRAFT_SWEEP_SECS: i64 = 3600;
 
 #[derive(Clone, Debug)]
 pub enum BlobMode {

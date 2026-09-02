@@ -357,9 +357,11 @@ async fn create_enforces_input_bounds_and_per_user_quota() {
     }))).await.unwrap();
     assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
 
+    let now = ppu_server::db::now();
     for i in 0..ppu_server::config::MAX_TOYS_PER_USER {
-        sqlx::query("INSERT INTO toys(id,author_id,title,files_json,state,created_at) VALUES(?, '1','T','[]','draft',1)")
+        sqlx::query("INSERT INTO toys(id,author_id,title,files_json,state,created_at) VALUES(?, '1','T','[]','draft',?)")
             .bind(format!("t{i}"))
+            .bind(now)
             .execute(&app.state.pool).await.unwrap();
     }
     let over_quota = app
@@ -428,4 +430,178 @@ async fn update_replaces_source_set() {
         vec!["a"],
         "dropped source is removed, not left stale"
     );
+}
+
+#[tokio::test]
+async fn create_with_forked_from_stores_it() {
+    let app = common::test_app().await;
+    let _owner = common::seed_session(&app.state, "1", "ann", false).await;
+    let forker = common::seed_session(&app.state, "2", "bob", false).await;
+    let now = ppu_server::db::now();
+    sqlx::query("INSERT INTO toys(id,author_id,title,files_json,state,created_at) VALUES('orig','1','Orig','[]','published',?)")
+        .bind(now)
+        .execute(&app.state.pool).await.unwrap();
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(authed(
+            "POST",
+            "/api/toys",
+            &forker,
+            serde_json::json!({
+                "title":"f","files":[],"sources":[],"forkedFrom":"orig"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let b = axum::body::to_bytes(res.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    let id = serde_json::from_slice::<serde_json::Value>(&b).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(authed_get(&format!("/api/toys/{id}"), &forker))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let b = axum::body::to_bytes(res.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&b).unwrap();
+    assert_eq!(v["forkedFrom"], "orig");
+}
+
+#[tokio::test]
+async fn forked_from_missing_or_unpublished_is_404() {
+    let app = common::test_app().await;
+    let _owner = common::seed_session(&app.state, "1", "ann", false).await;
+    let forker = common::seed_session(&app.state, "2", "bob", false).await;
+    sqlx::query("INSERT INTO toys(id,author_id,title,files_json,state,created_at) VALUES('unpub','1','Unpub','[]','draft',?)")
+        .bind(ppu_server::db::now())
+        .execute(&app.state.pool).await.unwrap();
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(authed(
+            "POST",
+            "/api/toys",
+            &forker,
+            serde_json::json!({
+                "title":"f","files":[],"sources":[],"forkedFrom":"nope"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(authed(
+            "POST",
+            "/api/toys",
+            &forker,
+            serde_json::json!({
+                "title":"f","files":[],"sources":[],"forkedFrom":"unpub"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn create_sweeps_callers_stale_drafts() {
+    let app = common::test_app().await;
+    let sid = common::seed_session(&app.state, "1", "ann", false).await;
+    let _ = common::seed_session(&app.state, "2", "bob", false).await;
+    let now = ppu_server::db::now();
+    sqlx::query("INSERT INTO toys(id,author_id,title,files_json,state,created_at) VALUES('old','1','Old','[]','draft',?)")
+        .bind(now - 2 * ppu_server::config::DRAFT_SWEEP_SECS)
+        .execute(&app.state.pool).await.unwrap();
+    sqlx::query("INSERT INTO toys(id,author_id,title,files_json,state,created_at) VALUES('fresh','1','Fresh','[]','draft',?)")
+        .bind(now - ppu_server::config::DRAFT_SWEEP_SECS / 2)
+        .execute(&app.state.pool).await.unwrap();
+    sqlx::query("INSERT INTO toys(id,author_id,title,files_json,state,created_at) VALUES('pub','1','Pub','[]','published',?)")
+        .bind(now - 2 * ppu_server::config::DRAFT_SWEEP_SECS)
+        .execute(&app.state.pool).await.unwrap();
+    sqlx::query("INSERT INTO toys(id,author_id,title,files_json,state,created_at) VALUES('other_old','2','OtherOld','[]','draft',?)")
+        .bind(now - 2 * ppu_server::config::DRAFT_SWEEP_SECS)
+        .execute(&app.state.pool).await.unwrap();
+    sqlx::query("INSERT INTO toy_sources(toy_id,name,kind) VALUES('old','s','bg')")
+        .execute(&app.state.pool)
+        .await
+        .unwrap();
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(authed(
+            "POST",
+            "/api/toys",
+            &sid,
+            serde_json::json!({
+                "title":"n","files":[],"sources":[]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let ids: Vec<(String,)> = sqlx::query_as("SELECT id FROM toys ORDER BY id")
+        .fetch_all(&app.state.pool)
+        .await
+        .unwrap();
+    let ids: Vec<&str> = ids.iter().map(|(i,)| i.as_str()).collect();
+    assert!(
+        !ids.contains(&"old"),
+        "stale draft should be swept: {ids:?}"
+    );
+    assert!(ids.contains(&"fresh"));
+    assert!(ids.contains(&"pub"));
+    assert!(ids.contains(&"other_old"));
+
+    let sources: i64 =
+        sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM toy_sources WHERE toy_id='old'")
+            .fetch_one(&app.state.pool)
+            .await
+            .unwrap()
+            .0;
+    assert_eq!(sources, 0, "swept draft's toy_sources row should cascade");
+}
+
+#[tokio::test]
+async fn stale_drafts_do_not_eat_the_quota() {
+    let app = common::test_app().await;
+    let sid = common::seed_session(&app.state, "1", "ann", false).await;
+    let now = ppu_server::db::now();
+    for i in 0..ppu_server::config::MAX_TOYS_PER_USER {
+        sqlx::query("INSERT INTO toys(id,author_id,title,files_json,state,created_at) VALUES(?, '1','T','[]','draft',?)")
+            .bind(format!("d{i}"))
+            .bind(now - 2 * ppu_server::config::DRAFT_SWEEP_SECS)
+            .execute(&app.state.pool).await.unwrap();
+    }
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(authed(
+            "POST",
+            "/api/toys",
+            &sid,
+            serde_json::json!({
+                "title":"x","files":[],"sources":[]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
 }
