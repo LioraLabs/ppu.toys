@@ -91,9 +91,18 @@ fn read_manifest(dir: &Path) -> Result<Manifest> {
 }
 
 /// Read a project directory (`ppu.json` manifest + its files/payloads) and
-/// serialize it to `ppu.toys/1` file text, byte-for-byte what Studio writes.
+/// serialize it to `ppu.toys/1` file text. The result parses identically in
+/// Studio's Open... dialog; key order may differ from what Studio writes
+/// (serde_json sorts object keys, Studio preserves insertion order).
 pub fn pack(dir: &Path) -> Result<String> {
     let manifest = read_manifest(dir)?;
+
+    if !manifest.files.iter().any(|name| name == "main.lua") {
+        bail!(
+            "{} must list main.lua in \"files\" (Studio requires it)",
+            dir.join(MANIFEST).display()
+        );
+    }
 
     let files = manifest
         .files
