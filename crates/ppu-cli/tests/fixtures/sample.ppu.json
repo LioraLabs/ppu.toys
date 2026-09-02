@@ -1,0 +1,46 @@
+{
+  "version": "ppu.toys/1",
+  "title": "Sample toy",
+  "description": "A two-file toy with one background source.",
+  "files": [
+    {
+      "name": "main.lua",
+      "source": "-- Sample toy: scrolls bg1 by the frame counter.\nfunction frame(t, f)\n  brightness = 15\n  screen.main.bg1 = true\n  bg[1].hofs = f\nend\n"
+    },
+    {
+      "name": "pokes.lua",
+      "source": "-- Helper pokes shared by the sample toy.\nfunction poke_all(value)\n  for i = 1, 4 do bg[i].vofs = value end\nend\n"
+    }
+  ],
+  "sources": [
+    {
+      "name": "sky",
+      "kind": "bg",
+      "builtinId": null,
+      "options": {
+        "bit_depth": 4
+      },
+      "meta": {
+        "height": 8,
+        "report": {
+          "mode": "tile",
+          "report": {
+            "colors_used": 0,
+            "overflows": [],
+            "palettes_used": 0,
+            "tile_cells": 0,
+            "unique_tiles": 0,
+            "vram_words": 0
+          }
+        },
+        "width": 8
+      },
+      "payload": "AQIDBAU="
+    }
+  ],
+  "origin": {
+    "id": "toy-123",
+    "revision": 4,
+    "authorId": "u1"
+  }
+}
