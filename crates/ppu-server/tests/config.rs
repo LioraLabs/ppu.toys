@@ -9,7 +9,7 @@ fn defaults_apply_and_missing_discord_is_none() {
     assert_eq!(cfg.session_ttl_days, 30);
     assert!(cfg.discord.is_none(), "no creds => auth disabled");
     assert!(cfg.admin_ids.is_empty());
-    assert!(cfg.dev_token.is_none());
+    assert!(!cfg.dev_seed);
 }
 
 #[test]
@@ -30,7 +30,10 @@ fn discord_present_and_admin_ids_parsed() {
 }
 
 #[test]
-fn explicit_dev_token_is_opt_in() {
-    let cfg = Config::from_map(|key| (key == "PPU_DEV_TOKEN").then(|| "local-only".into()));
-    assert_eq!(cfg.dev_token.as_deref(), Some("local-only"));
+fn dev_seed_is_opt_in() {
+    let cfg = Config::from_map(|key| (key == "PPU_DEV_SEED").then(|| "1".into()));
+    assert!(cfg.dev_seed);
+
+    let cfg = Config::from_map(|key| (key == "PPU_DEV_SEED").then(|| "0".into()));
+    assert!(!cfg.dev_seed);
 }

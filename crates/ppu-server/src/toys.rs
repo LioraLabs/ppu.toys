@@ -301,9 +301,9 @@ async fn update(
             "toy changed remotely",
         ));
     }
-    // ~1/min throttle applies to browser re-saves, after the cheap stale-write
+    // ~1/min throttle applies to every re-save, after the cheap stale-write
     // check so a conflict is never disguised as a rate-limit response.
-    if !user.api_token && !state.limiter.check_save(&user.id) {
+    if !state.limiter.check_save(&user.id) {
         return Err(AppError::status(
             StatusCode::TOO_MANY_REQUESTS,
             "save rate limit",

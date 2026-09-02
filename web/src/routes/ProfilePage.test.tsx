@@ -6,8 +6,17 @@ import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { ProfilePage } from "./ProfilePage";
 import { makeProfile, makeWallCard } from "../fixtures";
 
-vi.mock("../api/apiClient", () => ({ getProfile: vi.fn() }));
-vi.mock("../api/session", () => ({ useSession: () => ({ user: null, loading: false }) }));
+vi.mock("../api/apiClient", () => ({
+  getProfile: vi.fn(),
+}));
+let session: {
+  user: null | { id: string; handle: string; avatar: string | null };
+  loading: boolean;
+} = {
+  user: null,
+  loading: false,
+};
+vi.mock("../api/session", () => ({ useSession: () => session }));
 import { getProfile } from "../api/apiClient";
 
 const profile = makeProfile({
@@ -17,6 +26,7 @@ const mockGetProfile = getProfile as ReturnType<typeof vi.fn>;
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  session = { user: null, loading: false };
 });
 
 function renderAt(handle = "ada") {
@@ -42,5 +52,14 @@ describe("ProfilePage", () => {
     mockGetProfile.mockResolvedValue(makeProfile({ toys: [] }));
     renderAt();
     expect(await screen.findByText(/no published toys/i)).toBeInTheDocument();
+  });
+
+  it("own profile has no Local editing section", async () => {
+    session.user = { id: "u1", handle: "ada", avatar: null };
+    mockGetProfile.mockResolvedValue(profile);
+    renderAt();
+    expect(await screen.findByRole("heading", { name: "ada" })).toBeInTheDocument();
+    expect(screen.queryByText("Local editing")).toBeNull();
+    expect(screen.queryByRole("button", { name: /create cli token/i })).toBeNull();
   });
 });
