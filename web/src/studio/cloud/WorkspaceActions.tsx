@@ -1,24 +1,17 @@
 import { useEffect, useState } from "react";
-import { useOpenSketch, openContextLabel } from "../sketches/openSketch";
+import { useOpenSketch, openContextLabel, openSketchStore } from "../sketches/openSketch";
 import { useSession, sessionStore } from "../../api/session";
 import { SIGN_IN_URL, createToy, updateToy } from "../../api/apiClient";
 import { serializeWorkspace } from "./serialize";
-import { cloudDraft, useCloudDraft } from "./cloudDraft";
 import { PublishDialog } from "./PublishDialog";
 import "./cloud.css";
 
 /** Save + Publish, the toolbar's cloud seam. Signed-out collapses to a single
- *  sign-in link — Save/Publish/PublishDialog never mount without a session.
- *
- *  Intentionally left as a thin WIRED container (no story): it owns the session
- *  refresh + serialize/create-or-update side effects and exists only to bind the
- *  `save` seam it hands to the presentational PublishDialog, which IS storied.
- *  A full story would fake the session + cloud without exercising anything the
- *  PublishDialog story doesn't already cover. */
+ *  sign-in link — Save/Publish/PublishDialog never mount without a session. */
 export function WorkspaceActions() {
   const state = useOpenSketch();
   const { user } = useSession();
-  const draftId = useCloudDraft(state.session);
+  const origin = state.context.sketch.origin;
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [showPublish, setShowPublish] = useState(false);
@@ -30,23 +23,28 @@ export function WorkspaceActions() {
   }, []);
 
   /** Ensure-saved: serialize the open workspace and create-or-update the
-   *  bound cloud draft, returning its id. Shared by the Save button and the
-   *  publish flow (PublishDialog calls this same function via prop, passing
-   *  its edited title/description so they persist before publishing). */
+   *  toy the sketch is linked to (origin), returning its id. Updates only
+   *  when the origin is owned by the signed-in user; otherwise mints a new
+   *  toy and re-links to it. Shared by the Save button and the publish flow
+   *  (PublishDialog calls this same function via prop, passing its edited
+   *  title/description so they persist before publishing). */
   async function save(meta?: { title?: string; description?: string }): Promise<string> {
+    if (!user) throw new Error("not signed in");
     const { files, sources } = serializeWorkspace(state);
     const title = meta?.title ?? openContextLabel(state);
     const description = meta?.description ?? "";
-    const existing = cloudDraft.current(state.session);
-    if (existing) {
-      const revision = cloudDraft.revision(state.session);
-      if (revision === null) throw new Error("cloud revision missing");
-      const updated = await updateToy(existing, revision, { title, description, files, sources });
-      cloudDraft.set(existing, updated.revision, state.session);
-      return existing;
+    if (origin && origin.authorId === user.id) {
+      const updated = await updateToy(origin.id, origin.revision, {
+        title,
+        description,
+        files,
+        sources,
+      });
+      openSketchStore.setOrigin({ ...origin, revision: updated.revision });
+      return origin.id;
     }
     const created = await createToy({ title, description, files, sources });
-    cloudDraft.set(created.id, created.revision, state.session);
+    openSketchStore.setOrigin({ id: created.id, revision: created.revision, authorId: user.id });
     return created.id;
   }
 
@@ -96,11 +94,20 @@ export function WorkspaceActions() {
           {status}
         </span>
       )}
-      {draftId && (
-        <span className="cloud-draft-status">
-          <span className="cloud-draft-dot" aria-hidden="true" />
-          <span className="sr-only">Saved to a cloud draft</span>
+      {origin ? (
+        <span className="cloud-link-chip cloud-link-chip--linked">
+          {`linked to t/${origin.id}`}
+          <button
+            type="button"
+            className="cloud-link-unlink"
+            aria-label="Unlink"
+            onClick={() => openSketchStore.clearOrigin()}
+          >
+            ×
+          </button>
         </span>
+      ) : (
+        <span className="cloud-link-chip">unlinked</span>
       )}
       <button
         type="button"

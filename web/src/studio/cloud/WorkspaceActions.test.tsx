@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
+import "fake-indexeddb/auto";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { IDBFactory } from "fake-indexeddb";
 import "@testing-library/jest-dom/vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { WorkspaceActions } from "./WorkspaceActions";
-import { cloudDraft } from "./cloudDraft";
+import { openSketchStore } from "../sketches/openSketch";
+import { _resetSketchStoreForTests } from "../sketches/sketchStore";
 import type { Me } from "../../api/apiClient";
 
 vi.mock("../../api/apiClient", () => ({
@@ -33,7 +36,9 @@ const mockUpdateToy = updateToy as unknown as ReturnType<typeof vi.fn>;
 const USER: Me = { id: "u1", handle: "ada", avatar: null, isAdmin: false };
 
 beforeEach(() => {
-  cloudDraft._resetForTests();
+  (globalThis as { indexedDB: IDBFactory }).indexedDB = new IDBFactory();
+  _resetSketchStoreForTests();
+  openSketchStore._resetForTests();
   mockCreateToy.mockReset();
   mockUpdateToy.mockReset();
   mockUseSession.mockReset();
@@ -53,10 +58,10 @@ describe("WorkspaceActions", () => {
     expect(screen.queryByRole("button", { name: /^save$/i })).not.toBeInTheDocument();
   });
 
-  it("signed-in: Save creates the toy, then a second Save updates it", async () => {
+  it("signed-in: Save creates the toy, then updates it with the revision the previous save returned", async () => {
     mockUseSession.mockReturnValue({ user: USER, loading: false });
     mockCreateToy.mockResolvedValue({ id: "toy1", revision: 1 });
-    mockUpdateToy.mockResolvedValue({ revision: 2 });
+    mockUpdateToy.mockResolvedValueOnce({ revision: 2 }).mockResolvedValueOnce({ revision: 3 });
     render(
       <MemoryRouter>
         <WorkspaceActions />
@@ -80,5 +85,52 @@ describe("WorkspaceActions", () => {
     await waitFor(() => expect(mockUpdateToy).toHaveBeenCalledTimes(1));
     expect(mockUpdateToy.mock.calls[0][1]).toBe(1);
     expect(mockCreateToy).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(saveBtn);
+    await waitFor(() => expect(mockUpdateToy).toHaveBeenCalledTimes(2));
+    expect(mockUpdateToy.mock.calls[1][1]).toBe(2);
+    expect(mockCreateToy).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows unlinked, then linked to t/<id> after a save, then unlinked again after Unlink; the next save creates a new toy", async () => {
+    mockUseSession.mockReturnValue({ user: USER, loading: false });
+    mockCreateToy.mockResolvedValueOnce({ id: "toy1", revision: 1 }).mockResolvedValueOnce({
+      id: "toy2",
+      revision: 1,
+    });
+    render(
+      <MemoryRouter>
+        <WorkspaceActions />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText("unlinked")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(mockCreateToy).toHaveBeenCalledTimes(1));
+    const unlinkBtn = await screen.findByRole("button", { name: /unlink/i });
+    expect(screen.getByText(/linked to t\/toy1/)).toBeInTheDocument();
+
+    fireEvent.click(unlinkBtn);
+    await waitFor(() => expect(screen.getByText("unlinked")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(mockCreateToy).toHaveBeenCalledTimes(2));
+    expect(mockUpdateToy).not.toHaveBeenCalled();
+  });
+
+  it("an origin authored by someone else always creates a new toy, never updates", async () => {
+    mockUseSession.mockReturnValue({ user: USER, loading: false });
+    openSketchStore.setOrigin({ id: "other", revision: 7, authorId: "someone-else" });
+    mockCreateToy.mockResolvedValue({ id: "toy1", revision: 1 });
+    render(
+      <MemoryRouter>
+        <WorkspaceActions />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(mockCreateToy).toHaveBeenCalledTimes(1));
+    expect(mockUpdateToy).not.toHaveBeenCalled();
   });
 });

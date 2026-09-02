@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IDBFactory } from "fake-indexeddb";
 import { openContextFiles, openSketchStore } from "./openSketch";
-import { _resetSketchStoreForTests } from "./sketchStore";
+import { _resetSketchStoreForTests, loadSketch } from "./sketchStore";
 
 describe("openSketchStore", () => {
   beforeEach(() => {
@@ -46,5 +46,21 @@ describe("openSketchStore", () => {
     openSketchStore.deleteFile("main.lua");
     expect(openSketchStore.renameFile("main.lua", "entry.lua")).toBe(false);
     expect(openContextFiles(openSketchStore.state()).map((f) => f.name)).toContain("main.lua");
+  });
+
+  it("setOrigin/clearOrigin update state immediately and persist through flush", async () => {
+    await openSketchStore.newSketch();
+    const id = openSketchStore.state().context.sketch.id;
+    const origin = { id: "toy-1", revision: 2, authorId: "u1" };
+
+    openSketchStore.setOrigin(origin);
+    expect(openSketchStore.state().context.sketch.origin).toEqual(origin);
+    await openSketchStore.flush();
+    expect((await loadSketch(id))!.origin).toEqual(origin);
+
+    openSketchStore.clearOrigin();
+    expect(openSketchStore.state().context.sketch.origin).toBeUndefined();
+    await openSketchStore.flush();
+    expect((await loadSketch(id))!.origin).toBeUndefined();
   });
 });

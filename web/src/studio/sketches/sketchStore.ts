@@ -20,6 +20,13 @@ export interface SketchSource {
   meta: SourceMeta;
 }
 
+/** Carries authorId so ownership is judged without a fetch. Not copied by duplicateSketch (createSketch never takes it). */
+export interface SketchOrigin {
+  id: string;
+  revision: number;
+  authorId: string;
+}
+
 export interface Sketch {
   id: string;
   name: string;
@@ -31,6 +38,8 @@ export interface Sketch {
   /** Demo id this sketch was lazily forked from, if any. Restoring a forked
    *  sketch re-runs that demo's procedural assets instead of storing copies. */
   forkedFrom?: string;
+  /** The cloud toy this sketch came from / saves to. Unset means unlinked. */
+  origin?: SketchOrigin;
 }
 
 /** What the library list shows — everything but the payloads. */

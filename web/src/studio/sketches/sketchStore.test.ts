@@ -119,6 +119,21 @@ describe("sketchStore CRUD", () => {
     expect(loaded as unknown as { assets?: unknown }).not.toHaveProperty("assets");
   });
 
+  it("round-trips origin through saveSketch/loadSketch", async () => {
+    const made = await createSketch("linked", [{ name: "main.lua", source: "-- x" }]);
+    const origin = { id: "toy-1", revision: 3, authorId: "u1" };
+    await saveSketch({ ...made, origin });
+    expect((await loadSketch(made.id))!.origin).toEqual(origin);
+  });
+
+  it("duplicateSketch drops origin from both the return value and the stored copy", async () => {
+    const made = await createSketch("linked", [{ name: "main.lua", source: "-- x" }]);
+    await saveSketch({ ...made, origin: { id: "toy-1", revision: 3, authorId: "u1" } });
+    const dup = await duplicateSketch(made.id);
+    expect(dup!.origin).toBeUndefined();
+    expect((await loadSketch(dup!.id))!.origin).toBeUndefined();
+  });
+
   it("deletes", async () => {
     const made = await createSketch("gone", []);
     await deleteSketch(made.id);

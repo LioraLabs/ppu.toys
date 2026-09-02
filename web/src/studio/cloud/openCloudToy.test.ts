@@ -3,9 +3,8 @@ import "fake-indexeddb/auto";
 import { describe, it, expect, beforeEach } from "vitest";
 import { IDBFactory } from "fake-indexeddb";
 import { openCloudToy } from "./openCloudToy";
-import { cloudDraft } from "./cloudDraft";
 import { openSketchStore } from "../sketches/openSketch";
-import { _resetSketchStoreForTests } from "../sketches/sketchStore";
+import { _resetSketchStoreForTests, loadSketch } from "../sketches/sketchStore";
 import { encodeBase64 } from "../../api/base64";
 import type { ToyFull } from "../../api/apiClient";
 
@@ -65,11 +64,10 @@ beforeEach(() => {
   (globalThis as { indexedDB: IDBFactory }).indexedDB = new IDBFactory();
   _resetSketchStoreForTests();
   openSketchStore._resetForTests();
-  cloudDraft._resetForTests();
 });
 
 describe("openCloudToy", () => {
-  it("mints a local sketch from the toy's files + payload-bearing sources, opens it, and binds the cloud draft", async () => {
+  it("mints a local sketch from the toy's files + payload-bearing sources, opens it, and sets its origin", async () => {
     const t = toy();
     await openCloudToy(t);
 
@@ -81,7 +79,11 @@ describe("openCloudToy", () => {
     expect(sources.map((s) => s.name)).toEqual(["sky"]);
     expect(Array.from(sources[0].payload)).toEqual(Array.from(skyBytes));
 
-    expect(cloudDraft.current(state.session)).toBe(t.id);
-    expect(cloudDraft.revision(state.session)).toBe(4);
+    const origin = { id: t.id, revision: t.revision, authorId: t.author.id };
+    expect(state.context.sketch.origin).toEqual(origin);
+
+    // a reload right after openCloudToy must still show the origin
+    const loaded = await loadSketch(state.context.sketch.id);
+    expect(loaded!.origin).toEqual(origin);
   });
 });

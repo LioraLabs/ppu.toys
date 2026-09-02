@@ -9,6 +9,7 @@ import {
   type Sketch,
   type SketchSource,
   type SketchFile,
+  type SketchOrigin,
 } from "./sketchStore";
 
 /** Debounce window between the last change and the autosave write. */
@@ -297,6 +298,16 @@ export const openSketchStore = {
    *  the store would be reverted by the next autosave flush). */
   rename(name: string): void {
     mutateSketch((s) => ({ ...s, name }));
+  },
+
+  /** Link the open sketch to a published toy. Rides the autosave like any edit. */
+  setOrigin(origin: SketchOrigin): void {
+    mutateSketch((s) => ({ ...s, origin }));
+  },
+
+  /** Unlink the open sketch. Drops the key rather than setting it undefined. */
+  clearOrigin(): void {
+    mutateSketch(({ origin: _origin, ...s }) => s);
   },
 
   /** Persist pending changes now (autosave uses this; tests + open paths too). */
