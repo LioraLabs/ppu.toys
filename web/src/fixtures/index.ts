@@ -683,10 +683,3 @@ export const sourceMetaM7: SourceMeta = makeSourceMeta();
 export function makeSketchSource(name: string): SketchSource {
   return { name, kind: "m7", options: {}, payload: sourcePayloadM7, meta: sourceMetaM7 };
 }
-
-/** Ensure-saved stub for PublishDialog's `save` prop: resolves to a toy id
- *  without touching the cloud, so the dialog stories run offline. */
-export const publishSave = async (_meta?: {
-  title?: string;
-  description?: string;
-}): Promise<string> => "toy-fixture-123";

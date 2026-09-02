@@ -103,6 +103,21 @@
   color: var(--red);
   font-size: 12px;
 }
+.cloud-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--mid);
+}
+.cloud-preview img {
+  width: 32px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+}
 .cloud-status-line {
   color: var(--mid);
   font-size: 12px;

@@ -15,6 +15,7 @@ import {
   createToy,
   updateToy,
   publishToy,
+  ApiError,
 } from "./apiClient";
 import type { SaveToyBody } from "./apiClient";
 
@@ -143,6 +144,26 @@ describe("write endpoints", () => {
     expect(captured!.headers.get("X-PPU-CSRF")).toBe("1");
     expect(captured!.headers.get("content-type")).toContain("application/json");
     expect(await captured!.json()).toEqual(saveBody);
+  });
+
+  it("createToy passes forkedFrom through in the body", async () => {
+    let captured: Request | undefined;
+    server.use(
+      http.post("/api/toys", async ({ request }) => {
+        captured = request.clone();
+        return HttpResponse.json({ id: "new2", revision: 1 });
+      }),
+    );
+    await createToy({ ...saveBody, forkedFrom: "abc" });
+    expect((await captured!.json()).forkedFrom).toBe("abc");
+  });
+
+  it("a non-2xx rejects with an ApiError carrying the status", async () => {
+    server.use(http.put("/api/toys/:id", () => new HttpResponse(null, { status: 429 })));
+    const err = await updateToy("abc", 3, saveBody).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(429);
+    expect(err.message).toBe("PUT /api/toys/abc → 429");
   });
 
   it("updateToy PUTs /api/toys/:id with CSRF and JSON body; 204 resolves undefined", async () => {

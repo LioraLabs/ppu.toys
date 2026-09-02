@@ -107,6 +107,18 @@ export function goToSignIn(): void {
   window.location.assign(SIGN_IN_URL);
 }
 
+/** A non-2xx response. `status` lets callers branch (404 toy gone, 409
+ *  revision/quota conflict, 429 update throttle) without parsing the message. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
   const mutating = method === "POST" || method === "PUT" || method === "DELETE";
@@ -119,7 +131,7 @@ async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
     },
   });
   if (!res.ok) {
-    throw new Error(`${method} ${url} → ${res.status}`);
+    throw new ApiError(`${method} ${url} → ${res.status}`, res.status);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
@@ -239,6 +251,8 @@ export interface SaveToyBody {
   description?: string;
   files: ToyFile[];
   sources: ToySource[];
+  /** Create only: the published toy this one is a remix of. */
+  forkedFrom?: string;
 }
 
 export function createToy(body: SaveToyBody): Promise<{ id: string; revision: number }> {

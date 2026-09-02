@@ -25,9 +25,8 @@ export function WorkspaceActions() {
   /** Ensure-saved: serialize the open workspace and create-or-update the
    *  toy the sketch is linked to (origin), returning its id. Updates only
    *  when the origin is owned by the signed-in user; otherwise mints a new
-   *  toy and re-links to it. Shared by the Save button and the publish flow
-   *  (PublishDialog calls this same function via prop, passing its edited
-   *  title/description so they persist before publishing). */
+   *  toy and re-links to it. Backs the Save button only — PublishDialog owns
+   *  its own create/update-then-publish sequence (PPU-122). */
   async function save(meta?: { title?: string; description?: string }): Promise<string> {
     if (!user) throw new Error("not signed in");
     const { files, sources } = serializeWorkspace(state);
@@ -125,7 +124,7 @@ export function WorkspaceActions() {
       >
         Publish…
       </button>
-      {showPublish && <PublishDialog onClose={() => setShowPublish(false)} save={save} />}
+      {showPublish && <PublishDialog onClose={() => setShowPublish(false)} />}
     </div>
   );
 }
