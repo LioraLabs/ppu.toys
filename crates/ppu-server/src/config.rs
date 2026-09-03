@@ -11,7 +11,6 @@ pub const CAP_NAME: usize = 80;
 pub const MAX_FILES: usize = 32;
 pub const MAX_SOURCES: usize = 32;
 pub const MAX_TOYS_PER_USER: i64 = 25;
-pub const MAX_TOKENS_PER_USER: i64 = 5;
 pub const MAX_STORAGE_PER_USER: i64 = 100 * 1024 * 1024;
 pub const MAX_APP_STORAGE: i64 = 20 * 1024 * 1024 * 1024;
 pub const RATE_SAVE_MIN_SECS: u64 = 60;
@@ -45,9 +44,11 @@ pub struct Config {
     pub admin_ids: Vec<String>,
     pub session_ttl_days: i64,
     pub base_url: String,
-    /// Explicit local-development credential. When set, startup ensures a
-    /// `ppu` system account can authenticate with this API token.
-    pub dev_token: Option<String>,
+    /// Gates local-development seeding: the `sys:ppu` dev account and its
+    /// bundled featured toy (see `ensure_dev_account`), and the local
+    /// sign-in bypass in `auth::discord_start`. True iff `PPU_DEV_SEED` is
+    /// exactly `"1"`.
+    pub dev_seed: bool,
 }
 
 impl Config {
@@ -96,7 +97,7 @@ impl Config {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(30),
             base_url: get("PPU_BASE_URL").unwrap_or_else(|| "http://localhost:8080".into()),
-            dev_token: get("PPU_DEV_TOKEN").filter(|token| !token.is_empty()),
+            dev_seed: get("PPU_DEV_SEED").as_deref() == Some("1"),
         }
     }
 }

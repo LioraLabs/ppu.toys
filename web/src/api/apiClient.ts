@@ -75,12 +75,6 @@ export interface ToyFull {
   author: { id: string; handle: string; avatar: string | null };
 }
 
-export interface ApiToken {
-  id: string;
-  name: string;
-  createdAt: number;
-}
-
 export interface Profile {
   user: { id: string; handle: string; avatar: string | null };
   toys: WallCard[];
@@ -216,22 +210,6 @@ export function removeHeart(id: string): Promise<void> {
 
 export function logout(): Promise<void> {
   return request<void>("/api/auth/logout", { method: "POST" });
-}
-
-export function getTokens(): Promise<ApiToken[]> {
-  return request<ApiToken[]>("/api/tokens");
-}
-
-export function createToken(name = "CLI"): Promise<ApiToken & { token: string }> {
-  return request<ApiToken & { token: string }>("/api/tokens", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
-}
-
-export function deleteToken(id: string): Promise<void> {
-  return request<void>(`/api/tokens/${id}`, { method: "DELETE" });
 }
 
 export interface SaveToyBody {

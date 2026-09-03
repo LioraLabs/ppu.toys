@@ -23,8 +23,8 @@ end
 `;
 
 /** The entry file. Not special-cased by the engine (any file can define
- *  frame/init) but it IS the toy's front door — every tutorial, demo and
- *  `ppu new` scaffold names it — so it can't be deleted or renamed away. */
+ *  frame/init) but it IS the toy's front door — every tutorial and demo
+ *  names it — so it can't be deleted or renamed away. */
 export const MAIN_FILE = "main.lua";
 
 /** pokes.lua is reserved: always present, always index 0. The ONLY generated

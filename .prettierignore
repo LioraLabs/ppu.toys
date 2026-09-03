@@ -10,3 +10,5 @@ pnpm-lock.yaml
 Cargo.lock
 cook.lock
 vendor
+# byte-pinned by crates/ppu-cli/tests/pack.rs — prettier would break the pin
+crates/ppu-cli/tests/fixtures

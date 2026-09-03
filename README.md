@@ -99,58 +99,35 @@ No `.env` or Discord account is needed: **Sign in locally** uses the disposable
 
 ## Edit a toy on your machine
 
-Install the small sync client:
+Install the small pack/unpack CLI:
 
 ```sh
-cargo install --git https://github.com/LioraLabs/ppu.toys.git --bin ppu
+cargo install --git https://github.com/LioraLabs/ppu.toys.git ppu-cli
 ```
 
 When working from this checkout, `cook cli-install` installs the same binary.
 
-On your profile, create a CLI token under **Local editing**, then run the command
-shown there once.
-
-Start a new toy entirely locally:
-
-```sh
-ppu new my-tutorial
-cd my-tutorial
-$EDITOR main.lua
-ppu status
-ppu push
-```
-
-The first push creates a private draft and prints its URL. Open that URL in the
-Studio when you are ready to render its preview and publish it.
-
-To work on an existing toy:
+The loop is entirely local and file-based: import images in the Studio and
+Ctrl+S to save a `.ppu.json` file, unpack it into a folder, edit the Lua in
+your own editor, pack the folder back into a `.ppu.json`, then use Open… in
+the Studio to load it and Publish when you're ready.
 
 ```sh
-ppu pull https://ppu.toys/t/abc123
-cd abc123
-$EDITOR main.lua
-ppu push
+ppu unpack my-toy.ppu.json my-toy
+$EDITOR my-toy/main.lua
+ppu pack my-toy
 ```
 
-`ppu sync` handles the normal two-way loop: it pushes when only local files
-changed, pulls when only the server changed, and stops when both changed. In a
-conflict it leaves local files untouched and writes the remote versions under
-`.ppu/remote/`. `ppu pull --force` discards local edits; `ppu push --force`
-explicitly overwrites the latest remote code.
+`ppu unpack` writes the Lua files alongside a `ppu.json` manifest (title,
+description, file order, and each image source's options, metadata, and
+binary payload under `.ppu/sources/`); `ppu pack` reads that folder back into
+a single `.ppu.json` you can reopen in the Studio. The manifest's file list
+must include `main.lua`, or `ppu pack` refuses it. The packed file loads
+exactly like one the Studio saved; the bytes are not identical.
 
-`ppu.json` keeps the toy id, server revision, title, description, file order,
-and last-synced hashes. Pushes create normal server revisions and preserve the
-toy's existing image sources. Studio uses the same revision check, so a browser
-save and CLI push cannot silently overwrite one another.
-
-The intended toy development cycle is: `ppu new`, edit and run `ppu sync`
-as needed while the remote copy remains a private draft, open it in Studio to
-check the real renderer, then publish. Keep official tutorials/examples in a
-separate private repository as ordinary `ppu` toy directories; ppu.toys—not
-this application repository—is their public distribution. Update them with the
-same pull/edit/sync loop.
-Set `PPU_CONFIG` to override the default token file at
-`~/.config/ppu/config.json`.
+Keep official tutorials/examples in a separate private repository as ordinary
+toy directories; ppu.toys—not this application repository—is their public
+distribution. Update them with the same unpack/edit/pack/Open/Publish loop.
 
 ## Deployment
 

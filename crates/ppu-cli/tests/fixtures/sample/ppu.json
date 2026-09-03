@@ -1,0 +1,38 @@
+{
+  "title": "Sample toy",
+  "description": "A two-file toy with one background source.",
+  "files": [
+    "main.lua",
+    "pokes.lua"
+  ],
+  "sources": [
+    {
+      "name": "sky",
+      "kind": "bg",
+      "options": {
+        "bit_depth": 4
+      },
+      "meta": {
+        "width": 8,
+        "height": 8,
+        "report": {
+          "mode": "tile",
+          "report": {
+            "colors_used": 0,
+            "palettes_used": 0,
+            "tile_cells": 0,
+            "unique_tiles": 0,
+            "vram_words": 0,
+            "overflows": []
+          }
+        }
+      },
+      "payload": ".ppu/sources/0.bin"
+    }
+  ],
+  "origin": {
+    "id": "toy-123",
+    "revision": 4,
+    "authorId": "u1"
+  }
+}
