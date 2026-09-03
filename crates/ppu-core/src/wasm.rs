@@ -150,6 +150,12 @@ impl PpuCore {
         serde_wasm_bindgen::to_value(self.engine.import_reports()).map_err(Into::into)
     }
 
+    /// Controller bitmask for the next frame (bit order: LuaEngine::PAD_NAMES).
+    #[wasm_bindgen(js_name = setPad)]
+    pub fn set_pad(&mut self, mask: u16) {
+        self.engine.set_pad(mask);
+    }
+
     #[wasm_bindgen(js_name = setLayerVisible)]
     pub fn set_layer_visible(&mut self, id: String, visible: bool) {
         match id.as_str() {
