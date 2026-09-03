@@ -1,4 +1,4 @@
-import { decodeBase64 } from "../../api/base64";
+import { decodeBase64, encodeBase64 } from "../../api/base64";
 import { serializeWorkspace } from "./serialize";
 import type { SketchFile, SketchSource, SketchOrigin } from "../sketches/sketchStore";
 import { openContextLabel, MAIN_FILE, type OpenSketchState } from "../sketches/openSketch";
@@ -16,6 +16,9 @@ const REPORT_MODES: Record<SourceReport["mode"], true> = {
 /** The `.ppu.json` file format tag. Bumped whenever the body shape changes;
  *  parseFile rejects anything else outright rather than guessing. */
 export const PPU_FILE_VERSION = "ppu.toys/1";
+/** The `.ppusrc.json` format tag: one `.ppu.json` source record on its own, so
+ *  a single asset can travel between toys. */
+export const PPU_SOURCE_FILE_VERSION = "ppu.toys/source/1";
 
 type PpuFileBody = {
   version: string;
@@ -43,8 +46,87 @@ export function serializeToFile(state: OpenSketchState): string {
   return JSON.stringify(body, null, 2);
 }
 
+/** Serialize one source to `.ppusrc.json` text — the same record the cloud
+ *  and `.ppu.json` paths emit, plus a version tag. */
+export function serializeSourceToFile(s: SketchSource): string {
+  return JSON.stringify(
+    {
+      version: PPU_SOURCE_FILE_VERSION,
+      name: s.name,
+      kind: s.kind,
+      options: s.options,
+      meta: s.meta,
+      payload: encodeBase64(s.payload),
+    },
+    null,
+    2,
+  );
+}
+
+/** Parse and validate `.ppusrc.json` text into a SketchSource. */
+export function parseSourceFile(text: string): SketchSource {
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    throw new Error("Not valid JSON.");
+  }
+  if (!isRecord(body) || body.version === undefined) {
+    throw new Error("Not a ppu.toys source file.");
+  }
+  if (body.version !== PPU_SOURCE_FILE_VERSION) {
+    throw new Error(`Unknown source file version: ${String(body.version)}.`);
+  }
+  return parseSource(body, 0);
+}
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
+}
+
+/** Validate one serialized source record (an entry of a `.ppu.json`
+ *  `sources[]`, or a whole `.ppusrc.json`) into a SketchSource. */
+function parseSource(s: unknown, i: number): SketchSource {
+  if (
+    !isRecord(s) ||
+    typeof s.name !== "string" ||
+    typeof s.kind !== "string" ||
+    typeof s.payload !== "string"
+  ) {
+    throw new Error(`Source ${i} is missing a name, kind, or payload.`);
+  }
+  if (!Object.prototype.hasOwnProperty.call(SOURCE_KINDS, s.kind)) {
+    throw new Error(`Source "${s.name}" is malformed (unknown kind).`);
+  }
+  if (s.options !== undefined && !isRecord(s.options)) {
+    throw new Error(`Source "${s.name}" is malformed (invalid options).`);
+  }
+  const meta = s.meta;
+  if (
+    !isRecord(meta) ||
+    typeof meta.width !== "number" ||
+    typeof meta.height !== "number" ||
+    !isRecord(meta.report) ||
+    typeof meta.report.mode !== "string" ||
+    !Object.prototype.hasOwnProperty.call(REPORT_MODES, meta.report.mode) ||
+    !isRecord(meta.report.report) ||
+    (meta.report.mode !== "m7" && !Array.isArray(meta.report.report.overflows))
+  ) {
+    throw new Error(`Source "${s.name}" is malformed (missing or invalid meta).`);
+  }
+  let payload: Uint8Array;
+  try {
+    payload = decodeBase64(s.payload);
+  } catch {
+    throw new Error(`Source "${s.name}" has an invalid base64 payload.`);
+  }
+  return {
+    name: s.name,
+    kind: s.kind as SourceKind,
+    options: (s.options ?? {}) as ConvertSourceOptions,
+    payload,
+    meta: meta as unknown as SourceMeta,
+  };
 }
 
 /** Parse and validate `.ppu.json` text into a sketch's constituent parts.
@@ -83,48 +165,7 @@ export function parseFile(text: string): {
     throw new Error(`File is missing ${MAIN_FILE}.`);
   }
 
-  const sources: SketchSource[] = body.sources.map((s, i) => {
-    if (
-      !isRecord(s) ||
-      typeof s.name !== "string" ||
-      typeof s.kind !== "string" ||
-      typeof s.payload !== "string"
-    ) {
-      throw new Error(`Source ${i} is missing a name, kind, or payload.`);
-    }
-    if (!Object.prototype.hasOwnProperty.call(SOURCE_KINDS, s.kind)) {
-      throw new Error(`Source "${s.name}" is malformed (unknown kind).`);
-    }
-    if (s.options !== undefined && !isRecord(s.options)) {
-      throw new Error(`Source "${s.name}" is malformed (invalid options).`);
-    }
-    const meta = s.meta;
-    if (
-      !isRecord(meta) ||
-      typeof meta.width !== "number" ||
-      typeof meta.height !== "number" ||
-      !isRecord(meta.report) ||
-      typeof meta.report.mode !== "string" ||
-      !Object.prototype.hasOwnProperty.call(REPORT_MODES, meta.report.mode) ||
-      !isRecord(meta.report.report) ||
-      (meta.report.mode !== "m7" && !Array.isArray(meta.report.report.overflows))
-    ) {
-      throw new Error(`Source "${s.name}" is malformed (missing or invalid meta).`);
-    }
-    let payload: Uint8Array;
-    try {
-      payload = decodeBase64(s.payload);
-    } catch {
-      throw new Error(`Source "${s.name}" has an invalid base64 payload.`);
-    }
-    return {
-      name: s.name,
-      kind: s.kind as SourceKind,
-      options: (s.options ?? {}) as ConvertSourceOptions,
-      payload,
-      meta: meta as unknown as SourceMeta,
-    };
-  });
+  const sources: SketchSource[] = body.sources.map(parseSource);
 
   let origin: SketchOrigin | undefined;
   if (body.origin !== undefined) {
@@ -194,7 +235,12 @@ export async function saveLocalFile(state: OpenSketchState): Promise<boolean> {
     return true;
   }
 
-  const blob = new Blob([text], { type: "application/json" });
+  downloadBlob(new Blob([text], { type: "application/json" }), filename);
+  return true;
+}
+
+/** Download `blob` as `filename` via a throwaway anchor. */
+export function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -205,7 +251,19 @@ export async function saveLocalFile(state: OpenSketchState): Promise<boolean> {
   // deferred: some Firefox builds cancel a download if its blob URL is
   // revoked within the same tick as the click.
   setTimeout(() => URL.revokeObjectURL(url), 0);
-  return true;
+}
+
+/** Safe download basename for a source: its name with path separators swapped. */
+export const sourceFileStem = (name: string) => name.replace(/\//g, "-");
+
+/** Save one source as `<name>.ppusrc.json`. Always a download: a source is
+ *  exported once to carry elsewhere, so the silent re-save handle cache that
+ *  sketches get would never pay off. */
+export function saveSourceFile(s: SketchSource): void {
+  downloadBlob(
+    new Blob([serializeSourceToFile(s)], { type: "application/json" }),
+    `${sourceFileStem(s.name)}.ppusrc.json`,
+  );
 }
 
 /** Test hook: forget every cached save-picker handle. */

@@ -287,3 +287,28 @@ export function quantizedRgba(
   }
   return { pixels: px, width, height };
 }
+
+/** Paint an EXTBG source's priority mask as an opaque black/white RGBA
+ *  buffer: white where pixel bit 7 is set, black otherwise. The inverse of
+ *  the converter's `priority_file` input, so exporting color + mask PNGs
+ *  re-imports as the same source. */
+export function priorityMaskRgba(
+  d: DecodedM7,
+  width: number,
+  height: number,
+): { pixels: Uint8ClampedArray; width: number; height: number } {
+  const px = new Uint8ClampedArray(width * height * 4);
+  for (let ty = 0; ty < d.tilesH; ty++)
+    for (let tx = 0; tx < d.tilesW; tx++) {
+      const tile = d.tiles[d.map[ty * d.tilesW + tx] ?? 0] ?? [];
+      for (let y = 0; y < 8; y++)
+        for (let x = 0; x < 8; x++) {
+          const X = tx * 8 + x,
+            Y = ty * 8 + y;
+          if (X >= width || Y >= height) continue;
+          const v = ((tile[y * 8 + x] ?? 0) & 0x80) !== 0 ? 255 : 0;
+          px.set([v, v, v, 255], (Y * width + X) * 4);
+        }
+    }
+  return { pixels: px, width, height };
+}

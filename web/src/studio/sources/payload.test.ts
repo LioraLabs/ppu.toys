@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { decodeSourcePayload, quantizedRgba } from "./payload";
+import { decodeSourcePayload, quantizedRgba, priorityMaskRgba } from "./payload";
 
 // hand-build v1 payloads per the locked byte layout
 function u16le(v: number) {
@@ -87,6 +87,10 @@ describe("decodeSourcePayload", () => {
     const { pixels } = quantizedRgba(d, 8, 8);
     expect([...pixels.slice(0, 3)]).toEqual([255, 0, 0]);
     expect([...pixels.slice(4, 7)]).toEqual([255, 0, 0]);
+    // mask export: bit 7 -> white, else black, always opaque
+    const mask = priorityMaskRgba(d, 8, 8).pixels;
+    expect([...mask.slice(0, 4)]).toEqual([255, 255, 255, 255]);
+    expect([...mask.slice(4, 8)]).toEqual([0, 0, 0, 255]);
   });
 
   it("decodes an obj payload (1 tile 4bpp, 1 pal)", () => {

@@ -4,6 +4,9 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { IDBFactory } from "fake-indexeddb";
 import {
   PPU_FILE_VERSION,
+  PPU_SOURCE_FILE_VERSION,
+  serializeSourceToFile,
+  parseSourceFile,
   serializeToFile,
   parseFile,
   saveLocalFile,
@@ -296,5 +299,37 @@ describe("openLocalFile", () => {
     // persisted: a reload shows the origin
     const loaded = await loadSketch(opened.context.sketch.id);
     expect(loaded!.origin).toEqual({ id: "toy-123", revision: 4, authorId: "u1" });
+  });
+});
+
+describe("source files", () => {
+  const sky = {
+    name: "sky",
+    kind: "bg" as const,
+    options: { bit_depth: 4 as const },
+    payload: skyBytes,
+    meta: SKY_META,
+  };
+
+  it("round-trips one source through .ppusrc.json", () => {
+    const text = serializeSourceToFile(sky);
+    expect(JSON.parse(text).version).toBe(PPU_SOURCE_FILE_VERSION);
+    expect(JSON.parse(text).payload).toBe("AQIDBAU=");
+    const back = parseSourceFile(text);
+    expect(back.name).toBe("sky");
+    expect(back.kind).toBe("bg");
+    expect(back.options).toEqual({ bit_depth: 4 });
+    expect(Array.from(back.payload)).toEqual([1, 2, 3, 4, 5]);
+    expect(back.meta).toEqual(SKY_META);
+  });
+
+  it("rejects a whole-sketch file, a bad version, and a bad payload", () => {
+    expect(() => parseSourceFile(JSON.stringify({ version: PPU_FILE_VERSION }))).toThrow(
+      /Unknown source file version/,
+    );
+    expect(() => parseSourceFile("{}")).toThrow(/Not a ppu.toys source file/);
+    expect(() => parseSourceFile(serializeSourceToFile(sky).replace('"AQIDBAU="', '"@@"'))).toThrow(
+      /invalid base64/,
+    );
   });
 });
