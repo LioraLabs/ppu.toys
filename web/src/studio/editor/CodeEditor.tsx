@@ -3,7 +3,7 @@ import { Compartment, Prec, type Extension } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { StreamLanguage } from "@codemirror/language";
 import { lua } from "@codemirror/legacy-modes/mode/lua";
-import { acceptCompletion, autocompletion } from "@codemirror/autocomplete";
+import { acceptCompletion, autocompletion, closeCompletion } from "@codemirror/autocomplete";
 import { indentWithTab } from "@codemirror/commands";
 import { lintGutter, setDiagnostics } from "@codemirror/lint";
 import { vim } from "@replit/codemirror-vim";
@@ -67,7 +67,23 @@ export function CodeEditor({
     const extensions: Extension[] = [
       // Tab accepts an open completion (falls through when the popup is
       // closed); highest precedence so it wins over vim's insert-mode Tab.
-      Prec.highest(keymap.of([{ key: "Tab", run: acceptCompletion }])),
+      Prec.highest(
+        keymap.of([
+          { key: "Tab", run: acceptCompletion },
+          // completionKeymap's Escape (also Prec.highest) returns true for ANY
+          // active completion — including a pending query with no visible popup
+          // — which starves vim of the key: a fast type→Esc stays stuck in
+          // insert mode. Close the completion ourselves and fall through so
+          // vim (or the default keymap) still handles the Escape.
+          {
+            key: "Escape",
+            run: (view) => {
+              closeCompletion(view);
+              return false;
+            },
+          },
+        ]),
+      ),
       vimComp.current.of(vimExt(initial.current.vimMode)), // takes key precedence below
       basicSetup,
       StreamLanguage.define(lua),
