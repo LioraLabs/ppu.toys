@@ -317,8 +317,8 @@ impl LuaEngine {
                     let n = hk.length();
                     for idx in 1..=n {
                         if let Value::Table(entry) = hk.get(ctx, idx) {
-                            let y0 = entry.get(ctx, 1).to_integer().unwrap_or(0).max(0) as usize;
-                            let y1 = entry.get(ctx, 2).to_integer().unwrap_or(0).max(0) as usize;
+                            let y0 = entry.get(ctx, 1).to_int().unwrap_or(0).max(0) as usize;
+                            let y1 = entry.get(ctx, 2).to_int().unwrap_or(0).max(0) as usize;
                             if let Value::Function(func) = entry.get(ctx, 3) {
                                 let file = function_chunk_name(&func);
                                 out.push((y0, y1, ctx.stash(func), file));
@@ -493,10 +493,10 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     // flush masks the high VRAM byte lane, leaving the tilemap low byte intact
     // (raw `vram[]` sets both lanes at once; this helper touches one).
     let m7pixel = Callback::from_fn(&ctx, |ctx, _, mut stack| {
-        let tile = stack.get(0).to_integer().unwrap_or(0);
-        let x = stack.get(1).to_integer().unwrap_or(0);
-        let y = stack.get(2).to_integer().unwrap_or(0);
-        let idx = stack.get(3).to_integer().unwrap_or(0);
+        let tile = stack.get(0).to_int().unwrap_or(0);
+        let x = stack.get(1).to_int().unwrap_or(0);
+        let y = stack.get(2).to_int().unwrap_or(0);
+        let idx = stack.get(3).to_int().unwrap_or(0);
         stack.clear();
         if let Value::Table(cb) = ctx.get_global("__m7char") {
             let sub = match cb.get(ctx, tile) {
@@ -580,9 +580,9 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     // which channels a 5-bit value (bits0-4) overwrites; other channels persist.
     // Reads/writes the COLDATA global so it composes with a direct `COLDATA = rgb(..)`.
     let coldata = Callback::from_fn(&ctx, |ctx, _, mut stack| {
-        let byte = stack.get(0).to_integer().unwrap_or(0) as u16;
+        let byte = stack.get(0).to_int().unwrap_or(0) as u16;
         stack.clear();
-        let cur = ctx.get_global("COLDATA").to_integer().unwrap_or(0) as u16 & 0x7fff;
+        let cur = ctx.get_global("COLDATA").to_int().unwrap_or(0) as u16 & 0x7fff;
         let v = byte & 0x1f;
         let mut r = cur & 0x1f;
         let mut g = (cur >> 5) & 0x1f;
@@ -604,8 +604,8 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
 
     // hdma(y0,y1,fn) / scanline alias -> append {y0,y1,fn} to __ppu_hooks
     let hdma = Callback::from_fn(&ctx, |ctx, _, mut stack| {
-        let y0 = stack.get(0).to_integer().unwrap_or(0);
-        let y1 = stack.get(1).to_integer().unwrap_or(0);
+        let y0 = stack.get(0).to_int().unwrap_or(0);
+        let y1 = stack.get(1).to_int().unwrap_or(0);
         let f = stack.get(2);
         stack.clear();
         if let Value::Table(hooks) = ctx.get_global("__ppu_hooks") {
@@ -658,6 +658,22 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     ctx.set_global("win", win).unwrap();
     ctx.set_global("__win_base", Table::new(&ctx)).unwrap();
     sync_win(ctx, &[0u8; 11]); // power-on: every window register is zero
+}
+
+/// Register values are integers to the chip but numbers to the author —
+/// `t`-driven math hands over floats everywhere — so every value read floors
+/// a float instead of silently dropping the write. Table KEYS stay exact.
+trait ToInt {
+    fn to_int(self) -> Option<i64>;
+}
+impl ToInt for Value<'_> {
+    fn to_int(self) -> Option<i64> {
+        match self {
+            Value::Integer(i) => Some(i),
+            Value::Number(f) if f.is_finite() => Some(f.floor() as i64),
+            _ => None,
+        }
+    }
 }
 
 /// A string Lua runtime error raised from a native callback (piccolo has no
@@ -726,7 +742,7 @@ fn install_dma(
         } else {
             let int_opt = |key: &'static str, default: i64, max: i64| match opt(key) {
                 Value::Nil => Ok(default),
-                v => match v.to_integer() {
+                v => match v.to_int() {
                     Some(n) if (0..=max).contains(&n) => Ok(n),
                     _ => Err(lua_err(
                         ctx,
@@ -847,8 +863,11 @@ fn install_dma(
             }
             crate::source::SourcePayload::M7(src) => {
                 vram.push((0, 0x4000));
-                cgram_end = 256;
-                cgram = (0, 256);
+                // The plane is 8bpp, but it only WRITES entries 1..=colors;
+                // OBJ palettes (128+) and offset BG bases past that end can
+                // coexist with it, exactly as on hardware.
+                cgram_end = 1 + src.palette.len();
+                cgram = (0, cgram_end);
                 ret.set(ctx, "char", 0).unwrap();
                 ret.set(ctx, "map", 0).unwrap();
                 ret.set(ctx, "pal", 1).unwrap();
@@ -986,9 +1005,9 @@ const COLOR_CGWSEL_MASK: u8 = 0x32;
 fn read_color_base(ctx: piccolo::Context<'_>) -> (u8, u8, u16) {
     match ctx.get_global("__color_base") {
         Value::Table(t) => (
-            t.get(ctx, "cgwsel").to_integer().unwrap_or(0) as u8,
-            t.get(ctx, "cgadsub").to_integer().unwrap_or(0) as u8,
-            t.get(ctx, "coldata").to_integer().unwrap_or(0) as u16,
+            t.get(ctx, "cgwsel").to_int().unwrap_or(0) as u8,
+            t.get(ctx, "cgadsub").to_int().unwrap_or(0) as u8,
+            t.get(ctx, "coldata").to_int().unwrap_or(0) as u16,
         ),
         _ => (0, 0, 0),
     }
@@ -1041,7 +1060,7 @@ fn pack_color(ctx: piccolo::Context<'_>, base: (u8, u8, u16)) -> (u8, u8, u16) {
         Some("never") => 0x30,   // always prevent
         _ => base_w & 0x30,
     };
-    let c = match color.get(ctx, "fixed").to_integer() {
+    let c = match color.get(ctx, "fixed").to_int() {
         Some(v) => (v as u16) & 0x7fff,
         None => base_c,
     };
@@ -1115,8 +1134,8 @@ const SCREEN_LAYERS: [(&str, u8); 5] = [
 fn read_screen_base(ctx: piccolo::Context<'_>) -> (u8, u8) {
     match ctx.get_global("__screen_base") {
         Value::Table(t) => (
-            t.get(ctx, "tm").to_integer().unwrap_or(0) as u8,
-            t.get(ctx, "ts").to_integer().unwrap_or(0) as u8,
+            t.get(ctx, "tm").to_int().unwrap_or(0) as u8,
+            t.get(ctx, "ts").to_int().unwrap_or(0) as u8,
         ),
         _ => (0, 0),
     }
@@ -1239,7 +1258,7 @@ fn read_win_base(ctx: piccolo::Context<'_>) -> WinBytes {
     let mut out = [0u8; 11];
     if let Value::Table(t) = ctx.get_global("__win_base") {
         for (i, k) in WIN_BASE_KEYS.iter().enumerate() {
-            out[i] = t.get(ctx, *k).to_integer().unwrap_or(0) as u8;
+            out[i] = t.get(ctx, *k).to_int().unwrap_or(0) as u8;
         }
     }
     out
@@ -1265,8 +1284,8 @@ fn pack_win(ctx: piccolo::Context<'_>, base: &WinBytes) -> WinBytes {
     };
     for (i, (w, edge)) in WIN_EDGES.iter().enumerate() {
         if let Value::Table(t) = win.get(ctx, *w) {
-            if let Some(v) = t.get(ctx, *edge).to_integer() {
-                out[i] = v as u8;
+            if let Some(v) = t.get(ctx, *edge).to_int() {
+                out[i] = v.clamp(0, 255) as u8;
             }
         }
     }
@@ -1364,16 +1383,16 @@ fn row_win_bytes(row: &LineTableRow) -> WinBytes {
 /// keep their `LineTableRow::default()` value (sticky semantics).
 fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
     let mut row = LineTableRow::default();
-    if let Some(m) = ctx.get_global("mode").to_integer() {
+    if let Some(m) = ctx.get_global("mode").to_int() {
         row.mode = m as u8; // wrap; quantize::mode masks to 3 bits at build
     }
-    if let Some(b) = ctx.get_global("brightness").to_integer() {
+    if let Some(b) = ctx.get_global("brightness").to_int() {
         row.brightness = b as u8; // wrap; quantize::brightness masks to 4 bits
     }
-    if let Some(v) = ctx.get_global("TM").to_integer() {
+    if let Some(v) = ctx.get_global("TM").to_int() {
         row.tm = v as u8; // wrap; quantize::screen_mask masks to 5 bits at build
     }
-    if let Some(v) = ctx.get_global("TS").to_integer() {
+    if let Some(v) = ctx.get_global("TS").to_int() {
         row.ts = v as u8;
     }
     // Friendly `screen.*` fold — same coexistence contract as the `color`
@@ -1389,37 +1408,37 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
     row.tm = (row.tm & !changed_tm) | (f_tm & changed_tm);
     let changed_ts = (f_ts ^ sbase.1) & SCREEN_MASK;
     row.ts = (row.ts & !changed_ts) | (f_ts & changed_ts);
-    if let Some(v) = ctx.get_global("WH0").to_integer() {
+    if let Some(v) = ctx.get_global("WH0").to_int() {
         row.wh0 = v as u8;
     }
-    if let Some(v) = ctx.get_global("WH1").to_integer() {
+    if let Some(v) = ctx.get_global("WH1").to_int() {
         row.wh1 = v as u8;
     }
-    if let Some(v) = ctx.get_global("WH2").to_integer() {
+    if let Some(v) = ctx.get_global("WH2").to_int() {
         row.wh2 = v as u8;
     }
-    if let Some(v) = ctx.get_global("WH3").to_integer() {
+    if let Some(v) = ctx.get_global("WH3").to_int() {
         row.wh3 = v as u8;
     }
-    if let Some(v) = ctx.get_global("W12SEL").to_integer() {
+    if let Some(v) = ctx.get_global("W12SEL").to_int() {
         row.w12sel = v as u8;
     }
-    if let Some(v) = ctx.get_global("W34SEL").to_integer() {
+    if let Some(v) = ctx.get_global("W34SEL").to_int() {
         row.w34sel = v as u8;
     }
-    if let Some(v) = ctx.get_global("WOBJSEL").to_integer() {
+    if let Some(v) = ctx.get_global("WOBJSEL").to_int() {
         row.wobjsel = v as u8;
     }
-    if let Some(v) = ctx.get_global("WBGLOG").to_integer() {
+    if let Some(v) = ctx.get_global("WBGLOG").to_int() {
         row.wbglog = v as u8;
     }
-    if let Some(v) = ctx.get_global("WOBJLOG").to_integer() {
+    if let Some(v) = ctx.get_global("WOBJLOG").to_int() {
         row.wobjlog = v as u8;
     }
-    if let Some(v) = ctx.get_global("TMW").to_integer() {
+    if let Some(v) = ctx.get_global("TMW").to_int() {
         row.tmw = v as u8;
     }
-    if let Some(v) = ctx.get_global("TSW").to_integer() {
+    if let Some(v) = ctx.get_global("TSW").to_int() {
         row.tsw = v as u8;
     }
     // Friendly `win.*` fold — same coexistence contract as the `screen`/
@@ -1458,7 +1477,7 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
     row.wobjlog = wrow[8];
     row.tmw = wrow[9];
     row.tsw = wrow[10];
-    if let Some(v) = ctx.get_global("CGWSEL").to_integer() {
+    if let Some(v) = ctx.get_global("CGWSEL").to_int() {
         row.cgwsel = v as u8;
     }
     // Friendly alias: direct_color=true forces CGWSEL bit 0 (raw CGWSEL still works;
@@ -1467,10 +1486,10 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
         row.cgwsel |= 0x01;
     }
     row.force_blank = ctx.get_global("force_blank").to_bool();
-    if let Some(v) = ctx.get_global("CGADSUB").to_integer() {
+    if let Some(v) = ctx.get_global("CGADSUB").to_int() {
         row.cgadsub = v as u8;
     }
-    if let Some(v) = ctx.get_global("COLDATA").to_integer() {
+    if let Some(v) = ctx.get_global("COLDATA").to_int() {
         row.coldata = v as u16;
     }
     // Friendly `color.*` fold — the coexistence contract, generalizing the
@@ -1491,7 +1510,7 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
     if f_c != base.2 {
         row.coldata = f_c;
     }
-    if let Some(v) = ctx.get_global("mosaic").to_integer() {
+    if let Some(v) = ctx.get_global("mosaic").to_int() {
         row.mosaic_size = v as u8; // wrap; quantize::mosaic_size masks to 4 bits at build
     }
     if let Value::Table(bg) = ctx.get_global("bg") {
@@ -1510,16 +1529,16 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
                     v => v.to_bool(),
                 };
                 // Binding registers (quantize-on-write at RegRow build time).
-                if let Some(v) = layer.get(ctx, "tile_size").to_integer() {
+                if let Some(v) = layer.get(ctx, "tile_size").to_int() {
                     row.bg[i].tile_size = v as u8;
                 }
-                if let Some(v) = layer.get(ctx, "map_base").to_integer() {
+                if let Some(v) = layer.get(ctx, "map_base").to_int() {
                     row.bg[i].map_base = v as u32;
                 }
-                if let Some(v) = layer.get(ctx, "screen_size").to_integer() {
+                if let Some(v) = layer.get(ctx, "screen_size").to_int() {
                     row.bg[i].screen_size = v as u8;
                 }
-                if let Some(v) = layer.get(ctx, "char_base").to_integer() {
+                if let Some(v) = layer.get(ctx, "char_base").to_int() {
                     row.bg[i].char_base = v as u32;
                 }
                 // MOSAIC per-BG enable; unset/nil -> false (off, matches default).
@@ -1547,7 +1566,7 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
             row.m7.cy = v as f32;
         }
         // M7SEL binding registers (`wrap` = spec's `m7.repeat`, keyword-renamed).
-        if let Some(v) = m7.get(ctx, "wrap").to_integer() {
+        if let Some(v) = m7.get(ctx, "wrap").to_int() {
             row.m7.repeat = v as u8;
         }
         row.m7.flip_x = m7.get(ctx, "flip_x").to_bool();
@@ -1655,7 +1674,7 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
     // (mem.cgram was zeroed and any placed palette written before this runs.)
     if let Value::Table(cg) = ctx.get_global("cgram") {
         for (k, v) in cg {
-            if let (Some(i), Some(c)) = (k.to_integer(), v.to_integer()) {
+            if let (Some(i), Some(c)) = (k.to_integer(), v.to_int()) {
                 if (0..256).contains(&i) {
                     mem.cgram[i as usize] = (c as u16) & 0x7fff;
                 }
@@ -1664,18 +1683,18 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
     }
     if let Value::Table(obj) = ctx.get_global("obj") {
         mem.obsel.char_base = crate::quantize::obj_char_base(
-            obj.get(ctx, "char_base").to_integer().unwrap_or(0).max(0) as u32,
+            obj.get(ctx, "char_base").to_int().unwrap_or(0).max(0) as u32,
         );
         mem.obsel.size_sel =
-            crate::quantize::obj_size_sel(obj.get(ctx, "size_sel").to_integer().unwrap_or(0) as u8);
+            crate::quantize::obj_size_sel(obj.get(ctx, "size_sel").to_int().unwrap_or(0) as u8);
         mem.obsel.name_select = crate::quantize::obj_name_select(
-            obj.get(ctx, "name_select").to_integer().unwrap_or(0) as u8,
+            obj.get(ctx, "name_select").to_int().unwrap_or(0) as u8,
         );
         mem.priority_rotate = obj.get(ctx, "priority_rotate").to_bool();
-        mem.oam_addr = (obj.get(ctx, "oam_addr").to_integer().unwrap_or(0).max(0) as u16) & 0x1ff;
+        mem.oam_addr = (obj.get(ctx, "oam_addr").to_int().unwrap_or(0).max(0) as u16) & 0x1ff;
         // Friendly sugar: obj.first = N turns rotation on and points OAMADD at
         // sprite N (word address N<<1). Overrides the raw fields when present.
-        if let Some(n) = obj.get(ctx, "first").to_integer() {
+        if let Some(n) = obj.get(ctx, "first").to_int() {
             mem.priority_rotate = true;
             mem.oam_addr = ((n.max(0) as u16 & 0x7f) << 1) & 0x1ff;
         }
@@ -1684,9 +1703,9 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
                 let e = &mut mem.oam[i];
                 e.x = crate::quantize::sprite_x(o.get(ctx, "x").to_number().unwrap_or(0.0) as f32);
                 e.y = crate::quantize::sprite_y(o.get(ctx, "y").to_number().unwrap_or(0.0) as f32);
-                e.tile = o.get(ctx, "tile").to_integer().unwrap_or(0) as u16;
-                e.pal = o.get(ctx, "pal").to_integer().unwrap_or(0) as u8;
-                e.prio = o.get(ctx, "prio").to_integer().unwrap_or(0) as u8;
+                e.tile = o.get(ctx, "tile").to_int().unwrap_or(0) as u16;
+                e.pal = o.get(ctx, "pal").to_int().unwrap_or(0) as u8;
+                e.prio = o.get(ctx, "prio").to_int().unwrap_or(0) as u8;
                 e.large = o.get(ctx, "large").to_bool();
                 e.flip_x = o.get(ctx, "flip_x").to_bool();
                 e.flip_y = o.get(ctx, "flip_y").to_bool();
@@ -1704,10 +1723,10 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
                 continue;
             };
             let map_base = crate::quantize::bg_map_base(
-                layer.get(ctx, "map_base").to_integer().unwrap_or(0) as u32,
+                layer.get(ctx, "map_base").to_int().unwrap_or(0) as u32,
             );
             let screen_size = crate::quantize::bg_screen_size(
-                layer.get(ctx, "screen_size").to_integer().unwrap_or(0) as u8,
+                layer.get(ctx, "screen_size").to_int().unwrap_or(0) as u8,
             );
             let Value::Table(map) = layer.get(ctx, "map") else {
                 continue;
@@ -1720,9 +1739,9 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
                     let (Some(row_i), Value::Table(cell)) = (rk.to_integer(), rv) else {
                         continue;
                     };
-                    let tile = cell.get(ctx, "tile").to_integer().unwrap_or(0) as u16 & 0x03ff;
-                    let pal = cell.get(ctx, "pal").to_integer().unwrap_or(0) as u16 & 0x07;
-                    let prio = cell.get(ctx, "prio").to_integer().unwrap_or(0) as u16 & 0x01;
+                    let tile = cell.get(ctx, "tile").to_int().unwrap_or(0) as u16 & 0x03ff;
+                    let pal = cell.get(ctx, "pal").to_int().unwrap_or(0) as u16 & 0x07;
+                    let prio = cell.get(ctx, "prio").to_int().unwrap_or(0) as u16 & 0x01;
                     let hf = cell.get(ctx, "flip_x").to_bool() as u16;
                     let vf = cell.get(ctx, "flip_y").to_bool() as u16;
                     let word = tile | (pal << 10) | (prio << 13) | (hf << 14) | (vf << 15);
@@ -1742,7 +1761,7 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
                     continue;
                 };
                 for (xk, xv) in rowt {
-                    if let (Some(tx), Some(tile)) = (xk.to_integer(), xv.to_integer()) {
+                    if let (Some(tx), Some(tile)) = (xk.to_integer(), xv.to_int()) {
                         let i = (ty as usize) * 128 + tx as usize;
                         if i < 0x8000 {
                             mem.vram[i] = (mem.vram[i] & 0xff00) | (tile as u16 & 0x00ff);
@@ -1758,7 +1777,7 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
                 continue;
             };
             for (pk, pv) in pix {
-                if let (Some(off), Some(idx)) = (pk.to_integer(), pv.to_integer()) {
+                if let (Some(off), Some(idx)) = (pk.to_integer(), pv.to_int()) {
                     let i = (tile as usize) * 64 + off as usize;
                     if i < 0x8000 {
                         mem.vram[i] = (mem.vram[i] & 0x00ff) | ((idx as u16 & 0xff) << 8);
@@ -1773,7 +1792,7 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
     // set entries (sparse) rather than scanning 0..0x8000.
     if let Value::Table(vt) = ctx.get_global("vram") {
         for (k, v) in vt {
-            if let (Some(addr), Some(word)) = (k.to_integer(), v.to_integer()) {
+            if let (Some(addr), Some(word)) = (k.to_integer(), v.to_int()) {
                 if (0..0x8000).contains(&addr) {
                     mem.vram[addr as usize] = word as u16;
                 }
