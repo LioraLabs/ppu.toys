@@ -6,6 +6,11 @@ const GLOBALS: Completion[] = [
   { label: "mode", type: "variable", detail: "int 0..7 background mode · BGMODE $2105" },
   { label: "brightness", type: "variable", detail: "int 0..15 · INIDISP $2100" },
   {
+    label: "pad",
+    type: "variable",
+    detail: "controller: pad.up/down/left/right/a/b/x/y/l/r/start/select (bool, held)",
+  },
+  {
     label: "mosaic",
     type: "variable",
     detail: "int 0..15 block size · MOSAIC $2106; enable per layer via bg[n].mosaic",

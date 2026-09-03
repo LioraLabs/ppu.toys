@@ -23,6 +23,7 @@ import {
 // the CSS import: without it a standalone mount (e.g. the cosmos fixture) has
 // an unstyled canvas whose attribute size (dpr > 1) inflates its container,
 // re-triggering the ResizeObserver in a growth loop.
+import type { padKeyHandlers } from "../../studio/transport/pad";
 import "./hero.css";
 
 const SCREEN_VERT = `\
@@ -107,6 +108,7 @@ export function HeroStage({
   onFail,
   cart = null,
   tune = false,
+  pad,
 }: {
   /** Latest native framebuffer (RGBA, 256x224) or null while loading. */
   getFrame: () => Uint8ClampedArray | null;
@@ -118,6 +120,8 @@ export function HeroStage({
   /** Dev-only: lil-gui panel over the live scene + a dump button that logs
    *  values in LAYOUTS shape. Set from the cosmos fixture, never in the app. */
   tune?: boolean;
+  /** Controller key handlers (pad.ts): the TV becomes focusable and playable. */
+  pad?: ReturnType<typeof padKeyHandlers>;
 }) {
   const mountRef = useRef<HTMLDivElement>(null);
   const getFrameRef = useRef(getFrame);
@@ -381,5 +385,5 @@ export function HeroStage({
     };
   }, [cart?.thumbUrl, cart?.avatarUrl, cart?.handle, tune]);
 
-  return <div ref={mountRef} className="hero3d-mount" />;
+  return <div ref={mountRef} className="hero3d-mount" {...pad} />;
 }

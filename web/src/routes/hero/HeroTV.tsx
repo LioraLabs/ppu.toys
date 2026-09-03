@@ -6,12 +6,16 @@ import { getFeaturedToy, getToy, type ToyFull } from "../../api/apiClient";
 import { decodeBase64 } from "../../api/base64";
 import { ppuCore } from "../../ppu/instance";
 import { transport } from "../../studio/transport/transport";
+import { padKeyHandlers, PAD_HINT } from "../../studio/transport/pad";
 import { discordAvatarUrl } from "../../components/Avatar";
 import { HeroStage } from "./HeroStage";
 import "./hero.css";
 
 export default function HeroTV() {
   const [toy, setToy] = useState<ToyFull | null>(null);
+  const [pad] = useState(() => padKeyHandlers(transport.setPad));
+  // Cheap tell for "this toy takes input": it mentions the pad global.
+  const playable = !!toy && toy.files.some((f) => /\bpad\b/.test(f.source));
 
   useEffect(() => {
     let live = true;
@@ -48,6 +52,7 @@ export default function HeroTV() {
     <HeroStage
       getFrame={getFrame}
       onFail={() => {}}
+      pad={pad}
       cart={
         toy && {
           thumbUrl: `/blobs/thumb/${toy.id}`,
@@ -59,23 +64,22 @@ export default function HeroTV() {
   );
   return (
     <div className="hero3d">
-      {toy ? (
-        <Link className="hero3d-link" to={`/t/${toy.id}`} title={`Watch ${toy.title}`}>
-          {stage}
-        </Link>
-      ) : (
-        <div className="hero3d-link">{stage}</div>
-      )}
+      {/* The TV itself is the play surface (click to focus, then keys); the
+          caption carries the permalink so the toy is still one click away. */}
+      <div className="hero3d-link" title={playable ? `Click to play · ${PAD_HINT}` : undefined}>
+        {stage}
+      </div>
       <span className="hero3d-caption">
         <i />
         {toy ? (
-          <>
+          <Link to={`/t/${toy.id}`} title={`Watch ${toy.title}`}>
             NOW PLAYING&ensp;{toy.title} — {toy.author.handle}
-          </>
+          </Link>
         ) : (
           "NO SIGNAL"
         )}
       </span>
+      {playable && <span className="hero3d-hint">▶ CLICK THE TV TO PLAY · {PAD_HINT}</span>}
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { WIDTH, HEIGHT } from "../../ppu/core";
 import { integerScale } from "./clock";
 import { transport, useTransport } from "../transport/transport";
+import { padKeyHandlers, PAD_HINT } from "../transport/pad";
 import { Presenter } from "./presenter";
 import { loadFx, saveFx, type PresentFx } from "./fx";
 
@@ -23,6 +24,8 @@ export function OutputCanvas() {
   // context. Flip this to remount a FRESH canvas (key change) and re-init the
   // presenter in Canvas2D mode, so the framebuffer still shows (effects off).
   const [forceCanvas2d, setForceCanvas2d] = useState(false);
+  // one handler set for the life of the component: the held mask lives in it
+  const [pad] = useState(() => padKeyHandlers(transport.setPad));
 
   const { t, f, playing, fps, frame } = useTransport();
 
@@ -90,7 +93,7 @@ export function OutputCanvas() {
         <span className="pill">MODE 1</span>
         <span className="pill">256×224</span>
       </div>
-      <div className="display" ref={displayRef}>
+      <div className="display" ref={displayRef} title={`Click to focus · ${PAD_HINT}`} {...pad}>
         <canvas
           ref={canvasRef}
           // key flips on WebGL failure to mount a pristine canvas for Canvas2D

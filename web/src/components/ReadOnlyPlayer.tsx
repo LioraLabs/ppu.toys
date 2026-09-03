@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type Ref } from "react";
 import { WIDTH, HEIGHT } from "../ppu/core";
 import { ppuCore } from "../ppu/instance";
 import { transport, useTransport } from "../studio/transport/transport";
+import { padKeyHandlers, PAD_HINT } from "../studio/transport/pad";
 import { Presenter } from "../studio/output/presenter";
 import { integerScale } from "../studio/output/clock";
 import type { PresentFx } from "../studio/output/fx";
@@ -31,6 +32,7 @@ export function ReadOnlyPlayer({
   const [crt, setCrt] = useState(true);
   const crtRef = useRef(crt);
   const { playing, runtimeError } = useTransport();
+  const [pad] = useState(() => padKeyHandlers(transport.setPad));
 
   useEffect(() => {
     if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
@@ -103,6 +105,7 @@ export function ReadOnlyPlayer({
       // CRT is a WebGL pass; the Canvas2D fallback ignores fx, so hide the toggle there.
       onCrtToggle={forceCanvas2d ? undefined : () => setCrt((v) => !v)}
       error={ppuCore ? runtimeError?.message : undefined}
+      pad={pad}
     />
   );
 }
@@ -120,6 +123,7 @@ export function PlayerFrame({
   crt,
   onCrtToggle,
   error,
+  pad,
 }: {
   displayRef?: Ref<HTMLDivElement>;
   canvasRef?: Ref<HTMLCanvasElement>;
@@ -129,9 +133,11 @@ export function PlayerFrame({
   crt?: boolean;
   onCrtToggle?: () => void;
   error?: string;
+  /** Controller key handlers (pad.ts) — the frame becomes focusable and playable. */
+  pad?: ReturnType<typeof padKeyHandlers>;
 }) {
   return (
-    <div className="player" ref={displayRef}>
+    <div className="player" ref={displayRef} title={pad && `Click to focus · ${PAD_HINT}`} {...pad}>
       <canvas
         ref={canvasRef}
         key={canvasKey}

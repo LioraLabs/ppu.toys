@@ -43,7 +43,31 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.hero3d-caption a {
+  color: inherit;
+  text-decoration: none;
+}
+.hero3d-caption a:hover {
+  color: var(--text);
+}
+/* controller hint under the caption, shown only for toys that read `pad` */
+.hero3d-hint {
+  position: absolute;
+  left: 12px;
+  bottom: 2px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: var(--panel2);
+  color: var(--mid);
+  font: 600 0.65rem var(--font-mono);
+  letter-spacing: 0.12em;
+  white-space: nowrap;
   pointer-events: none;
+}
+.hero3d-mount:focus-visible {
+  outline: 1px solid var(--green);
+  outline-offset: -1px;
 }
 .hero3d-caption i {
   flex: none;

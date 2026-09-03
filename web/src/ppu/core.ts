@@ -219,6 +219,10 @@ export interface PpuCore {
    *  semantics); frame()/init() resolve after all chunks. Errors carry `file`. */
   setSources(files: SourceFile[]): { ok: boolean; error?: LuaError };
   frame(t: number, f: number): FrameResult;
+  /** Controller bitmask read by the next frame() as the Lua `pad` table
+   *  (bit order: PAD in studio/transport/pad.ts). Optional so lightweight
+   *  test stubs stay valid. */
+  setPad?(mask: number): void;
   setLayerVisible(id: string, visible: boolean): void;
   /** Mirrored PPU VRAM words from the most recent frame. */
   vram(): Uint16Array;

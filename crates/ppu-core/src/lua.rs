@@ -70,6 +70,9 @@ pub struct LuaEngine {
     reports: Vec<ImportBudget>,
     program_sources: Vec<(String, String)>,
     source_dirty: bool,
+    /// Controller state for the next frame: a PAD_* bitmask mirrored into the
+    /// Lua `pad` table before frame() runs. JS owns the key/gamepad mapping.
+    pad: u16,
 }
 
 /// The resolved result of one init-stage `dma(name, opts?)` call. Replay
@@ -123,6 +126,7 @@ impl LuaEngine {
             reports: Vec::new(),
             program_sources: Vec::new(),
             source_dirty: false,
+            pad: 0,
         }
     }
 
@@ -247,6 +251,12 @@ impl LuaEngine {
     /// Run one frame: call `frame(t,f)` once (bare assigns -> frame-wide defaults,
     /// `hdma` -> registered hooks), read CGRAM/OAM, then resolve the 224-row
     /// LineTable by applying each covering hook per scanline (later call wins).
+    /// Set the controller bitmask read by the next frame() (see PAD_NAMES for
+    /// the bit order). Sticky: a held button stays held until cleared.
+    pub fn set_pad(&mut self, mask: u16) {
+        self.pad = mask;
+    }
+
     pub fn frame(&mut self, t: f64, f: u32) -> Result<LineTable, LuaError> {
         if self.source_dirty {
             let files = self.program_sources.clone();
@@ -259,8 +269,10 @@ impl LuaEngine {
         // Reset the per-frame hook registry, then run frame(t,f) once.
         {
             let mut l = self.lua.borrow_mut();
+            let pad = self.pad;
             l.enter(|ctx| {
                 ctx.set_global("__ppu_hooks", Table::new(&ctx)).unwrap();
+                set_pad_table(ctx, pad);
             });
             if let Some(frame) = self.frame_fn.clone() {
                 let ex = l.enter(|ctx| {
@@ -390,7 +402,24 @@ fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (u8, u8, u8) {
     )
 }
 
+/// Bit order of the controller mask, low bit first — the same order the web
+/// side's `PAD` constants use. `pad.<name>` is a boolean per bit.
+pub const PAD_NAMES: [&str; 12] = [
+    "up", "down", "left", "right", "a", "b", "x", "y", "l", "r", "start", "select",
+];
+
+/// Publish the controller mask as the `pad` global: one boolean per button.
+fn set_pad_table(ctx: piccolo::Context<'_>, mask: u16) {
+    let pad = Table::new(&ctx);
+    for (bit, name) in PAD_NAMES.iter().enumerate() {
+        pad.set(ctx, *name, mask & (1 << bit) != 0).unwrap();
+    }
+    ctx.set_global("pad", pad).unwrap();
+}
+
 fn install_bindings(ctx: piccolo::Context<'_>) {
+    // controller: all released until the host sets a mask; init() may read it.
+    set_pad_table(ctx, 0);
     // scalar registers
     ctx.set_global("mode", 1).unwrap();
     ctx.set_global("brightness", 15).unwrap();

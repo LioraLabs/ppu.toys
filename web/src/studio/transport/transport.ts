@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { pollGamepads } from "./pad";
 import { ppuCore } from "../../ppu/instance";
 import type {
   FrameResult,
@@ -88,6 +89,8 @@ export class Transport {
   private listeners = new Set<() => void>();
   private raf: number | null = null;
   private lastTs = 0;
+  /** Keyboard pad mask from the focused surface; gamepads are polled per frame. */
+  private keyPad = 0;
   private fpsMs = 0;
   private fpsCount = 0;
 
@@ -101,6 +104,7 @@ export class Transport {
    *  records/clears runtimeError with identity-stable references. */
   private safeFrame(t: number, f: number): FrameResult {
     try {
+      this.coreRef().setPad?.(this.keyPad | pollGamepads());
       const fr = this.coreRef().frame(t, f);
       this.setRuntimeError(undefined);
       // Bind failures ride the frame's import reports; optional-call so
@@ -188,6 +192,11 @@ export class Transport {
   getSnapshot = () => this.snapshot;
 
   // actions
+  /** Keyboard controller state (see pad.ts); takes effect on the next frame. */
+  setPad = (mask: number) => {
+    this.keyPad = mask;
+  };
+
   setPlaying(p: boolean) {
     if (this.playing === p) return;
     this.playing = p;

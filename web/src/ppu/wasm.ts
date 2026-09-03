@@ -54,6 +54,7 @@ export interface WasmCoreLike {
   ): unknown;
   addSource(name: string, payload: Uint8Array): unknown;
   removeSource(name: string): boolean;
+  setPad?(mask: number): void;
 }
 
 /** Adapt a wasm-bindgen core to the PpuCore seam. Pure (no wasm load) so it can be
@@ -76,6 +77,9 @@ export function wrapWasmCore(core: WasmCoreLike): PpuCore {
         oam: core.oam(),
         objOverflow: core.objOverflow(),
       };
+    },
+    setPad(mask: number) {
+      core.setPad?.(mask);
     },
     setLayerVisible(id: string, visible: boolean) {
       core.setLayerVisible(id, visible);
