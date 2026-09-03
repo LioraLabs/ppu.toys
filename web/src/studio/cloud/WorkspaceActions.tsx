@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useOpenSketch, openSketchStore } from "../sketches/openSketch";
+import { openSketchStore } from "../sketches/openSketch";
 import { useSession, sessionStore } from "../../api/session";
 import { SIGN_IN_URL } from "../../api/apiClient";
 import { saveLocalFile, openLocalFile } from "./localFile";
@@ -7,12 +7,11 @@ import { PublishDialog } from "./PublishDialog";
 import "./cloud.css";
 
 /** Save + Open + Publish, the toolbar's cloud seam. Save/Open write and read
- *  a local `.ppu.json` file and work signed out; only the link chip and
- *  Publish require a session, collapsing to a sign-in link when signed out. */
+ *  a local `.ppu.json` file and work signed out; only Publish requires a
+ *  session, collapsing to a sign-in link when signed out. Whether the sketch
+ *  points at an existing toy is the PublishDialog's concern (update vs. new). */
 export function WorkspaceActions() {
-  const state = useOpenSketch();
   const { user } = useSession();
-  const origin = state.context.sketch.origin;
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [showPublish, setShowPublish] = useState(false);
@@ -83,22 +82,6 @@ export function WorkspaceActions() {
     />
   );
 
-  const chip = origin ? (
-    <span className="cloud-link-chip cloud-link-chip--linked">
-      {`linked to t/${origin.id}`}
-      <button
-        type="button"
-        className="cloud-link-unlink"
-        aria-label="Unlink"
-        onClick={() => openSketchStore.clearOrigin()}
-      >
-        ×
-      </button>
-    </span>
-  ) : (
-    <span className="cloud-link-chip">unlinked</span>
-  );
-
   return (
     <div className="workspace-actions">
       {status && (
@@ -106,7 +89,6 @@ export function WorkspaceActions() {
           {status}
         </span>
       )}
-      {chip}
       <button type="button" className="btn-ghost" disabled={busy} onClick={() => void handleSave()}>
         Save
       </button>

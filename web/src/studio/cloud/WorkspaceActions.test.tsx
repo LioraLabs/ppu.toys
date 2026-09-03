@@ -112,7 +112,7 @@ describe("WorkspaceActions", () => {
     ["signed-out", null],
     ["signed-in", USER],
   ])(
-    "%s: Open… a good file with an origin shows the link chip, changes the sketch id, and Unlink clears it",
+    "%s: Open… a good file with an origin re-links it and changes the sketch id",
     async (_label, user) => {
       mockUseSession.mockReturnValue({ user, loading: false });
       openSketchStore.editFile("main.lua", "-- hello");
@@ -130,28 +130,11 @@ describe("WorkspaceActions", () => {
       const input = queryFileInput(container);
       fireEvent.change(input, { target: { files: [new File([text], "good.ppu.json")] } });
 
-      await waitFor(() => expect(screen.getByText(/linked to t\/toy9/)).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Opened"));
+      expect(openSketchStore.state().context.sketch.origin?.id).toBe("toy9");
       expect(openSketchStore.state().context.sketch.id).not.toBe(beforeId);
-
-      fireEvent.click(screen.getByRole("button", { name: /unlink/i }));
-      await waitFor(() => expect(screen.getByText("unlinked")).toBeInTheDocument());
     },
   );
-
-  it("signed-in: shows linked to t/<id> after setOrigin, then unlinked after Unlink", async () => {
-    mockUseSession.mockReturnValue({ user: USER, loading: false });
-    openSketchStore.setOrigin({ id: "abc", revision: 1, authorId: "u1" });
-    render(
-      <MemoryRouter>
-        <WorkspaceActions />
-      </MemoryRouter>,
-    );
-
-    expect(screen.getByText(/linked to t\/abc/)).toBeInTheDocument();
-    const unlinkBtn = screen.getByRole("button", { name: /unlink/i });
-    fireEvent.click(unlinkBtn);
-    await waitFor(() => expect(screen.getByText("unlinked")).toBeInTheDocument());
-  });
 
   it("signed-out: an edit after mount is still what Ctrl+S writes (no stale closure)", async () => {
     mockUseSession.mockReturnValue({ user: null, loading: false });
