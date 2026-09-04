@@ -9,6 +9,7 @@ import { Docs } from "./Docs";
 import { Studio } from "../studio/Studio";
 import { AdminPage } from "./AdminPage";
 import { Browse } from "./Browse";
+import { StudioRawOutput } from "../studio/output/StudioRawOutput";
 
 export function AppRoutes() {
   return (
@@ -23,6 +24,8 @@ export function AppRoutes() {
         <Route path="/admin" element={<AdminPage />} />
         <Route path="/browse" element={<Browse />} />
       </Route>
+      <Route path="/t/:id/raw" element={<Permalink raw />} />
+      <Route path="/studio/raw" element={<StudioRawOutput />} />
       {/* Studio owns the full viewport — outside the nav shell so its layout is unchanged. */}
       <Route path="/studio" element={<Studio />} />
     </Routes>

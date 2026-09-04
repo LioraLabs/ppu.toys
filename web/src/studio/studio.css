@@ -371,6 +371,111 @@ input.project-name:focus-visible {
   font-size: 10px;
   color: var(--dim2);
 }
+.timeline {
+  display: grid;
+  gap: 7px;
+}
+.timeline--panel {
+  padding: 12px 14px;
+}
+.output-scrubber {
+  position: relative;
+  display: flex;
+}
+.scrubber-overlay {
+  position: absolute;
+  inset: 0 7px;
+  pointer-events: none;
+}
+.scrubber-loop {
+  position: absolute;
+  top: 9px;
+  height: 4px;
+  background: color-mix(in srgb, var(--orange) 35%, transparent);
+}
+.scrubber-marker {
+  position: absolute;
+  top: 5px;
+  width: 2px;
+  height: 12px;
+  background: var(--orange);
+}
+.timeline-scrubber {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--orange);
+}
+.timeline-controls,
+.timeline-markers,
+.timeline-controls form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.timeline-controls button,
+.timeline-markers button,
+.timeline-controls input[type="text"] {
+  min-height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--raised);
+  color: var(--txt2);
+  font: 10px/1 var(--font-mono);
+}
+.timeline-controls button,
+.timeline-markers button {
+  padding: 0 8px;
+  cursor: pointer;
+}
+.timeline-controls label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--dim2);
+  font: 10px/1 var(--font-mono);
+}
+.timeline-controls form {
+  margin-left: auto;
+}
+.timeline-controls input:not([type="checkbox"]) {
+  width: 112px;
+  min-height: 28px;
+  box-sizing: border-box;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--txt);
+  font: 10px/1 var(--font-mono);
+}
+.timeline-controls input[type="number"] {
+  width: 54px;
+}
+.timeline-markers {
+  padding-top: 1px;
+}
+.timeline-marker {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.timeline-marker input {
+  width: 110px;
+  min-height: 28px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--txt);
+  font: 10px/1 var(--font-mono);
+}
+.timeline-marker input[type="number"] {
+  width: 76px;
+}
+.timeline-markers button:first-child {
+  color: var(--orange);
+}
 
 .drop-sub--error {
   color: var(--red);

@@ -9,7 +9,7 @@ import { INSPECTOR_TABS, type TabId } from "./inspector/tabs";
 
 /** Every dockable page. The former inspector tabs are first-class panels —
  *  "the inspector" is just whatever tab group you keep them stacked in. */
-export type PanelId = "editor" | "assets" | "output" | TabId;
+export type PanelId = "editor" | "assets" | "output" | "timeline" | TabId;
 
 export type LayoutPreset = "default" | "code" | "showcase";
 
@@ -34,10 +34,11 @@ const PANEL_TITLES: Record<PanelId, string> = {
   editor: "CODE",
   assets: "ASSETS",
   output: "OUTPUT",
+  timeline: "TIMELINE",
   ...Object.fromEntries(INSPECTOR_TABS.map((t) => [t.id, t.label.toUpperCase()])),
 } as Record<PanelId, string>;
 
-const ALL_PANELS: PanelId[] = ["editor", "assets", "output", ...INSPECTOR_PAGES];
+const ALL_PANELS: PanelId[] = ["editor", "assets", "output", "timeline", ...INSPECTOR_PAGES];
 
 /** Slot content rides through context so the dockview component map can stay
  *  module-stable (a changing `components` prop identity would remount panels). */
@@ -68,6 +69,8 @@ export function applyPreset(api: DockviewApi, preset: LayoutPreset) {
   const editor = addPanel(api, "editor");
   addPanel(api, "assets", { referencePanel: "editor" });
   const output = addPanel(api, "output", { referencePanel: "editor", direction: "right" });
+  const timeline = addPanel(api, "timeline", { referencePanel: "output", direction: "below" });
+  timeline.api.setSize({ height: 190 });
   if (preset === "default") {
     const trace = addPanel(api, "trace", { referencePanel: "editor", direction: "below" });
     for (const page of INSPECTOR_PAGES.filter((p) => p !== "trace")) {
@@ -100,7 +103,7 @@ export function reopenPanel(api: DockviewApi, id: PanelId) {
       addPanel(api, id, { referencePanel: sibling });
       return;
     }
-    const ref = anchor("editor", "assets", "output");
+    const ref = anchor("editor", "assets", "output", "timeline");
     const p = addPanel(api, id, ref ? { referencePanel: ref, direction: "below" } : undefined);
     p.api.setSize({ height: 280 });
     return;
@@ -116,7 +119,7 @@ export function reopenPanel(api: DockviewApi, id: PanelId) {
   } else if (id === "assets") {
     const ref = anchor("editor");
     addPanel(api, "assets", ref ? { referencePanel: ref } : undefined);
-  } else {
+  } else if (id === "output") {
     const ref = anchor("editor", "assets");
     const p = addPanel(
       api,
@@ -124,6 +127,14 @@ export function reopenPanel(api: DockviewApi, id: PanelId) {
       ref ? { referencePanel: ref, direction: "right" } : undefined,
     );
     p.api.setSize({ width: 620 });
+  } else {
+    const ref = anchor("output", "editor", "assets");
+    const p = addPanel(
+      api,
+      "timeline",
+      ref ? { referencePanel: ref, direction: "below" } : undefined,
+    );
+    p.api.setSize({ height: 190 });
   }
 }
 
@@ -242,7 +253,7 @@ export function LayoutMenu({ api }: { api: DockviewApi }) {
             aria-label="Studio panels and layouts"
           >
             <div className="layout-menu-head">PANELS</div>
-            {(["editor", "assets", "output"] as PanelId[]).map(item)}
+            {(["editor", "assets", "output", "timeline"] as PanelId[]).map(item)}
             <div className="layout-menu-head">INSPECTOR</div>
             {INSPECTOR_PAGES.map(item)}
             <div className="layout-menu-head">PRESETS</div>

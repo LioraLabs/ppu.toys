@@ -330,6 +330,12 @@ impl LuaEngine {
             })
         };
 
+        // The frame-wide `cgram` table, so a hook's palette write can be told
+        // apart, recorded on its line, and put back (HDMA to CGRAM).
+        let cg_snap: Rc<Vec<Option<i64>>> = {
+            let mut l = self.lua.borrow_mut();
+            Rc::new(l.enter(snapshot_cgram))
+        };
         // Resolve the line table: each hook becomes a closure that re-baselines
         // globals to the working row, runs fn(y), and reads the row back.
         let err_sink: Rc<RefCell<Option<LuaError>>> = Rc::new(RefCell::new(None));
@@ -337,6 +343,7 @@ impl LuaEngine {
         for (y0, y1, sf, file) in hooks {
             let lua = self.lua.clone();
             let sink = err_sink.clone();
+            let snap = cg_snap.clone();
             builder.hdma(y0, y1, move |y, row| {
                 if sink.borrow().is_some() {
                     return;
@@ -349,7 +356,10 @@ impl LuaEngine {
                 });
                 match l.execute::<()>(&ex) {
                     Ok(()) => {
+                        let mut pokes = std::mem::take(&mut row.cgram);
                         *row = l.enter(read_state);
+                        pokes.extend(l.enter(|ctx| take_cgram_pokes(ctx, &snap)));
+                        row.cgram = pokes;
                     }
                     Err(e) => {
                         let mut err = static_error_to_lua(e);
@@ -1385,6 +1395,43 @@ fn row_win_bytes(row: &LineTableRow) -> WinBytes {
 
 /// Read the per-scanline register globals into a `LineTableRow`. Missing globals
 /// keep their `LineTableRow::default()` value (sticky semantics).
+/// The `cgram` table as frame() left it: one slot per entry, None = unset.
+fn snapshot_cgram(ctx: piccolo::Context<'_>) -> Vec<Option<i64>> {
+    let mut out = vec![None; 256];
+    if let Value::Table(cg) = ctx.get_global("cgram") {
+        for (i, slot) in out.iter_mut().enumerate() {
+            *slot = cg.get(ctx, i as i64).to_int();
+        }
+    }
+    out
+}
+
+/// After a hook ran for one line: every `cgram[i]` that differs from the
+/// frame snapshot is that line's poke, and the table is put back so the
+/// write reaches neither the next line nor the next frame. A hook setting
+/// an entry to nil is "no override".
+fn take_cgram_pokes(ctx: piccolo::Context<'_>, snap: &[Option<i64>]) -> Vec<(u8, u16)> {
+    let mut pokes = Vec::new();
+    let Value::Table(cg) = ctx.get_global("cgram") else {
+        return pokes;
+    };
+    for (i, was) in snap.iter().enumerate() {
+        let now = cg.get(ctx, i as i64).to_int();
+        if now == *was {
+            continue;
+        }
+        if let Some(c) = now {
+            pokes.push((i as u8, (c as u16) & 0x7fff));
+        }
+        let back = match was {
+            Some(v) => Value::Integer(*v),
+            None => Value::Nil,
+        };
+        cg.set(ctx, i as i64, back).unwrap();
+    }
+    pokes
+}
+
 fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
     let mut row = LineTableRow::default();
     if let Some(m) = ctx.get_global("mode").to_int() {

@@ -35,6 +35,8 @@ export interface ToolbarProps {
   /** Injected wired cloud actions (WorkspaceActions in production). Slot for the
    *  same reason — it reads the session/network. */
   workspaceSlot?: ReactNode;
+  /** Live, chrome-free framebuffer popout for capture software. */
+  rawOutputHref?: string;
 }
 
 /** Account avatar + dropdown. Plain anchors, not router Links — the toolbar
@@ -129,6 +131,7 @@ export function Toolbar({
   settingsOpen = false,
   layoutSlot,
   workspaceSlot,
+  rawOutputHref,
 }: ToolbarProps) {
   return (
     <header className="toolbar">
@@ -167,6 +170,11 @@ export function Toolbar({
         )}
       </div>
       <div className="tb-spacer" />
+      {rawOutputHref && (
+        <a className="btn-ghost" href={rawOutputHref} target="_blank" rel="noreferrer">
+          Raw output
+        </a>
+      )}
       {layoutSlot}
       <button
         type="button"

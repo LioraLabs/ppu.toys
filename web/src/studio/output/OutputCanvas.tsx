@@ -1,10 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { WIDTH, HEIGHT } from "../../ppu/core";
 import { integerScale } from "./clock";
 import { transport, useTransport } from "../transport/transport";
 import { padKeyHandlers, PAD_HINT } from "../transport/pad";
 import { Presenter } from "./presenter";
 import { loadFx, saveFx, type PresentFx } from "./fx";
+import { openContextFiles, useOpenSketch } from "../sketches/openSketch";
+import { timelineMarkers, useTimelineSettings } from "./timeline";
 
 /** Right-column Output: presents the SHARED core's framebuffer through a WebGL
  *  present pass (integer upscale + toggleable CRT/scanline/pixel-grid FX) and
@@ -28,6 +30,11 @@ export function OutputCanvas() {
   const [pad] = useState(() => padKeyHandlers(transport.setPad));
 
   const { t, f, playing, fps, frame } = useTransport();
+  const sketch = useOpenSketch();
+  const files = openContextFiles(sketch);
+  const markers = useMemo(() => timelineMarkers(files), [files]);
+  const { end, loopIn, loopOut } = useTimelineSettings();
+  const duration = Math.max(end, loopOut, ...markers.map((marker) => marker.time));
 
   // init the presenter, integer-scale sizing + initial paint. Re-runs once if
   // WebGL fails and we fall back to a remounted Canvas2D canvas.
@@ -118,11 +125,59 @@ export function OutputCanvas() {
         <button className="play-btn" aria-label="Stop" onClick={() => transport.stop()}>
           ■
         </button>
+        <button
+          className="play-btn"
+          aria-label="Previous frame"
+          onClick={() => {
+            transport.setPlaying(false);
+            transport.seek(Math.max(0, f - 1) / 60);
+          }}
+        >
+          −1
+        </button>
+        <button
+          className="play-btn"
+          aria-label="Next frame"
+          onClick={() => {
+            transport.setPlaying(false);
+            transport.seek((f + 1) / 60);
+          }}
+        >
+          +1
+        </button>
         <div className="readout">
           <span>t={t.toFixed(1)}s</span>
           <span>frame {f}</span>
           <span>{fps}fps</span>
         </div>
+      </div>
+      <div className="output-scrubber">
+        <div className="scrubber-overlay" aria-hidden="true">
+          <span
+            className="scrubber-loop"
+            style={{
+              left: `${(loopIn / duration) * 100}%`,
+              width: `${((loopOut - loopIn) / duration) * 100}%`,
+            }}
+          />
+          {markers.map((marker) => (
+            <span
+              key={marker.name}
+              className="scrubber-marker"
+              style={{ left: `${(marker.time / duration) * 100}%` }}
+            />
+          ))}
+        </div>
+        <input
+          className="timeline-scrubber"
+          type="range"
+          min={0}
+          max={duration}
+          step={1 / 60}
+          value={Math.min(t, duration)}
+          aria-label="Timeline"
+          onChange={(event) => transport.seek(Number(event.currentTarget.value))}
+        />
       </div>
     </div>
   );

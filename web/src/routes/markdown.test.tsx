@@ -36,4 +36,10 @@ describe("renderMarkdown", () => {
     expect(out).toContain('<pre data-lang="lua"><code>brightness = 15</code></pre>');
     expect(out).toContain("<li>two continued</li>");
   });
+
+  it("can nest a document beneath a page heading", () => {
+    const out = renderToStaticMarkup(<>{renderMarkdown("# Chapter\n\n## Topic", "", 1)}</>);
+    expect(out).toContain('<h2 id="chapter">Chapter</h2>');
+    expect(out).toContain('<h3 id="topic">Topic</h3>');
+  });
 });

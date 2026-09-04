@@ -13,6 +13,8 @@ export interface PlayerSource {
   payload: Uint8Array;
 }
 
+let activeSourceNames = new Set<string>();
+
 /** Read-only live player: pushes a published toy's program into the SHARED
  *  transport/core and presents its framebuffer through the same WebGL Presenter
  *  the Studio uses. No editor, no scrubber, no drop zone — pure playback. Both
@@ -21,15 +23,19 @@ export interface PlayerSource {
 export function ReadOnlyPlayer({
   files,
   sources,
+  raw = false,
+  rawKeys = true,
 }: {
   files: { name: string; source: string }[];
   sources: PlayerSource[];
+  raw?: boolean;
+  rawKeys?: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const displayRef = useRef<HTMLDivElement>(null);
   const presenterRef = useRef<Presenter | null>(null);
   const [forceCanvas2d, setForceCanvas2d] = useState(false);
-  const [crt, setCrt] = useState(true);
+  const [crt, setCrt] = useState(!raw);
   const crtRef = useRef(crt);
   const { playing, runtimeError } = useTransport();
   const [pad] = useState(() => padKeyHandlers(transport.setPad));
@@ -40,6 +46,19 @@ export function ReadOnlyPlayer({
     }
   }, []);
 
+  useEffect(() => {
+    if (!raw || !rawKeys) return;
+    const control = (event: KeyboardEvent) => {
+      if (event.repeat) return;
+      if (event.code === "Space") transport.toggle();
+      else if (event.code === "KeyR") transport.seek(0);
+      else return;
+      event.preventDefault();
+    };
+    window.addEventListener("keydown", control);
+    return () => window.removeEventListener("keydown", control);
+  }, [raw, rawKeys]);
+
   // Push the toy's program into the shared core: source payloads FIRST, then
   // the files — setSources runs the setup stage, whose dma() placements only
   // see sources already registered (same order as the Studio's restore path
@@ -48,7 +67,10 @@ export function ReadOnlyPlayer({
   // the unset singleton.
   useEffect(() => {
     if (!ppuCore) return;
+    const nextNames = new Set(sources.map((source) => source.name));
+    for (const name of activeSourceNames) if (!nextNames.has(name)) transport.removeSource(name);
     for (const s of sources) transport.addSource(s.name, s.payload);
+    activeSourceNames = nextNames;
     transport.setSources(files);
   }, [files, sources]);
 
@@ -69,7 +91,7 @@ export function ReadOnlyPlayer({
     const fx = (): PresentFx => ({ crt: crtRef.current, scanline: false, pixelGrid: false });
     const draw = () => presenter.render(transport.getSnapshot().frame.framebuffer, fx());
     const resize = () => {
-      presenter.resize(integerScale(container.clientWidth, container.clientHeight));
+      presenter.resize(raw ? 1 : integerScale(container.clientWidth, container.clientHeight));
       draw();
     };
     resize();
@@ -82,7 +104,7 @@ export function ReadOnlyPlayer({
       presenter.dispose();
       presenterRef.current = null;
     };
-  }, [forceCanvas2d]);
+  }, [forceCanvas2d, raw]);
 
   // repaint on CRT toggle without re-initing the presenter
   useLayoutEffect(() => {
@@ -99,13 +121,14 @@ export function ReadOnlyPlayer({
       displayRef={displayRef}
       canvasRef={canvasRef}
       canvasKey={forceCanvas2d ? "canvas2d" : "webgl"}
-      playing={playing}
-      onToggle={transport.toggle}
+      playing={raw ? undefined : playing}
+      onToggle={raw ? undefined : transport.toggle}
       crt={crt}
       // CRT is a WebGL pass; the Canvas2D fallback ignores fx, so hide the toggle there.
-      onCrtToggle={forceCanvas2d ? undefined : () => setCrt((v) => !v)}
+      onCrtToggle={raw || forceCanvas2d ? undefined : () => setCrt((v) => !v)}
       error={ppuCore ? runtimeError?.message : undefined}
       pad={pad}
+      raw={raw}
     />
   );
 }
@@ -124,6 +147,7 @@ export function PlayerFrame({
   onCrtToggle,
   error,
   pad,
+  raw = false,
 }: {
   displayRef?: Ref<HTMLDivElement>;
   canvasRef?: Ref<HTMLCanvasElement>;
@@ -135,9 +159,15 @@ export function PlayerFrame({
   error?: string;
   /** Controller key handlers (pad.ts) — the frame becomes focusable and playable. */
   pad?: ReturnType<typeof padKeyHandlers>;
+  raw?: boolean;
 }) {
   return (
-    <div className="player" ref={displayRef} title={pad && `Click to focus · ${PAD_HINT}`} {...pad}>
+    <div
+      className={`player${raw ? " player--raw" : ""}`}
+      ref={displayRef}
+      title={pad && `Click to focus · ${PAD_HINT}`}
+      {...pad}
+    >
       <canvas
         ref={canvasRef}
         key={canvasKey}

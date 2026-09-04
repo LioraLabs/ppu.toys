@@ -16,12 +16,13 @@ export interface ToolbarWiredProps {
   /** Layout controls (LayoutMenu over the dock api) — a slot because the api
    *  only exists once the dock has mounted. */
   layoutSlot?: ReactNode;
+  rawOutputHref?: string;
 }
 
 /** Wired container: reads the theme store and drives the transport, injecting
  *  the wired AddSourceButton / WorkspaceActions as the presentational toolbar's
  *  slots. Render-identical to the pre-split Toolbar. */
-export function ToolbarWired({ sketchName, dirty, layoutSlot }: ToolbarWiredProps) {
+export function ToolbarWired({ sketchName, dirty, layoutSlot, rawOutputHref }: ToolbarWiredProps) {
   const { theme, toggleTheme } = useTheme();
   const vimMode = useVimMode();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -43,6 +44,7 @@ export function ToolbarWired({ sketchName, dirty, layoutSlot }: ToolbarWiredProp
         onToggleSettings={() => setSettingsOpen((o) => !o)}
         settingsOpen={settingsOpen}
         layoutSlot={layoutSlot}
+        rawOutputHref={rawOutputHref}
         workspaceSlot={<WorkspaceActions />}
       />
       {settingsOpen && (

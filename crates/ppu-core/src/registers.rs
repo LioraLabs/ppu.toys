@@ -187,6 +187,9 @@ pub struct LineTableRow {
     /// regardless of layers/brightness (compositor honors it). Per-line, like
     /// brightness. Power-on 0 = not blanked.
     pub force_blank: bool,
+    /// HDMA to CGRAM: `cgram[i] = colour` inside a hook lands on this line
+    /// only — (entry, BGR555) pairs, later hooks after earlier ones.
+    pub cgram: Vec<(u8, u16)>,
 }
 
 impl Default for LineTableRow {
@@ -217,6 +220,7 @@ impl Default for LineTableRow {
             mosaic_enable: [false; 4],
             setini: 0,
             force_blank: false,
+            cgram: Vec::new(),
         }
     }
 }
@@ -343,6 +347,8 @@ pub struct RegRow {
     /// SETINI ($2133); only bit 6 (EXTBG) is load-bearing. See `LineTableRow::setini`.
     pub setini: u8,
     pub force_blank: bool,
+    /// Per-line CGRAM pokes (see `LineTableRow::cgram`), masked to 15 bits.
+    pub cgram: Vec<(u8, u16)>,
 }
 
 impl From<&LineTableRow> for RegRow {
@@ -394,6 +400,7 @@ impl From<&LineTableRow> for RegRow {
             mosaic_enable: r.mosaic_enable,
             setini: r.setini,
             force_blank: r.force_blank,
+            cgram: r.cgram.iter().map(|&(i, c)| (i, c & 0x7fff)).collect(),
         }
     }
 }

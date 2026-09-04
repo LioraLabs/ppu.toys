@@ -227,6 +227,7 @@ function ComposedShell() {
           editor: <EditorMock />,
           assets: <AssetsPanel />,
           output: <OutputMock f={frame} />,
+          timeline: <div className="timeline timeline--panel">Timeline controls</div>,
           ...fixturePages(frame),
         }}
       />

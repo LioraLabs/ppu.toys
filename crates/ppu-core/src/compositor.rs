@@ -447,6 +447,11 @@ pub fn render_frame_view(lt: &LineTable, mem: &Memory) -> FrameView {
     let mut src_sub = vec![PixelSource::Backdrop; WIDTH];
     let mut stats = ObjOverflow::default();
     let rows = lt.rows.len().min(HEIGHT);
+    let mut scratch: Option<Memory> = lt
+        .rows
+        .iter()
+        .any(|r| !r.cgram.is_empty())
+        .then(|| mem.clone());
     for y in 0..rows {
         let row = &lt.rows[y];
         if row.force_blank {
@@ -459,15 +464,25 @@ pub fn render_frame_view(lt: &LineTable, mem: &Memory) -> FrameView {
             }
             continue;
         }
+        // HDMA to CGRAM: this line's palette pokes, on a scratch copy.
+        let m: &Memory = match scratch.as_mut() {
+            Some(s) => {
+                for &(i, c) in &row.cgram {
+                    s.cgram[i as usize] = c;
+                }
+                &*s
+            }
+            None => mem,
+        };
         // Bin OBJ once per line; both screens reuse the identical capped set.
-        let bin = bin_line(mem, y);
+        let bin = bin_line(m, y);
         stats.range_over |= bin.range_over;
         stats.time_over |= bin.time_over;
         stats.max_sprites = stats.max_sprites.max(bin.sprite_count);
         stats.max_tiles = stats.max_tiles.max(bin.tile_count);
         composite_screen(
             row,
-            mem,
+            m,
             y,
             row.tm,
             row.tmw,
@@ -477,7 +492,7 @@ pub fn render_frame_view(lt: &LineTable, mem: &Memory) -> FrameView {
         );
         composite_screen(
             row,
-            mem,
+            m,
             y,
             row.ts,
             row.tsw,
@@ -507,6 +522,11 @@ pub fn render_frame_view(lt: &LineTable, mem: &Memory) -> FrameView {
             fb[o + 1] = apply_brightness(px[1], bri);
             fb[o + 2] = apply_brightness(px[2], bri);
             fb[o + 3] = 255;
+        }
+        if let Some(s) = scratch.as_mut() {
+            for &(i, _) in &row.cgram {
+                s.cgram[i as usize] = mem.cgram[i as usize];
+            }
         }
     }
     FrameView {

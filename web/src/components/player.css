@@ -11,6 +11,23 @@
 .player-canvas {
   image-rendering: pixelated;
 }
+.player--raw {
+  flex: 0 0 256px;
+  width: 256px;
+  height: 224px;
+}
+.raw-output {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #000;
+}
+.raw-output-status {
+  margin: 0;
+  padding: 1rem;
+  color: #fff;
+  font: 14px/1.4 system-ui, sans-serif;
+}
 .player-toggle {
   position: absolute;
   right: 12px;

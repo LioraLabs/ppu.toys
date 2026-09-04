@@ -11,7 +11,7 @@ import "./permalink.css";
 
 type Load = { status: "loading" } | { status: "error" } | { status: "ok"; toy: ToyFull };
 
-export function Permalink() {
+export function Permalink({ raw = false }: { raw?: boolean }) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user } = useSession();
@@ -64,6 +64,13 @@ export function Permalink() {
   const toy = load.toy;
   const activeFile = toy.files[active] ?? toy.files[0];
 
+  if (raw)
+    return (
+      <main className="raw-output">
+        <ReadOnlyPlayer files={toy.files} sources={decoded} raw />
+      </main>
+    );
+
   /** Open this toy in the Studio. Owner: reopens it bound to the SAME cloud
    *  id, so Save/Publish update it in place instead of minting a fork.
    *  Non-owner (signed in or not): opens the same toy with its origin owned by
@@ -106,6 +113,9 @@ export function Permalink() {
             hearted={toy.hearted}
             signedIn={!!user}
           />
+          <Link className="fork-btn" to={`/t/${toy.id}/raw`} target="_blank">
+            Raw output
+          </Link>
           {user && user.id === toy.author.id ? (
             <button
               className="fork-btn"

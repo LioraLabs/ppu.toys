@@ -38,7 +38,11 @@ const GLOBALS: Completion[] = [
     type: "variable",
     detail: "windows .w1 .w2 .bg1..bg4 .obj .color · WH0-3/W*SEL/W*LOG/TMW/TSW $2123-$212F",
   },
-  { label: "cgram", type: "variable", detail: "cgram[0..255] palette, 15-bit BGR · $2121/$2122" },
+  {
+    label: "cgram",
+    type: "variable",
+    detail: "cgram[0..255] palette, 15-bit BGR · $2121/$2122 · inside hdma: that line only",
+  },
   { label: "vram", type: "variable", detail: "vram[0..0x7FFF] raw 16-bit words · $2116-$2119" },
   { label: "obj", type: "variable", detail: "obj[0..127] sprites · OAM, OBSEL $2101" },
   { label: "TM", type: "variable", detail: "main screen designation bitmask · $212C" },

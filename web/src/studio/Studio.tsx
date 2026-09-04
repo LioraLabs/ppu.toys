@@ -11,6 +11,9 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { transport } from "./transport/transport";
 import { openSketchStore, useOpenSketch, openContextLabel } from "./sketches/openSketch";
 import { useDocumentTitle } from "../routes/useDocumentTitle";
+import { STUDIO_RAW_CHANNEL, type StudioRawState } from "./output/StudioRawOutput";
+import { TimelinePanel } from "./output/TimelinePanel";
+import { timelineConfig, timelineSettings } from "./output/timeline";
 
 /** The wired studio: a toolbar over the dockable shell (StudioDock). Every
  *  page — CODE, ASSETS, OUTPUT and each inspector page — is its own panel the
@@ -28,6 +31,54 @@ export function Studio() {
     void openSketchStore.initializeStarter();
   }, []);
 
+  useEffect(() => {
+    timelineSettings.set(timelineConfig(state.context.sketch.files));
+  }, [state.context]);
+
+  useEffect(
+    () =>
+      transport.subscribe(() => {
+        const { loopIn, loopOut, looping } = timelineSettings.get();
+        const current = transport.getSnapshot();
+        if (current.playing && looping && current.t >= loopOut) transport.seek(loopIn);
+      }),
+    [],
+  );
+
+  useEffect(() => {
+    if (typeof BroadcastChannel === "undefined") return;
+    const channel = new BroadcastChannel(STUDIO_RAW_CHANNEL);
+    const sendFiles = () => {
+      const sketch = openSketchStore.state().context.sketch;
+      const message: StudioRawState = {
+        type: "state",
+        files: sketch.files,
+        sources: sketch.sources.map(({ name, payload }) => ({ name, payload })),
+      };
+      channel.postMessage(message);
+    };
+    const sendClock = () => {
+      const { t, playing } = transport.getSnapshot();
+      channel.postMessage({ type: "clock", t, playing });
+    };
+    channel.onmessage = (event) => {
+      if (event.data?.type === "request") {
+        sendFiles();
+        sendClock();
+      } else if (event.data?.type === "toggle") transport.toggle();
+      else if (event.data?.type === "restart") transport.seek(0);
+    };
+    const unsubscribeFiles = openSketchStore.subscribe(sendFiles);
+    const unsubscribeClock = transport.subscribe(sendClock);
+    sendFiles();
+    sendClock();
+    return () => {
+      unsubscribeFiles();
+      unsubscribeClock();
+      channel.close();
+    };
+  }, []);
+
   const slots: DockSlots = {
     editor: <EditorPane onSources={transport.setSources} />,
     assets: (
@@ -40,6 +91,7 @@ export function Studio() {
         <OutputCanvas />
       </ErrorBoundary>
     ),
+    timeline: <TimelinePanel />,
     ...Object.fromEntries(
       INSPECTOR_PAGES.map((id) => [
         id,
@@ -56,6 +108,7 @@ export function Studio() {
         sketchName={sketchName}
         dirty={dirty}
         layoutSlot={dockApi ? <LayoutMenu api={dockApi} /> : null}
+        rawOutputHref="/studio/raw"
       />
       <StudioDock slots={slots} onApi={setDockApi} />
     </div>

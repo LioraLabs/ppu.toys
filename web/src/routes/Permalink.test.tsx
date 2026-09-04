@@ -51,6 +51,16 @@ function renderAt(id = "abc") {
   );
 }
 
+function renderRaw(id = "abc") {
+  return render(
+    <MemoryRouter initialEntries={[`/t/${id}/raw`]}>
+      <Routes>
+        <Route path="/t/:id/raw" element={<Permalink raw />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
 describe("Permalink", () => {
   it("fetches the toy and shows title, author, code and the player", async () => {
     mockGetToy.mockResolvedValue(toy);
@@ -59,6 +69,19 @@ describe("Permalink", () => {
     expect(screen.getByText("player")).toBeInTheDocument();
     expect(screen.getByText(/-- code here/)).toBeInTheDocument();
     expect(mockGetToy).toHaveBeenCalledWith("abc");
+    expect(screen.getByRole("link", { name: "Raw output" })).toHaveAttribute(
+      "href",
+      "/t/abc/raw",
+    );
+  });
+
+  it("renders only the player on the raw output route", async () => {
+    mockGetToy.mockResolvedValue(toy);
+    const { container } = renderRaw();
+    await screen.findByText("player");
+    expect(container.querySelector(".raw-output")).toBeInTheDocument();
+    expect(screen.queryByText("Dusk")).not.toBeInTheDocument();
+    expect(screen.queryByText(/-- code here/)).not.toBeInTheDocument();
   });
 
   it("switches source tabs with the keyboard", async () => {

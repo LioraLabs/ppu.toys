@@ -6,9 +6,10 @@ import { render, cleanup, fireEvent } from "@testing-library/react";
 // vi.mock factories are hoisted above top-level code, so any variable they
 // reference must be created via vi.hoisted (plain `const`s declared above
 // vi.mock would still be in the TDZ when the factory runs).
-const { setSources, addSource, getSnapshot, subscribe, toggle, setPlaying } = vi.hoisted(() => ({
+const { setSources, addSource, removeSource, getSnapshot, subscribe, toggle, setPlaying, seek } = vi.hoisted(() => ({
   setSources: vi.fn(() => ({ ok: true })),
   addSource: vi.fn(() => ({ ok: true })),
+  removeSource: vi.fn(() => true),
   getSnapshot: vi.fn(() => ({
     playing: true,
     frame: { framebuffer: new Uint8ClampedArray(256 * 224 * 4) },
@@ -16,9 +17,10 @@ const { setSources, addSource, getSnapshot, subscribe, toggle, setPlaying } = vi
   subscribe: vi.fn(() => () => {}),
   toggle: vi.fn(),
   setPlaying: vi.fn(),
+  seek: vi.fn(),
 }));
 vi.mock("../studio/transport/transport", () => ({
-  transport: { setSources, addSource, getSnapshot, subscribe, toggle, setPlaying },
+  transport: { setSources, addSource, removeSource, getSnapshot, subscribe, toggle, setPlaying, seek },
   useTransport: () => getSnapshot(),
 }));
 // Presenter touches WebGL; stub it — this test asserts wiring, not pixels.
@@ -28,14 +30,15 @@ vi.mock("../studio/transport/transport", () => ({
 // flush (i.e. actually mounted via render()) trips a bogus
 // "Cannot access '__vi_import_N__' before initialization" at module load.
 // The constructor-function form is behaviorally identical and avoids it.
-const { init, presentRender } = vi.hoisted(() => ({
+const { init, presentRender, resize } = vi.hoisted(() => ({
   init: vi.fn(() => true),
   presentRender: vi.fn(),
+  resize: vi.fn(),
 }));
 vi.mock("../studio/output/presenter", () => {
   function Presenter() {}
   Presenter.prototype.init = init;
-  Presenter.prototype.resize = vi.fn();
+  Presenter.prototype.resize = resize;
   Presenter.prototype.render = presentRender;
   Presenter.prototype.dispose = vi.fn();
   return { Presenter };
@@ -106,5 +109,21 @@ describe("ReadOnlyPlayer", () => {
     vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true } as MediaQueryList);
     render(<ReadOnlyPlayer files={files} sources={[]} />);
     expect(setPlaying).toHaveBeenCalledWith(false);
+  });
+
+  it("keeps raw output at native resolution with no controls or CRT pass", () => {
+    const { container } = render(<ReadOnlyPlayer files={files} sources={[]} raw />);
+    expect(container.querySelector(".player--raw")).toBeInTheDocument();
+    expect(container.querySelector("button")).toBeNull();
+    expect(resize).toHaveBeenCalledWith(1);
+    expect(presentRender).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ crt: false }),
+    );
+
+    fireEvent.keyDown(window, { code: "Space" });
+    fireEvent.keyDown(window, { code: "KeyR" });
+    expect(toggle).toHaveBeenCalledOnce();
+    expect(seek).toHaveBeenCalledWith(0);
   });
 });

@@ -6,7 +6,9 @@
 
 The project pairs a headless Rust PPU engine with a browser-based studio. The engine currently supports tile modes 0–4 and affine Mode 7, including the familiar Mode 1 and Mode 7 workflows, per-scanline effects, sprites, priority and color compositing, and PNG import for backgrounds and sprite sheets.
 
-See [PPU registers → Lua](docs/registers.md) for the full register map, [Source placement and `dma()`](docs/dma.md) for the Lua source-loading contract, and [Controller input: `pad`](docs/pad.md) for keyboard and gamepad input.
+Start with [the PPU pipeline](docs/registers.md), then follow the concept guides
+for display, backgrounds, sprites, Mode 7, windows, color math, scanline effects,
+source placement, and controller input.
 
 The studio provides a multi-file Lua editor, live output, register and memory inspectors, compositing controls, local sketches, and publishing. It is useful both as a creative toy and as an approachable way to learn the machinery behind SNES graphics.
 

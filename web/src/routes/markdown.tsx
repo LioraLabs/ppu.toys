@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
  *  [links]. Nothing else, on purpose — the docs are the contract, and a real
  *  renderer is a dependency for a format we only write ourselves. Relative
  *  `x.md` links become in-page anchors so the stacked pages cross-link. */
-export function renderMarkdown(md: string, keyPrefix = ""): ReactNode[] {
+export function renderMarkdown(md: string, keyPrefix = "", headingOffset = 0): ReactNode[] {
   const out: ReactNode[] = [];
   const lines = md.replace(/\r\n/g, "\n").split("\n");
   let i = 0;
@@ -21,14 +21,18 @@ export function renderMarkdown(md: string, keyPrefix = ""): ReactNode[] {
     if (h) {
       const text = h[2].trim();
       const id = slug(text);
-      const props = { id, key: key(), children: inline(text) };
+      const props = { id, children: inline(text) };
+      const headingKey = key();
+      const level = h[1].length + headingOffset;
       out.push(
-        h[1].length === 1 ? (
-          <h1 {...props} />
-        ) : h[1].length === 2 ? (
-          <h2 {...props} />
+        level === 1 ? (
+          <h1 key={headingKey} {...props} />
+        ) : level === 2 ? (
+          <h2 key={headingKey} {...props} />
+        ) : level === 3 ? (
+          <h3 key={headingKey} {...props} />
         ) : (
-          <h3 {...props} />
+          <h4 key={headingKey} {...props} />
         ),
       );
       i++;
