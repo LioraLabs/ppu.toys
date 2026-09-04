@@ -94,3 +94,21 @@ fn coldata_helper_accumulates_channel_writes() {
     // red channel = 31, blue channel = 31, green untouched (0).
     assert_eq!(lt.rows[0].coldata, (31 << 10) | 31);
 }
+
+#[test]
+fn float_register_values_floor_instead_of_being_dropped() {
+    // Locked decision: the DSL floors. `t`-driven math hands registers floats
+    // everywhere (an iris helper's `cx - hw`, an offset-table word straight out
+    // of sin()); a fractional value must land as its floor, never vanish.
+    let mut e = LuaEngine::new();
+    e.set_source(
+        "function frame(t, f) brightness = 14.9; mosaic = 3.7; win.w1.lo = 10.5; \
+         win.w1.hi = 200.2; vram[0x0800] = 0x2000 + 31.6 end",
+    )
+    .unwrap();
+    let lt = e.frame(0.0, 0).unwrap();
+    assert_eq!(lt.rows[0].brightness, 14);
+    assert_eq!(lt.rows[0].mosaic_size, 3);
+    assert_eq!((lt.rows[0].wh0, lt.rows[0].wh1), (10, 200));
+    assert_eq!(e.memory().vram[0x0800], 0x201f);
+}

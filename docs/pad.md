@@ -1,12 +1,12 @@
-# Controller input: `pad`
+# Controller input
 
-`pad` is a global table of booleans, one per SNES controller button, refreshed
-before every `frame()`. It holds the *held* state: a button reads `true` for as
-long as it is down. Edge detection (pressed this frame) is ordinary Lua.
+`pad` is the first SNES controller. Each field is `true` while its button is
+held and refreshes before every `frame()`.
+
+## Move something
 
 ```lua
 local x, y = 128, 112
-local was_a = false
 
 function frame(t, f)
   if pad.left then x = x - 1 end
@@ -14,31 +14,45 @@ function frame(t, f)
   if pad.up then y = y - 1 end
   if pad.down then y = y + 1 end
 
-  local pressed_a = pad.a and not was_a
-  was_a = pad.a
-  if pressed_a then brightness = 15 - brightness end
-
-  obj[0].x, obj[0].y = x, y
+  obj[0].x = x
+  obj[0].y = y
 end
 ```
 
-Fields: `up`, `down`, `left`, `right`, `a`, `b`, `x`, `y`, `l`, `r`, `start`,
-`select`. `init()` can read `pad` too; every button is released there.
+Available fields are `up`, `down`, `left`, `right`, `a`, `b`, `x`, `y`, `l`,
+`r`, `start`, and `select`.
 
-## Where input comes from
+## Detect one press
 
-Click the output to focus it, then use the keyboard. Any standard-mapping
-gamepad works alongside, no focus needed.
+Because `pad.a` stays true while held, remember the previous frame when an
+action should happen only once.
 
-| SNES | Keyboard | Gamepad (standard mapping) |
-|------|----------|----------------------------|
-| d-pad | arrow keys | d-pad or left stick |
-| B / A | Z / X | bottom / right face button |
-| Y / X | A / S | left / top face button |
-| L / R | Q / W | left / right shoulder |
-| Start | Enter | start |
-| Select | Shift | select |
+```lua
+local was_a = false
 
-The Studio output, the permalink player, and the landing page TV all take
-input. Clips and thumbnails are recorded with every button released, so a toy
-that waits for input shows its idle state on the wall.
+function frame(t, f)
+  local pressed_a = pad.a and not was_a
+  was_a = pad.a
+
+  if pressed_a then
+    brightness = 15 - brightness
+  end
+end
+```
+
+## Controls
+
+| SNES | Keyboard | Gamepad |
+|---|---|---|
+| D-pad | Arrow keys | D-pad or left stick |
+| B / A | Z / X | Bottom / right face button |
+| Y / X | A / S | Left / top face button |
+| L / R | Q / W | Left / right shoulder |
+| Start | Enter | Start |
+| Select | Shift | Select |
+
+Click the output once to give keyboard controls focus. Standard-mapping
+gamepads work without focus. Recorded clips and thumbnails use released input,
+so toys that wait for a button show their idle state.
+
+See also: [Sprites](sprites.md) and [the PPU pipeline](registers.md).
