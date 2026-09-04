@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
-import { getToy, goToSignIn, type ToyFull } from "../api/apiClient";
+import { getToy, type ToyFull } from "../api/apiClient";
 import { useSession } from "../api/session";
 import { openCloudToy } from "../studio/cloud/openCloudToy";
 import { decodeBase64 } from "../api/base64";
@@ -66,17 +66,12 @@ export function Permalink() {
 
   /** Open this toy in the Studio. Owner: reopens it bound to the SAME cloud
    *  id, so Save/Publish update it in place instead of minting a fork.
-   *  Non-owner: opens the same toy with its origin owned by someone else, so
-   *  the publish dialog offers the forked branch — no server call until
-   *  publish. */
+   *  Non-owner (signed in or not): opens the same toy with its origin owned by
+   *  someone else, so the publish dialog offers the forked branch — no server
+   *  call until publish. The Studio is fully usable without an account (local
+   *  sketches, Save/Open files); only publishing asks for sign-in. */
   async function openInStudio() {
     if (load.status !== "ok") return;
-    if (!user) {
-      // Live sign-in ask instead of a dead disabled button — forking is the
-      // loop we want visitors to enter.
-      goToSignIn();
-      return;
-    }
     setForking(true);
     setForkFailed(false);
     try {
@@ -125,7 +120,7 @@ export function Permalink() {
               className="fork-btn"
               onClick={() => void openInStudio()}
               disabled={forking}
-              title={user ? "Fork into your Studio" : "Sign in with Discord to fork this toy"}
+              title="Fork into your Studio — no account needed until you publish"
             >
               {forking ? "Forking…" : "Fork"}
             </button>

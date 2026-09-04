@@ -11,8 +11,11 @@ vi.mock("react-router-dom", async (orig) => ({
   useNavigate: () => navigate,
 }));
 vi.mock("../api/apiClient", () => ({ getToy: vi.fn() }));
+const session = vi.hoisted(() => ({
+  user: { id: "1", handle: "ada" } as { id: string; handle: string } | null,
+}));
 vi.mock("../api/session", () => ({
-  useSession: () => ({ user: { id: "1", handle: "ada" }, loading: false }),
+  useSession: () => ({ user: session.user, loading: false }),
 }));
 // Player wiring is covered by its own test; stub it here.
 vi.mock("../components/ReadOnlyPlayer", () => ({ ReadOnlyPlayer: () => <div>player</div> }));
@@ -34,6 +37,7 @@ const mockOpenCloudToy = openCloudToy as ReturnType<typeof vi.fn>;
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  session.user = { id: "1", handle: "ada" };
 });
 
 import { Permalink } from "./Permalink";
@@ -91,6 +95,17 @@ describe("Permalink", () => {
     expect(mockOpenCloudToy.mock.invocationCallOrder[0]).toBeLessThan(
       navigate.mock.invocationCallOrder[0],
     );
+  });
+
+  it("fork works signed out — the Studio needs no account until publish", async () => {
+    session.user = null;
+    mockGetToy.mockResolvedValue(toy);
+    renderAt();
+    await screen.findByText("Dusk");
+    fireEvent.click(screen.getByRole("button", { name: /fork/i }));
+
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith("/studio"));
+    expect(mockOpenCloudToy).toHaveBeenCalledWith(toy);
   });
 
   it("shows a retryable error when the toy cannot load", async () => {
