@@ -89,6 +89,15 @@ export function WorkspaceActions() {
           {status}
         </span>
       )}
+      <a
+        className="btn-ghost"
+        href="/docs"
+        target="_blank"
+        rel="noopener"
+        title="Registers → Lua quick reference"
+      >
+        Docs
+      </a>
       <button type="button" className="btn-ghost" disabled={busy} onClick={() => void handleSave()}>
         Save
       </button>

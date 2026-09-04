@@ -5,6 +5,7 @@ import { Permalink } from "./Permalink";
 import { ProfilePage } from "./ProfilePage";
 import { Tos } from "./Tos";
 import { Privacy } from "./Privacy";
+import { Docs } from "./Docs";
 import { Studio } from "../studio/Studio";
 import { AdminPage } from "./AdminPage";
 import { Browse } from "./Browse";
@@ -18,6 +19,7 @@ export function AppRoutes() {
         <Route path="/u/:handle" element={<ProfilePage />} />
         <Route path="/tos" element={<Tos />} />
         <Route path="/privacy" element={<Privacy />} />
+        <Route path="/docs" element={<Docs />} />
         <Route path="/admin" element={<AdminPage />} />
         <Route path="/browse" element={<Browse />} />
       </Route>

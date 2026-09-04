@@ -25,6 +25,7 @@ export function Layout() {
         <nav className="site-nav">
           <Link to="/studio">Studio</Link>
           <Link to="/browse">Browse</Link>
+          <Link to="/docs">Docs</Link>
           {!loading && user && (
             <>
               {user.isAdmin && <Link to="/admin">Admin</Link>}
@@ -50,6 +51,7 @@ export function Layout() {
       <footer className="site-footer">
         <span>ppu.toys — little graphics toys for a real SNES PPU</span>
         <nav>
+          <Link to="/docs">Reference</Link>
           <Link to="/tos">Terms</Link>
           <Link to="/privacy">Privacy</Link>
         </nav>
