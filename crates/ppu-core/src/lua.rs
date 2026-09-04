@@ -663,6 +663,10 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
 /// Register values are integers to the chip but numbers to the author —
 /// `t`-driven math hands over floats everywhere — so every value read floors
 /// a float instead of silently dropping the write. Table KEYS stay exact.
+/// The DSL's one number-to-integer rule: floats floor. Applies to every
+/// register VALUE and every memory-table KEY (`cgram[i]`, `vram[a]`,
+/// `bg[n].map[c][r]`, `m7.map[y][x]`), so `cgram[i / 2]` lands on entry
+/// `floor(i / 2)` instead of silently vanishing as a non-integer key.
 trait ToInt {
     fn to_int(self) -> Option<i64>;
 }
@@ -1674,7 +1678,7 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
     // (mem.cgram was zeroed and any placed palette written before this runs.)
     if let Value::Table(cg) = ctx.get_global("cgram") {
         for (k, v) in cg {
-            if let (Some(i), Some(c)) = (k.to_integer(), v.to_int()) {
+            if let (Some(i), Some(c)) = (k.to_int(), v.to_int()) {
                 if (0..256).contains(&i) {
                     mem.cgram[i as usize] = (c as u16) & 0x7fff;
                 }
@@ -1732,11 +1736,11 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
                 continue;
             };
             for (ck, cv) in map {
-                let (Some(col), Value::Table(rowt)) = (ck.to_integer(), cv) else {
+                let (Some(col), Value::Table(rowt)) = (ck.to_int(), cv) else {
                     continue;
                 };
                 for (rk, rv) in rowt {
-                    let (Some(row_i), Value::Table(cell)) = (rk.to_integer(), rv) else {
+                    let (Some(row_i), Value::Table(cell)) = (rk.to_int(), rv) else {
                         continue;
                     };
                     let tile = cell.get(ctx, "tile").to_int().unwrap_or(0) as u16 & 0x03ff;
@@ -1757,11 +1761,11 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
     if let Value::Table(m7) = ctx.get_global("m7") {
         if let Value::Table(map) = m7.get(ctx, "map") {
             for (yk, yv) in map {
-                let (Some(ty), Value::Table(rowt)) = (yk.to_integer(), yv) else {
+                let (Some(ty), Value::Table(rowt)) = (yk.to_int(), yv) else {
                     continue;
                 };
                 for (xk, xv) in rowt {
-                    if let (Some(tx), Some(tile)) = (xk.to_integer(), xv.to_int()) {
+                    if let (Some(tx), Some(tile)) = (xk.to_int(), xv.to_int()) {
                         let i = (ty as usize) * 128 + tx as usize;
                         if i < 0x8000 {
                             mem.vram[i] = (mem.vram[i] & 0xff00) | (tile as u16 & 0x00ff);
@@ -1773,11 +1777,11 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
     }
     if let Value::Table(cb) = ctx.get_global("__m7char") {
         for (tk, tv) in cb {
-            let (Some(tile), Value::Table(pix)) = (tk.to_integer(), tv) else {
+            let (Some(tile), Value::Table(pix)) = (tk.to_int(), tv) else {
                 continue;
             };
             for (pk, pv) in pix {
-                if let (Some(off), Some(idx)) = (pk.to_integer(), pv.to_int()) {
+                if let (Some(off), Some(idx)) = (pk.to_int(), pv.to_int()) {
                     let i = (tile as usize) * 64 + off as usize;
                     if i < 0x8000 {
                         mem.vram[i] = (mem.vram[i] & 0x00ff) | ((idx as u16 & 0xff) << 8);
@@ -1792,7 +1796,7 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
     // set entries (sparse) rather than scanning 0..0x8000.
     if let Value::Table(vt) = ctx.get_global("vram") {
         for (k, v) in vt {
-            if let (Some(addr), Some(word)) = (k.to_integer(), v.to_int()) {
+            if let (Some(addr), Some(word)) = (k.to_int(), v.to_int()) {
                 if (0..0x8000).contains(&addr) {
                     mem.vram[addr as usize] = word as u16;
                 }
