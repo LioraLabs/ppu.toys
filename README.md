@@ -14,7 +14,7 @@ The studio provides a multi-file Lua editor, live output, register and memory in
 
 ## Quick start
 
-You need Rust, Node.js/pnpm, `wasm-pack`, and [Cook](https://github.com/alexandru/cook) available on your path. The web app is a one-package pnpm workspace rooted at the repo top level; Cook drives it through the `cook_pnpm` module (`cook modules install` realises the pin in `cook.toml`).
+You need Rust, Node.js/pnpm, `wasm-pack`, and [Cook](https://github.com/LioraLabs/cook) available on your path. The web app is a one-package pnpm workspace rooted at the repo top level; Cook drives it through the `cook_pnpm` module (`cook modules install` realises the pin in `cook.toml`).
 
 ```sh
 pnpm install

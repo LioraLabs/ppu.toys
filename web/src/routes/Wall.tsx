@@ -83,6 +83,14 @@ export function Wall() {
             <Link className="wall-secondary" to="/browse">
               Explore toys
             </Link>
+            <a
+              className="wall-secondary"
+              href="https://discord.gg/eNZkftbaU4"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Join Discord
+            </a>
             <KofiWidget />
           </div>
         </div>

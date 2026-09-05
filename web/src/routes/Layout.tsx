@@ -54,6 +54,9 @@ export function Layout() {
           <Link to="/docs">Reference</Link>
           <Link to="/tos">Terms</Link>
           <Link to="/privacy">Privacy</Link>
+          <a href="https://github.com/LioraLabs/ppu.toys" target="_blank" rel="noreferrer">
+            GitHub
+          </a>
         </nav>
       </footer>
     </div>
