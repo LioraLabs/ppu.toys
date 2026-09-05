@@ -13,7 +13,7 @@ import { openSketchStore, useOpenSketch, openContextLabel } from "./sketches/ope
 import { useDocumentTitle } from "../routes/useDocumentTitle";
 import { STUDIO_RAW_CHANNEL, type StudioRawState } from "./output/StudioRawOutput";
 import { TimelinePanel } from "./output/TimelinePanel";
-import { timelineConfig, timelineSettings } from "./output/timeline";
+import { timelineSettings } from "./output/timeline";
 
 /** The wired studio: a toolbar over the dockable shell (StudioDock). Every
  *  page — CODE, ASSETS, OUTPUT and each inspector page — is its own panel the
@@ -31,16 +31,13 @@ export function Studio() {
     void openSketchStore.initializeStarter();
   }, []);
 
-  useEffect(() => {
-    timelineSettings.set(timelineConfig(state.context.sketch.files));
-  }, [state.context]);
-
   useEffect(
     () =>
       transport.subscribe(() => {
         const { loopIn, loopOut, looping } = timelineSettings.get();
         const current = transport.getSnapshot();
-        if (current.playing && looping && current.t >= loopOut) transport.seek(loopIn);
+        if (current.playing && looping && loopOut > loopIn && current.t >= loopOut)
+          transport.seek(loopIn);
       }),
     [],
   );

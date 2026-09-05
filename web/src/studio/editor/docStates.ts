@@ -1,4 +1,5 @@
 import { EditorState, type Extension } from "@codemirror/state";
+import { isolateHistory } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
 
 /** Per-file EditorState registry: ONE CodeMirror view swaps whole
@@ -12,7 +13,7 @@ export interface DocStates {
    *  reused) whenever `doc` differs from the cached content — a generated
    *  file's truth lives outside the editor (e.g. the inspector writes
    *  pokes.lua), so external changes must always show through. */
-  acquire(key: string, doc: string, generated?: boolean): EditorState;
+  acquire(key: string, doc: string, generated?: boolean, linked?: boolean): EditorState;
   /** Save the live state back under `key` (call before switching away). */
   store(key: string, state: EditorState): void;
 }
@@ -28,7 +29,7 @@ const READ_ONLY_EXTENSIONS: Extension = [
 export function createDocStates(extensions: Extension): DocStates {
   const states = new Map<string, EditorState>();
   return {
-    acquire(key, doc, generated = false) {
+    acquire(key, doc, generated = false, linked = false) {
       let s = states.get(key);
       if (generated) {
         if (!s || s.doc.toString() !== doc) {
@@ -36,6 +37,13 @@ export function createDocStates(extensions: Extension): DocStates {
           states.set(key, s);
         }
         return s;
+      }
+      if (s && linked && s.doc.toString() !== doc) {
+        s = s.update({
+          changes: sourceChange(s.doc.toString(), doc),
+          annotations: isolateHistory.of("full"),
+        }).state;
+        states.set(key, s);
       }
       if (!s) {
         s = EditorState.create({ doc, extensions });
@@ -47,4 +55,17 @@ export function createDocStates(extensions: Extension): DocStates {
       states.set(key, state);
     },
   };
+}
+
+/** Replace the changed span so linked-file refreshes keep cursor and undo history. */
+export function sourceChange(before: string, after: string) {
+  let from = 0;
+  while (from < before.length && from < after.length && before[from] === after[from]) from++;
+  let to = before.length;
+  let end = after.length;
+  while (to > from && end > from && before[to - 1] === after[end - 1]) {
+    to--;
+    end--;
+  }
+  return { from, to, insert: after.slice(from, end) };
 }

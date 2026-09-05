@@ -34,7 +34,7 @@ const PANEL_TITLES: Record<PanelId, string> = {
   editor: "CODE",
   assets: "ASSETS",
   output: "OUTPUT",
-  timeline: "TIMELINE",
+  timeline: "MARKERS",
   ...Object.fromEntries(INSPECTOR_TABS.map((t) => [t.id, t.label.toUpperCase()])),
 } as Record<PanelId, string>;
 
@@ -165,6 +165,7 @@ export function StudioDock({ slots, onApi }: StudioDockProps) {
       }
     }
     if (!restored) applyPreset(api, "default");
+    api.getPanel("timeline")?.api.setTitle(PANEL_TITLES.timeline);
     api.onDidLayoutChange(() => {
       if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
       saveTimer.current = window.setTimeout(() => {

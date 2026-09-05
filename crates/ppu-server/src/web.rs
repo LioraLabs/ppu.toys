@@ -37,7 +37,11 @@ async fn permalink(State(state): State<AppState>, Path(id): Path<String>) -> Res
             let og = format!(
                 "<meta property=\"og:title\" content=\"{}\">\n<meta property=\"og:description\" content=\"by {}\">\n<meta property=\"og:image\" content=\"{}/blobs/thumb/{}\">\n<meta property=\"og:type\" content=\"video.other\">",
                 esc(&title), esc(&handle), state.cfg.base_url, id);
-            if html.contains("<!--OG-->") {
+            // The built index.html carries the site-wide card between the two
+            // markers; a toy permalink swaps the whole span so scrapers see one card.
+            if let (Some(a), Some(b)) = (html.find("<!--OG-->"), html.find("<!--/OG-->")) {
+                format!("{}{og}{}", &html[..a], &html[b + "<!--/OG-->".len()..])
+            } else if html.contains("<!--OG-->") {
                 html.replace("<!--OG-->", &og)
             } else {
                 html.replacen("<head>", &format!("<head>\n{og}"), 1)

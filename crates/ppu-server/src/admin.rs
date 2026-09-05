@@ -169,15 +169,98 @@ struct AdminUser {
     storage_bytes: i64,
 }
 
+#[derive(serde::Serialize, sqlx::FromRow)]
+struct ActivityCounts {
+    total: i64,
+    hour: i64,
+    day: i64,
+    week: i64,
+}
+
+#[derive(serde::Serialize, sqlx::FromRow)]
+struct DailyActivity {
+    day: i64,
+    users: i64,
+    toys: i64,
+    published: i64,
+    creators: i64,
+}
+
+#[derive(serde::Serialize, sqlx::FromRow)]
+struct PublishingFunnel {
+    creators: i64,
+    publishers: i64,
+    repeat_publishers: i64,
+}
+
 async fn overview(State(s): State<AppState>, user: AuthUser) -> AppResult<Json<serde_json::Value>> {
     require_admin(&user)?;
+    let now = crate::db::now();
+    let mut counts = Vec::new();
+    // Identifiers are fixed here, never supplied by a request.
+    for (table, timestamp, filter) in [
+        ("users", "created_at", "id NOT LIKE 'sys:%'"),
+        ("toys", "created_at", "1=1"),
+        ("toys", "published_at", "author_id NOT LIKE 'sys:%'"),
+    ] {
+        counts.push(
+            sqlx::query_as::<_, ActivityCounts>(&format!(
+                "SELECT COUNT(*) total, COUNT(CASE WHEN {timestamp}>?-3600 THEN 1 END) hour,
+             COUNT(CASE WHEN {timestamp}>?-86400 THEN 1 END) day,
+             COUNT(CASE WHEN {timestamp}>?-604800 THEN 1 END) week
+             FROM {table} WHERE {filter} AND {timestamp}<=?"
+            ))
+            .bind(now)
+            .bind(now)
+            .bind(now)
+            .bind(now)
+            .fetch_one(&s.pool)
+            .await?,
+        );
+    }
+    let creators = sqlx::query_as::<_, ActivityCounts>(
+        "WITH activity AS (
+           SELECT author_id, created_at at FROM toys WHERE created_at<=?
+           UNION ALL SELECT author_id, published_at at FROM toys WHERE published_at<=?
+         ), creators AS (SELECT MAX(at) at FROM activity WHERE author_id NOT LIKE 'sys:%' GROUP BY author_id)
+         SELECT COUNT(*) total, COUNT(CASE WHEN at>?-3600 THEN 1 END) hour,
+         COUNT(CASE WHEN at>?-86400 THEN 1 END) day,
+         COUNT(CASE WHEN at>?-604800 THEN 1 END) week FROM creators"
+    ).bind(now).bind(now).bind(now).bind(now).bind(now).fetch_one(&s.pool).await?;
+    let funnel = sqlx::query_as::<_, PublishingFunnel>(
+        "WITH creators AS (
+           SELECT COUNT(CASE WHEN published_at<=? THEN 1 END) publications
+           FROM toys WHERE author_id NOT LIKE 'sys:%' AND created_at<=? GROUP BY author_id
+         ) SELECT COUNT(*) creators, COUNT(CASE WHEN publications>=1 THEN 1 END) publishers,
+         COUNT(CASE WHEN publications>=2 THEN 1 END) repeat_publishers FROM creators",
+    )
+    .bind(now)
+    .bind(now)
+    .fetch_one(&s.pool)
+    .await?;
+    let today = now / 86400 * 86400;
+    let daily = sqlx::query_as::<_, DailyActivity>(
+        "WITH RECURSIVE days(day) AS (SELECT ?-13*86400 UNION ALL SELECT day+86400 FROM days WHERE day<?),
+         signups AS (SELECT created_at/86400*86400 day, COUNT(*) n FROM users WHERE id NOT LIKE 'sys:%' AND created_at>=?-13*86400 AND created_at<=? GROUP BY day),
+         events AS (
+           SELECT author_id, created_at at, 0 published FROM toys
+           UNION ALL SELECT author_id, published_at at, 1 published FROM toys WHERE published_at IS NOT NULL
+         ), activity AS (
+           SELECT at/86400*86400 day, COUNT(CASE WHEN published=0 THEN 1 END) toys,
+           COUNT(CASE WHEN published=1 AND author_id NOT LIKE 'sys:%' THEN 1 END) published,
+           COUNT(DISTINCT CASE WHEN author_id NOT LIKE 'sys:%' THEN author_id END) creators
+           FROM events WHERE at>=?-13*86400 AND at<=? GROUP BY day
+         ) SELECT days.day, COALESCE(signups.n,0) users, COALESCE(activity.toys,0) toys,
+         COALESCE(activity.published,0) published, COALESCE(activity.creators,0) creators FROM days
+         LEFT JOIN signups USING(day) LEFT JOIN activity USING(day) ORDER BY days.day DESC"
+    ).bind(today).bind(today).bind(today).bind(now).bind(today).bind(now).fetch_all(&s.pool).await?;
     let toys = sqlx::query_as::<_, AdminToy>(
         "SELECT t.id,t.title,t.state,u.handle author,t.created_at FROM toys t JOIN users u ON u.id=t.author_id ORDER BY t.created_at DESC LIMIT 200",
     )
     .fetch_all(&s.pool)
     .await?;
     let featured_toys = sqlx::query_as::<_, AdminToy>(
-        "SELECT t.id,t.title,t.state,u.handle author,t.created_at FROM toys t JOIN users u ON u.id=t.author_id WHERE t.state='published' ORDER BY t.title",
+        "SELECT t.id,t.title,t.state,u.handle author,t.created_at FROM toys t JOIN users u ON u.id=t.author_id WHERE t.state='published' AND (t.id=(SELECT value FROM settings WHERE key='featured_toy') OR t.id IN (SELECT value FROM json_each((SELECT value FROM settings WHERE key='featured_toys')))) ORDER BY t.title",
     )
     .fetch_all(&s.pool)
     .await?;
@@ -190,6 +273,7 @@ async fn overview(State(s): State<AppState>, user: AuthUser) -> AppResult<Json<s
         .fetch_one(&s.pool)
         .await?;
     Ok(Json(serde_json::json!({
+        "activity": { "asOf": now, "users": counts[0], "toys": counts[1], "published": counts[2], "creators": creators, "funnel": funnel, "daily": daily },
         "toys": toys,
         "featuredToys": featured_toys,
         "users": users,

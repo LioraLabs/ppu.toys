@@ -129,3 +129,38 @@ async fn static_asset_is_served() {
         .unwrap();
     assert_eq!(String::from_utf8(b.to_vec()).unwrap(), "console.log(1)");
 }
+
+#[tokio::test]
+async fn t_route_replaces_static_og_span() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("index.html"),
+        "<head><!--OG--><meta property=\"og:title\" content=\"site\"><!--/OG--><title>x</title></head>",
+    )
+    .unwrap();
+    let app = common::test_app_web(dir.path()).await;
+    sqlx::query("INSERT INTO users(id,handle,created_at) VALUES('1','ann',1)")
+        .execute(&app.state.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO toys(id,author_id,title,files_json,state,created_at) VALUES('abc','1','My Toy','[]','published',1)").execute(&app.state.pool).await.unwrap();
+    let res = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/t/abc")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let b = axum::body::to_bytes(res.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    let html = String::from_utf8(b.to_vec()).unwrap();
+    assert_eq!(html.matches("og:title").count(), 1);
+    assert!(
+        html.contains("My Toy") && !html.contains("\"site\"") && html.contains("<title>x</title>")
+    );
+}

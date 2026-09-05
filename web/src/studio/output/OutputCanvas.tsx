@@ -1,12 +1,12 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { WIDTH, HEIGHT } from "../../ppu/core";
 import { integerScale } from "./clock";
 import { transport, useTransport } from "../transport/transport";
 import { padKeyHandlers, PAD_HINT } from "../transport/pad";
 import { Presenter } from "./presenter";
 import { loadFx, saveFx, type PresentFx } from "./fx";
-import { openContextFiles, useOpenSketch } from "../sketches/openSketch";
-import { timelineMarkers, useTimelineSettings } from "./timeline";
+import { TimelineLength } from "./TimelinePanel";
+import { useTimelineMarkers, useTimelineSettings } from "./timeline";
 
 /** Right-column Output: presents the SHARED core's framebuffer through a WebGL
  *  present pass (integer upscale + toggleable CRT/scanline/pixel-grid FX) and
@@ -30,11 +30,9 @@ export function OutputCanvas() {
   const [pad] = useState(() => padKeyHandlers(transport.setPad));
 
   const { t, f, playing, fps, frame } = useTransport();
-  const sketch = useOpenSketch();
-  const files = openContextFiles(sketch);
-  const markers = useMemo(() => timelineMarkers(files), [files]);
+  const markers = useTimelineMarkers();
   const { end, loopIn, loopOut } = useTimelineSettings();
-  const duration = Math.max(end, loopOut, ...markers.map((marker) => marker.time));
+  const duration = end;
 
   // init the presenter, integer-scale sizing + initial paint. Re-runs once if
   // WebGL fails and we fall back to a remounted Canvas2D canvas.
@@ -151,22 +149,49 @@ export function OutputCanvas() {
           <span>{fps}fps</span>
         </div>
       </div>
+      <div className="timeline-controls output-timeline-controls">
+        <label>
+          Go to marker
+          <select
+            aria-label="Go to marker"
+            value=""
+            disabled={markers.length === 0}
+            onChange={(event) => {
+              const marker = markers.find((item) => item.name === event.target.value);
+              if (marker) {
+                transport.setPlaying(false);
+                transport.seek(marker.time);
+              }
+            }}
+          >
+            <option value="">Choose marker…</option>
+            {markers.map((marker) => (
+              <option key={marker.name} value={marker.name}>
+                {marker.name} · {marker.time.toFixed(1)}s
+              </option>
+            ))}
+          </select>
+        </label>
+        <TimelineLength />
+      </div>
       <div className="output-scrubber">
         <div className="scrubber-overlay" aria-hidden="true">
           <span
             className="scrubber-loop"
             style={{
-              left: `${(loopIn / duration) * 100}%`,
-              width: `${((loopOut - loopIn) / duration) * 100}%`,
+              left: `${(Math.min(loopIn, duration) / duration) * 100}%`,
+              width: `${(Math.max(0, Math.min(loopOut, duration) - loopIn) / duration) * 100}%`,
             }}
           />
-          {markers.map((marker) => (
-            <span
-              key={marker.name}
-              className="scrubber-marker"
-              style={{ left: `${(marker.time / duration) * 100}%` }}
-            />
-          ))}
+          {markers
+            .filter((marker) => marker.time <= duration)
+            .map((marker) => (
+              <span
+                key={marker.name}
+                className="scrubber-marker"
+                style={{ left: `${(marker.time / duration) * 100}%` }}
+              />
+            ))}
         </div>
         <input
           className="timeline-scrubber"

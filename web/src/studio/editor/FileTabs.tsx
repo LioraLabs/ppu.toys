@@ -8,7 +8,7 @@ export interface FileTabsProps {
   /** Files whose tab shows an error dot (shown on inactive tabs only —
    *  the active tab shows its errors inline in the editor). */
   errorFiles: ReadonlySet<string>;
-  /** Machine-generated files (pokes.lua): rendered with a ⚙ glyph, not
+  /** Machine-generated files (pokes.lua, timeline.lua): rendered with a ⚙ glyph, not
    *  draggable, not rename/delete-able, and pinned as a drop floor — nothing
    *  can be reordered before or onto a generated tab's position. */
   generated: ReadonlySet<string>;
@@ -16,8 +16,7 @@ export interface FileTabsProps {
    *  renamed or deleted: main.lua, the toy's entry file. Generated files are
    *  locked too, implicitly. */
   locked?: ReadonlySet<string>;
-  /** Generated files that currently have pokes applied to them — swaps the
-   *  ⚙ glyph for an accent ⚡ so a poked pokes.lua reads as "live". */
+  /** Generated files with panel data — swaps the ⚙ glyph for an accent ⚡. */
   pokedFiles?: ReadonlySet<string>;
   /** Vim keybindings state shown (and toggled) by the status chip. */
   vimMode?: boolean;

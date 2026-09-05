@@ -36,7 +36,23 @@ export interface StarterTemplate {
   files: ToyFile[];
 }
 
+export interface ActivityCounts {
+  total: number;
+  hour: number;
+  day: number;
+  week: number;
+}
+
 export interface AdminOverview {
+  activity: {
+    asOf: number;
+    users: ActivityCounts;
+    toys: ActivityCounts;
+    published: ActivityCounts;
+    creators: ActivityCounts;
+    funnel: { creators: number; publishers: number; repeat_publishers: number };
+    daily: { day: number; users: number; toys: number; published: number; creators: number }[];
+  };
   toys: { id: string; title: string; state: string; author: string; created_at: number }[];
   featuredToys: { id: string; title: string; author: string }[];
   users: {

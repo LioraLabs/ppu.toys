@@ -13,6 +13,8 @@ import {
   openLocalFile,
   _resetLocalFileForTests,
 } from "./localFile";
+import { saveTimeline } from "../output/TimelinePanel";
+import { timelineConfig, timelineMarkers } from "../output/timeline";
 import { openSketchStore } from "../sketches/openSketch";
 import { _resetSketchStoreForTests, loadSketch } from "../sketches/sketchStore";
 
@@ -280,6 +282,34 @@ describe("saveLocalFile: download path (no picker)", () => {
 });
 
 describe("openLocalFile", () => {
+  it("persists markers, linked loop bounds, and scrubber length through a file round trip", async () => {
+    const markers = [
+      { name: "intro", time: 2.5 },
+      { name: "outro", time: 42 },
+    ];
+    const settings = {
+      end: 90,
+      loopIn: 2.5,
+      loopOut: 42,
+      looping: true,
+      loopInMarker: "intro",
+      loopOutMarker: "outro",
+    };
+    saveTimeline(markers, settings);
+    const text = serializeToFile(openSketchStore.state());
+    expect(parseFile(text).files.some((file) => file.name === "timeline.lua")).toBe(true);
+
+    openSketchStore._resetForTests();
+    await openLocalFile(new File([text], "markers.ppu.json"));
+    const opened = openSketchStore.state().context.sketch;
+    expect(timelineMarkers(opened.files)).toEqual(markers);
+    expect(timelineConfig(opened.files)).toEqual(settings);
+
+    const persisted = await loadSketch(opened.id);
+    expect(timelineMarkers(persisted!.files)).toEqual(markers);
+    expect(timelineConfig(persisted!.files)).toEqual(settings);
+  });
+
   it("mints and opens a new sketch with files, sources, and origin intact", async () => {
     const state = buildState();
     const text = serializeToFile(state);

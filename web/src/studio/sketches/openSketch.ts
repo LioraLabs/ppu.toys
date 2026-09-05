@@ -1,6 +1,8 @@
 import { useSyncExternalStore } from "react";
 import { getStarterTemplate } from "../../api/apiClient";
 import { POKES_FILE, EMPTY_POKES } from "../pokes/pokes";
+import { TIMELINE_FILE, markerSource, DEFAULT_TIMELINE, syncTimeline } from "../output/timeline";
+
 import {
   newSketchObject,
   createSketch,
@@ -11,6 +13,8 @@ import {
   type SketchFile,
   type SketchOrigin,
 } from "./sketchStore";
+
+export const GENERATED_FILES: ReadonlySet<string> = new Set([POKES_FILE, TIMELINE_FILE]);
 
 /** Debounce window between the last change and the autosave write. */
 export const AUTOSAVE_MS = 800;
@@ -27,15 +31,17 @@ end
  *  names it — so it can't be deleted or renamed away. */
 export const MAIN_FILE = "main.lua";
 
-/** pokes.lua is reserved: always present, always index 0. The ONLY generated
- *  file — every point where files enter or are read from the open context
- *  normalizes through this. */
-function ensurePokesFirst(files: SketchFile[]): SketchFile[] {
+/** Generated files are always present and pinned before user code. */
+function ensureGeneratedFirst(files: SketchFile[]): SketchFile[] {
   const pokes = files.find((f) => f.name === POKES_FILE) ?? {
     name: POKES_FILE,
     source: EMPTY_POKES,
   };
-  return [pokes, ...files.filter((f) => f.name !== POKES_FILE)];
+  const timeline = files.find((f) => f.name === TIMELINE_FILE) ?? {
+    name: TIMELINE_FILE,
+    source: markerSource([], DEFAULT_TIMELINE),
+  };
+  return [pokes, timeline, ...files.filter((f) => !GENERATED_FILES.has(f.name))];
 }
 
 export type OpenContext = { kind: "sketch"; sketch: Sketch };
@@ -53,10 +59,13 @@ export interface OpenSketchState {
 const FALLBACK_FILES = [{ name: MAIN_FILE, source: NEW_SKETCH_SOURCE }];
 
 function starterSketch(name = "untitled toy", files: SketchFile[] = FALLBACK_FILES): Sketch {
-  return newSketchObject(name, [
-    { name: POKES_FILE, source: EMPTY_POKES },
-    ...files.filter((file) => file.name !== POKES_FILE),
-  ]);
+  return newSketchObject(
+    name,
+    ensureGeneratedFirst([
+      { name: POKES_FILE, source: EMPTY_POKES },
+      ...files.filter((file) => file.name !== POKES_FILE),
+    ]),
+  );
 }
 
 let context: OpenContext = { kind: "sketch", sketch: starterSketch() };
@@ -66,6 +75,7 @@ let session = 0;
 let gen = 0;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let snapshot: OpenSketchState = { context, dirty, session };
+syncTimeline(context.sketch.files, session);
 let starterPromise: ReturnType<typeof getStarterTemplate> | null = null;
 
 function loadStarter() {
@@ -81,6 +91,7 @@ function loadStarter() {
 const listeners = new Set<() => void>();
 function emit() {
   snapshot = { context, dirty, session };
+  syncTimeline(context.sketch.files, session);
   for (const l of listeners) l();
 }
 
@@ -128,7 +139,7 @@ function mutateSketch(update: (s: Sketch) => Sketch) {
  *  lazy fork. Persistence rides the scheduled autosave (saveSketch upserts). */
 function mutateOpen(update: (s: Sketch) => Sketch) {
   const next = update(context.sketch);
-  context = { kind: "sketch", sketch: { ...next, files: ensurePokesFirst(next.files) } };
+  context = { kind: "sketch", sketch: { ...next, files: ensureGeneratedFirst(next.files) } };
   dirty = true;
   gen++;
   schedule();
@@ -159,7 +170,7 @@ function openContext(next: OpenContext) {
   gen++; // invalidate any in-flight flush's state patch (its write still lands)
   context = {
     kind: "sketch",
-    sketch: { ...next.sketch, files: ensurePokesFirst(next.sketch.files) },
+    sketch: { ...next.sketch, files: ensureGeneratedFirst(next.sketch.files) },
   };
   dirty = false;
   session++;
@@ -219,13 +230,13 @@ export const openSketchStore = {
 
   /** Append a new empty file with a unique fileN.lua name; returns the name.
    *  Order is execution order — new files run last. Demos fork (add IS an edit).
-   *  pokes.lua doesn't count toward the numbering (it's not a user file) and
+   *  Generated files don't count toward the numbering and
    *  can never collide with the fileN.lua pattern, but the exclusion is kept
    *  explicit for clarity. */
   addFile(): string {
     const files = currentFiles();
     const taken = new Set(files.map((f) => f.name));
-    let n = files.filter((f) => f.name !== POKES_FILE).length + 1;
+    let n = files.filter((f) => !GENERATED_FILES.has(f.name)).length + 1;
     while (taken.has(`file${n}.lua`)) n++;
     const name = `file${n}.lua`;
     mutateFiles((fs) => [...fs, { name, source: "" }]);
@@ -233,11 +244,11 @@ export const openSketchStore = {
   },
 
   /** Rename a file. Returns false (and no-ops) on empty/unknown/duplicate
-   *  names, on touching the reserved pokes.lua (as source or target), or on
+   *  names, on touching a generated file (as source or target), or on
    *  renaming main.lua away (that IS a delete). Renaming a demo's file forks it. */
   renameFile(from: string, to: string): boolean {
     const next = to.trim();
-    if (from === POKES_FILE || next === POKES_FILE) return false;
+    if (GENERATED_FILES.has(from) || GENERATED_FILES.has(next)) return false;
     if (from === MAIN_FILE) return false;
     const files = currentFiles();
     if (!next || next === from) return false;
@@ -247,22 +258,22 @@ export const openSketchStore = {
     return true;
   },
 
-  /** Delete a file. No-ops on the reserved pokes.lua and on main.lua. Refuses
-   *  the last REAL (non-pokes) file — a sketch always has >= 1 user file. */
+  /** Delete a file. No-ops on generated files and on main.lua. Refuses
+   *  the last user file — a sketch always has >= 1 user file. */
   deleteFile(name: string): void {
-    if (name === POKES_FILE || name === MAIN_FILE) return;
+    if (GENERATED_FILES.has(name) || name === MAIN_FILE) return;
     const files = currentFiles();
-    const realCount = files.filter((f) => f.name !== POKES_FILE).length;
+    const realCount = files.filter((f) => !GENERATED_FILES.has(f.name)).length;
     if (realCount <= 1 || !files.some((f) => f.name === name)) return;
     mutateFiles((fs) => fs.filter((f) => f.name !== name));
   },
 
   /** Move files[from] to index `to`. Order is EXECUTION order (PICO-8).
-   *  No-ops if either endpoint is index 0 — pokes.lua is pinned first. */
+   *  No-ops if either endpoint is a pinned generated file. */
   moveFile(from: number, to: number): void {
     const len = currentFiles().length;
     if (from === to || from < 0 || to < 0 || from >= len || to >= len) return;
-    if (from === 0 || to === 0) return;
+    if (from < GENERATED_FILES.size || to < GENERATED_FILES.size) return;
     mutateFiles((fs) => {
       const next = [...fs];
       const [moved] = next.splice(from, 1);

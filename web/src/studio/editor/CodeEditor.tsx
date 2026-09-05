@@ -4,14 +4,14 @@ import { EditorView, keymap } from "@codemirror/view";
 import { StreamLanguage } from "@codemirror/language";
 import { lua } from "@codemirror/legacy-modes/mode/lua";
 import { acceptCompletion, autocompletion, closeCompletion } from "@codemirror/autocomplete";
-import { indentWithTab } from "@codemirror/commands";
+import { indentWithTab, isolateHistory } from "@codemirror/commands";
 import { lintGutter, setDiagnostics } from "@codemirror/lint";
 import { vim } from "@replit/codemirror-vim";
 import { basicSetup } from "codemirror";
 import type { LuaError } from "../../ppu/core";
 import { ppuCompletions } from "./completions";
 import { luaErrorsToDiagnostics } from "./diagnostics";
-import { createDocStates, type DocStates } from "./docStates";
+import { createDocStates, sourceChange, type DocStates } from "./docStates";
 import { ppuTheme } from "./theme";
 
 export interface CodeEditorProps {
@@ -24,6 +24,8 @@ export interface CodeEditorProps {
    *  rebuilt from `doc` whenever it changes externally instead of treating
    *  the editor buffer as the source of truth. */
   generated?: boolean;
+  /** Editable file whose source can also change through a linked panel. */
+  linked?: boolean;
   /** Vim keybindings on/off. Off = plain CodeMirror bindings (the default). */
   vimMode?: boolean;
   /** Called on every document change with the new source. */
@@ -40,6 +42,7 @@ export function CodeEditor({
   docKey,
   doc,
   generated = false,
+  linked = false,
   vimMode = false,
   onChange,
   errors,
@@ -55,14 +58,15 @@ export function CodeEditor({
   const vimComp = useRef(new Compartment());
   const vimModeRef = useRef(vimMode);
   vimModeRef.current = vimMode;
-  const initial = useRef({ docKey, doc, generated, vimMode });
+  const initial = useRef({ docKey, doc, generated, linked, vimMode });
+  const applyingSource = useRef(false);
 
   const vimExt = (on: boolean): Extension => (on ? vim({ status: true }) : []);
 
   useEffect(() => {
     if (!host.current) return;
     const updateListener = EditorView.updateListener.of((u) => {
-      if (u.docChanged) onChangeRef.current(u.state.doc.toString());
+      if (u.docChanged && !applyingSource.current) onChangeRef.current(u.state.doc.toString());
     });
     const extensions: Extension[] = [
       // Tab accepts an open completion (falls through when the popup is
@@ -98,7 +102,12 @@ export function CodeEditor({
     keyRef.current = initial.current.docKey;
     const view = new EditorView({
       parent: host.current,
-      state: docs.acquire(initial.current.docKey, initial.current.doc, initial.current.generated),
+      state: docs.acquire(
+        initial.current.docKey,
+        initial.current.doc,
+        initial.current.generated,
+        initial.current.linked,
+      ),
     });
     viewRef.current = view;
     return () => {
@@ -124,16 +133,27 @@ export function CodeEditor({
       view.dispatch({ effects: vimComp.current.reconfigure(vimExt(vimModeRef.current)) });
     if (keyRef.current === docKey) {
       if (generated && view.state.doc.toString() !== doc) {
-        view.setState(docs.acquire(docKey, doc, generated));
+        view.setState(docs.acquire(docKey, doc, generated, linked));
         syncVim();
+      }
+      if (linked && view.state.doc.toString() !== doc) {
+        applyingSource.current = true;
+        try {
+          view.dispatch({
+            changes: sourceChange(view.state.doc.toString(), doc),
+            annotations: isolateHistory.of("full"),
+          });
+        } finally {
+          applyingSource.current = false;
+        }
       }
       return;
     }
     docs.store(keyRef.current, view.state);
     keyRef.current = docKey;
-    view.setState(docs.acquire(docKey, doc, generated));
+    view.setState(docs.acquire(docKey, doc, generated, linked));
     syncVim();
-  }, [docKey, doc, generated]);
+  }, [docKey, doc, generated, linked]);
 
   // input-mode toggle: reconfigure the live state in place
   useEffect(() => {

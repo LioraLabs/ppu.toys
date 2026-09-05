@@ -95,6 +95,7 @@ input.project-name:focus-visible {
   flex: 1;
 }
 .btn-ghost {
+  text-decoration: none;
   height: 30px;
   padding: 0 11px;
   border: 1px solid var(--line);
@@ -376,6 +377,9 @@ input.project-name:focus-visible {
   gap: 7px;
 }
 .timeline--panel {
+  border: 0;
+  margin: 0;
+  min-width: 0;
   padding: 12px 14px;
 }
 .output-scrubber {
@@ -428,6 +432,7 @@ input.project-name:focus-visible {
   padding: 0 8px;
   cursor: pointer;
 }
+.timeline-bound,
 .timeline-controls label {
   display: flex;
   align-items: center;
@@ -435,9 +440,13 @@ input.project-name:focus-visible {
   color: var(--dim2);
   font: 10px/1 var(--font-mono);
 }
+.timeline-bound {
+  flex-wrap: wrap;
+}
 .timeline-controls form {
   margin-left: auto;
 }
+.timeline-controls select,
 .timeline-controls input:not([type="checkbox"]) {
   width: 112px;
   min-height: 28px;
@@ -450,13 +459,22 @@ input.project-name:focus-visible {
   font: 10px/1 var(--font-mono);
 }
 .timeline-controls input[type="number"] {
-  width: 54px;
+  width: 76px;
+}
+.output-timeline-controls {
+  justify-content: space-between;
+  padding: 6px 0;
+}
+.timeline-controls select {
+  width: auto;
+  max-width: 160px;
 }
 .timeline-markers {
   padding-top: 1px;
 }
 .timeline-marker {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 5px;
 }

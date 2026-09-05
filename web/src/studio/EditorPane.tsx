@@ -10,28 +10,26 @@ import {
   useTransportBindMismatches,
   useTransportRuntimeError,
 } from "./transport/transport";
-import { openSketchStore, useOpenSketch, openContextFiles, MAIN_FILE } from "./sketches/openSketch";
+import {
+  openSketchStore,
+  useOpenSketch,
+  openContextFiles,
+  MAIN_FILE,
+  GENERATED_FILES,
+} from "./sketches/openSketch";
 import { restoreOpenContext } from "./sketches/restore";
 import { POKES_FILE } from "./pokes/pokes";
+import { TIMELINE_FILE, useTimelineMarkers } from "./output/timeline";
 import { usePokes } from "./pokes/pokeStore";
 import { DialectToggle, PokeBar } from "./inspector/compose/chrome";
 
-/** The only machine-generated file — read-only tab, CRUD-guarded (see
- *  openSketchStore), never a default active-tab target. */
-const GENERATED = new Set([POKES_FILE]);
-
-/** Files the tab bar may not rename or delete: the generated one plus the
- *  entry file (the store rejects both too — this just hides the affordances). */
-const LOCKED = new Set([POKES_FILE, MAIN_FILE]);
-
-/** Stable empty-set identity: reused whenever there are no pokes, so
- *  FileTabs doesn't see a new Set on every render. */
-const EMPTY_SET: ReadonlySet<string> = new Set();
+/** Generated files and the entry file cannot be renamed or deleted. */
+const LOCKED = new Set([...GENERATED_FILES, MAIN_FILE]);
 
 /** First non-generated file, falling back to files[0] when every file is
  *  generated (should not happen — a sketch always keeps >= 1 real file). */
 function defaultActive(files: SourceFile[]): string {
-  return (files.find((f) => !GENERATED.has(f.name)) ?? files[0])?.name ?? "main.lua";
+  return (files.find((f) => !GENERATED_FILES.has(f.name)) ?? files[0])?.name ?? "main.lua";
 }
 
 export interface EditorPaneProps {
@@ -144,7 +142,7 @@ export function EditorPane({ onSources }: EditorPaneProps) {
   const rename = (from: string, to: string): boolean => {
     // belt-and-braces: the store already rejects touching the reserved
     // generated file, and FileTabs never wires up its dblclick for it.
-    if (LOCKED.has(from) || GENERATED.has(to)) return false;
+    if (LOCKED.has(from) || GENERATED_FILES.has(to)) return false;
     if (!openSketchStore.renameFile(from, to)) return false;
     const k = docKeys.get(from);
     if (k !== undefined) {
@@ -165,7 +163,16 @@ export function EditorPane({ onSources }: EditorPaneProps) {
   };
 
   const activeFile = files.find((f) => f.name === active);
-  const pokedFiles = usePokes().length > 0 ? GENERATED : EMPTY_SET;
+  const pokes = usePokes();
+  const markers = useTimelineMarkers();
+  const pokedFiles = useMemo(
+    () =>
+      new Set([
+        ...(pokes.length > 0 ? [POKES_FILE] : []),
+        ...(markers.length > 0 ? [TIMELINE_FILE] : []),
+      ]),
+    [pokes, markers],
+  );
   const vimMode = useVimMode();
 
   return (
@@ -174,7 +181,7 @@ export function EditorPane({ onSources }: EditorPaneProps) {
         files={files.map((f) => f.name)}
         active={active}
         errorFiles={errorFiles}
-        generated={GENERATED}
+        generated={GENERATED_FILES}
         locked={LOCKED}
         pokedFiles={pokedFiles}
         vimMode={vimMode}
@@ -191,7 +198,8 @@ export function EditorPane({ onSources }: EditorPaneProps) {
           key={session}
           docKey={keyFor(active)}
           doc={activeFile?.source ?? ""}
-          generated={GENERATED.has(active)}
+          generated={active === POKES_FILE}
+          linked={active === TIMELINE_FILE}
           vimMode={vimMode}
           onChange={(src) => openSketchStore.editFile(active, src)}
           errors={routed.get(active) ?? NO_ERRORS}

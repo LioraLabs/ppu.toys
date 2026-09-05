@@ -14,6 +14,7 @@ describe("openSketchStore", () => {
   it("boots with a usable fallback toy", () => {
     expect(openContextFiles(openSketchStore.state())).toEqual([
       expect.objectContaining({ name: "pokes.lua" }),
+      expect.objectContaining({ name: "timeline.lua" }),
       { name: "main.lua", source: expect.stringContaining("function frame(t, f)") },
     ]);
   });
@@ -63,4 +64,17 @@ describe("openSketchStore", () => {
     await openSketchStore.flush();
     expect((await loadSketch(id))!.origin).toBeUndefined();
   });
+});
+
+it("reserves and pins timeline.lua while allowing generated writes", () => {
+  openSketchStore._resetForTests();
+  openSketchStore.editFile("timeline.lua", "markers = { intro = 2 }\n");
+  const before = openContextFiles(openSketchStore.state());
+  expect(openSketchStore.renameFile("timeline.lua", "renamed.lua")).toBe(false);
+  expect(openSketchStore.renameFile("main.lua", "timeline.lua")).toBe(false);
+  openSketchStore.deleteFile("timeline.lua");
+  openSketchStore.moveFile(1, 2);
+  openSketchStore.moveFile(2, 1);
+  expect(openContextFiles(openSketchStore.state())).toEqual(before);
+  expect(before[1]).toEqual({ name: "timeline.lua", source: "markers = { intro = 2 }\n" });
 });
