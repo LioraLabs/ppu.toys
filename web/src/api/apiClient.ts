@@ -135,7 +135,11 @@ async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
     },
   });
   if (!res.ok) {
-    throw new ApiError(`${method} ${url} → ${res.status}`, res.status);
+    const reason = await res.json().then((j) => j?.error, () => undefined);
+    throw new ApiError(
+      `${method} ${url} → ${res.status}${reason ? `: ${reason}` : ""}`,
+      res.status,
+    );
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;

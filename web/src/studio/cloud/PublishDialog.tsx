@@ -28,16 +28,11 @@ export interface PublishDialogProps {
   onClose: () => void;
 }
 
-/** Maps a create/update failure to dialog copy. A 409 means different things
- *  on each verb (stale revision vs. quota), so the caller says which. */
-function errorMessage(e: unknown, verb: "create" | "update"): string {
+/** Maps a create/update failure to dialog copy. */
+function errorMessage(e: unknown): string {
   if (e instanceof ApiError) {
     if (e.status === 429) return "Updates are limited to one per minute — try again shortly.";
-    if (e.status === 409) {
-      return verb === "update"
-        ? "This toy changed elsewhere — reopen it to update, or publish as new."
-        : "Toy quota reached.";
-    }
+    if (e.status === 409) return "This toy changed elsewhere — reopen it to update, or publish as new.";
   }
   return e instanceof Error ? e.message : "Publish failed";
 }
@@ -103,7 +98,6 @@ export function PublishDialog({ onClose }: PublishDialogProps) {
   // `forkedFrom` origin that no longer exists, and since `afterPublish` never
   // ran, origin is never bound to it.
   async function run(
-    verb: "create" | "update",
     save: (body: SaveToyBody) => Promise<{ id: string; afterPublish?: () => void }>,
   ) {
     setError(null);
@@ -147,14 +141,14 @@ export function PublishDialog({ onClose }: PublishDialogProps) {
         setPhase("idle");
         return;
       }
-      setError(errorMessage(e, verb));
+      setError(errorMessage(e));
       setPhase("idle");
     }
   }
 
   async function publishNew(fork: boolean) {
     if (busy || !user) return;
-    await run("create", async (body) => {
+    await run(async (body) => {
       const created = await createToy({
         ...body,
         ...(fork && origin ? { forkedFrom: origin.id } : {}),
@@ -175,7 +169,7 @@ export function PublishDialog({ onClose }: PublishDialogProps) {
 
   async function publishUpdate() {
     if (busy || !origin) return;
-    await run("update", async (body) => {
+    await run(async (body) => {
       const updated = await updateToy(origin.id, origin.revision, body);
       // The toy is already published, not a sweepable draft: rebind right
       // away, before the upload, so a retry never 409s on a stale revision.

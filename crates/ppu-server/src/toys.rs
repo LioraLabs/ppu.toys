@@ -93,9 +93,9 @@ fn unb64(s: &str) -> AppResult<Vec<u8>> {
         .map_err(|_| AppError::status(StatusCode::BAD_REQUEST, "bad base64 payload"))
 }
 
-/// Validate a save BEFORE any row is written: per-file cap, per-source-payload cap,
-/// and the aggregate ≤1MB toy-total cap. Doing it up front means a cap violation on a
-/// later item can't leave a half-written toy behind.
+/// Validate a save BEFORE any row is written and return its byte size for the
+/// per-account storage quota (the only size limit). Doing it up front means a
+/// rejection on a later item can't leave a half-written toy behind.
 fn validate_save(body: &SaveBody) -> AppResult<i64> {
     if body.title.trim().is_empty() || body.title.len() > crate::config::CAP_TITLE {
         return Err(AppError::status(StatusCode::BAD_REQUEST, "invalid title"));
@@ -104,14 +104,6 @@ fn validate_save(body: &SaveBody) -> AppResult<i64> {
         return Err(AppError::status(
             StatusCode::BAD_REQUEST,
             "description too long",
-        ));
-    }
-    if body.files.len() > crate::config::MAX_FILES
-        || body.sources.len() > crate::config::MAX_SOURCES
-    {
-        return Err(AppError::status(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "too many files or sources",
         ));
     }
     let mut file_names = HashSet::new();
@@ -125,12 +117,6 @@ fn validate_save(body: &SaveBody) -> AppResult<i64> {
             return Err(AppError::status(
                 StatusCode::BAD_REQUEST,
                 "invalid file name",
-            ));
-        }
-        if f.source.len() > crate::config::CAP_LUA_FILE {
-            return Err(AppError::status(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "lua file too large",
             ));
         }
         total += f.name.len() + f.source.len();
@@ -150,21 +136,8 @@ fn validate_save(body: &SaveBody) -> AppResult<i64> {
         total +=
             s.name.len() + s.kind.len() + s.options.to_string().len() + s.meta.to_string().len();
         if let Some(p) = &s.payload {
-            let bytes = unb64(p)?;
-            if bytes.len() > crate::config::CAP_SOURCE_PAYLOAD {
-                return Err(AppError::status(
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    "source payload too large",
-                ));
-            }
-            total += bytes.len();
+            total += unb64(p)?.len();
         }
-    }
-    if total > crate::config::CAP_TOY_TOTAL {
-        return Err(AppError::status(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "toy exceeds total size cap",
-        ));
     }
     Ok(total as i64)
 }
@@ -223,17 +196,6 @@ mod storage_tests {
     }
 }
 
-async fn ensure_toy_capacity(state: &AppState, user_id: &str) -> AppResult<()> {
-    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM toys WHERE author_id=?")
-        .bind(user_id)
-        .fetch_one(&state.pool)
-        .await?;
-    if count >= crate::config::MAX_TOYS_PER_USER {
-        return Err(AppError::status(StatusCode::CONFLICT, "toy quota reached"));
-    }
-    Ok(())
-}
-
 /// Upsert source metadata rows, then push each payload through the blob layer so
 /// PPU_BLOB_MODE (db|disk) is honored uniformly. The row is written first (payload
 /// column NULL); blobs::store then fills it (db) or writes a file (disk).
@@ -243,14 +205,6 @@ async fn write_sources(state: &AppState, toy_id: &str, sources: &[SourceDto]) ->
             Some(p) => Some(unb64(p)?),
             None => None,
         };
-        if let Some(ref p) = payload {
-            if p.len() > crate::config::CAP_SOURCE_PAYLOAD {
-                return Err(AppError::status(
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    "source payload too large",
-                ));
-            }
-        }
         sqlx::query("INSERT INTO toy_sources(toy_id,name,kind,builtin_id,options_json,payload,meta_json) VALUES(?,?,?,?,?,NULL,?)
                      ON CONFLICT(toy_id,name) DO UPDATE SET kind=excluded.kind, builtin_id=excluded.builtin_id, options_json=excluded.options_json, meta_json=excluded.meta_json, payload=NULL")
             .bind(toy_id).bind(&s.name).bind(&s.kind).bind(&s.builtin_id)
@@ -278,7 +232,7 @@ async fn create(
     let save_bytes = validate_save(&body)? + tags_json.as_ref().map_or(2, |tags| tags.len() as i64);
     let _write = state.toy_writes.lock().await;
     // A failed/abandoned upload leaves a draft row behind; sweep the caller's own
-    // drafts older than an hour first so they never count against the toy quota.
+    // drafts older than an hour first so they never count against the storage quota.
     // create() only accepts a published forkedFrom, so no draft created from now
     // on is ever a fork target; migration 0008 detached the legacy edges left by
     // the removed fork route, so this delete never trips the forked_from FK.
@@ -287,7 +241,6 @@ async fn create(
         .bind(crate::db::now() - crate::config::DRAFT_SWEEP_SECS)
         .execute(&state.pool)
         .await?;
-    ensure_toy_capacity(&state, &user.id).await?;
     ensure_storage(&state, &user.id, 0, save_bytes).await?;
     if let Some(src) = &body.forked_from {
         let published: Option<(i64,)> =
@@ -454,7 +407,7 @@ async fn get_toy(
     })).into_response())
 }
 
-/// Publish a draft: validates author + caps, stores clip/thumb blobs, flips
+/// Publish a draft: validates author + storage quota, stores clip/thumb blobs, flips
 /// state, and (if this is the toy's first publish and Discord is configured)
 /// fires the announce webhook in the background — a webhook failure only
 /// logs a warning and never fails the publish response itself. Republishing
@@ -524,18 +477,6 @@ async fn publish(
         .is_some_and(|title| title.trim().is_empty() || title.len() > crate::config::CAP_TITLE)
     {
         return Err(AppError::status(StatusCode::BAD_REQUEST, "invalid title"));
-    }
-    if clip.len() > crate::config::CAP_CLIP {
-        return Err(AppError::status(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "clip too large",
-        ));
-    }
-    if thumb.len() > crate::config::CAP_THUMB {
-        return Err(AppError::status(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "thumb too large",
-        ));
     }
     let (old_media,): (i64,) = sqlx::query_as(
         "SELECT COALESCE(length(clip),0)+COALESCE(length(thumb),0) FROM toys WHERE id=?",

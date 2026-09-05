@@ -70,31 +70,6 @@ async fn publish_flips_state_and_stores_blobs_webhook_skipped() {
 }
 
 #[tokio::test]
-async fn publish_rejects_oversized_clip() {
-    let app = common::test_app().await;
-    let sid = common::seed_session(&app.state, "1", "ann", false).await;
-    sqlx::query("INSERT INTO toys(id,author_id,title,files_json,state,created_at) VALUES('t','1','T','[]','draft',1)").execute(&app.state.pool).await.unwrap();
-    let big = vec![0u8; 2 * 1024 * 1024 + 1];
-    let (ct, body) = multipart(&big, b"thumb");
-    let res = app
-        .router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/toys/t/publish")
-                .header("cookie", format!("ppu_sess={sid}"))
-                .header("x-ppu-csrf", "1")
-                .header("content-type", ct)
-                .body(Body::from(body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
-}
-
-#[tokio::test]
 async fn publish_by_non_author_forbidden() {
     let app = common::test_app().await;
     common::seed_session(&app.state, "1", "ann", false).await;

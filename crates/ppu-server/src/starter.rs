@@ -29,9 +29,10 @@ fn validate(template: &StarterTemplate) -> AppResult<()> {
         || template.files.is_empty()
         || unique_names.len() != template.files.len()
         || !template.files.iter().any(|file| file.name == "main.lua")
-        || template.files.iter().any(|file| {
-            file.name.trim().is_empty() || file.source.len() > crate::config::CAP_LUA_FILE
-        })
+        || template
+            .files
+            .iter()
+            .any(|file| file.name.trim().is_empty())
     {
         return Err(AppError::status(
             StatusCode::BAD_REQUEST,

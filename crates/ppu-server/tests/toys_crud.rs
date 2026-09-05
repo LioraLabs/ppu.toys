@@ -196,10 +196,14 @@ async fn source_payload_roundtrips_through_get() {
 }
 
 #[tokio::test]
-async fn oversized_lua_file_rejected_413() {
+async fn toy_over_storage_quota_rejected_413() {
     let app = common::test_app().await;
     let sid = common::seed_session(&app.state, "1", "ann", false).await;
-    let big = "x".repeat(64 * 1024 + 1);
+    sqlx::query("INSERT INTO toys(id,author_id,title,description,files_json,state,created_at) VALUES('full','1','T',zeroblob(?),'[]','published',1)")
+        .bind(ppu_server::config::MAX_STORAGE_PER_USER)
+        .execute(&app.state.pool)
+        .await
+        .unwrap();
     let res = app
         .router
         .clone()
@@ -208,7 +212,7 @@ async fn oversized_lua_file_rejected_413() {
             "/api/toys",
             &sid,
             serde_json::json!({
-                "title":"B","files":[{"name":"m.lua","source":big}],"sources":[]
+                "title":"Big","files":[{"name":"main.lua","source":"x"}],"sources":[]
             }),
         ))
         .await
@@ -218,69 +222,7 @@ async fn oversized_lua_file_rejected_413() {
         .fetch_one(&app.state.pool)
         .await
         .unwrap();
-    assert_eq!(n, 0, "rejected before any toy row is written");
-}
-
-#[tokio::test]
-async fn oversized_source_payload_rejected_413() {
-    let app = common::test_app().await;
-    let sid = common::seed_session(&app.state, "1", "ann", false).await;
-    use base64::Engine;
-    let payload = base64::engine::general_purpose::STANDARD.encode(vec![0u8; 128 * 1024 + 1]);
-    let res = app
-        .router
-        .clone()
-        .oneshot(authed(
-            "POST",
-            "/api/toys",
-            &sid,
-            serde_json::json!({
-                "title":"B","files":[],"sources":[{"name":"bg","kind":"bg","payload":payload}]
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM toys")
-        .fetch_one(&app.state.pool)
-        .await
-        .unwrap();
-    assert_eq!(n, 0, "rejected before any toy row is written");
-}
-
-#[tokio::test]
-async fn toy_exceeding_total_cap_rejected_413() {
-    let app = common::test_app().await;
-    let sid = common::seed_session(&app.state, "1", "ann", false).await;
-    use base64::Engine;
-    // 9 sources * 120KB each = 1.08MB > 1MB total, though each is under the 128KB per-source cap
-    let sources: Vec<serde_json::Value> = (0..9)
-        .map(|i| {
-            serde_json::json!({
-                "name": format!("s{i}"), "kind": "bg",
-                "payload": base64::engine::general_purpose::STANDARD.encode(vec![0u8; 120 * 1024]),
-            })
-        })
-        .collect();
-    let res = app
-        .router
-        .clone()
-        .oneshot(authed(
-            "POST",
-            "/api/toys",
-            &sid,
-            serde_json::json!({
-                "title":"Big","files":[],"sources":sources
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM toys")
-        .fetch_one(&app.state.pool)
-        .await
-        .unwrap();
-    assert_eq!(n, 0, "aggregate-cap rejection writes nothing");
+    assert_eq!(n, 1, "quota rejection writes nothing");
 }
 
 #[tokio::test]
@@ -349,35 +291,13 @@ async fn drafts_are_visible_only_to_their_owner() {
 }
 
 #[tokio::test]
-async fn create_enforces_input_bounds_and_per_user_quota() {
+async fn create_rejects_duplicate_file_names() {
     let app = common::test_app().await;
     let sid = common::seed_session(&app.state, "1", "ann", false).await;
     let duplicate = app.router.clone().oneshot(authed("POST", "/api/toys", &sid, serde_json::json!({
         "title":"x", "files":[{"name":"main.lua","source":""},{"name":"main.lua","source":""}], "sources":[]
     }))).await.unwrap();
     assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
-
-    let now = ppu_server::db::now();
-    for i in 0..ppu_server::config::MAX_TOYS_PER_USER {
-        sqlx::query("INSERT INTO toys(id,author_id,title,files_json,state,created_at) VALUES(?, '1','T','[]','draft',?)")
-            .bind(format!("t{i}"))
-            .bind(now)
-            .execute(&app.state.pool).await.unwrap();
-    }
-    let over_quota = app
-        .router
-        .clone()
-        .oneshot(authed(
-            "POST",
-            "/api/toys",
-            &sid,
-            serde_json::json!({
-                "title":"x", "files":[], "sources":[]
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(over_quota.status(), StatusCode::CONFLICT);
 }
 
 #[tokio::test]
@@ -633,32 +553,4 @@ async fn stale_draft_fork_target_is_detached_before_sweep() {
             .unwrap()
             .0;
     assert_eq!(forked_from, None, "legacy fork edge should be detached");
-}
-
-#[tokio::test]
-async fn stale_drafts_do_not_eat_the_quota() {
-    let app = common::test_app().await;
-    let sid = common::seed_session(&app.state, "1", "ann", false).await;
-    let now = ppu_server::db::now();
-    for i in 0..ppu_server::config::MAX_TOYS_PER_USER {
-        sqlx::query("INSERT INTO toys(id,author_id,title,files_json,state,created_at) VALUES(?, '1','T','[]','draft',?)")
-            .bind(format!("d{i}"))
-            .bind(now - 2 * ppu_server::config::DRAFT_SWEEP_SECS)
-            .execute(&app.state.pool).await.unwrap();
-    }
-
-    let res = app
-        .router
-        .clone()
-        .oneshot(authed(
-            "POST",
-            "/api/toys",
-            &sid,
-            serde_json::json!({
-                "title":"x","files":[],"sources":[]
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
 }

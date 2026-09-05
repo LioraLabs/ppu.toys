@@ -26,10 +26,12 @@ pub fn build_router(state: AppState) -> Router {
         .merge(toys::routes())
         .merge(hearts::routes())
         .merge(admin::routes())
-        // axum's default body limit is 2MB, which would reject a legitimately-capped
-        // ~2MB clip once the thumb + multipart overhead push the request past it; the
-        // publish handler enforces the real per-field caps (CAP_CLIP/CAP_THUMB) itself.
-        .layer(DefaultBodyLimit::max(8 * 1024 * 1024));
+        // The only size limit is the 100MB per-account storage quota, checked in the
+        // handlers; the body limit just has to admit a quota-sized toy plus base64
+        // and multipart overhead.
+        .layer(DefaultBodyLimit::max(
+            crate::config::MAX_STORAGE_PER_USER as usize * 3 / 2,
+        ));
     Router::new()
         .nest("/api", api)
         .merge(blobs::routes())
