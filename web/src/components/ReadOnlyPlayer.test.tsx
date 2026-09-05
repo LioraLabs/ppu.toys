@@ -6,7 +6,17 @@ import { render, cleanup, fireEvent } from "@testing-library/react";
 // vi.mock factories are hoisted above top-level code, so any variable they
 // reference must be created via vi.hoisted (plain `const`s declared above
 // vi.mock would still be in the TDZ when the factory runs).
-const { setSources, addSource, removeSource, getSnapshot, subscribe, toggle, setPlaying, seek } = vi.hoisted(() => ({
+const {
+  setSources,
+  addSource,
+  removeSource,
+  getSnapshot,
+  subscribe,
+  toggle,
+  setPlaying,
+  seek,
+  setPad,
+} = vi.hoisted(() => ({
   setSources: vi.fn(() => ({ ok: true })),
   addSource: vi.fn(() => ({ ok: true })),
   removeSource: vi.fn(() => true),
@@ -18,9 +28,20 @@ const { setSources, addSource, removeSource, getSnapshot, subscribe, toggle, set
   toggle: vi.fn(),
   setPlaying: vi.fn(),
   seek: vi.fn(),
+  setPad: vi.fn(),
 }));
 vi.mock("../studio/transport/transport", () => ({
-  transport: { setSources, addSource, removeSource, getSnapshot, subscribe, toggle, setPlaying, seek },
+  transport: {
+    setSources,
+    addSource,
+    removeSource,
+    getSnapshot,
+    subscribe,
+    toggle,
+    setPlaying,
+    seek,
+    setPad,
+  },
   useTransport: () => getSnapshot(),
 }));
 // Presenter touches WebGL; stub it — this test asserts wiring, not pixels.
@@ -126,4 +147,18 @@ describe("ReadOnlyPlayer", () => {
     expect(toggle).toHaveBeenCalledOnce();
     expect(seek).toHaveBeenCalledWith(0);
   });
+});
+
+it("combines controller and keyboard input and clears it on unmount", () => {
+  const { container, getByRole, unmount } = render(
+    <ReadOnlyPlayer files={[]} sources={[]} controls />,
+  );
+  const frame = container.querySelector(".player")!;
+  fireEvent.keyDown(frame, { code: "ArrowUp" });
+  fireEvent.keyDown(getByRole("button", { name: "A" }), { key: " " });
+  expect(setPad).toHaveBeenLastCalledWith(1 | 16);
+  fireEvent.keyUp(frame, { code: "ArrowUp" });
+  expect(setPad).toHaveBeenLastCalledWith(16);
+  unmount();
+  expect(setPad).toHaveBeenLastCalledWith(0);
 });

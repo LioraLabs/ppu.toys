@@ -1,6 +1,7 @@
 import { Routes, Route } from "react-router-dom";
 import { Layout } from "./Layout";
 import { Wall } from "./Wall";
+import { Play } from "./Play";
 import { Permalink } from "./Permalink";
 import { ProfilePage } from "./ProfilePage";
 import { Tos } from "./Tos";
@@ -24,6 +25,7 @@ export function AppRoutes() {
         <Route path="/admin" element={<AdminPage />} />
         <Route path="/browse" element={<Browse />} />
       </Route>
+      <Route path="/t/:id/play" element={<Play />} />
       <Route path="/t/:id/raw" element={<Permalink raw />} />
       <Route path="/studio/raw" element={<StudioRawOutput />} />
       {/* Studio owns the full viewport — outside the nav shell so its layout is unchanged. */}

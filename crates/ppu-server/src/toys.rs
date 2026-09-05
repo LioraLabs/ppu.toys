@@ -37,6 +37,8 @@ pub struct SaveBody {
     pub title: String,
     #[serde(default)]
     pub description: String,
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
     pub files: Vec<FileDto>,
     #[serde(default)]
     pub sources: Vec<SourceDto>,
@@ -44,6 +46,35 @@ pub struct SaveBody {
     pub expected_revision: Option<i64>,
     #[serde(default, rename = "forkedFrom")]
     pub forked_from: Option<String>,
+}
+
+/// Tags are a small, normalized set of public slugs; omitted tags preserve an
+/// existing toy when older clients save it.
+fn normalize_tags(tags: &[String]) -> AppResult<Vec<String>> {
+    if tags.len() > 5 {
+        return Err(AppError::status(StatusCode::BAD_REQUEST, "at most 5 tags"));
+    }
+    let mut result = Vec::new();
+    for tag in tags {
+        let tag = tag.trim().to_ascii_lowercase();
+        if tag.is_empty()
+            || tag.len() > 24
+            || !tag
+                .bytes()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+            || tag.starts_with('-')
+            || tag.ends_with('-')
+        {
+            return Err(AppError::status(
+                StatusCode::BAD_REQUEST,
+                "tags must be 1–24 letters, numbers or hyphens",
+            ));
+        }
+        if !result.contains(&tag) {
+            result.push(tag);
+        }
+    }
+    Ok(result)
 }
 
 fn slug() -> String {
@@ -140,7 +171,7 @@ fn validate_save(body: &SaveBody) -> AppResult<i64> {
 
 pub(crate) async fn user_storage(state: &AppState, user_id: &str) -> AppResult<i64> {
     let (bytes,): (i64,) = sqlx::query_as(
-        "SELECT COALESCE((SELECT SUM(length(title)+length(description)+length(files_json)+COALESCE(length(clip),0)+COALESCE(length(thumb),0)) FROM toys WHERE author_id=?),0)+COALESCE((SELECT SUM(length(s.name)+length(s.kind)+COALESCE(length(s.builtin_id),0)+COALESCE(length(s.options_json),0)+COALESCE(length(s.payload),0)+COALESCE(length(s.meta_json),0)) FROM toy_sources s JOIN toys t ON t.id=s.toy_id WHERE t.author_id=?),0)",
+        "SELECT COALESCE((SELECT SUM(length(title)+length(description)+length(tags_json)+length(files_json)+COALESCE(length(clip),0)+COALESCE(length(thumb),0)) FROM toys WHERE author_id=?),0)+COALESCE((SELECT SUM(length(s.name)+length(s.kind)+COALESCE(length(s.builtin_id),0)+COALESCE(length(s.options_json),0)+COALESCE(length(s.payload),0)+COALESCE(length(s.meta_json),0)) FROM toy_sources s JOIN toys t ON t.id=s.toy_id WHERE t.author_id=?),0)",
     )
     .bind(user_id)
     .bind(user_id)
@@ -239,7 +270,12 @@ async fn create(
     user: AuthUser,
     Json(body): Json<SaveBody>,
 ) -> AppResult<Response> {
-    let save_bytes = validate_save(&body)?;
+    let tags_json = body
+        .tags
+        .as_ref()
+        .map(|tags| normalize_tags(tags).and_then(|tags| Ok(serde_json::to_string(&tags)?)))
+        .transpose()?;
+    let save_bytes = validate_save(&body)? + tags_json.as_ref().map_or(2, |tags| tags.len() as i64);
     let _write = state.toy_writes.lock().await;
     // A failed/abandoned upload leaves a draft row behind; sweep the caller's own
     // drafts older than an hour first so they never count against the toy quota.
@@ -266,8 +302,8 @@ async fn create(
     let id = slug();
     let files_json = serde_json::to_string(&body.files)?;
     let now = crate::db::now();
-    sqlx::query("INSERT INTO toys(id,author_id,title,description,files_json,state,forked_from,created_at) VALUES(?,?,?,?,?, 'draft', ?, ?)")
-        .bind(&id).bind(&user.id).bind(&body.title).bind(&body.description).bind(&files_json).bind(&body.forked_from).bind(now).execute(&state.pool).await?;
+    sqlx::query("INSERT INTO toys(id,author_id,title,description,files_json,state,forked_from,created_at,tags_json) VALUES(?,?,?,?,?, 'draft', ?, ?, ?)")
+        .bind(&id).bind(&user.id).bind(&body.title).bind(&body.description).bind(&files_json).bind(&body.forked_from).bind(now).bind(tags_json.as_deref().unwrap_or("[]")).execute(&state.pool).await?;
     write_sources(&state, &id, &body.sources).await?;
     Ok(Json(serde_json::json!({ "id": id, "revision": 1 })).into_response())
 }
@@ -309,20 +345,29 @@ async fn update(
             "save rate limit",
         ));
     }
-    let save_bytes = validate_save(&body)?;
-    let (old_bytes,): (i64,) = sqlx::query_as(
-        "SELECT length(title)+length(description)+length(files_json)+COALESCE((SELECT SUM(length(name)+length(kind)+COALESCE(length(builtin_id),0)+COALESCE(length(options_json),0)+COALESCE(length(payload),0)+COALESCE(length(meta_json),0)) FROM toy_sources WHERE toy_id=?),0) FROM toys WHERE id=?",
+    let tags_json = body
+        .tags
+        .as_ref()
+        .map(|tags| normalize_tags(tags).and_then(|tags| Ok(serde_json::to_string(&tags)?)))
+        .transpose()?;
+    let (old_bytes, old_tags_bytes): (i64, i64) = sqlx::query_as(
+        "SELECT length(title)+length(description)+length(tags_json)+length(files_json)+COALESCE((SELECT SUM(length(name)+length(kind)+COALESCE(length(builtin_id),0)+COALESCE(length(options_json),0)+COALESCE(length(payload),0)+COALESCE(length(meta_json),0)) FROM toy_sources WHERE toy_id=?),0),length(tags_json) FROM toys WHERE id=?",
     )
     .bind(&id)
     .bind(&id)
     .fetch_one(&state.pool)
     .await?;
+    let save_bytes = validate_save(&body)?
+        + tags_json
+            .as_ref()
+            .map_or(old_tags_bytes, |tags| tags.len() as i64);
     ensure_storage(&state, &user.id, old_bytes, save_bytes).await?;
     let files_json = serde_json::to_string(&body.files)?;
-    let changed = sqlx::query("UPDATE toys SET title=?, description=?, files_json=?, revision=revision+1 WHERE id=? AND revision=?")
+    let changed = sqlx::query("UPDATE toys SET title=?, description=?, files_json=?, tags_json=COALESCE(?,tags_json), revision=revision+1 WHERE id=? AND revision=?")
         .bind(&body.title)
         .bind(&body.description)
         .bind(&files_json)
+        .bind(&tags_json)
         .bind(&id)
         .bind(expected)
         .execute(&state.pool)
@@ -349,8 +394,8 @@ async fn get_toy(
     maybe: Option<AuthUser>,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let row: Option<(String,String,String,String,Option<String>,i64,i64,String,String,Option<String>)> = sqlx::query_as(
-        "SELECT t.title,t.description,t.files_json,t.state,t.forked_from,t.heart_count,t.revision,u.handle,u.id,u.avatar_hash
+    let row: Option<(String,String,String,String,Option<String>,i64,i64,String,String,Option<String>,String)> = sqlx::query_as(
+        "SELECT t.title,t.description,t.files_json,t.state,t.forked_from,t.heart_count,t.revision,u.handle,u.id,u.avatar_hash,t.tags_json
          FROM toys t JOIN users u ON u.id=t.author_id WHERE t.id=?").bind(&id).fetch_optional(&state.pool).await?;
     let (
         title,
@@ -363,10 +408,12 @@ async fn get_toy(
         handle,
         author_id,
         avatar,
+        tags_json,
     ) = row.ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such toy"))?;
     if tstate != "published" && maybe.as_ref().is_none_or(|user| user.id != author_id) {
         return Err(AppError::status(StatusCode::NOT_FOUND, "no such toy"));
     }
+    let tags: Vec<String> = serde_json::from_str(&tags_json)?;
     let files: serde_json::Value = serde_json::from_str(&files_json)?;
     let src_rows: Vec<(
         String,
@@ -401,7 +448,7 @@ async fn get_toy(
         false
     };
     Ok(Json(serde_json::json!({
-        "id": id, "title": title, "description": description, "state": tstate, "revision": revision,
+        "id": id, "title": title, "tags": tags, "description": description, "state": tstate, "revision": revision,
         "files": files, "sources": sources, "heartCount": heart_count, "hearted": hearted, "forkedFrom": forked_from,
         "author": { "id": author_id, "handle": handle, "avatar": avatar },
     })).into_response())
@@ -556,6 +603,10 @@ pub struct WallQuery {
     page: Option<i64>,
     #[serde(default)]
     q: Option<String>,
+    #[serde(default)]
+    tag: Option<String>,
+    #[serde(default)]
+    author: Option<String>,
 }
 
 const PAGE_SIZE: i64 = 24;
@@ -573,8 +624,17 @@ async fn highlights(
     State(state): State<AppState>,
     maybe: Option<AuthUser>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let rows: Vec<(String, String, i64, i64, String, String, Option<String>)> = sqlx::query_as(
-        "SELECT t.id,t.title,t.heart_count,t.created_at,u.id,u.handle,u.avatar_hash
+    let rows: Vec<(
+        String,
+        String,
+        i64,
+        i64,
+        String,
+        String,
+        Option<String>,
+        String,
+    )> = sqlx::query_as(
+        "SELECT t.id,t.title,t.heart_count,t.created_at,u.id,u.handle,u.avatar_hash,t.tags_json
          FROM settings s,json_each(s.value) j
          JOIN toys t ON t.id=j.value JOIN users u ON u.id=t.author_id
          WHERE s.key='featured_toys' AND t.state='published' ORDER BY CAST(j.key AS INTEGER)",
@@ -583,7 +643,7 @@ async fn highlights(
     .await?;
     let uid = maybe.as_ref().map(|user| user.id.as_str());
     let mut cards = Vec::new();
-    for (id, title, hearts, created, author_id, handle, avatar) in rows {
+    for (id, title, hearts, created, author_id, handle, avatar, tags_json) in rows {
         let hearted = match uid {
             Some(uid) => {
                 sqlx::query_as::<_, (i64,)>("SELECT 1 FROM hearts WHERE user_id=? AND toy_id=?")
@@ -596,7 +656,7 @@ async fn highlights(
             None => false,
         };
         cards.push(wall_card(
-            &id, &title, created, &author_id, &handle, &avatar, hearts, hearted,
+            &id, &title, created, &author_id, &handle, &avatar, hearts, hearted, &tags_json,
         ));
     }
     Ok(Json(serde_json::json!({ "toys": cards })))
@@ -611,6 +671,7 @@ fn wall_card(
     avatar: &Option<String>,
     heart_count: i64,
     hearted: bool,
+    tags_json: &str,
 ) -> serde_json::Value {
     serde_json::json!({
         "id": id, "title": title,
@@ -619,6 +680,7 @@ fn wall_card(
         "clipUrl": format!("/blobs/clip/{id}"),
         "heartCount": heart_count, "hearted": hearted,
         "createdAt": created_at,
+        "tags": serde_json::from_str::<Vec<String>>(tags_json).unwrap_or_default(),
     })
 }
 
@@ -629,25 +691,40 @@ async fn wall(
 ) -> AppResult<Response> {
     let page = q.page.unwrap_or(0).max(0);
     let query = q.q.unwrap_or_default();
+    let tag = q.tag.unwrap_or_default().trim().to_ascii_lowercase();
+    let author = q.author.unwrap_or_default();
     let order = match q.sort.as_deref() {
-        Some("popular") => "t.heart_count DESC, t.created_at DESC",
-        _ => "t.created_at DESC",
+        Some("popular") => "t.heart_count DESC, t.created_at DESC, t.id DESC",
+        _ => "t.created_at DESC, t.id DESC",
     };
-    let sql = format!("SELECT t.id,t.title,t.heart_count,t.created_at,u.id,u.handle,u.avatar_hash FROM toys t JOIN users u ON u.id=t.author_id
-                       WHERE t.state='published' AND (?='' OR t.title LIKE '%'||?||'%' OR u.handle LIKE '%'||?||'%') ORDER BY {order} LIMIT ? OFFSET ?");
-    let rows: Vec<(String, String, i64, i64, String, String, Option<String>)> =
-        sqlx::query_as(&sql)
-            .bind(&query)
-            .bind(&query)
-            .bind(&query)
-            .bind(PAGE_SIZE + 1)
-            .bind(page * PAGE_SIZE)
-            .fetch_all(&state.pool)
-            .await?;
+    // ponytail: scan at most five JSON tags per toy; use an indexed tag table if filtering becomes a bottleneck.
+    let sql = format!("SELECT t.id,t.title,t.heart_count,t.created_at,u.id,u.handle,u.avatar_hash,t.tags_json FROM toys t JOIN users u ON u.id=t.author_id
+                       WHERE t.state='published' AND (?='' OR t.title LIKE '%'||?||'%' OR u.handle LIKE '%'||?||'%') AND (?='' OR EXISTS (SELECT 1 FROM json_each(t.tags_json) WHERE value=?)) AND (?='' OR u.handle=?) ORDER BY {order} LIMIT ? OFFSET ?");
+    let rows: Vec<(
+        String,
+        String,
+        i64,
+        i64,
+        String,
+        String,
+        Option<String>,
+        String,
+    )> = sqlx::query_as(&sql)
+        .bind(&query)
+        .bind(&query)
+        .bind(&query)
+        .bind(&tag)
+        .bind(&tag)
+        .bind(&author)
+        .bind(&author)
+        .bind(PAGE_SIZE + 1)
+        .bind(page * PAGE_SIZE)
+        .fetch_all(&state.pool)
+        .await?;
     let uid = maybe.as_ref().map(|u| u.id.clone());
     let has_more = rows.len() as i64 > PAGE_SIZE;
     let mut cards = Vec::new();
-    for (id, title, hc, created, author_id, handle, avatar) in
+    for (id, title, hc, created, author_id, handle, avatar, tags_json) in
         rows.into_iter().take(PAGE_SIZE as usize)
     {
         let hearted = match &uid {
@@ -662,7 +739,7 @@ async fn wall(
             None => false,
         };
         cards.push(wall_card(
-            &id, &title, created, &author_id, &handle, &avatar, hc, hearted,
+            &id, &title, created, &author_id, &handle, &avatar, hc, hearted, &tags_json,
         ));
     }
     Ok(Json(serde_json::json!({ "toys": cards, "nextPage": if has_more { Some(page+1) } else { None } })).into_response())
@@ -680,10 +757,10 @@ async fn profile(
             .await?;
     let (uid, handle, avatar) =
         u.ok_or_else(|| AppError::status(StatusCode::NOT_FOUND, "no such user"))?;
-    let rows: Vec<(String,String,i64,i64)> = sqlx::query_as("SELECT id,title,heart_count,created_at FROM toys WHERE author_id=? AND state='published' ORDER BY created_at DESC").bind(&uid).fetch_all(&state.pool).await?;
+    let rows: Vec<(String,String,i64,i64,String)> = sqlx::query_as("SELECT id,title,heart_count,created_at,tags_json FROM toys WHERE author_id=? AND state='published' ORDER BY created_at DESC").bind(&uid).fetch_all(&state.pool).await?;
     let viewer = maybe.as_ref().map(|x| x.id.clone());
     let mut cards = Vec::new();
-    for (id, title, hc, created) in rows {
+    for (id, title, hc, created, tags_json) in rows {
         let hearted = match &viewer {
             Some(v) => {
                 sqlx::query_as::<_, (i64,)>("SELECT 1 FROM hearts WHERE user_id=? AND toy_id=?")
@@ -696,7 +773,7 @@ async fn profile(
             None => false,
         };
         cards.push(wall_card(
-            &id, &title, created, &uid, &handle, &avatar, hc, hearted,
+            &id, &title, created, &uid, &handle, &avatar, hc, hearted, &tags_json,
         ));
     }
     Ok(Json(serde_json::json!({ "user": { "id": uid, "handle": handle, "avatar": avatar }, "toys": cards })).into_response())

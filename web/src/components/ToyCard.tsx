@@ -3,6 +3,7 @@ import type { WallCard } from "../api/apiClient";
 import { Avatar } from "./Avatar";
 import { HeartButton } from "./HeartButton";
 import "./cards.css";
+import { ToyTags } from "./ToyTags";
 
 /** One clip on the Wall / a profile grid. The clip autoplays muted+looped
  *  (native-res, cheap) with the thumbnail as its poster so a card paints
@@ -44,6 +45,7 @@ export function ToyCard({ card, signedIn }: { card: WallCard; signedIn: boolean 
           signedIn={signedIn}
         />
       </div>
+      <ToyTags tags={card.tags} />
     </div>
   );
 }

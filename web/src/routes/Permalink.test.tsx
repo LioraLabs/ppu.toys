@@ -69,9 +69,15 @@ describe("Permalink", () => {
     expect(screen.getByText("player")).toBeInTheDocument();
     expect(screen.getByText(/-- code here/)).toBeInTheDocument();
     expect(mockGetToy).toHaveBeenCalledWith("abc");
-    expect(screen.getByRole("link", { name: "Raw output" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Raw output" })).toHaveAttribute("href", "/t/abc/raw");
+  });
+
+  it("offers a dedicated player", async () => {
+    mockGetToy.mockResolvedValue(toy);
+    renderAt();
+    expect(await screen.findByRole("link", { name: "Play full screen" })).toHaveAttribute(
       "href",
-      "/t/abc/raw",
+      "/t/abc/play",
     );
   });
 

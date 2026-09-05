@@ -8,6 +8,7 @@ import { ReadOnlyPlayer, type PlayerSource } from "../components/ReadOnlyPlayer"
 import { HeartButton } from "../components/HeartButton";
 import { useDocumentTitle } from "./useDocumentTitle";
 import "./permalink.css";
+import { ToyTags } from "../components/ToyTags";
 
 type Load = { status: "loading" } | { status: "error" } | { status: "ok"; toy: ToyFull };
 
@@ -96,7 +97,7 @@ export function Permalink({ raw = false }: { raw?: boolean }) {
   return (
     <div className="permalink">
       <div className="permalink-stage">
-        <ReadOnlyPlayer files={toy.files} sources={decoded} />
+        <ReadOnlyPlayer key={toy.id} files={toy.files} sources={decoded} controls />
       </div>
       <div className="permalink-side">
         <header className="permalink-head">
@@ -104,9 +105,13 @@ export function Permalink({ raw = false }: { raw?: boolean }) {
           <Link to={`/u/${toy.author.handle}`} className="permalink-author">
             by {toy.author.handle}
           </Link>
+          <ToyTags tags={toy.tags} />
           {toy.description && <p className="permalink-desc">{toy.description}</p>}
         </header>
         <div className="permalink-actions">
+          <Link className="fork-btn play-link" to={`/t/${toy.id}/play`}>
+            Play full screen
+          </Link>
           <HeartButton
             id={toy.id}
             heartCount={toy.heartCount}

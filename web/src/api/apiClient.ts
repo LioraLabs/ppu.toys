@@ -13,6 +13,7 @@ export interface Me {
 export interface WallCard {
   id: string;
   title: string;
+  tags: string[];
   author: { id: string; handle: string; avatar: string | null };
   thumbUrl: string;
   clipUrl: string;
@@ -81,6 +82,7 @@ export interface ToyFull {
   id: string;
   title: string;
   description: string;
+  tags: string[];
   state: string;
   revision: number;
   files: ToyFile[];
@@ -146,9 +148,17 @@ export async function getMe(): Promise<Me | null> {
   return res.json() as Promise<Me>;
 }
 
-export function getWall(sort: WallSort, page: number, query = ""): Promise<WallPage> {
+export function getWall(
+  sort: WallSort,
+  page: number,
+  query = "",
+  filters: { tag?: string; author?: string } = {},
+): Promise<WallPage> {
+  const extra = new URLSearchParams();
+  if (filters.tag) extra.set("tag", filters.tag);
+  if (filters.author) extra.set("author", filters.author);
   return request<WallPage>(
-    `/api/toys?sort=${sort}&page=${page}&q=${encodeURIComponent(query.trim())}`,
+    `/api/toys?sort=${sort}&page=${page}&q=${encodeURIComponent(query.trim())}${extra.size ? `&${extra}` : ""}`,
   );
 }
 
@@ -231,6 +241,7 @@ export function logout(): Promise<void> {
 export interface SaveToyBody {
   title: string;
   description?: string;
+  tags?: string[];
   files: ToyFile[];
   sources: ToySource[];
   /** Create only: the published toy this one is a remix of. */

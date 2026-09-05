@@ -25,7 +25,25 @@ it("searches and sorts the toy archive", async () => {
   await screen.findByText("Road");
   fireEvent.change(screen.getByRole("searchbox"), { target: { value: "mode7" } });
   fireEvent.submit(screen.getByRole("search"));
-  await waitFor(() => expect(getWall).toHaveBeenCalledWith("recent", 0, "mode7"));
+  await waitFor(() => expect(getWall).toHaveBeenCalledWith("recent", 0, "mode7", { tag: "" }));
   fireEvent.click(screen.getByRole("button", { name: "Popular" }));
-  await waitFor(() => expect(getWall).toHaveBeenCalledWith("popular", 0, "mode7"));
+  await waitFor(() => expect(getWall).toHaveBeenCalledWith("popular", 0, "mode7", { tag: "" }));
+});
+
+it("filters by linked tags and opens a feed with the same filter", async () => {
+  vi.mocked(getWall).mockResolvedValue({
+    toys: [makeWallCard({ tags: ["playable"] })],
+    nextPage: null,
+  });
+  render(
+    <MemoryRouter initialEntries={["/browse?tag=playable"]}>
+      <Browse />
+    </MemoryRouter>,
+  );
+  await screen.findByRole("link", { name: "#playable" });
+  expect(getWall).toHaveBeenCalledWith("recent", 0, "", { tag: "playable" });
+  expect(screen.getByRole("link", { name: "Play feed" })).toHaveAttribute(
+    "href",
+    "/t/abc123/play?tag=playable",
+  );
 });

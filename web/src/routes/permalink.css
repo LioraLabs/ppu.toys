@@ -137,3 +137,102 @@
     max-height: none;
   }
 }
+
+.permalink-actions {
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.permalink-actions .fork-btn,
+.play-header .fork-btn,
+.play-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  box-sizing: border-box;
+  text-decoration: none;
+}
+.play-link {
+  background: var(--orange);
+  color: #15100a;
+  font-weight: 600;
+}
+.play-page {
+  min-height: 100svh;
+  color: var(--txt);
+  background: var(--bg);
+  font-family: var(--font-sans);
+}
+.play-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: max(8px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 8px
+    max(16px, env(safe-area-inset-left));
+  border-bottom: 1px solid var(--line);
+}
+.play-header > div {
+  min-width: 0;
+  text-align: center;
+}
+.play-header h1 {
+  font-size: 16px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.play-header a {
+  color: var(--txt2);
+  font-size: 12px;
+}
+.play-header > a,
+.play-header > button {
+  flex-shrink: 0;
+}
+.play-page .player-console {
+  max-width: 560px;
+  margin: auto;
+  min-height: calc(100svh - 72px);
+  display: flex;
+  flex-direction: column;
+}
+.play-page .player {
+  height: clamp(224px, 43svh, 448px);
+  aspect-ratio: auto;
+  flex-shrink: 0;
+}
+.play-page .player-canvas,
+.permalink-stage .player-canvas {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.play-page .player-canvas {
+  width: 100%;
+  height: 100%;
+}
+.play-page .touch-controller {
+  flex: 1;
+}
+@media (orientation: landscape) and (max-height: 600px) {
+  .play-page .player-console {
+    max-width: 1000px;
+    min-height: calc(100svh - 64px);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 0.85fr);
+    align-items: stretch;
+  }
+  .play-page .player {
+    height: 100%;
+    min-height: 260px;
+  }
+  .play-page .touch-controller {
+    padding-top: 8px;
+  }
+  .play-page .touch-main {
+    margin-top: 8px;
+  }
+  .play-page .touch-system {
+    margin-top: 8px;
+  }
+}

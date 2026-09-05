@@ -20,6 +20,7 @@ export function makeWallCard(overrides?: Partial<WallCard>): WallCard {
   return {
     id: "abc123",
     title: "Dusk",
+    tags: [],
     author: { id: "1", handle: "ada", avatar: null },
     thumbUrl: "/blobs/thumb/abc123",
     clipUrl: "/blobs/clip/abc123",
@@ -71,6 +72,7 @@ export function makeToyFull(overrides?: Partial<ToyFull>): ToyFull {
   return {
     id: "abc123",
     title: "Dusk",
+    tags: [],
     description: "A quiet sunset scene.",
     state: "published",
     revision: 1,

@@ -1,4 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState, type Ref } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type Ref,
+  type ReactNode,
+} from "react";
 import { WIDTH, HEIGHT } from "../ppu/core";
 import { ppuCore } from "../ppu/instance";
 import { transport, useTransport } from "../studio/transport/transport";
@@ -7,6 +15,7 @@ import { Presenter } from "../studio/output/presenter";
 import { integerScale } from "../studio/output/clock";
 import type { PresentFx } from "../studio/output/fx";
 import "./player.css";
+import { TouchController } from "./TouchController";
 
 export interface PlayerSource {
   name: string;
@@ -25,11 +34,15 @@ export function ReadOnlyPlayer({
   sources,
   raw = false,
   rawKeys = true,
+  controls = false,
+  children,
 }: {
   files: { name: string; source: string }[];
   sources: PlayerSource[];
   raw?: boolean;
   rawKeys?: boolean;
+  controls?: boolean;
+  children?: ReactNode;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const displayRef = useRef<HTMLDivElement>(null);
@@ -38,7 +51,28 @@ export function ReadOnlyPlayer({
   const [crt, setCrt] = useState(!raw);
   const crtRef = useRef(crt);
   const { playing, runtimeError } = useTransport();
-  const [pad] = useState(() => padKeyHandlers(transport.setPad));
+  const input = useRef({ keys: 0, touch: 0 });
+  const [pad] = useState(() =>
+    padKeyHandlers((mask) => {
+      input.current.keys = mask;
+      transport.setPad(mask | input.current.touch);
+    }),
+  );
+  const setTouch = useCallback((mask: number) => {
+    input.current.touch = mask;
+    transport.setPad(mask | input.current.keys);
+  }, []);
+  useEffect(() => {
+    const clear = pad.onBlur;
+    window.addEventListener("blur", clear);
+    document.addEventListener("visibilitychange", clear);
+    return () => {
+      window.removeEventListener("blur", clear);
+      document.removeEventListener("visibilitychange", clear);
+      input.current = { keys: 0, touch: 0 };
+      transport.setPad(0);
+    };
+  }, [pad]);
 
   useEffect(() => {
     if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
@@ -71,6 +105,7 @@ export function ReadOnlyPlayer({
     for (const name of activeSourceNames) if (!nextNames.has(name)) transport.removeSource(name);
     for (const s of sources) transport.addSource(s.name, s.payload);
     activeSourceNames = nextNames;
+    transport.seek(0);
     transport.setSources(files);
   }, [files, sources]);
 
@@ -117,19 +152,33 @@ export function ReadOnlyPlayer({
   }, [crt]);
 
   return (
-    <PlayerFrame
-      displayRef={displayRef}
-      canvasRef={canvasRef}
-      canvasKey={forceCanvas2d ? "canvas2d" : "webgl"}
-      playing={raw ? undefined : playing}
-      onToggle={raw ? undefined : transport.toggle}
-      crt={crt}
-      // CRT is a WebGL pass; the Canvas2D fallback ignores fx, so hide the toggle there.
-      onCrtToggle={raw || forceCanvas2d ? undefined : () => setCrt((v) => !v)}
-      error={ppuCore ? runtimeError?.message : undefined}
-      pad={pad}
-      raw={raw}
-    />
+    <div className={controls ? "player-console" : undefined}>
+      <PlayerFrame
+        displayRef={displayRef}
+        canvasRef={canvasRef}
+        canvasKey={forceCanvas2d ? "canvas2d" : "webgl"}
+        playing={raw ? undefined : playing}
+        onToggle={raw ? undefined : transport.toggle}
+        crt={crt}
+        // CRT is a WebGL pass; the Canvas2D fallback ignores fx, so hide the toggle there.
+        onCrtToggle={raw || forceCanvas2d ? undefined : () => setCrt((v) => !v)}
+        error={ppuCore ? runtimeError?.message : undefined}
+        pad={pad}
+        raw={raw}
+      >
+        {children}
+      </PlayerFrame>
+      {controls && (
+        <TouchController onChange={setTouch}>
+          <PlayerControls
+            playing={playing}
+            onToggle={transport.toggle}
+            crt={crt}
+            onCrtToggle={forceCanvas2d ? undefined : () => setCrt((v) => !v)}
+          />
+        </TouchController>
+      )}
+    </div>
   );
 }
 
@@ -148,6 +197,7 @@ export function PlayerFrame({
   error,
   pad,
   raw = false,
+  children,
 }: {
   displayRef?: Ref<HTMLDivElement>;
   canvasRef?: Ref<HTMLCanvasElement>;
@@ -160,6 +210,7 @@ export function PlayerFrame({
   /** Controller key handlers (pad.ts) — the frame becomes focusable and playable. */
   pad?: ReturnType<typeof padKeyHandlers>;
   raw?: boolean;
+  children?: ReactNode;
 }) {
   return (
     <div
@@ -177,6 +228,30 @@ export function PlayerFrame({
         role="img"
         aria-label="Live SNES toy output"
       />
+      {children}
+      <PlayerControls playing={playing} onToggle={onToggle} crt={crt} onCrtToggle={onCrtToggle} />
+      {error && (
+        <div className="player-error" role="alert">
+          This toy stopped: {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function PlayerControls({
+  playing,
+  onToggle,
+  crt,
+  onCrtToggle,
+}: {
+  playing?: boolean;
+  onToggle?: () => void;
+  crt?: boolean;
+  onCrtToggle?: () => void;
+}) {
+  return (
+    <div className="player-controls">
       {onToggle && (
         <button type="button" className="player-toggle" onClick={onToggle}>
           {playing ? "Pause" : "Play"}
@@ -191,11 +266,6 @@ export function PlayerFrame({
         >
           CRT
         </button>
-      )}
-      {error && (
-        <div className="player-error" role="alert">
-          This toy stopped: {error}
-        </div>
       )}
     </div>
   );

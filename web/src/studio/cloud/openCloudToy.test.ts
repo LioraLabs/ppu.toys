@@ -14,6 +14,7 @@ function toy(): ToyFull {
   return {
     id: "toy-123",
     title: "my toy",
+    tags: [],
     description: "",
     state: "draft",
     revision: 4,

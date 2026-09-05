@@ -48,6 +48,7 @@ function makeToy(overrides?: Partial<ToyFull>): ToyFull {
   return {
     id: "abc123",
     title: "Dusk",
+    tags: [],
     description: "A quiet sunset scene.",
     state: "published",
     revision: 1,
@@ -249,4 +250,22 @@ describe("PublishDialog — foreign origin", () => {
       authorId: "1",
     });
   });
+});
+
+it("validates and saves normalized tags before recording", async () => {
+  mockCreateToy.mockResolvedValue({ id: "tagged", revision: 1 });
+  mockPublishToy.mockResolvedValue({ id: "tagged", state: "published" });
+  renderDialog();
+  const tags = screen.getByLabelText("Tags");
+  fireEvent.change(tags, { target: { value: "bad tag" } });
+  fireEvent.click(screen.getByRole("button", { name: "Publish new toy" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Use up to 5 tags");
+  expect(mockRecordClip).not.toHaveBeenCalled();
+  fireEvent.change(tags, { target: { value: " Playable, arcade, playable " } });
+  fireEvent.click(screen.getByRole("button", { name: "Publish new toy" }));
+  await waitFor(() =>
+    expect(mockCreateToy).toHaveBeenCalledWith(
+      expect.objectContaining({ tags: ["playable", "arcade"] }),
+    ),
+  );
 });

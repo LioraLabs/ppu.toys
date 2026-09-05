@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { TouchController } from "./TouchController";
 import { WIDTH, HEIGHT } from "../ppu/core";
-import { PlayerFrame } from "./ReadOnlyPlayer";
+import { PlayerControls, PlayerFrame } from "./ReadOnlyPlayer";
 
 // The wired ReadOnlyPlayer drives the shared transport/core, so it can't be
 // storied without booting wasm. We story its presentational half, PlayerFrame
@@ -31,7 +32,29 @@ const Default = () => {
 
 const Empty = () => <PlayerFrame />;
 
+export function MobilePermalink() {
+  const [playing, setPlaying] = useState(true);
+  const [crt, setCrt] = useState(true);
+  const controls = {
+    playing,
+    crt,
+    onToggle: () => setPlaying((v) => !v),
+    onCrtToggle: () => setCrt((v) => !v),
+  };
+  return (
+    <div style={{ width: "100%", maxWidth: 393 }}>
+      <div className="player-console">
+        <PlayerFrame canvasRef={paintGradient} />
+        <TouchController onChange={() => {}}>
+          <PlayerControls {...controls} />
+        </TouchController>
+      </div>
+    </div>
+  );
+}
+
 export default {
+  MobilePermalink,
   Default,
   Empty,
 };

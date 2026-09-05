@@ -56,6 +56,7 @@ export function PublishDialog({ onClose }: PublishDialogProps) {
 
   const [title, setTitle] = useState(() => openContextLabel(state));
   const [description, setDescription] = useState("");
+  const [tags, setTags] = useState<string | undefined>(origin ? undefined : "");
   const [clipStart, setClipStart] = useState(() => Math.floor(transport.getSnapshot().t));
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -72,11 +73,13 @@ export function PublishDialog({ onClose }: PublishDialogProps) {
   // Owned origin: prefill title/description from the live toy and show its
   // current thumb. Other fetch errors just leave the form at its defaults.
   useEffect(() => {
-    if (!owned || !origin) return;
+    if (!origin) return;
     let live = true;
     getToy(origin.id)
       .then((toy) => {
         if (!live) return;
+        setTags((current) => current ?? (toy.tags ?? []).join(", "));
+        if (!owned) return;
         setTitle(toy.title);
         setDescription(toy.description);
         setExisting(toy.title);
@@ -105,11 +108,35 @@ export function PublishDialog({ onClose }: PublishDialogProps) {
   ) {
     setError(null);
     try {
+      const parsedTags =
+        tags === undefined
+          ? undefined
+          : [
+              ...new Set(
+                tags
+                  .split(",")
+                  .map((tag) => tag.trim().toLowerCase())
+                  .filter(Boolean),
+              ),
+            ];
+      if (
+        parsedTags &&
+        (parsedTags.length > 5 ||
+          parsedTags.some((tag) => !/^[a-z0-9](?:[a-z0-9-]{0,22}[a-z0-9])?$/.test(tag)))
+      ) {
+        throw new Error("Use up to 5 tags, each 1–24 letters, numbers or hyphens.");
+      }
       setPhase("recording");
       const { clip, thumb } = await recordClip({ startTime: clipStart });
       const { files, sources } = serializeWorkspace(state);
       setPhase("saving");
-      const { id, afterPublish } = await save({ title, description, files, sources });
+      const { id, afterPublish } = await save({
+        title,
+        description,
+        files,
+        sources,
+        ...(parsedTags === undefined ? {} : { tags: parsedTags }),
+      });
       setPhase("uploading");
       await publishToy(id, { title, description }, clip, thumb);
       afterPublish?.();
@@ -223,6 +250,21 @@ export function PublishDialog({ onClose }: PublishDialogProps) {
               onChange={(e) => setDescription(e.target.value)}
             />
           </label>
+          <div className="cloud-field">
+            <label htmlFor="publish-tags">Tags</label>
+            <input
+              id="publish-tags"
+              value={tags ?? ""}
+              disabled={busy}
+              maxLength={128}
+              onChange={(event) => setTags(event.target.value)}
+              aria-describedby="publish-tags-hint"
+              placeholder="playable, arcade, puzzle"
+            />
+            <span id="publish-tags-hint">
+              Up to 5, separated by commas. Add playable if people can control your toy.
+            </span>
+          </div>
           <label className="cloud-field">
             Clip time (5 seconds)
             <input

@@ -1,0 +1,31 @@
+.toy-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.toy-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--raised);
+  color: var(--txt2);
+  text-decoration: none;
+  font: 500 12px/1.4 var(--font-mono);
+}
+.toy-tag:hover {
+  border-color: var(--orange);
+  color: var(--txt);
+}
+.toy-tag:focus-visible {
+  outline: 3px solid var(--cyan);
+  outline-offset: 2px;
+}
+.toy-card > .toy-tags {
+  padding: 0 0.85rem 0.85rem;
+}
+.permalink-head .toy-tags {
+  margin-top: 12px;
+}

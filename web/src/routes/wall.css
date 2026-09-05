@@ -357,3 +357,22 @@
     transition: none;
   }
 }
+
+.browse-tag-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.browse-tag-filter select {
+  min-height: 44px;
+  background: var(--panel);
+  color: var(--txt);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 12px;
+  font: inherit;
+}
+.browse-toolbar {
+  flex-wrap: wrap;
+  gap: 12px;
+}
