@@ -188,7 +188,7 @@ export function StudioDock({ slots, onApi }: StudioDockProps) {
   return (
     <SlotContext.Provider value={slots}>
       <div className="studio-body dockview-theme-dark dockview-theme-ppu">
-        <DockviewReact components={COMPONENTS} onReady={onReady} />
+        <DockviewReact components={COMPONENTS} onReady={onReady} keyboardNavigation={false} />
       </div>
     </SlotContext.Provider>
   );
@@ -207,14 +207,7 @@ export function LayoutMenu({ api }: { api: DockviewApi }) {
   useEffect(() => {
     if (!open) return;
     popRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      setOpen(false);
-      triggerRef.current?.focus();
-    };
-    document.addEventListener("keydown", onKey);
     return () => {
-      document.removeEventListener("keydown", onKey);
       if (popRef.current?.contains(document.activeElement)) triggerRef.current?.focus();
     };
   }, [open]);
@@ -252,6 +245,12 @@ export function LayoutMenu({ api }: { api: DockviewApi }) {
             id="layout-menu-pop"
             className="layout-menu-pop"
             aria-label="Studio panels and layouts"
+            onKeyDown={(event) => {
+              if (event.key !== "Escape") return;
+              event.stopPropagation();
+              setOpen(false);
+              triggerRef.current?.focus();
+            }}
           >
             <div className="layout-menu-head">PANELS</div>
             {(["editor", "assets", "output", "timeline"] as PanelId[]).map(item)}
