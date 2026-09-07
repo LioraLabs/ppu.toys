@@ -72,3 +72,15 @@ each sprite consumes two OAM words, so sprite 32 begins at word address 64.
 
 See also: [Sprite source placement](dma.md#sprites-and-animation-sheets),
 [screen designation](color-math.md#main-and-sub-screens), and [windows](windows.md).
+
+## Inspect and poke
+
+The Sprites panel shows one OAM object at a time. Use the arrows to cycle
+through all 128 entries (including disabled objects), or choose an index
+directly. The preview shows the object's graphics with its palette and flips;
+it does not include screen clipping, occlusion, or color math.
+
+Edit position, tile, palette, priority, size, flips, or Enabled to write that
+field into `pokes.lua`. Numbers apply on Enter or blur; Escape cancels.
+Click a poke marker to remove that field's poke. A hollow marker means the
+live value differs: a later script write or quantization has changed it.
