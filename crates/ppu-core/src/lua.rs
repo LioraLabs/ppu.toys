@@ -387,6 +387,11 @@ impl LuaEngine {
         self.set_sources(&[("source", src)])
     }
 
+    /// The sequencer sugar prelude (`note`/`instrument`/`sfx`/`song`), run as
+    /// the `"kit"` chunk before every user chunk in [`Self::set_sources`] —
+    /// see `kit.lua`'s own doc comment.
+    const KIT_LUA: &'static str = include_str!("kit.lua");
+
     /// Compile and load a multi-file sketch (PICO-8 scope): builds a fresh VM,
     /// installs bindings, then executes each `(name, source)` chunk **in list
     /// order** into ONE shared global environment, each compiled with its file
@@ -411,7 +416,10 @@ impl LuaEngine {
             lua.enter(move |ctx| install_dma(ctx, store, rec));
         }
 
-        for (name, src) in files {
+        let mut sourced: Vec<(&str, &str)> = Vec::with_capacity(files.len() + 1);
+        sourced.push(("kit", Self::KIT_LUA));
+        sourced.extend_from_slice(files);
+        for (name, src) in &sourced {
             let load = lua.try_enter(|ctx| {
                 let closure = Closure::load(ctx, Some(*name), src.as_bytes())?;
                 Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
