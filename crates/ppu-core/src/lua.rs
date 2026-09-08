@@ -197,6 +197,7 @@ struct DmaPlacement {
 /// compile time (`set_sources`, after `init()` succeeds) — never replayed
 /// per frame, unlike [`DmaPlacement`]. `end` is exclusive; `loop_addr` equals
 /// `addr` for a non-looping sample.
+#[derive(Clone)]
 struct SamplePlacement {
     name: String,
     id: u8,
@@ -253,6 +254,20 @@ impl Default for LuaEngine {
     }
 }
 
+/// A freshly power-cycled S-DSP: ADSR mode (gain nil) on all 8 voices — see
+/// the `Dsp::new()` state doc comment (a fresh Dsp otherwise leaves ADSR1 at
+/// 0, which is GAIN mode with gain 0) — and the sample directory pinned at
+/// ARAM 0x0100 (DIR = 0x01; the DSL never exposes DIR). Used by both
+/// `LuaEngine::new()` and `LuaEngine::reset()`.
+fn power_on_dsp() -> Dsp {
+    let mut dsp = Dsp::new();
+    for v in 0..8u8 {
+        dsp.write((v << 4) | 0x05, 0x80);
+    }
+    dsp.write(0x5d, (SAMPLE_DIR >> 8) as u8);
+    dsp
+}
+
 impl LuaEngine {
     pub fn new() -> Self {
         let source_store = Rc::new(RefCell::new(HashMap::new()));
@@ -263,15 +278,7 @@ impl LuaEngine {
             let (store, rec) = (source_store.clone(), dma.clone());
             lua.enter(move |ctx| install_dma(ctx, store, rec));
         }
-        // DSL power-on: ADSR mode (gain nil) on all 8 voices — see the
-        // `Dsp::new()` state doc comment (a fresh Dsp otherwise leaves ADSR1
-        // at 0, which is GAIN mode with gain 0) — and the sample directory
-        // pinned at ARAM 0x0100 (DIR = 0x01; the DSL never exposes DIR).
-        let mut dsp = Dsp::new();
-        for v in 0..8u8 {
-            dsp.write((v << 4) | 0x05, 0x80);
-        }
-        dsp.write(0x5d, (SAMPLE_DIR >> 8) as u8);
+        let dsp = power_on_dsp();
         lua.enter(|ctx| seed_dsp_tables(ctx, &dsp));
         LuaEngine {
             lua: Rc::new(RefCell::new(lua)),
@@ -393,9 +400,10 @@ impl LuaEngine {
         // must not silence a sounding voice. See `seed_dsp_tables`.
         lua.enter(|ctx| seed_dsp_tables(ctx, &self.dsp));
         // dma() records into a FRESH recorder, active for the init window
-        // (top-level chunks + init()). Committed to the engine only on the
-        // swap-on-success below, so a failed recompile keeps the previous
-        // program's placements — same contract as the VM itself.
+        // (top-level chunks + init()). A load error returns before the
+        // recorder is swapped in; an error after the swap (init(), echo
+        // re-check) restores the previous program's sample placements into
+        // it — see `prev_samples` below — since nothing was written to ARAM.
         let rec = Rc::new(DmaRecorder::default());
         rec.active.set(true);
         {
@@ -429,6 +437,11 @@ impl LuaEngine {
         self.frame_fn = frame_fn;
         self.frame_file = frame_file;
         self.init_fn = init_fn;
+        // Snapshot the OLD recorder's placements before swapping it out: if
+        // this compile fails below, nothing new was actually written to
+        // ARAM, so these are what ARAM still holds — restoring them (instead
+        // of clearing) keeps `dsp_view()` truthful on the failure path.
+        let prev_samples = self.dma.samples.borrow().clone();
         self.dma = rec.clone();
         self.memory = Memory::new();
         // The old stashed hooks belong to the dead VM just swapped out —
@@ -445,10 +458,10 @@ impl LuaEngine {
             rec.active.set(false); // init window closes even on error
             res.map_err(|e| {
                 // Nothing was written to ARAM yet (that happens after this
-                // `?`) — drop any placements dma() already recorded before
-                // the error, so a failed init never reports samples that
-                // were never placed.
-                rec.samples.borrow_mut().clear();
+                // `?`) — restore the OLD program's placements (recorded
+                // above, before this compile's dma() calls), so a failed
+                // init keeps reporting what ARAM still actually holds.
+                *rec.samples.borrow_mut() = prev_samples.clone();
                 let mut err = static_error_to_lua(e);
                 err.file = init_file.clone();
                 err
@@ -480,7 +493,10 @@ impl LuaEngine {
             .find(|sp| (sp.addr as u32) < echo_hi && echo_lo < sp.end)
             .map(|sp| sp.name.clone());
         if let Some(name) = overlap {
-            rec.samples.borrow_mut().clear();
+            // Same reasoning as the init() error path above: nothing was
+            // written to ARAM by this compile, so the previous program's
+            // placements are what ARAM still holds.
+            *rec.samples.borrow_mut() = prev_samples.clone();
             return Err(LuaError {
                 message: format!(
                     "dma: '{name}' overlaps the echo region (0x{echo_lo:04x}-0x{hi:04x}, \
@@ -537,6 +553,35 @@ impl LuaEngine {
         Ok(())
     }
 
+    /// Recompile the cached program sources (`frame()`'s dirty-source path and `reset()`).
+    fn recompile(&mut self) -> Result<(), LuaError> {
+        let files = self.program_sources.clone();
+        let refs: Vec<_> = files
+            .iter()
+            .map(|(n, s)| (n.as_str(), s.as_str()))
+            .collect();
+        self.set_sources(&refs)
+    }
+
+    /// Run (t=0): a full power cycle of the sound chip. Fresh `Dsp`, zeroed
+    /// ARAM (echo RAM included, since it's just the top of ARAM), then the
+    /// same recompile path `frame()` uses for a dirty source list — so
+    /// `dma()` placements are re-written into the freshly-zeroed ARAM and
+    /// `timer()` hooks re-register at phase zero, exactly like a fresh
+    /// engine loaded with the same program. Clearing `dma.samples` first
+    /// keeps `dsp_view()` truthful if that recompile itself fails (same
+    /// contract as `set_sources`'s own failure path). Contrast `set_sources`
+    /// (recompile): that keeps the DSP/ARAM/timer phase running — it never
+    /// resets anything.
+    pub fn reset(&mut self) -> Result<(), LuaError> {
+        self.dsp = power_on_dsp();
+        self.aram.fill(0);
+        self.audio.clear();
+        self.audio_acc = 0;
+        self.dma.samples.borrow_mut().clear();
+        self.recompile()
+    }
+
     /// Run one frame: call `frame(t,f)` once (bare assigns -> frame-wide defaults,
     /// `hdma` -> registered hooks), read CGRAM/OAM, then resolve the 224-row
     /// LineTable by applying each covering hook per scanline (later call wins).
@@ -548,12 +593,7 @@ impl LuaEngine {
 
     pub fn frame(&mut self, t: f64, f: u32) -> Result<LineTable, LuaError> {
         if self.source_dirty {
-            let files = self.program_sources.clone();
-            let refs: Vec<_> = files
-                .iter()
-                .map(|(n, s)| (n.as_str(), s.as_str()))
-                .collect();
-            self.set_sources(&refs)?;
+            self.recompile()?;
         }
         // Reset the per-frame hook registry, then run frame(t,f) once.
         {

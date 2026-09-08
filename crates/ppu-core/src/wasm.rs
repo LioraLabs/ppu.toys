@@ -72,6 +72,13 @@ impl PpuCore {
         to_set_source_result(self.engine.set_sources(&pairs))
     }
 
+    /// Power-cycle the sound chip (Run from t=0): fresh DSP, zero ARAM,
+    /// recompile so placements re-write and timers restart at phase zero.
+    /// Same `{ok, error?}` result shape as `setSources`.
+    pub fn reset(&mut self) -> Result<JsValue, JsValue> {
+        to_set_source_result(self.engine.reset())
+    }
+
     pub fn frame(&mut self, t: f64, f: u32) -> Result<(), JsValue> {
         // Build the LineTable + update Memory. On a Lua runtime error, throw the
         // structured LuaError (same shape as setSource) so the JS adapter's
