@@ -73,7 +73,16 @@ pub struct LuaEngine {
     /// Controller state for the next frame: a PAD_* bitmask mirrored into the
     /// Lua `pad` table before frame() runs. JS owns the key/gamepad mapping.
     pad: u16,
+    /// Battery-backed save data: the `sram` global mirrored as normalized JSON.
+    /// The host sets it before the program loads (`set_sram`); `frame()`
+    /// re-serializes the table and flags a change for the host to persist.
+    sram_json: String,
+    sram_dirty: bool,
 }
+
+/// Size cap of the serialized `sram` blob — a real cartridge's battery RAM.
+pub const SRAM_MAX_BYTES: usize = 32 * 1024;
+const SRAM_MAX_DEPTH: usize = 32;
 
 /// The resolved result of one init-stage `dma(name, opts?)` call. Replay
 /// resolves `name` against the LIVE source store each frame, so an
@@ -127,6 +136,8 @@ impl LuaEngine {
             program_sources: Vec::new(),
             source_dirty: false,
             pad: 0,
+            sram_json: "{}".to_string(),
+            sram_dirty: false,
         }
     }
 
@@ -184,6 +195,8 @@ impl LuaEngine {
     pub fn set_sources(&mut self, files: &[(&str, &str)]) -> Result<(), LuaError> {
         let mut lua = Lua::core();
         lua.enter(install_bindings);
+        let sram = self.sram_json.clone();
+        lua.enter(|ctx| set_sram_table(ctx, &sram));
         // dma() records into a FRESH recorder, active for the init window
         // (top-level chunks + init()). Committed to the engine only on the
         // swap-on-success below, so a failed recompile keeps the previous
@@ -255,6 +268,32 @@ impl LuaEngine {
     /// the bit order). Sticky: a held button stays held until cleared.
     pub fn set_pad(&mut self, mask: u16) {
         self.pad = mask;
+    }
+
+    /// Bind the `sram` global to a save blob (JSON object or array). Lands in
+    /// the live VM now and seeds every later recompile, so `init()` sees it.
+    /// Anything else (invalid JSON, a scalar) resets to an empty table.
+    pub fn set_sram(&mut self, json: &str) {
+        let v: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+        self.sram_json = if v.is_object() || v.is_array() {
+            v.to_string()
+        } else {
+            "{}".to_string()
+        };
+        self.sram_dirty = false;
+        let json = self.sram_json.clone();
+        self.lua
+            .borrow_mut()
+            .enter(|ctx| set_sram_table(ctx, &json));
+    }
+
+    /// JSON of `sram` if a frame changed it since the last take, else `None`.
+    pub fn take_sram(&mut self) -> Option<String> {
+        if !self.sram_dirty {
+            return None;
+        }
+        self.sram_dirty = false;
+        Some(self.sram_json.clone())
     }
 
     pub fn frame(&mut self, t: f64, f: u32) -> Result<LineTable, LuaError> {
@@ -381,8 +420,138 @@ impl LuaEngine {
         if let Some(e) = err_sink.borrow_mut().take() {
             return Err(e);
         }
+
+        // Mirror `sram` back to JSON; a change is flagged for the host to persist.
+        let json = self
+            .lua
+            .borrow_mut()
+            .enter(|ctx| sram_to_json(ctx.get_global("sram")))
+            .map_err(|message| LuaError {
+                message,
+                line: None,
+                file: self.frame_file.clone(),
+            })?;
+        if json != self.sram_json {
+            self.sram_json = json;
+            self.sram_dirty = true;
+        }
         Ok(lt)
     }
+}
+
+/// Publish `json` (a serde-normalized object/array) as the `sram` global.
+fn set_sram_table(ctx: piccolo::Context<'_>, json: &str) {
+    let v: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+    ctx.set_global("sram", json_to_lua(ctx, &v)).unwrap();
+}
+
+fn json_to_lua<'gc>(ctx: piccolo::Context<'gc>, v: &serde_json::Value) -> Value<'gc> {
+    use serde_json::Value as J;
+    match v {
+        J::Null => Value::Nil,
+        J::Bool(b) => Value::Boolean(*b),
+        J::Number(n) => match n.as_i64() {
+            Some(i) => Value::Integer(i),
+            None => Value::Number(n.as_f64().unwrap_or(0.0)),
+        },
+        J::String(s) => Value::String(ctx.intern(s.as_bytes())),
+        J::Array(items) => {
+            let t = Table::new(&ctx);
+            for (i, item) in items.iter().enumerate() {
+                t.set(ctx, i as i64 + 1, json_to_lua(ctx, item)).unwrap();
+            }
+            Value::Table(t)
+        }
+        J::Object(map) => {
+            let t = Table::new(&ctx);
+            for (k, item) in map {
+                t.set(ctx, ctx.intern(k.as_bytes()), json_to_lua(ctx, item))
+                    .unwrap();
+            }
+            Value::Table(t)
+        }
+    }
+}
+
+/// Serialize the `sram` global for the host. Errors name the offending path:
+/// the table must be JSON-shaped (string keys or a dense 1..n array; numbers,
+/// strings, booleans, tables only) and fit in `SRAM_MAX_BYTES`.
+fn sram_to_json(root: Value<'_>) -> Result<String, String> {
+    if !matches!(root, Value::Table(_)) {
+        return Err(format!("sram must be a table, got {}", root.type_name()));
+    }
+    let json = lua_to_json(root, "sram", 0)?.to_string();
+    if json.len() > SRAM_MAX_BYTES {
+        return Err(format!(
+            "sram is {} bytes; the cartridge holds {}",
+            json.len(),
+            SRAM_MAX_BYTES
+        ));
+    }
+    Ok(json)
+}
+
+fn lua_to_json(v: Value<'_>, path: &str, depth: usize) -> Result<serde_json::Value, String> {
+    use serde_json::Value as J;
+    Ok(match v {
+        Value::Nil => J::Null,
+        Value::Boolean(b) => J::Bool(b),
+        Value::Integer(i) => J::from(i),
+        Value::Number(n) => serde_json::Number::from_f64(n)
+            .map(J::Number)
+            .ok_or_else(|| format!("{path} is not a finite number"))?,
+        Value::String(s) => J::String(
+            s.to_str()
+                .map_err(|_| format!("{path} is not valid UTF-8"))?
+                .to_string(),
+        ),
+        Value::Table(t) => {
+            if depth >= SRAM_MAX_DEPTH {
+                return Err(format!("{path} nests too deep (or is cyclic)"));
+            }
+            let n = t.length();
+            let mut arr = Vec::new();
+            let mut obj = serde_json::Map::new();
+            for (k, item) in t.iter() {
+                match k {
+                    Value::Integer(i) if (1..=n).contains(&i) => arr.push((i, item)),
+                    Value::String(s) => {
+                        let key = s
+                            .to_str()
+                            .map_err(|_| format!("{path} has a non-UTF-8 key"))?
+                            .to_string();
+                        let item = lua_to_json(item, &format!("{path}.{key}"), depth + 1)?;
+                        obj.insert(key, item);
+                    }
+                    other => {
+                        return Err(format!(
+                            "{path} has a {} key; sram keys must be strings or 1..n",
+                            other.type_name()
+                        ))
+                    }
+                }
+            }
+            if !arr.is_empty() && !obj.is_empty() {
+                return Err(format!("{path} mixes array and string keys"));
+            }
+            if arr.is_empty() {
+                J::Object(obj)
+            } else {
+                arr.sort_by_key(|(i, _)| *i);
+                let mut out = Vec::with_capacity(arr.len());
+                for (i, item) in arr {
+                    out.push(lua_to_json(item, &format!("{path}[{i}]"), depth + 1)?);
+                }
+                J::Array(out)
+            }
+        }
+        other => {
+            return Err(format!(
+                "{path} is a {}; sram holds only numbers, strings, booleans and tables",
+                other.type_name()
+            ))
+        }
+    })
 }
 
 fn clamp_u8(v: f64) -> u8 {
@@ -430,6 +599,8 @@ fn set_pad_table(ctx: piccolo::Context<'_>, mask: u16) {
 fn install_bindings(ctx: piccolo::Context<'_>) {
     // controller: all released until the host sets a mask; init() may read it.
     set_pad_table(ctx, 0);
+    // battery-backed save data; set_sources overwrites it from the host blob.
+    ctx.set_global("sram", Table::new(&ctx)).unwrap();
     // scalar registers
     ctx.set_global("mode", 1).unwrap();
     ctx.set_global("brightness", 15).unwrap();

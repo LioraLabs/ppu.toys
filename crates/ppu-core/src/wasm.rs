@@ -166,6 +166,19 @@ impl PpuCore {
         self.engine.set_pad(mask);
     }
 
+    /// Battery-backed save data: JSON of the Lua `sram` table. Set BEFORE
+    /// setSources so init() sees it; invalid JSON resets to `{}`.
+    #[wasm_bindgen(js_name = setSram)]
+    pub fn set_sram(&mut self, json: &str) {
+        self.engine.set_sram(json);
+    }
+
+    /// JSON of `sram` if a frame changed it since the last take, else undefined.
+    #[wasm_bindgen(js_name = takeSram)]
+    pub fn take_sram(&mut self) -> Option<String> {
+        self.engine.take_sram()
+    }
+
     #[wasm_bindgen(js_name = setLayerVisible)]
     pub fn set_layer_visible(&mut self, id: String, visible: bool) {
         match id.as_str() {
