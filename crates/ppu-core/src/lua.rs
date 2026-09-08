@@ -145,6 +145,22 @@ pub struct LuaEngine {
     /// Fractional-sample accumulator for the 32000/60.0988 span length (see
     /// `render_frame_audio`): exact over time, no drift.
     audio_acc: u32,
+    /// `timer(n, div, fn)` hooks registered by the current program's init
+    /// window (top-level chunks + `init()`). Dropped and re-registered
+    /// wholesale on every `set_sources` (recompile resets timer phase — see
+    /// `DmaRecorder::timers`).
+    timers: Vec<TimerHook>,
+}
+
+/// One `timer(n, div, fn)` registration, resolved to half-sample (`h`) units
+/// at 32 kHz output (see `render_frame_audio`'s segment-walker doc comment):
+/// `period_h` is `div * 8` for timers 0/1 (8 kHz) or `div * 1` for timer 2
+/// (64 kHz); `due_h` is the next expiry and carries across frames.
+struct TimerHook {
+    period_h: u64,
+    due_h: u64,
+    func: StashedFunction,
+    file: Option<String>,
 }
 
 /// The resolved result of one init-stage `dma(name, opts?)` call. Replay
@@ -159,9 +175,10 @@ struct DmaPlacement {
     cgram_base: u8,
 }
 
-/// `dma()` call recorder shared between the engine and the callback installed
-/// in its VM. `active` is true only while `set_sources` executes top-level
-/// chunks + `init()` — the init-only gate.
+/// `dma()`/`timer()` call recorder shared between the engine and the
+/// callbacks installed in its VM. `active` is true only while `set_sources`
+/// executes top-level chunks + `init()` — the init-only gate both `dma` and
+/// `timer` share.
 #[derive(Default)]
 struct DmaRecorder {
     active: Cell<bool>,
@@ -169,6 +186,11 @@ struct DmaRecorder {
     vram_ranges: RefCell<Vec<(String, usize, usize)>>,
     cgram_ranges: RefCell<Vec<(usize, usize)>>,
     obj_base: Cell<Option<u16>>,
+    /// `timer(n, div, fn)` registrations recorded during the init window:
+    /// (timer index 0..=2, div 1..=255, stashed hook, defining chunk). Moved
+    /// into `LuaEngine::timers` (with computed period_h/due_h) once
+    /// `set_sources` confirms `init()` succeeded.
+    timers: RefCell<Vec<(u8, u8, StashedFunction, Option<String>)>>,
 }
 
 impl Default for LuaEngine {
@@ -213,6 +235,7 @@ impl LuaEngine {
             aram: Box::new([0u8; 0x10000]),
             audio: Vec::new(),
             audio_acc: 0,
+            timers: Vec::new(),
         }
     }
 
@@ -256,10 +279,17 @@ impl LuaEngine {
     }
 
     /// The most recently rendered frame's interleaved stereo audio (L,R per
-    /// sample, [`Dsp::SAMPLE_RATE`]). Empty before the first `frame()`. An
-    /// errored `frame()` returns before the audio step (see
-    /// `render_frame_audio`), so this still holds the *previous* clean
-    /// frame's span — the web seam must not re-emit it as new audio.
+    /// sample, [`crate::dsp::SAMPLE_RATE`]). Empty before the first
+    /// `frame()`. An errored `frame()` (before the audio pass — see
+    /// `render_frame_audio`) leaves the *previous* clean frame's span
+    /// untouched. An errored timer hook aborts the segment walker partway,
+    /// so this holds THIS frame's rendered prefix followed by a stale tail —
+    /// leftover samples from the previous frame, since `Vec::resize` doesn't
+    /// zero elements that already existed. An errored hdma hook runs AFTER
+    /// the audio pass has already completed, so it leaves this frame's fully
+    /// and cleanly rendered span. Either way this never reaches the web:
+    /// the wasm shim (`web/src/ppu/wasm.ts`) throws on the `frame()` error
+    /// before it ever reads `core.audio()`.
     pub fn audio(&self) -> &[i16] {
         &self.audio
     }
@@ -332,6 +362,9 @@ impl LuaEngine {
         self.init_fn = init_fn;
         self.dma = rec.clone();
         self.memory = Memory::new();
+        // The old stashed hooks belong to the dead VM just swapped out —
+        // drop them now regardless of whether init() below succeeds.
+        self.timers.clear();
 
         if let Some(init) = self.init_fn.clone() {
             let mut l = self.lua.borrow_mut();
@@ -349,6 +382,23 @@ impl LuaEngine {
         } else {
             rec.active.set(false);
         }
+        // Recompile == drop + re-register: a fresh registration always
+        // starts one period from firing (`due_h = period_h`), so phase never
+        // survives a recompile.
+        self.timers = rec
+            .timers
+            .borrow_mut()
+            .drain(..)
+            .map(|(n, div, func, file)| {
+                let period_h = div as u64 * if n == 2 { 1 } else { 8 };
+                TimerHook {
+                    period_h,
+                    due_h: period_h,
+                    func,
+                    file,
+                }
+            })
+            .collect();
         self.program_sources = files
             .iter()
             .map(|(name, source)| ((*name).to_string(), (*source).to_string()))
@@ -416,6 +466,17 @@ impl LuaEngine {
                 read_state(ctx)
             })
         };
+
+        // M12/audio: walk this frame's audio span sample-accurately against
+        // the registered `timer(n, div, fn)` hooks — BEFORE the hdma hooks
+        // below are even collected, so timers and hdma interleave in a
+        // fixed order within one frame (timers, then hdma) even though both
+        // may touch the same globals (see `render_frame_audio`). Consequence
+        // (Spec-locked, not to be reordered): an hdma hook's `kon`/`koff`/
+        // `voice[]`/`dsp` writes are flushed to the DSP only at the NEXT
+        // frame's offset-0 flush, one frame later than a `frame()`-body or
+        // timer-hook write — see the `kon`/`koff` callback comment below.
+        self.render_frame_audio()?;
 
         // Collect registered hooks (stash each fn with its [y0,y1]).
         let hooks: Vec<(usize, usize, StashedFunction, Option<String>)> = {
@@ -491,78 +552,158 @@ impl LuaEngine {
             return Err(e);
         }
 
-        // M12/audio: flush voice[]/dsp/aram[] to the DSP and render this
-        // frame's span. Only reached on a clean frame — an errored frame
-        // (returned above) leaves the previous `audio()` untouched.
-        self.render_frame_audio();
-
         Ok(lt)
     }
 
     /// Drain `aram[]`, write `voice[]`/`dsp` to the DSP registers wholesale,
-    /// flush KOF then KON, render this frame's audio span, and republish
-    /// `voice[n].envx/.outx/.ended` for the next `frame()` to read. Runs once
-    /// per `frame()`, after hooks and the sticky-global restore. (The timer
-    /// milestone turns this into a segment walker with timer hooks — the
-    /// steps below stay distinct blocks for that reason.)
-    fn render_frame_audio(&mut self) {
-        {
-            let mut l = self.lua.borrow_mut();
-            l.enter(|ctx| {
-                // 1. Drain aram[] pokes. A poke lands ONCE — the table is
-                // never rebuilt from `self.aram`, so the echo unit's own
-                // writes (and anything else living in ARAM) persist across
-                // frames exactly like real hardware.
-                if let Value::Table(a) = ctx.get_global("aram") {
-                    let mut keys = Vec::new();
-                    for (k, v) in a {
-                        if let Some(addr) = k.to_int() {
-                            if let Some(byte) = v.to_int() {
-                                if (0..=0xffff).contains(&addr) {
-                                    self.aram[addr as usize] = (byte & 0xff) as u8;
-                                }
+    /// and flush KOF then KON (KON LAST, so a koff+kon in the same span
+    /// restarts the voice — matches the Dsp's KON-deferred-to-next-render-
+    /// tick contract). One atomic unit applied by `render_frame_audio` at
+    /// segment offset 0 and again after every timer hook, so a hook's
+    /// `voice[]`/`dsp`/`kon`/`koff` writes land exactly at its sample offset.
+    fn flush_dsp_writes(&mut self) {
+        let mut l = self.lua.borrow_mut();
+        l.enter(|ctx| {
+            // 1. Drain aram[] pokes. A poke lands ONCE — the table is
+            // never rebuilt from `self.aram`, so the echo unit's own
+            // writes (and anything else living in ARAM) persist across
+            // frames exactly like real hardware.
+            if let Value::Table(a) = ctx.get_global("aram") {
+                let mut keys = Vec::new();
+                for (k, v) in a {
+                    if let Some(addr) = k.to_int() {
+                        if let Some(byte) = v.to_int() {
+                            if (0..=0xffff).contains(&addr) {
+                                self.aram[addr as usize] = (byte & 0xff) as u8;
                             }
-                            keys.push(k);
                         }
-                    }
-                    for k in keys {
-                        a.set(ctx, k, Value::Nil).unwrap();
+                        keys.push(k);
                     }
                 }
+                for k in keys {
+                    a.set(ctx, k, Value::Nil).unwrap();
+                }
+            }
 
-                // 2. voice[]/dsp -> DSP registers, wholesale and idempotent.
-                // Never touches ENDX (0x7c) or the read-only ENVX/OUTX (n8/n9).
-                write_dsp_regs(ctx, &mut self.dsp);
+            // 2. voice[]/dsp -> DSP registers, wholesale and idempotent.
+            // Never touches ENDX (0x7c) or the read-only ENVX/OUTX (n8/n9).
+            write_dsp_regs(ctx, &mut self.dsp);
 
-                // 3. Flush KOF then KON — KON LAST, so a koff+kon in the same
-                // frame restarts the voice (matches the Dsp's KON-deferred-to-
-                // next-render-tick contract: a KOF issued after a still-
-                // pending KON is applied after it, i.e. a silent restart).
-                let kof = ctx.get_global("__dsp_koff").to_int().unwrap_or(0) as u8;
-                self.dsp.write(0x5c, kof);
-                ctx.set_global("__dsp_koff", 0).unwrap();
-                let kon = ctx.get_global("__dsp_kon").to_int().unwrap_or(0) as u8;
-                self.dsp.write(0x4c, kon);
-                ctx.set_global("__dsp_kon", 0).unwrap();
-            });
-        }
+            // 3. Flush KOF then KON.
+            let kof = ctx.get_global("__dsp_koff").to_int().unwrap_or(0) as u8;
+            self.dsp.write(0x5c, kof);
+            ctx.set_global("__dsp_koff", 0).unwrap();
+            let kon = ctx.get_global("__dsp_kon").to_int().unwrap_or(0) as u8;
+            self.dsp.write(0x4c, kon);
+            ctx.set_global("__dsp_kon", 0).unwrap();
+        });
+    }
 
-        // 4. Render this frame's span. Exact 32000/60.0988 accumulator:
-        // 320_000_000 / 600_988 == 32000 / 60.0988, so `n` alternates 532/533
-        // and drifts by less than one sample over any run length.
+    /// Render this frame's audio span sample-accurately against the
+    /// registered `timer(n, div, fn)` hooks: flush `voice[]`/`dsp`/`aram[]`/
+    /// KON/KOFF at offset 0, then walk expiry to expiry — render the DSP up
+    /// to the next due hook (across all three timers, earliest `due_h`
+    /// first, ties in registration order), call it as `fn(off)` where `off`
+    /// is the sample offset within this span, flush again so its writes take
+    /// effect from that offset on, and repeat until no hook is due within
+    /// this span, then render the tail. Timer phase (`due_h`, tracked in
+    /// half-samples at 32 kHz — see `TimerHook`) carries across frames
+    /// unconditionally, including on the error path. Runs once per
+    /// `frame()`, right after `defaults`/`read_state` and before the hdma
+    /// hooks are collected from `__ppu_hooks` — timers always run before
+    /// hdma within the same frame. Republishes `voice[n].envx/.outx/.ended`
+    /// for the next `frame()`/hook to read only once the whole span rendered
+    /// cleanly; a timer hook error aborts the walk early and leaves this
+    /// frame's rendered prefix plus a stale (previous-frame) tail in
+    /// `self.audio` — see [`Self::audio`].
+    fn render_frame_audio(&mut self) -> Result<(), LuaError> {
+        self.flush_dsp_writes();
+
+        // Exact 32000/60.0988 accumulator: 320_000_000 / 600_988 ==
+        // 32000 / 60.0988, so `n` alternates 532/533 and drifts by less
+        // than one sample over any run length.
         self.audio_acc += 320_000_000;
         let n = (self.audio_acc / 600_988) as usize;
         self.audio_acc %= 600_988;
         self.audio.resize(n * 2, 0);
-        self.dsp.render(&mut self.aram, &mut self.audio);
 
-        // 5. Republish envx/outx/ended so the NEXT frame() observes this
-        // frame's envelope/output/end-of-sample state.
-        {
-            let view = decode_dsp_view(&self.dsp);
-            let mut l = self.lua.borrow_mut();
-            l.enter(|ctx| publish_voice_readbacks(ctx, &view));
+        let span_h = 2 * n as u64;
+        let mut cursor = 0usize;
+        let mut err: Option<LuaError> = None;
+
+        loop {
+            let pick = self
+                .timers
+                .iter()
+                .enumerate()
+                .filter(|(_, h)| h.due_h < span_h)
+                .min_by_key(|(i, h)| (h.due_h, *i))
+                .map(|(i, _)| i);
+            let Some(i) = pick else { break };
+
+            let off = (self.timers[i].due_h / 2) as usize;
+            if off > cursor {
+                self.dsp
+                    .render(&mut self.aram, &mut self.audio[2 * cursor..2 * off]);
+            }
+
+            let func = self.timers[i].func.clone();
+            let res = {
+                let mut l = self.lua.borrow_mut();
+                let ex = l.enter(|ctx| {
+                    let f = ctx.fetch(&func);
+                    ctx.stash(Executor::start(ctx, f, (off as i64,)))
+                });
+                l.execute::<()>(&ex)
+            };
+            if let Err(e) = res {
+                let mut e = static_error_to_lua(e);
+                e.file = self.timers[i].file.clone();
+                err = Some(e);
+            }
+
+            self.flush_dsp_writes();
+            self.timers[i].due_h += self.timers[i].period_h;
+            cursor = off;
+            if err.is_some() {
+                break;
+            }
         }
+
+        if err.is_none() {
+            self.dsp
+                .render(&mut self.aram, &mut self.audio[2 * cursor..]);
+        }
+
+        // An error stops the walker from calling any MORE hooks (matching
+        // the hdma sink's short-circuit), but time keeps passing: fast-
+        // forward every timer's phase past this span without invoking them,
+        // so the unconditional carry below never underflows and next
+        // frame's due_h is exactly where it would be had the hooks run.
+        if err.is_some() {
+            for h in self.timers.iter_mut() {
+                while h.due_h < span_h {
+                    h.due_h += h.period_h;
+                }
+            }
+        }
+
+        // Phase carries across frames — unconditionally, even when a hook
+        // above errored.
+        for h in self.timers.iter_mut() {
+            h.due_h -= span_h;
+        }
+
+        if let Some(e) = err {
+            return Err(e);
+        }
+
+        // Republish envx/outx/ended so the NEXT frame() observes this
+        // frame's envelope/output/end-of-sample state.
+        let view = decode_dsp_view(&self.dsp);
+        let mut l = self.lua.borrow_mut();
+        l.enter(|ctx| publish_voice_readbacks(ctx, &view));
+        Ok(())
     }
 }
 
@@ -865,7 +1006,15 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     // frame(), hooks, and init(). Two calls to the same voice in one frame
     // collapse to the same bit (a no-op repeat), which is exactly the "kon
     // twice == kon once" contract. Byte-identical apart from the name/global,
-    // so both are built from the same loop.
+    // so both are built from the same loop. `flush_dsp_writes` is what
+    // actually applies these (and `voice[]`/`dsp`) to the DSP registers, at
+    // offset 0 and after every timer hook within `render_frame_audio`. Since
+    // that pass runs BEFORE hdma hooks are invoked (see `frame()`), an hdma
+    // hook's kon/koff/voice[]/dsp writes sit in these tables un-flushed for
+    // the rest of the current frame and land at the NEXT frame's offset-0
+    // flush — a one-frame lag (Spec-locked ordering; before this ticket the
+    // audio pass ran after hdma, so these writes took effect the same
+    // frame).
     for (name, global) in [("kon", "__dsp_kon"), ("koff", "__dsp_koff")] {
         let cb = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
             let mut mask = 0i64;
@@ -1189,6 +1338,7 @@ fn install_dma(
     rec: Rc<DmaRecorder>,
 ) {
     use crate::source::SourceKind;
+    let timer_rec = rec.clone();
     let dma = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
         if !rec.active.get() {
             return Err(lua_err(
@@ -1411,6 +1561,41 @@ fn install_dma(
         Ok(CallbackReturn::Return)
     });
     ctx.set_global("dma", dma).unwrap();
+
+    // timer(n, div, fn): register an SPC700 timer hook (M12/audio). Same
+    // init-window gate as `dma` — top-level chunks + `init()` only; a call
+    // from frame() or any hook raises the same-shaped error. `n` selects
+    // which of the three hardware timers (0/1 tick at 8 kHz, 2 at 64 kHz);
+    // `div` (1..=255) sets the period in ticks. See `render_frame_audio` for
+    // how registrations become the per-frame segment walker.
+    let timer = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
+        if !timer_rec.active.get() {
+            return Err(lua_err(
+                ctx,
+                "timer runs during setup — call it from top-level code, not frame() or hooks",
+            ));
+        }
+        let n = match stack.get(0).to_int() {
+            Some(n) if (0..=2).contains(&n) => n as u8,
+            _ => return Err(lua_err(ctx, "timer: n must be an integer in 0..2")),
+        };
+        let div = match stack.get(1).to_int() {
+            Some(d) if (1..=255).contains(&d) => d as u8,
+            _ => return Err(lua_err(ctx, "timer: div must be an integer in 1..255")),
+        };
+        let f = match stack.get(2) {
+            Value::Function(f) => f,
+            _ => return Err(lua_err(ctx, "timer: third argument must be a function")),
+        };
+        let file = function_chunk_name(&f);
+        stack.clear();
+        timer_rec
+            .timers
+            .borrow_mut()
+            .push((n, div, ctx.stash(f), file));
+        Ok(CallbackReturn::Return)
+    });
+    ctx.set_global("timer", timer).unwrap();
 }
 
 /// Re-run the init-recorded `dma()` placements in call order into the frame's
