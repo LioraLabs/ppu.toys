@@ -57,7 +57,8 @@ pub(crate) fn sprite_dims(size_sel: u8, large: bool) -> (u32, u32) {
 /// its tile-slivers even when it is fully off-screen horizontally; the renderer
 /// clips it per-pixel. Time-over drops WHOLE sprites (we do not model partial
 /// tile fetches straddling the 34-tile budget).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LineBin {
     /// Kept + rendered sprites, in evaluation order.
     pub sprites: Vec<usize>,

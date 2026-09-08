@@ -37,6 +37,22 @@ end
 
 Scaling the matrix changes how quickly the source plane is sampled.
 
+The matrix maps **screen coordinates to source texels**, not the reverse.
+Ignoring fixed-point rounding (and with flips/mosaic disabled), the mapping is:
+
+```text
+px = screen_x + bg[1].scroll.x - m7.cx
+py = screen_y + bg[1].scroll.y - m7.cy
+source_x = m7.a * px + m7.b * py + m7.cx
+source_y = m7.c * px + m7.d * py + m7.cy
+```
+
+Smaller matrix coefficients enlarge the image. To center a texture point
+`(cx, cy)` at screen `(128, 112)`, set `m7.cx/cy` to that texture point and
+`bg[1].scroll.x/y` to `cx - 128, cy - 112`. For perspective, change the matrix
+and source center for each scanline with `hdma()`; the `ppu new` starter
+contains a working floor projection.
+
 ```lua
 function frame(t, f)
   m7.a = 0.5
@@ -55,6 +71,13 @@ m7.cx = 128
 m7.cy = 112
 m7.wrap = 0
 ```
+
+`m7.wrap = 0` or `1` wraps at the full 1024×1024 plane boundary; `2` makes
+out-of-plane samples transparent; `3` samples tile zero outside the plane.
+An imported image smaller than the plane is placed at its top-left, with
+uncovered map cells left as tile zero. Wrapping does not repeat the smaller
+image at its own dimensions. Repeat a texture across the source PNG or
+explicitly fill the Mode 7 tilemap when a repeating plane is wanted.
 
 ## EXTBG · SETINI `$2133`
 

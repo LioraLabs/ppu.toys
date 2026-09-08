@@ -21,15 +21,41 @@ becomes an animation frame with its tile, palette, and flip information kept.
 **Mode 7** builds one 8bpp plane with its fixed hardware memory layout. An
 optional black-and-white EXTBG image supplies per-pixel priority.
 
+## Source dimensions and tile budgets
+
+Use image dimensions divisible by 8 for tile art, and divisible by
+`cell_size` for OBJ sheets. Pixel dimensions and unique-tile counts are
+separate constraints: a large repeating image can cost fewer tiles than a
+small detailed image.
+
+| Kind    | Layout and budget                                                                                                                                            |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `bg`    | Up to 512×512 pixels (64×64 map cells), cropped with a report beyond that; at most 1024 addressable character tiles, including the reserved transparent tile |
+| `sheet` | 8×8 cells in row order, at most 1024 tiles; no deduplication or reserved blank tile                                                                          |
+| `obj`   | Square cells of 8, 16, 32, or 64 pixels, default 8; the character name table holds at most 512 8×8 tiles                                                     |
+| `m7`    | Up to a 1024×1024 plane, at most 256 distinct 8×8 tiles after deduplication; excess unique tiles fall back to tile zero and are reported                     |
+
+For Mode 7, a 128×128 image contains at most 256 cells, but covers only the
+top-left of the full plane. Repeat those pixels into a 1024×1024 PNG if the
+whole plane should repeat the image. Repetition preserves the unique-tile
+budget. For a centered emblem or portal, keep the smaller image and position
+the sampling center inside it; see [the coordinate mapping](mode7.md).
+
+VRAM placement can impose tighter limits than these format maxima. A 4bpp
+8×8 tile costs 16 words, a 2bpp tile 8 words, and an 8bpp tile 32 words.
+Account for maps and other layers sharing VRAM. `dma()` validates placement;
+the source report records conversion losses. Mode 7 and OBJ also share
+CGRAM: keep their palette allocations from recoloring each other.
+
 ## Bit depth and palettes
 
 Bit depth controls how many palette entries one tile can address.
 
-| Format | Colors per palette | Palettes | Typical use |
-|---|---|---|---|
-| 2bpp | 4 including transparency | Up to 8 | Mode 0 and simple art |
-| 4bpp | 16 including transparency | Up to 8 | Mode 1 backgrounds and sprites |
-| 8bpp | 256 including transparency | 1 | Rich backgrounds and Mode 7 |
+| Format | Colors per palette         | Palettes | Typical use                    |
+| ------ | -------------------------- | -------- | ------------------------------ |
+| 2bpp   | 4 including transparency   | Up to 8  | Mode 0 and simple art          |
+| 4bpp   | 16 including transparency  | Up to 8  | Mode 1 backgrounds and sprites |
+| 8bpp   | 256 including transparency | 1        | Rich backgrounds and Mode 7    |
 
 Transparent pixels use entry 0. The remaining colors are converted from PNG
 RGB to the SNES's 15-bit BGR555 color format. If the image has too many colors,

@@ -3,6 +3,11 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+mod author;
+pub use author::*;
+mod docs;
+pub use docs::docs;
+
 const MANIFEST: &str = "ppu.json";
 const VERSION: &str = "ppu.toys/1";
 
@@ -48,9 +53,20 @@ struct Manifest {
 struct ManifestSource {
     name: String,
     kind: String,
+    #[serde(default = "empty_options")]
     options: serde_json::Value,
+    #[serde(default)]
     meta: serde_json::Value,
-    payload: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    payload: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    priority_file: Option<String>,
+}
+
+fn empty_options() -> serde_json::Value {
+    serde_json::json!({})
 }
 
 /// A file entry inside a `ppu.toys/1` body.
@@ -123,17 +139,14 @@ pub fn pack(dir: &Path) -> Result<String> {
         .sources
         .iter()
         .map(|source| {
-            if !safe_relative(&source.payload) {
-                bail!("unsafe source payload path {:?}", source.payload);
-            }
-            let bytes = std::fs::read(dir.join(&source.payload))
-                .with_context(|| format!("cannot read source payload {}", source.payload))?;
+            let (bytes, meta) = author::source_bytes(dir, source)
+                .map_err(|e| anyhow::anyhow!("source {:?}: {e:#}", source.name))?;
             Ok(SourceEntry {
                 name: source.name.clone(),
                 kind: source.kind.clone(),
                 builtin_id: None,
                 options: source.options.clone(),
-                meta: source.meta.clone(),
+                meta,
                 payload: BASE64.encode(bytes),
             })
         })
@@ -198,7 +211,9 @@ pub fn unpack(text: &str, dir: &Path) -> Result<()> {
             kind: source.kind.clone(),
             options: source.options.clone(),
             meta: source.meta.clone(),
-            payload: payload_path,
+            payload: Some(payload_path),
+            file: None,
+            priority_file: None,
         });
     }
 

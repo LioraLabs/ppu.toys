@@ -134,6 +134,16 @@ impl PpuCore {
         serde_wasm_bindgen::to_value(&self.registers).map_err(Into::into)
     }
 
+    /// Inspect the selected line without advancing or re-rendering the frame.
+    #[wasm_bindgen(js_name = inspectScanline)]
+    pub fn inspect_scanline(&self, y: u32) -> Result<JsValue, JsValue> {
+        let snapshot = self
+            .last_lt
+            .as_ref()
+            .and_then(|lt| crate::inspect_scanline(lt, self.engine.memory(), y as usize));
+        serde_wasm_bindgen::to_value(&snapshot).map_err(Into::into)
+    }
+
     pub fn oam(&self) -> Result<JsValue, JsValue> {
         serde_wasm_bindgen::to_value(&self.oam).map_err(Into::into)
     }

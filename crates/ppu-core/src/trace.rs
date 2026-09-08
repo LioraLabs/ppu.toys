@@ -17,6 +17,30 @@ use crate::registers::{RegBg, RegRow};
 use crate::sprite::{bin_line, obj_tile_addr, render_scanline_for, sprite_dims};
 use crate::{OamSprite, HEIGHT, WIDTH};
 
+/// Resolved inspector state for one scanline. OAM/VRAM remain frame-global.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanlineSnapshot {
+    pub scanline: usize,
+    pub registers: Vec<crate::Register>,
+    pub cgram: Vec<u16>,
+    pub obj_line: crate::LineBin,
+}
+
+pub fn inspect_scanline(lt: &LineTable, mem: &Memory, y: usize) -> Option<ScanlineSnapshot> {
+    let row = lt.rows.get(y)?;
+    let mut cgram = mem.cgram.to_vec();
+    for &(i, color) in &row.cgram {
+        cgram[i as usize] = color;
+    }
+    Some(ScanlineSnapshot {
+        scanline: y,
+        registers: crate::derive_registers(row, &mem.obsel, &Default::default()),
+        cgram,
+        obj_line: bin_line(mem, y),
+    })
+}
+
 /// Stage 1 of the chain: the source registers the selection resolves through.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -249,6 +273,16 @@ pub fn trace_bg_screen(
     if layer >= 4 {
         return None; // self-defending seam: never index outside bg[0..3]
     }
+    let mut palette_mem;
+    let mem = if row.cgram.is_empty() {
+        mem
+    } else {
+        palette_mem = mem.clone();
+        for &(i, color) in &row.cgram {
+            palette_mem.cgram[i as usize] = color;
+        }
+        &palette_mem
+    };
     if row.mode == 7 {
         if layer != 0 {
             return None;

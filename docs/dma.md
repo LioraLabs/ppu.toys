@@ -85,6 +85,13 @@ obj.char_base = hero.char
 Each result includes `tile`, its offset from the shared OBJ base, plus
 `cell_size` and `cells` for animation.
 
+For **OBJ only**, placement `pal` and returned `pal`/`next_pal` are sprite
+palette slots (0–7), not absolute CGRAM entries. Slot `p` starts at CGRAM
+`128 + p * 16`; `cell.pal` is relative to the source's first slot. Use
+`obj[i].pal = hero.pal + cell.pal`. Background/tilesheet `pal` values are
+absolute CGRAM entries instead. For example, OBJ `pal = 4` places its first
+palette at CGRAM 192, which can keep it clear of a small Mode 7 palette.
+
 ## Place Mode 7
 
 Mode 7 has a fixed hardware layout, so it accepts no placement options.

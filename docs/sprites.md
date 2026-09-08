@@ -32,6 +32,26 @@ Every visible object shares those settings. OBSEL packs them into bits 0–2,
 Each object chooses a tile, palette, priority, flips, and one of the two sizes
 selected by `obj.size_sel`.
 
+| `obj.size_sel` | `large = false` | `large = true` |
+| -------------- | --------------- | -------------- |
+| 0              | 8×8             | 16×16          |
+| 1              | 8×8             | 32×32          |
+| 2              | 8×8             | 64×64          |
+| 3              | 16×16           | 32×32          |
+| 4              | 16×16           | 64×64          |
+| 5              | 32×32           | 64×64          |
+| 6              | 16×32           | 32×64          |
+| 7              | 16×32           | 32×32          |
+
+Match the source's `cell_size` to the displayed size. Large sprites fetch
+8×8 subtiles in a 16-tile-wide character layout, not as a tightly packed
+image. The OBJ importer builds that layout for you.
+
+The 128 entries share per-scanline limits of 32 sprites and 34 eight-pixel
+slivers. A 32-pixel-wide sprite uses four slivers on each covered line.
+`ppu check` reports actual range/sliver overflow; reducing total OAM usage
+alone may not fix a crowded line.
+
 ```lua
 function frame(t, f)
   obj[0].x = 128 + sin(t) * 48
@@ -75,10 +95,20 @@ See also: [Sprite source placement](dma.md#sprites-and-animation-sheets),
 
 ## Inspect and poke
 
-The Sprites panel shows one OAM object at a time. Use the arrows to cycle
-through all 128 entries (including disabled objects), or choose an index
-directly. The preview shows the object's graphics with its palette and flips;
-it does not include screen clipping, occlusion, or color math.
+The Sprites panel opens with a pixel-preview grid. Click an object to inspect
+and poke it; **All sprites** returns to the grid. **Show disabled** includes
+unused OAM entries. In detail, use the arrows or index selector to cycle
+through all 128 objects.
+
+**Inspect line** is shared with the other inspectors. The grid and detail
+previews use that line's palette, with each object's flips. Each object is
+marked as outside the line, accepted by OAM evaluation, or dropped by sprite
+limits. The line summary reports its counts; the frame summary retains the
+whole-frame overflow flags. Accepted objects can still be clipped, masked,
+or covered by higher-priority pixels.
+
+OAM attributes remain frame-wide. Selecting a line changes inspection, not
+sprite placement or poke scope.
 
 Edit position, tile, palette, priority, size, flips, or Enabled to write that
 field into `pokes.lua`. Numbers apply on Enter or blur; Escape cancels.

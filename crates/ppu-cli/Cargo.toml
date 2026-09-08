@@ -1,6 +1,6 @@
 [package]
 name = "ppu-cli"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2021"
 publish = false
 
@@ -13,6 +13,8 @@ anyhow = "1"
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+ppu-core = { path = "../ppu-core" }
+png = "0.17"
 
 [dev-dependencies]
 tempfile = "3"
