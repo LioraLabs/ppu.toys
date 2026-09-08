@@ -370,6 +370,27 @@ impl PpuCore {
         Ok(out.into())
     }
 
+    /// Pure BRR encode: 32 kHz i16 mono PCM -> versioned sample payload +
+    /// meta. No engine state mutation. Returns `{ payload: Uint8Array, meta: SourceMeta }`.
+    #[wasm_bindgen(js_name = convertSample)]
+    pub fn convert_sample(&self, pcm: &[i16], options: JsValue) -> Result<JsValue, JsValue> {
+        let opts: crate::ConvertSampleOptions = if options.is_undefined() || options.is_null() {
+            Default::default()
+        } else {
+            serde_wasm_bindgen::from_value(options)?
+        };
+        let (payload, meta) =
+            crate::convert_sample(pcm, &opts).map_err(|e| JsValue::from_str(&e))?;
+        let out = Object::new();
+        Reflect::set(
+            &out,
+            &"payload".into(),
+            &Uint8Array::from(payload.encode().as_slice()).into(),
+        )?;
+        Reflect::set(&out, &"meta".into(), &serde_wasm_bindgen::to_value(&meta)?)?;
+        Ok(out.into())
+    }
+
     /// Decode + register a payload in the source store. Never throws for a bad
     /// payload — returns `{ ok: false, error }` (the structured-diagnostic channel).
     #[wasm_bindgen(js_name = addSource)]

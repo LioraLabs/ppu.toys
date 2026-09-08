@@ -108,7 +108,7 @@
 //! `render`. Bit 7 (soft reset) is stored in `regs` but has no effect; no
 //! hardware behavior in this emulator depends on it.
 
-mod brr;
+pub(crate) mod brr;
 mod echo;
 mod envelope;
 mod gaussian;

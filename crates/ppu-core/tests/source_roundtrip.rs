@@ -6,8 +6,8 @@
 //! source path's exact pixels.)
 
 use ppu_core::{
-    convert_source, render_frame_view, rgb15, unpack_rgb15, ConvertOptions, LuaEngine, SourceKind,
-    WIDTH,
+    convert_sample, convert_source, render_frame_view, rgb15, unpack_rgb15, ConvertOptions,
+    ConvertSampleOptions, LuaEngine, SourceKind, SourcePayload, SourceReport, WIDTH,
 };
 
 fn fb(engine: &mut LuaEngine, script: &str) -> Vec<u8> {
@@ -182,4 +182,99 @@ end"#,
     expect_at(4, 4, [255, 255, 0]); // map cell (0,0) -> sheet cell 3 = yellow
     expect_at(12, 4, [255, 0, 0]); // map cell (1,0) -> sheet cell 0 = red
     expect_at(4, 12, [0, 255, 0]); // map cell (0,1) -> sheet cell 1 = green
+}
+
+/// 1 kHz sine at 32 kHz sample rate: 32 samples/period, amplitude 20000,
+/// 640 samples total (20 periods) -> 640/16 = 40 BRR blocks, 40*9 = 360 bytes.
+fn sine_640() -> Vec<i16> {
+    (0..640)
+        .map(|i| {
+            let phase = (i as f64) / 32.0 * std::f64::consts::TAU;
+            (phase.sin() * 20000.0).round() as i16
+        })
+        .collect()
+}
+
+// PPU-136: a sample is a first-class source payload — convert_sample encodes
+// BRR + a loop point, the payload round-trips, and add_source registers it
+// like any other kind.
+#[test]
+fn sample_payload_roundtrips_and_registers() {
+    let pcm = sine_640();
+    let (p, meta) = convert_sample(
+        &pcm,
+        &ConvertSampleOptions {
+            loop_start: Some(96),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(meta.width, 640);
+    assert_eq!(meta.height, 1);
+    match &meta.report {
+        SourceReport::Sample { report } => {
+            assert_eq!(report.blocks, 40);
+            assert_eq!(report.bytes, 360);
+            assert_eq!(report.loop_start, Some(96));
+        }
+        other => panic!("expected SourceReport::Sample, got {other:?}"),
+    }
+
+    match &p {
+        SourcePayload::Sample(s) => {
+            assert_eq!(s.loop_block, Some(6));
+            assert_eq!(s.brr.len(), 360);
+        }
+        other => panic!("expected SourcePayload::Sample, got {other:?}"),
+    }
+
+    assert_eq!(SourcePayload::decode(&p.encode()).unwrap(), p);
+
+    let mut engine = LuaEngine::new();
+    assert!(engine.add_source("kick", &p.encode()).is_ok());
+
+    let mut truncated = p.encode();
+    truncated.truncate(truncated.len() - 1);
+    assert!(LuaEngine::new().add_source("kick", &truncated).is_err());
+}
+
+// PPU-136: bad input is rejected with an actionable message, and a sample
+// can only be built via convertSample, never convertSource.
+#[test]
+fn convert_sample_rejects_bad_input() {
+    let err = convert_sample(&[], &ConvertSampleOptions::default()).unwrap_err();
+    assert_eq!(err, "sample has no PCM");
+
+    let pcm = vec![0i16; 32];
+    let err = convert_sample(
+        &pcm,
+        &ConvertSampleOptions {
+            loop_start: Some(32),
+        },
+    )
+    .unwrap_err();
+    assert!(err.contains("loop_start"), "unexpected error: {err}");
+
+    let rgba = vec![0u8; 8 * 8 * 4];
+    let err =
+        convert_source(SourceKind::Sample, &ConvertOptions::default(), &rgba, 8, 8).unwrap_err();
+    assert!(err.contains("convertSample"), "unexpected error: {err}");
+
+    assert_eq!("sample".parse::<SourceKind>(), Ok(SourceKind::Sample));
+}
+
+// PPU-136: the brute-force encoder must not run at all on input that can
+// never fit sound RAM — the length guard rejects it up front instead of
+// spending minutes encoding before the post-encode blocks check fires.
+#[test]
+fn convert_sample_rejects_over_long_input_before_encoding() {
+    let pcm = vec![0i16; 32_000 * 300]; // five minutes at 32 kHz
+    let start = std::time::Instant::now();
+    let err = convert_sample(&pcm, &ConvertSampleOptions::default()).unwrap_err();
+    let elapsed = start.elapsed();
+    assert!(err.contains("sample too long"), "unexpected error: {err}");
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "convert_sample took {elapsed:?}, expected the length guard to reject before encoding"
+    );
 }

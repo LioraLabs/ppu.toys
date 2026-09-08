@@ -76,6 +76,18 @@ pub struct DspVoiceView {
     pub ended: bool,
 }
 
+/// One `dma()` sample placement, as surfaced to the UI (Audio inspector) —
+/// see [`LuaEngine::dsp_view`]. `start`/`end` are ARAM byte offsets
+/// (`end` exclusive).
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DspSampleView {
+    pub id: u8,
+    pub name: String,
+    pub start: u32,
+    pub end: u32,
+}
+
 /// A full snapshot of the live S-DSP registers, decoded for the UI inspector
 /// (M12/audio) — see [`LuaEngine::dsp_view`].
 #[derive(Clone, Debug, serde::Serialize)]
@@ -87,6 +99,11 @@ pub struct DspView {
     pub echo: DspEchoView,
     pub noise_clock: u8,
     pub mute: bool,
+    /// Sample sources placed into ARAM by `dma()` at compile time, in
+    /// placement (call) order — filled by [`LuaEngine::dsp_view`] from
+    /// `self.dma.samples`, not by `decode_dsp_view` (which has no access to
+    /// the recorder).
+    pub samples: Vec<DspSampleView>,
 }
 
 /// Compile/runtime error surfaced to the editor, matching the TS `LuaError` shape.
@@ -175,6 +192,38 @@ struct DmaPlacement {
     cgram_base: u8,
 }
 
+/// The resolved result of one init-stage `dma(name, { addr })` call on a
+/// SAMPLE source. Written into ARAM + the sample directory ONCE at
+/// compile time (`set_sources`, after `init()` succeeds) — never replayed
+/// per frame, unlike [`DmaPlacement`]. `end` is exclusive; `loop_addr` equals
+/// `addr` for a non-looping sample.
+struct SamplePlacement {
+    name: String,
+    id: u8,
+    addr: u16,
+    end: u32,
+    loop_addr: u16,
+}
+
+/// Fixed ARAM home of the 256-entry sample directory (DIR pinned to page
+/// 0x01 — see `LuaEngine::new`'s DSP power-on write of `dsp.write(0x5d, ..)`).
+const SAMPLE_DIR: u32 = 0x0100;
+/// End (exclusive) of the sample directory page: 256 entries * 4 bytes.
+const SAMPLE_DIR_END: u32 = SAMPLE_DIR + 256 * 4;
+
+/// The half-open ARAM range `[start, end)` the echo buffer reserves for a
+/// given `dsp.echo.delay` (0..=15, already clamped by the caller). Echo RAM
+/// sits at the TOP of ARAM: delay 0 is the documented "no echo writes"
+/// sentinel (ESA 0xff, a 4-byte placeholder region); every other delay
+/// reserves `delay*0x800` bytes ending exactly at 0x10000.
+fn echo_region(delay: i64) -> (u32, u32) {
+    if delay == 0 {
+        (0xff00, 0xff04)
+    } else {
+        (0x10000 - delay as u32 * 0x800, 0x10000)
+    }
+}
+
 /// `dma()`/`timer()` call recorder shared between the engine and the
 /// callbacks installed in its VM. `active` is true only while `set_sources`
 /// executes top-level chunks + `init()` — the init-only gate both `dma` and
@@ -186,6 +235,11 @@ struct DmaRecorder {
     vram_ranges: RefCell<Vec<(String, usize, usize)>>,
     cgram_ranges: RefCell<Vec<(usize, usize)>>,
     obj_base: Cell<Option<u16>>,
+    /// Sample placements recorded during the init window, in call order.
+    /// Never replayed — `replay_dma`'s `Sample(_) => {}` arm is a deliberate
+    /// no-op: samples are written once by `LuaEngine::set_sources` after
+    /// `init()`, not per frame.
+    samples: RefCell<Vec<SamplePlacement>>,
     /// `timer(n, div, fn)` registrations recorded during the init window:
     /// (timer index 0..=2, div 1..=255, stashed hook, defining chunk). Moved
     /// into `LuaEngine::timers` (with computed period_h/due_h) once
@@ -217,7 +271,7 @@ impl LuaEngine {
         for v in 0..8u8 {
             dsp.write((v << 4) | 0x05, 0x80);
         }
-        dsp.write(0x5d, 0x01);
+        dsp.write(0x5d, (SAMPLE_DIR >> 8) as u8);
         lua.enter(|ctx| seed_dsp_tables(ctx, &dsp));
         LuaEngine {
             lua: Rc::new(RefCell::new(lua)),
@@ -300,9 +354,24 @@ impl LuaEngine {
         &self.dsp
     }
 
-    /// A decoded snapshot of the live DSP registers for the UI inspector.
+    /// A decoded snapshot of the live DSP registers for the UI inspector,
+    /// plus the sample sources placed into ARAM by `dma()` (compile-time,
+    /// not part of `Dsp`'s own state — filled here from `self.dma.samples`).
     pub fn dsp_view(&self) -> DspView {
-        decode_dsp_view(&self.dsp)
+        let mut view = decode_dsp_view(&self.dsp);
+        view.samples = self
+            .dma
+            .samples
+            .borrow()
+            .iter()
+            .map(|s| DspSampleView {
+                id: s.id,
+                name: s.name.clone(),
+                start: s.addr as u32,
+                end: s.end,
+            })
+            .collect();
+        view
     }
 
     /// Single-file sugar for [`Self::set_sources`]; the chunk keeps its
@@ -375,12 +444,73 @@ impl LuaEngine {
             let res = l.execute::<()>(&ex);
             rec.active.set(false); // init window closes even on error
             res.map_err(|e| {
+                // Nothing was written to ARAM yet (that happens after this
+                // `?`) — drop any placements dma() already recorded before
+                // the error, so a failed init never reports samples that
+                // were never placed.
+                rec.samples.borrow_mut().clear();
                 let mut err = static_error_to_lua(e);
                 err.file = init_file.clone();
                 err
             })?;
         } else {
             rec.active.set(false);
+        }
+        // Re-check the echo region here against the FINAL `dsp.echo.delay`
+        // (init() may have changed it after a sample dma() call already
+        // placed against an earlier value — the dma() arm only ever sees
+        // the value at call time). Same lookup/clamp/message shape as that
+        // arm's own check.
+        let delay = self
+            .lua
+            .borrow_mut()
+            .enter(|ctx| match ctx.get_global("dsp") {
+                Value::Table(d) => match d.get(ctx, "echo") {
+                    Value::Table(echo) => echo.get(ctx, "delay").to_int().unwrap_or(0),
+                    _ => 0,
+                },
+                _ => 0,
+            })
+            .clamp(0, 15);
+        let (echo_lo, echo_hi) = echo_region(delay);
+        let overlap = rec
+            .samples
+            .borrow()
+            .iter()
+            .find(|sp| (sp.addr as u32) < echo_hi && echo_lo < sp.end)
+            .map(|sp| sp.name.clone());
+        if let Some(name) = overlap {
+            rec.samples.borrow_mut().clear();
+            return Err(LuaError {
+                message: format!(
+                    "dma: '{name}' overlaps the echo region (0x{echo_lo:04x}-0x{hi:04x}, \
+                     dsp.echo.delay = {delay})",
+                    hi = echo_hi - 1
+                ),
+                line: None,
+                file: init_file.clone(),
+            });
+        }
+        // Sample placements write ARAM + the sample directory ONCE here,
+        // after init() has succeeded (or there is none) and passed the
+        // final echo-region check above — never in frame(), and never
+        // cleared first: DSP/ARAM survive recompiles by design, so an
+        // earlier program's placed samples stay put underneath these.
+        // The name was already validated against the store at `dma()` call
+        // time, moments ago, so it's expected to still resolve.
+        for sp in rec.samples.borrow().iter() {
+            if let Some(crate::source::SourcePayload::Sample(src)) =
+                self.source_store.borrow().get(&sp.name)
+            {
+                let addr = sp.addr as usize;
+                let end = sp.end as usize;
+                self.aram[addr..end].copy_from_slice(&src.brr);
+                let dir = SAMPLE_DIR as usize + 4 * sp.id as usize;
+                self.aram[dir] = (sp.addr & 0xff) as u8;
+                self.aram[dir + 1] = (sp.addr >> 8) as u8;
+                self.aram[dir + 2] = (sp.loop_addr & 0xff) as u8;
+                self.aram[dir + 3] = (sp.loop_addr >> 8) as u8;
+            }
         }
         // Recompile == drop + re-register: a fresh registration always
         // starts one period from firing (`due_h = period_h`), so phase never
@@ -1082,6 +1212,9 @@ fn decode_dsp_view(dsp: &Dsp) -> DspView {
         },
         noise_clock: flg & 0x1f,
         mute: flg & 0x40 != 0,
+        // Filled by `LuaEngine::dsp_view` from `self.dma.samples` — this
+        // function only sees the `Dsp` registers, not the recorder.
+        samples: Vec::new(),
     }
 }
 
@@ -1281,11 +1414,9 @@ fn write_dsp_regs(ctx: piccolo::Context<'_>, dsp: &mut Dsp) {
         // Echo RAM sits at the TOP of ARAM: delay 0 is the documented "no
         // echo writes" sentinel (ESA 0xff); every other delay ends its
         // buffer exactly at 0x10000 (ESA*0x100 + delay*0x800 == 0x10000).
-        let esa = if delay == 0 {
-            0xff
-        } else {
-            (0x100 - delay * 8) as u8
-        };
+        // ESA is the echo region's start page, from the same formula
+        // `echo_region` uses to reject a sample `dma()` placement.
+        let esa = (echo_region(delay).0 >> 8) as u8;
         dsp.write(0x6d, esa);
 
         let noise_clock = geti(ctx, d, "noise_clock").unwrap_or(0) & 0x1f;
@@ -1366,16 +1497,22 @@ fn install_dma(
             _ => return Err(lua_err(ctx, "dma: opts must be a table")),
         };
         let opt = |key: &'static str| opts.map_or(Value::Nil, |t| t.get(ctx, key));
-        let (char_base, map_base, cgram_base) = if kind == SourceKind::M7 {
+        let (char_base, map_base, cgram_base) = if kind == SourceKind::M7
+            || kind == SourceKind::Sample
+        {
             for k in ["char", "map", "pal"] {
                 if !matches!(opt(k), Value::Nil) {
-                    return Err(lua_err(
-                        ctx,
-                        &format!(
+                    let msg = if kind == SourceKind::M7 {
+                        format!(
                             "dma: '{name}' is an m7 source — chars+map always live \
                              interleaved at 0x0000 (palette at CGRAM 1), so it takes no '{k}' opt"
-                        ),
-                    ));
+                        )
+                    } else {
+                        format!(
+                            "dma: '{name}' is a sample source — it takes only 'addr', not '{k}'"
+                        )
+                    };
+                    return Err(lua_err(ctx, &msg));
                 }
             }
             (0, 0, 0)
@@ -1514,6 +1651,104 @@ fn install_dma(
                 ret.set(ctx, "tiles_w", src.tiles_w as i64).unwrap();
                 ret.set(ctx, "tiles_h", src.tiles_h as i64).unwrap();
             }
+            // Samples are PCM written into ARAM, not VRAM/CGRAM graphics data
+            // — `dma()`'s char/map/pal placement doesn't apply; they take an
+            // `addr` opt instead and are recorded into `rec.samples` (never
+            // `rec.placements` — samples are placed once at compile time in
+            // `set_sources`, not replayed per frame).
+            crate::source::SourcePayload::Sample(src) => {
+                let recorded = rec.samples.borrow().len();
+                if recorded >= 256 {
+                    return Err(lua_err(
+                        ctx,
+                        &format!("dma: '{name}' exceeds the 256-entry sample directory"),
+                    ));
+                }
+                let id = recorded as u8;
+                let addr: u32 = match opt("addr") {
+                    Value::Nil => SAMPLE_DIR_END,
+                    v => match v.to_int() {
+                        Some(n) if (0..=0xffff).contains(&n) => n as u32,
+                        _ => {
+                            return Err(lua_err(
+                                ctx,
+                                "dma: opts.addr must be an integer in 0..0xffff",
+                            ))
+                        }
+                    },
+                };
+                let bytes = src.brr.len() as u32;
+                let end = addr + bytes;
+                if end > 0x10000 {
+                    return Err(lua_err(
+                        ctx,
+                        &format!("dma: '{name}' placement exceeds sound RAM"),
+                    ));
+                }
+                // Reserved sample directory page: [SAMPLE_DIR, SAMPLE_DIR_END).
+                if addr < SAMPLE_DIR_END && SAMPLE_DIR < end {
+                    return Err(lua_err(
+                        ctx,
+                        &format!(
+                            "dma: '{name}' overlaps the sample directory page (0x{SAMPLE_DIR:04x}-0x{:04x})",
+                            SAMPLE_DIR_END - 1
+                        ),
+                    ));
+                }
+                // Echo region, derived from `dsp.echo.delay` as it stands
+                // right now (see `echo_region`'s doc for the formula, which
+                // mirrors `write_dsp_regs`'s ESA computation).
+                let delay = match ctx.get_global("dsp") {
+                    Value::Table(d) => match d.get(ctx, "echo") {
+                        Value::Table(echo) => echo.get(ctx, "delay").to_int().unwrap_or(0),
+                        _ => 0,
+                    },
+                    _ => 0,
+                }
+                .clamp(0, 15);
+                let (echo_lo, echo_hi) = echo_region(delay);
+                if addr < echo_hi && echo_lo < end {
+                    return Err(lua_err(
+                        ctx,
+                        &format!(
+                            "dma: '{name}' overlaps the echo region (0x{echo_lo:04x}-0x{hi:04x}, \
+                             dsp.echo.delay = {delay})",
+                            hi = echo_hi - 1
+                        ),
+                    ));
+                }
+                if let Some(other) = rec
+                    .samples
+                    .borrow()
+                    .iter()
+                    .find(|s| addr < s.end && (s.addr as u32) < end)
+                {
+                    return Err(lua_err(
+                        ctx,
+                        &format!(
+                            "dma: '{name}' overlaps sample '{}' in sound RAM",
+                            other.name
+                        ),
+                    ));
+                }
+                let loop_addr = match src.loop_block {
+                    Some(lb) => (addr + lb as u32 * 9) as u16,
+                    None => addr as u16,
+                };
+                rec.samples.borrow_mut().push(SamplePlacement {
+                    name: name.clone(),
+                    id,
+                    addr: addr as u16,
+                    end,
+                    loop_addr,
+                });
+                ret.set(ctx, "id", id as i64).unwrap();
+                ret.set(ctx, "addr", addr as i64).unwrap();
+                ret.set(ctx, "next_addr", end as i64).unwrap();
+                stack.clear();
+                stack.replace(ctx, ret);
+                return Ok(CallbackReturn::Return);
+            }
         }
         if vram.iter().any(|&(s, e)| e > 0x8000 || s >= e) || cgram_end > 256 {
             return Err(lua_err(
@@ -1624,6 +1859,10 @@ fn replay_dma(
             Some(SourcePayload::Obj(src)) => {
                 crate::source::place_obj(src, mem, p.char_base, p.cgram_base as usize)
             }
+            // Samples are written once by `LuaEngine::set_sources` after
+            // `init()`, never replayed per frame — a `dma()` placement
+            // naming one is a no-op here.
+            Some(SourcePayload::Sample(_)) => {}
             None => reports.push(ImportBudget::Mismatch {
                 layer: None,
                 slot: p.name.clone(),

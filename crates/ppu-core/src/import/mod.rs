@@ -2,6 +2,7 @@
 //! `quantize`/`tiles` are the shared primitives Mode-7 and OBJ import reuse;
 //! this module's own surface is the tile-BG importer.
 
+pub mod brr;
 pub mod dither;
 pub mod obj;
 pub mod quantize;

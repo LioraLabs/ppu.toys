@@ -5,6 +5,58 @@
 
 use super::clamp;
 
+/// Decode one nibble into the next output sample, given the running history.
+/// `nibble` is the sign-extended 4-bit nibble (-8..=7); `shift`/`filter` come
+/// from the block header; `last_sample`/`last_last_sample` are the previous
+/// two decoded samples. Pulled out of `BrrBlockDecoder::read` so the BRR
+/// encoder (`crate::import::brr`) can judge candidate nibbles with the exact
+/// decoder arithmetic instead of a second implementation.
+pub(crate) fn decode_sample(
+    nibble: i32,
+    shift: u8,
+    filter: u8,
+    last_sample: i16,
+    last_last_sample: i16,
+) -> i16 {
+    let mut sample = nibble;
+
+    if shift <= 12 {
+        sample <<= shift;
+        sample >>= 1;
+    } else {
+        sample &= !0x07ff;
+    }
+
+    let p1 = last_sample as i32;
+    let p2 = (last_last_sample >> 1) as i32;
+
+    match filter {
+        1 => {
+            // sample += p1 * 0.46875
+            sample += p1 >> 1;
+            sample += (-p1) >> 5;
+        }
+        2 => {
+            // sample += p1 * 0.953125 - p2 * 0.46875
+            sample += p1;
+            sample -= p2;
+            sample += p2 >> 4;
+            sample += (p1 * -3) >> 6;
+        }
+        3 => {
+            // sample += p1 * 0.8984375 - p2 * 0.40625
+            sample += p1;
+            sample -= p2;
+            sample += (p1 * -13) >> 7;
+            sample += (p2 * 3) >> 4;
+        }
+        _ => (),
+    }
+
+    sample = clamp(sample);
+    (sample << 1) as i16
+}
+
 pub(crate) struct BrrBlockDecoder {
     pub(crate) is_end: bool,
     pub(crate) is_looping: bool,
@@ -55,44 +107,16 @@ impl BrrBlockDecoder {
             buf_pos += 1;
 
             for _ in 0..4 {
-                let mut sample = ((nybbles as i16) >> 12) as i32;
+                let nibble = ((nybbles as i16) >> 12) as i32;
                 nybbles <<= 4;
 
-                if shift <= 12 {
-                    sample <<= shift;
-                    sample >>= 1;
-                } else {
-                    sample &= !0x07ff;
-                }
-
-                let p1 = self.last_sample as i32;
-                let p2 = (self.last_last_sample >> 1) as i32;
-
-                match filter {
-                    1 => {
-                        // sample += p1 * 0.46875
-                        sample += p1 >> 1;
-                        sample += (-p1) >> 5;
-                    }
-                    2 => {
-                        // sample += p1 * 0.953125 - p2 * 0.46875
-                        sample += p1;
-                        sample -= p2;
-                        sample += p2 >> 4;
-                        sample += (p1 * -3) >> 6;
-                    }
-                    3 => {
-                        // sample += p1 * 0.8984375 - p2 * 0.40625
-                        sample += p1;
-                        sample -= p2;
-                        sample += (p1 * -13) >> 7;
-                        sample += (p2 * 3) >> 4;
-                    }
-                    _ => (),
-                }
-
-                sample = clamp(sample);
-                let sample_16 = (sample << 1) as i16;
+                let sample_16 = decode_sample(
+                    nibble,
+                    shift,
+                    filter,
+                    self.last_sample,
+                    self.last_last_sample,
+                );
                 self.samples[out_pos] = sample_16;
                 out_pos += 1;
                 self.last_last_sample = self.last_sample;

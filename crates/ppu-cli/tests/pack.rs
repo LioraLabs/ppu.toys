@@ -151,3 +151,44 @@ fn pack_rejects_unsafe_source_payload_path() {
         "unexpected error: {err}"
     );
 }
+
+// A sample source travels through unpack -> pack untouched: pack/unpack copy
+// `kind`, `meta` and the payload bytes verbatim, so a kind they never heard of
+// (BRR audio, not an image) needs no CLI change.
+#[test]
+fn sample_source_round_trips_through_unpack_and_pack() {
+    use base64::Engine;
+    let pcm: Vec<i16> = (0..640)
+        .map(|i| ((i as f64 * std::f64::consts::TAU / 32.0).sin() * 20000.0).round() as i16)
+        .collect();
+    let opts = ppu_core::ConvertSampleOptions {
+        loop_start: Some(96),
+    };
+    let (payload, meta) = ppu_core::convert_sample(&pcm, &opts).unwrap();
+    let bytes = payload.encode();
+
+    let mut value: serde_json::Value = serde_json::from_str(SAMPLE_PPU_JSON).unwrap();
+    value["sources"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "name": "kick",
+            "kind": "sample",
+            "builtinId": null,
+            "options": { "loop_start": 96 },
+            "meta": serde_json::to_value(&meta).unwrap(),
+            "payload": base64::engine::general_purpose::STANDARD.encode(&bytes),
+        }));
+    let text = serde_json::to_string(&value).unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    ppu_cli::unpack(&text, dir.path()).unwrap();
+    assert_eq!(
+        std::fs::read(dir.path().join(".ppu/sources/1.bin")).unwrap(),
+        bytes
+    );
+
+    let repacked: serde_json::Value =
+        serde_json::from_str(&ppu_cli::pack(dir.path()).unwrap()).unwrap();
+    assert_eq!(repacked, value);
+}

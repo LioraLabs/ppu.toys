@@ -7,7 +7,7 @@
 //! Byte layout v1 (little-endian):
 //!
 //! ```text
-//! common:  u8 version=2 | u8 kind (0=bg 1=m7 2=obj 3=sheet)
+//! common:  u8 version=3 | u8 kind (0=bg 1=m7 2=obj 3=sheet 4=sample)
 //! bg:      u8 bit_depth (2|4|8) | u8 tile_size (8)
 //!          u8 pal_count, per palette: u8 len + len*u16 BGR555
 //!          u16 tile_count, tile_count*(bit_depth*4)*u16 char words (bitplane-packed, tile 0 blank)
@@ -25,6 +25,10 @@
 //!          u16 tile_count, tile_count*(bit_depth*4)*u16 char words (sheet order,
 //!          NO reserved blank tile). No screen_size, no tilemap: map geometry is
 //!          the author's, not the payload's.
+//! sample:  u8 has_loop (0|1), [u16 loop_block, only if has_loop]
+//!          u16 block_count (1..=MAX_SAMPLE_BLOCKS), block_count*9 raw BRR
+//!          bytes (9 bytes per 16-sample block). PCM, not an image: no
+//!          palette, no tiles.
 //! ```
 //!
 //! Tilemap/map tile numbers are relative to the payload's own char block;
@@ -37,7 +41,11 @@ use crate::import_m7::Mode7ImportReport;
 use crate::memory::Memory;
 use serde::Serialize;
 
-pub const PAYLOAD_VERSION: u8 = 2;
+pub const PAYLOAD_VERSION: u8 = 3;
+
+/// Max BRR blocks a sample payload can carry: 64 KB of sound RAM / 9-byte
+/// BRR blocks.
+pub const MAX_SAMPLE_BLOCKS: usize = 0x10000 / 9;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SourceKind {
@@ -45,6 +53,7 @@ pub enum SourceKind {
     M7,
     Obj,
     Sheet,
+    Sample,
 }
 
 /// The kind strings the JS surface names a source by (`convertSource`).
@@ -56,6 +65,7 @@ impl std::str::FromStr for SourceKind {
             "m7" => Ok(SourceKind::M7),
             "obj" => Ok(SourceKind::Obj),
             "sheet" => Ok(SourceKind::Sheet),
+            "sample" => Ok(SourceKind::Sample),
             other => Err(format!("unknown source kind '{other}'")),
         }
     }
@@ -116,12 +126,27 @@ pub struct SheetSource {
     pub char_words: Vec<u16>,
 }
 
+/// A BRR-encoded PCM sample. Unlike the image-derived kinds, this is not
+/// quantized/packed from RGBA — see `convert_sample`. Placement (writing
+/// `brr` into ARAM, once at compile time) is `LuaEngine::set_sources`'s
+/// concern (`crate::lua`); the payload itself carries only what the encoder
+/// produced.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SampleSource {
+    /// Raw BRR bytes, 9 per 16-sample block.
+    pub brr: Vec<u8>,
+    /// Block-aligned loop point, in blocks (`loop_start / 16`); `None` if
+    /// the sample doesn't loop.
+    pub loop_block: Option<u16>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum SourcePayload {
     Bg(BgSource),
     M7(M7Source),
     Obj(ObjSource),
     Sheet(SheetSource),
+    Sample(SampleSource),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,6 +195,10 @@ pub enum SourceReport {
     Obj { report: BudgetReport },
     #[serde(rename = "sheet")]
     Sheet { report: BudgetReport },
+    #[serde(rename = "sample")]
+    Sample {
+        report: crate::import::brr::SampleReport,
+    },
 }
 
 /// Tilemap length in words for a BGnSC screen-size field.
@@ -260,6 +289,7 @@ impl SourcePayload {
             SourcePayload::M7(_) => SourceKind::M7,
             SourcePayload::Obj(_) => SourceKind::Obj,
             SourcePayload::Sheet(_) => SourceKind::Sheet,
+            SourcePayload::Sample(_) => SourceKind::Sample,
         }
     }
 
@@ -374,6 +404,31 @@ impl SourcePayload {
                     push_u16(&mut b, w);
                 }
             }
+            SourcePayload::Sample(s) => {
+                debug_assert!(
+                    s.brr.len() % 9 == 0,
+                    "sample: brr not a whole number of blocks"
+                );
+                let blocks = s.brr.len() / 9;
+                debug_assert!(
+                    (1..=MAX_SAMPLE_BLOCKS).contains(&blocks),
+                    "sample: block count out of range"
+                );
+                debug_assert!(
+                    s.loop_block.is_none_or(|lb| (lb as usize) < blocks),
+                    "sample: loop_block out of range"
+                );
+                b.push(4);
+                match s.loop_block {
+                    Some(lb) => {
+                        b.push(1);
+                        push_u16(&mut b, lb);
+                    }
+                    None => b.push(0),
+                }
+                push_u16(&mut b, blocks as u16);
+                b.extend_from_slice(&s.brr);
+            }
         }
         b
     }
@@ -381,7 +436,7 @@ impl SourcePayload {
     pub fn decode(bytes: &[u8]) -> Result<SourcePayload, PayloadError> {
         let mut r = Rd { b: bytes, i: 0 };
         let version = r.u8()?;
-        if !matches!(version, 1 | PAYLOAD_VERSION) {
+        if !(1..=PAYLOAD_VERSION).contains(&version) {
             return Err(PayloadError::BadVersion(version));
         }
         let kind = r.u8()?;
@@ -521,6 +576,24 @@ impl SourcePayload {
                     palettes,
                     char_words,
                 })
+            }
+            4 => {
+                let has_loop = r.u8()?;
+                if has_loop > 1 {
+                    return Err(PayloadError::BadParam("has_loop"));
+                }
+                let loop_block = if has_loop == 1 { Some(r.u16()?) } else { None };
+                let block_count = r.u16()? as usize;
+                if !(1..=MAX_SAMPLE_BLOCKS).contains(&block_count) {
+                    return Err(PayloadError::BadParam("block_count"));
+                }
+                if let Some(lb) = loop_block {
+                    if lb as usize >= block_count {
+                        return Err(PayloadError::BadParam("loop_block"));
+                    }
+                }
+                let brr = r.bytes(block_count * 9)?.to_vec();
+                SourcePayload::Sample(SampleSource { brr, loop_block })
             }
             k => return Err(PayloadError::BadKind(k)),
         };
@@ -768,7 +841,57 @@ pub fn convert_source_with_priority(
             let (src, meta) = crate::import::import_tile_sheet(rgba, width, height, &io);
             Ok((SourcePayload::Sheet(src), meta))
         }
+        SourceKind::Sample => Err("sample sources are PCM, not images: use convertSample".into()),
     }
+}
+
+/// Options for [`convert_sample`].
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[serde(default)]
+pub struct ConvertSampleOptions {
+    /// Loop point in input PCM frames; block-aligned by the encoder.
+    pub loop_start: Option<usize>,
+}
+
+/// Pure conversion: BRR-encode mono 32 kHz i16 PCM into (payload, meta). The
+/// browser does WAV decode + resampling; the engine only ever sees PCM
+/// already at the SPC700's native rate. This is the core of the
+/// `convertSample` wasm entry.
+pub fn convert_sample(
+    pcm: &[i16],
+    opts: &ConvertSampleOptions,
+) -> Result<(SourcePayload, SourceMeta), String> {
+    if pcm.is_empty() {
+        return Err("sample has no PCM".into());
+    }
+    if let Some(loop_start) = opts.loop_start {
+        if loop_start >= pcm.len() {
+            return Err(format!(
+                "loop_start {} is past the end of the sample ({} frames)",
+                loop_start,
+                pcm.len()
+            ));
+        }
+    }
+    // Reject up front: the encoder below is brute force, so a multi-minute
+    // WAV must not spend minutes encoding before this same check fires
+    // post-encode — see MAX_SAMPLE_BLOCKS.
+    let blocks = pcm.len().div_ceil(16);
+    if blocks > MAX_SAMPLE_BLOCKS {
+        return Err(format!(
+            "sample too long for sound RAM ({blocks} blocks, max {MAX_SAMPLE_BLOCKS})"
+        ));
+    }
+    let (brr, report) = crate::import::brr::encode_brr(pcm, opts.loop_start);
+    let loop_block = report.loop_start.map(|s| (s / 16) as u16);
+    let payload = SourcePayload::Sample(SampleSource { brr, loop_block });
+    let meta = SourceMeta {
+        width: pcm.len() as u32,
+        height: 1,
+        report: SourceReport::Sample { report },
+        cells: None,
+    };
+    Ok((payload, meta))
 }
 
 #[cfg(test)]
@@ -805,6 +928,19 @@ mod tests {
         }
     }
 
+    // PPU-136: a hand-built two-block BRR blob (18 bytes), distinguishable
+    // per-byte so a mis-sliced encode/decode boundary would show up.
+    fn sample_brr_two_blocks() -> Vec<u8> {
+        (0..18u8).collect()
+    }
+
+    fn sample_sample() -> SampleSource {
+        SampleSource {
+            brr: sample_brr_two_blocks(),
+            loop_block: Some(1),
+        }
+    }
+
     // PPU-93: sheet payload is bit depth + palettes + char words, nothing else.
     #[test]
     fn sheet_roundtrips_and_carries_no_map_geometry() {
@@ -812,7 +948,7 @@ mod tests {
         let b = p.encode();
         assert_eq!(SourcePayload::decode(&b).unwrap(), p);
         // version, kind=3, bit_depth, pal_count, pal0 len, color lo/hi ...
-        assert_eq!(&b[..6], &[2, 3, 2, 2, 2, 0x1f]);
+        assert_eq!(&b[..6], &[3, 3, 2, 2, 2, 0x1f]);
         // header(2) + bit_depth(1) + pal block(1 + (1+4) + (1+2) = 9) = 12, then u16 tile_count
         assert_eq!(&b[12..14], &[2, 0]);
         // ...and the payload ENDS with the char words: no screen_size byte, no tilemap.
@@ -876,16 +1012,114 @@ mod tests {
             SourcePayload::Bg(sample_bg()),
             SourcePayload::M7(sample_m7()),
             SourcePayload::Obj(sample_obj()),
+            SourcePayload::Sample(sample_sample()),
         ] {
             assert_eq!(SourcePayload::decode(&p.encode()).unwrap(), p);
         }
     }
 
+    // Stored payloads from every earlier version keep decoding after a bump.
+    #[test]
+    fn decode_accepts_every_earlier_payload_version() {
+        let mut v2 = SourcePayload::Sheet(sample_sheet()).encode();
+        v2[0] = 2;
+        assert_eq!(
+            SourcePayload::decode(&v2).unwrap(),
+            SourcePayload::Sheet(sample_sheet())
+        );
+        let mut v1 = SourcePayload::Bg(sample_bg()).encode();
+        v1[0] = 1;
+        assert_eq!(
+            SourcePayload::decode(&v1).unwrap(),
+            SourcePayload::Bg(sample_bg())
+        );
+        let mut future = SourcePayload::Bg(sample_bg()).encode();
+        future[0] = PAYLOAD_VERSION + 1;
+        assert_eq!(
+            SourcePayload::decode(&future),
+            Err(PayloadError::BadVersion(PAYLOAD_VERSION + 1))
+        );
+    }
+
     #[test]
     fn payload_self_describes_version_and_kind() {
-        assert_eq!(SourcePayload::Bg(sample_bg()).encode()[..2], [2, 0]);
-        assert_eq!(SourcePayload::M7(sample_m7()).encode()[..2], [2, 1]);
-        assert_eq!(SourcePayload::Obj(sample_obj()).encode()[..2], [2, 2]);
+        assert_eq!(SourcePayload::Bg(sample_bg()).encode()[..2], [3, 0]);
+        assert_eq!(SourcePayload::M7(sample_m7()).encode()[..2], [3, 1]);
+        assert_eq!(SourcePayload::Obj(sample_obj()).encode()[..2], [3, 2]);
+        assert_eq!(SourcePayload::Sample(sample_sample()).encode()[..2], [3, 4]);
+    }
+
+    // PPU-136: a sample is a first-class source payload — encoded as
+    // has_loop + (loop_block) + block_count + raw BRR bytes, with and
+    // without a loop point.
+    #[test]
+    fn sample_roundtrips_with_and_without_loop() {
+        let looped = sample_sample();
+        let p = SourcePayload::Sample(looped.clone());
+        let b = p.encode();
+        // version, kind=4, has_loop=1, loop_block=1 LE, block_count=2 LE
+        assert_eq!(&b[..7], &[3, 4, 1, 1, 0, 2, 0]);
+        assert_eq!(&b[7..], &looped.brr[..]);
+        assert_eq!(SourcePayload::decode(&b).unwrap(), p);
+
+        let unlooped = SampleSource {
+            brr: sample_brr_two_blocks(),
+            loop_block: None,
+        };
+        let p2 = SourcePayload::Sample(unlooped.clone());
+        let b2 = p2.encode();
+        // version, kind=4, has_loop=0, block_count=2 LE
+        assert_eq!(&b2[..5], &[3, 4, 0, 2, 0]);
+        assert_eq!(&b2[5..], &unlooped.brr[..]);
+        assert_eq!(SourcePayload::decode(&b2).unwrap(), p2);
+    }
+
+    // PPU-136: same strict codec discipline as the existing kinds — every
+    // field boundary is checked, block_count is bounds-checked before any
+    // allocation, and truncation/trailing bytes reject.
+    #[test]
+    fn sample_decode_is_strict() {
+        let base = SourcePayload::Sample(sample_sample()).encode();
+
+        let mut bad_has_loop = base.clone();
+        bad_has_loop[2] = 2;
+        assert_eq!(
+            SourcePayload::decode(&bad_has_loop),
+            Err(PayloadError::BadParam("has_loop"))
+        );
+
+        let mut bad_loop_block = base.clone();
+        bad_loop_block[3] = 2; // loop_block lo byte: now == block_count (2)
+        assert_eq!(
+            SourcePayload::decode(&bad_loop_block),
+            Err(PayloadError::BadParam("loop_block"))
+        );
+
+        assert_eq!(
+            SourcePayload::decode(&[3, 4, 0, 0, 0]),
+            Err(PayloadError::BadParam("block_count"))
+        );
+
+        let mut huge_block_count = vec![3u8, 4, 0];
+        huge_block_count.extend_from_slice(&7282u16.to_le_bytes());
+        assert_eq!(
+            SourcePayload::decode(&huge_block_count),
+            Err(PayloadError::BadParam("block_count"))
+        );
+
+        let mut truncated = base.clone();
+        truncated.truncate(truncated.len() - 1);
+        assert_eq!(
+            SourcePayload::decode(&truncated),
+            Err(PayloadError::Truncated)
+        );
+
+        let mut trailing = base;
+        trailing.push(0);
+        assert_eq!(
+            SourcePayload::decode(&trailing),
+            Err(PayloadError::TrailingBytes)
+        );
     }
 
     #[test]
@@ -900,7 +1134,7 @@ mod tests {
         };
         let b = SourcePayload::Bg(s).encode();
         // version, kind, bit_depth, tile_size, pal_count, pal0 len, color lo, hi
-        assert_eq!(&b[..8], &[2, 0, 2, 8, 1, 1, 0x1f, 0x00]);
+        assert_eq!(&b[..8], &[3, 0, 2, 8, 1, 1, 0x1f, 0x00]);
         assert_eq!(&b[8..10], &[1, 0]); // u16 LE tile_count = 1
         assert_eq!(b[10 + 16], 0); // screen_size byte after 8 char words
         assert_eq!(b.len(), 10 + 16 + 1 + 0x400 * 2);
@@ -930,8 +1164,8 @@ mod tests {
     fn decode_rejects_garbage() {
         assert_eq!(SourcePayload::decode(&[]), Err(PayloadError::Truncated));
         assert_eq!(
-            SourcePayload::decode(&[3, 0]),
-            Err(PayloadError::BadVersion(3))
+            SourcePayload::decode(&[4, 0]),
+            Err(PayloadError::BadVersion(4))
         );
         assert_eq!(
             SourcePayload::decode(&[1, 9]),
@@ -1098,10 +1332,21 @@ mod tests {
         assert_eq!("m7".parse(), Ok(SourceKind::M7));
         assert_eq!("obj".parse(), Ok(SourceKind::Obj));
         assert_eq!("sheet".parse(), Ok(SourceKind::Sheet));
+        assert_eq!("sample".parse(), Ok(SourceKind::Sample));
         assert_eq!(
             "tilesheet".parse::<SourceKind>(),
             Err("unknown source kind 'tilesheet'".to_string())
         );
+    }
+
+    // PPU-136: samples are PCM, not images — convert_source refuses the kind
+    // and points callers at convertSample.
+    #[test]
+    fn convert_source_rejects_sample_kind() {
+        let rgba = vec![0u8; 8 * 8 * 4];
+        let err = convert_source(SourceKind::Sample, &ConvertOptions::default(), &rgba, 8, 8)
+            .unwrap_err();
+        assert!(err.contains("convertSample"), "unexpected error: {err}");
     }
 
     // PPU-93: the pure conversion entry accepts the sheet kind and carries the
