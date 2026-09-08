@@ -57,6 +57,11 @@ pub use import_m7::*;
 mod source;
 pub use source::*;
 
+// M12/audio: headless S-DSP core (BRR/Gaussian/ADSR/echo), ported from
+// snes-apu. See `dsp/mod.rs` for the license notice and register map.
+mod dsp;
+pub use dsp::*;
+
 /// Native SNES PPU output dimensions (the only resolution v1 targets).
 pub const WIDTH: usize = 256;
 pub const HEIGHT: usize = 224;
