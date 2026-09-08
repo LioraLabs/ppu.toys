@@ -11,7 +11,7 @@ use piccolo::{
     StaticError, Table, Value,
 };
 
-use crate::{rgb15, LineTable, LineTableBuilder, LineTableRow, Memory, HEIGHT};
+use crate::{rgb15, Dsp, LineTable, LineTableBuilder, LineTableRow, Memory, HEIGHT};
 
 /// Per-frame placement diagnostics surfaced to the UI (assets panel/inspector).
 #[derive(Clone, Debug, serde::Serialize)]
@@ -28,6 +28,65 @@ pub enum ImportBudget {
         expected: String,
         found: String,
     },
+}
+
+/// L/R pair for a signed 8-bit volume-style register (VOL, MVOL, EVOL).
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DspLr {
+    pub l: i8,
+    pub r: i8,
+}
+
+/// A voice's ADSR1/ADSR2 fields, decoded to their raw 4/3/3/5-bit ranges.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DspAdsr {
+    pub a: u8,
+    pub d: u8,
+    pub s: u8,
+    pub r: u8,
+}
+
+/// The echo unit's tunable fields (buffer position is derived from `delay`,
+/// not surfaced here — see `write_dsp_regs`'s ESA formula).
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DspEchoView {
+    pub delay: u8,
+    pub feedback: i8,
+    pub fir: [i8; 8],
+}
+
+/// One voice's full register state, decoded for the UI inspector.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DspVoiceView {
+    pub sample: u8,
+    pub pitch: u16,
+    pub vol: DspLr,
+    pub adsr: DspAdsr,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gain: Option<u8>,
+    pub noise: bool,
+    pub pmod: bool,
+    pub echo: bool,
+    pub envx: u8,
+    pub outx: i8,
+    pub ended: bool,
+}
+
+/// A full snapshot of the live S-DSP registers, decoded for the UI inspector
+/// (M12/audio) — see [`LuaEngine::dsp_view`].
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DspView {
+    pub voices: [DspVoiceView; 8],
+    pub mvol: DspLr,
+    pub evol: DspLr,
+    pub echo: DspEchoView,
+    pub noise_clock: u8,
+    pub mute: bool,
 }
 
 /// Compile/runtime error surfaced to the editor, matching the TS `LuaError` shape.
@@ -73,6 +132,19 @@ pub struct LuaEngine {
     /// Controller state for the next frame: a PAD_* bitmask mirrored into the
     /// Lua `pad` table before frame() runs. JS owns the key/gamepad mapping.
     pad: u16,
+    /// The live S-DSP core (M12/audio). Survives recompiles and `Memory::new()`
+    /// resets — only `render_frame_audio` writes to it.
+    dsp: Dsp,
+    /// The 64 KB ARAM the DSP renders from/into. Boxed so `LuaEngine` doesn't
+    /// carry a 64 KB inline array. Survives recompiles; only the `aram[]`
+    /// Lua table (drained once per frame) and the echo unit itself write here.
+    aram: Box<[u8; 0x10000]>,
+    /// The most recently rendered frame's interleaved stereo audio (L,R per
+    /// sample). Empty before the first `frame()`.
+    audio: Vec<i16>,
+    /// Fractional-sample accumulator for the 32000/60.0988 span length (see
+    /// `render_frame_audio`): exact over time, no drift.
+    audio_acc: u32,
 }
 
 /// The resolved result of one init-stage `dma(name, opts?)` call. Replay
@@ -115,6 +187,16 @@ impl LuaEngine {
             let (store, rec) = (source_store.clone(), dma.clone());
             lua.enter(move |ctx| install_dma(ctx, store, rec));
         }
+        // DSL power-on: ADSR mode (gain nil) on all 8 voices — see the
+        // `Dsp::new()` state doc comment (a fresh Dsp otherwise leaves ADSR1
+        // at 0, which is GAIN mode with gain 0) — and the sample directory
+        // pinned at ARAM 0x0100 (DIR = 0x01; the DSL never exposes DIR).
+        let mut dsp = Dsp::new();
+        for v in 0..8u8 {
+            dsp.write((v << 4) | 0x05, 0x80);
+        }
+        dsp.write(0x5d, 0x01);
+        lua.enter(|ctx| seed_dsp_tables(ctx, &dsp));
         LuaEngine {
             lua: Rc::new(RefCell::new(lua)),
             frame_fn: None,
@@ -127,6 +209,10 @@ impl LuaEngine {
             program_sources: Vec::new(),
             source_dirty: false,
             pad: 0,
+            dsp,
+            aram: Box::new([0u8; 0x10000]),
+            audio: Vec::new(),
+            audio_acc: 0,
         }
     }
 
@@ -169,6 +255,26 @@ impl LuaEngine {
         &mut self.memory
     }
 
+    /// The most recently rendered frame's interleaved stereo audio (L,R per
+    /// sample, [`Dsp::SAMPLE_RATE`]). Empty before the first `frame()`. An
+    /// errored `frame()` returns before the audio step (see
+    /// `render_frame_audio`), so this still holds the *previous* clean
+    /// frame's span — the web seam must not re-emit it as new audio.
+    pub fn audio(&self) -> &[i16] {
+        &self.audio
+    }
+
+    /// The live S-DSP core — read-only; all writes go through the `dsp`/
+    /// `voice[]` DSL tables, flushed by `render_frame_audio`.
+    pub fn dsp(&self) -> &Dsp {
+        &self.dsp
+    }
+
+    /// A decoded snapshot of the live DSP registers for the UI inspector.
+    pub fn dsp_view(&self) -> DspView {
+        decode_dsp_view(&self.dsp)
+    }
+
     /// Single-file sugar for [`Self::set_sources`]; the chunk keeps its
     /// historical name `"source"` so existing diagnostics are unchanged.
     pub fn set_source(&mut self, src: &str) -> Result<(), LuaError> {
@@ -184,6 +290,9 @@ impl LuaEngine {
     pub fn set_sources(&mut self, files: &[(&str, &str)]) -> Result<(), LuaError> {
         let mut lua = Lua::core();
         lua.enter(install_bindings);
+        // Reseed voice[]/dsp from the LIVE registers (not reset) — a recompile
+        // must not silence a sounding voice. See `seed_dsp_tables`.
+        lua.enter(|ctx| seed_dsp_tables(ctx, &self.dsp));
         // dma() records into a FRESH recorder, active for the init window
         // (top-level chunks + init()). Committed to the engine only on the
         // swap-on-success below, so a failed recompile keeps the previous
@@ -381,7 +490,79 @@ impl LuaEngine {
         if let Some(e) = err_sink.borrow_mut().take() {
             return Err(e);
         }
+
+        // M12/audio: flush voice[]/dsp/aram[] to the DSP and render this
+        // frame's span. Only reached on a clean frame — an errored frame
+        // (returned above) leaves the previous `audio()` untouched.
+        self.render_frame_audio();
+
         Ok(lt)
+    }
+
+    /// Drain `aram[]`, write `voice[]`/`dsp` to the DSP registers wholesale,
+    /// flush KOF then KON, render this frame's audio span, and republish
+    /// `voice[n].envx/.outx/.ended` for the next `frame()` to read. Runs once
+    /// per `frame()`, after hooks and the sticky-global restore. (The timer
+    /// milestone turns this into a segment walker with timer hooks — the
+    /// steps below stay distinct blocks for that reason.)
+    fn render_frame_audio(&mut self) {
+        {
+            let mut l = self.lua.borrow_mut();
+            l.enter(|ctx| {
+                // 1. Drain aram[] pokes. A poke lands ONCE — the table is
+                // never rebuilt from `self.aram`, so the echo unit's own
+                // writes (and anything else living in ARAM) persist across
+                // frames exactly like real hardware.
+                if let Value::Table(a) = ctx.get_global("aram") {
+                    let mut keys = Vec::new();
+                    for (k, v) in a {
+                        if let Some(addr) = k.to_int() {
+                            if let Some(byte) = v.to_int() {
+                                if (0..=0xffff).contains(&addr) {
+                                    self.aram[addr as usize] = (byte & 0xff) as u8;
+                                }
+                            }
+                            keys.push(k);
+                        }
+                    }
+                    for k in keys {
+                        a.set(ctx, k, Value::Nil).unwrap();
+                    }
+                }
+
+                // 2. voice[]/dsp -> DSP registers, wholesale and idempotent.
+                // Never touches ENDX (0x7c) or the read-only ENVX/OUTX (n8/n9).
+                write_dsp_regs(ctx, &mut self.dsp);
+
+                // 3. Flush KOF then KON — KON LAST, so a koff+kon in the same
+                // frame restarts the voice (matches the Dsp's KON-deferred-to-
+                // next-render-tick contract: a KOF issued after a still-
+                // pending KON is applied after it, i.e. a silent restart).
+                let kof = ctx.get_global("__dsp_koff").to_int().unwrap_or(0) as u8;
+                self.dsp.write(0x5c, kof);
+                ctx.set_global("__dsp_koff", 0).unwrap();
+                let kon = ctx.get_global("__dsp_kon").to_int().unwrap_or(0) as u8;
+                self.dsp.write(0x4c, kon);
+                ctx.set_global("__dsp_kon", 0).unwrap();
+            });
+        }
+
+        // 4. Render this frame's span. Exact 32000/60.0988 accumulator:
+        // 320_000_000 / 600_988 == 32000 / 60.0988, so `n` alternates 532/533
+        // and drifts by less than one sample over any run length.
+        self.audio_acc += 320_000_000;
+        let n = (self.audio_acc / 600_988) as usize;
+        self.audio_acc %= 600_988;
+        self.audio.resize(n * 2, 0);
+        self.dsp.render(&mut self.aram, &mut self.audio);
+
+        // 5. Republish envx/outx/ended so the NEXT frame() observes this
+        // frame's envelope/output/end-of-sample state.
+        {
+            let view = decode_dsp_view(&self.dsp);
+            let mut l = self.lua.borrow_mut();
+            l.enter(|ctx| publish_voice_readbacks(ctx, &view));
+        }
     }
 }
 
@@ -668,6 +849,301 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     ctx.set_global("win", win).unwrap();
     ctx.set_global("__win_base", Table::new(&ctx)).unwrap();
     sync_win(ctx, &[0u8; 11]); // power-on: every window register is zero
+
+    // M12/audio: `aram[addr] = byte` poke surface, drained (once) at the
+    // start of `render_frame_audio` — never rebuilt, so echo-unit writes
+    // persist. `voice[0..7]`/`dsp` are NOT seeded here — they come from the
+    // live DSP registers via `seed_dsp_tables`, called separately right
+    // after `install_bindings` so a recompile can't silence a sounding voice.
+    ctx.set_global("aram", Table::new(&ctx)).unwrap();
+    // Hidden KON/KOFF accumulators: `kon`/`koff` OR bits in; flushed and
+    // zeroed by `render_frame_audio` each frame.
+    ctx.set_global("__dsp_kon", 0).unwrap();
+    ctx.set_global("__dsp_koff", 0).unwrap();
+
+    // kon(...)/koff(...): edge-triggered voice-number varargs, callable from
+    // frame(), hooks, and init(). Two calls to the same voice in one frame
+    // collapse to the same bit (a no-op repeat), which is exactly the "kon
+    // twice == kon once" contract. Byte-identical apart from the name/global,
+    // so both are built from the same loop.
+    for (name, global) in [("kon", "__dsp_kon"), ("koff", "__dsp_koff")] {
+        let cb = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
+            let mut mask = 0i64;
+            for i in 0..stack.len() {
+                match stack.get(i).to_int() {
+                    Some(n) if (0..=7).contains(&n) => mask |= 1 << n,
+                    _ => return Err(lua_err(ctx, &format!("{name}: voice numbers must be 0..7"))),
+                }
+            }
+            stack.clear();
+            let cur = ctx.get_global(global).to_int().unwrap_or(0);
+            ctx.set_global(global, cur | mask).unwrap();
+            Ok(CallbackReturn::Return)
+        });
+        ctx.set_global(name, cb).unwrap();
+    }
+}
+
+/// Decode the live DSP registers into a [`DspView`] — the ONE place that
+/// knows the S-DSP register layout. [`LuaEngine::dsp_view`] returns this
+/// directly; `seed_dsp_tables` walks it into the Lua `voice`/`dsp` tables.
+fn decode_dsp_view(dsp: &Dsp) -> DspView {
+    let endx = dsp.read(0x7c);
+    let voices = std::array::from_fn(|n| {
+        let base = (n as u8) << 4;
+        let adsr1 = dsp.read(base | 0x05);
+        let adsr2 = dsp.read(base | 0x06);
+        DspVoiceView {
+            sample: dsp.read(base | 0x04),
+            pitch: dsp.read(base | 0x02) as u16 | (((dsp.read(base | 0x03) & 0x3f) as u16) << 8),
+            vol: DspLr {
+                l: dsp.read(base) as i8,
+                r: dsp.read(base | 0x01) as i8,
+            },
+            adsr: DspAdsr {
+                a: adsr1 & 0x0f,
+                d: (adsr1 >> 4) & 0x07,
+                s: adsr2 >> 5,
+                r: adsr2 & 0x1f,
+            },
+            gain: (adsr1 & 0x80 == 0).then(|| dsp.read(base | 0x07)),
+            noise: dsp.read(0x3d) & (1 << n) != 0,
+            pmod: dsp.read(0x2d) & (1 << n) != 0,
+            echo: dsp.read(0x4d) & (1 << n) != 0,
+            envx: dsp.read(base | 0x08),
+            outx: dsp.read(base | 0x09) as i8,
+            ended: endx & (1 << n) != 0,
+        }
+    });
+    let flg = dsp.read(0x6c);
+    DspView {
+        voices,
+        mvol: DspLr {
+            l: dsp.read(0x0c) as i8,
+            r: dsp.read(0x1c) as i8,
+        },
+        evol: DspLr {
+            l: dsp.read(0x2c) as i8,
+            r: dsp.read(0x3c) as i8,
+        },
+        echo: DspEchoView {
+            delay: dsp.read(0x7d) & 0x0f,
+            feedback: dsp.read(0x0d) as i8,
+            fir: std::array::from_fn(|i| dsp.read(((i as u8) << 4) | 0x0f) as i8),
+        },
+        noise_clock: flg & 0x1f,
+        mute: flg & 0x40 != 0,
+    }
+}
+
+/// Seed `voice[0..7]`/`dsp` from the LIVE DSP register state — called right
+/// after `install_bindings` in both `LuaEngine::new` and `set_sources`, so
+/// the DSL tables always start as a faithful decode of whatever the chip
+/// currently holds (a fresh `Dsp` after the ADSR1=0x80 power-on writes, or
+/// the still-sounding registers across a recompile). Also republishes
+/// envx/outx/ended (see `publish_voice_readbacks`).
+fn seed_dsp_tables(ctx: piccolo::Context<'_>, dsp: &Dsp) {
+    let view = decode_dsp_view(dsp);
+    let voices = Table::new(&ctx);
+    for (n, vv) in view.voices.iter().enumerate() {
+        let v = Table::new(&ctx);
+        v.set(ctx, "sample", vv.sample as i64).unwrap();
+        v.set(ctx, "pitch", vv.pitch as i64).unwrap();
+
+        let vol = Table::new(&ctx);
+        vol.set(ctx, "l", vv.vol.l as i64).unwrap();
+        vol.set(ctx, "r", vv.vol.r as i64).unwrap();
+        v.set(ctx, "vol", vol).unwrap();
+
+        let adsr = Table::new(&ctx);
+        adsr.set(ctx, "a", vv.adsr.a as i64).unwrap();
+        adsr.set(ctx, "d", vv.adsr.d as i64).unwrap();
+        adsr.set(ctx, "s", vv.adsr.s as i64).unwrap();
+        adsr.set(ctx, "r", vv.adsr.r as i64).unwrap();
+        v.set(ctx, "adsr", adsr).unwrap();
+
+        v.set(
+            ctx,
+            "gain",
+            match vv.gain {
+                Some(g) => Value::Integer(g as i64),
+                None => Value::Nil,
+            },
+        )
+        .unwrap();
+
+        v.set(ctx, "noise", vv.noise).unwrap();
+        v.set(ctx, "pmod", vv.pmod).unwrap();
+        v.set(ctx, "echo", vv.echo).unwrap();
+
+        voices.set(ctx, n as i64, v).unwrap();
+    }
+    ctx.set_global("voice", voices).unwrap();
+
+    let d = Table::new(&ctx);
+    let mvol = Table::new(&ctx);
+    mvol.set(ctx, "l", view.mvol.l as i64).unwrap();
+    mvol.set(ctx, "r", view.mvol.r as i64).unwrap();
+    d.set(ctx, "mvol", mvol).unwrap();
+    let evol = Table::new(&ctx);
+    evol.set(ctx, "l", view.evol.l as i64).unwrap();
+    evol.set(ctx, "r", view.evol.r as i64).unwrap();
+    d.set(ctx, "evol", evol).unwrap();
+
+    let echo = Table::new(&ctx);
+    echo.set(ctx, "feedback", view.echo.feedback as i64)
+        .unwrap();
+    echo.set(ctx, "delay", view.echo.delay as i64).unwrap();
+    let fir = Table::new(&ctx);
+    for (i, c) in view.echo.fir.iter().enumerate() {
+        fir.set(ctx, i as i64 + 1, *c as i64).unwrap();
+    }
+    echo.set(ctx, "fir", fir).unwrap();
+    d.set(ctx, "echo", echo).unwrap();
+
+    d.set(ctx, "noise_clock", view.noise_clock as i64).unwrap();
+    d.set(ctx, "mute", view.mute).unwrap();
+    ctx.set_global("dsp", d).unwrap();
+
+    publish_voice_readbacks(ctx, &view);
+}
+
+/// Publish `voice[n].envx/.outx/.ended` from a decoded [`DspView`]. Called at
+/// seeding and at the end of every `render_frame_audio`, so the NEXT
+/// `frame()`/hook sees this frame's envelope/output/end-of-sample state.
+/// `ended` mirrors raw ENDX, which also pulses on a LOOPING sample's END
+/// block (real hardware behavior, not a non-looping-only "finished" flag).
+fn publish_voice_readbacks(ctx: piccolo::Context<'_>, view: &DspView) {
+    let Value::Table(voices) = ctx.get_global("voice") else {
+        return;
+    };
+    for (n, vv) in view.voices.iter().enumerate() {
+        let Value::Table(v) = voices.get(ctx, n as i64) else {
+            continue;
+        };
+        v.set(ctx, "envx", vv.envx as i64).unwrap();
+        v.set(ctx, "outx", vv.outx as i64).unwrap();
+        v.set(ctx, "ended", vv.ended).unwrap();
+    }
+}
+
+/// Write `voice[0..7]`/`dsp` back to the DSP registers, wholesale and
+/// idempotent — the DSL tables are the single source of truth, rebuilt into
+/// registers every frame exactly like `write_state` does for the PPU side.
+/// Never writes ENDX (0x7c) or the read-only ENVX/OUTX (n8/n9); KON/KOFF are
+/// flushed separately by the caller (`render_frame_audio`), after this.
+fn write_dsp_regs(ctx: piccolo::Context<'_>, dsp: &mut Dsp) {
+    fn geti<'gc>(ctx: piccolo::Context<'gc>, t: Table<'gc>, k: &'static str) -> Option<i64> {
+        t.get(ctx, k).to_int()
+    }
+    // Rule: unsigned fields mask/wrap to their register width (sample wraps
+    // mod 256, pitch/noise_clock/gain mask their bit width); signed fields
+    // (vol/feedback/FIR) and delay clamp to their range instead — so -200
+    // lands at -128, not wrapping to +56.
+    let clamp_i8 = |v: i64| -> u8 { v.clamp(-128, 127) as i8 as u8 };
+
+    let mut non = 0u8;
+    let mut pmon = 0u8;
+    let mut eon = 0u8;
+
+    if let Value::Table(voices) = ctx.get_global("voice") {
+        for n in 0i64..8 {
+            let Value::Table(v) = voices.get(ctx, n) else {
+                continue;
+            };
+            let base = (n as u8) << 4;
+
+            if v.get(ctx, "noise").to_bool() {
+                non |= 1 << n;
+            }
+            if v.get(ctx, "pmod").to_bool() {
+                pmon |= 1 << n;
+            }
+            if v.get(ctx, "echo").to_bool() {
+                eon |= 1 << n;
+            }
+
+            dsp.write(base | 0x04, geti(ctx, v, "sample").unwrap_or(0) as u8);
+
+            let pitch = geti(ctx, v, "pitch").unwrap_or(0) & 0x3fff;
+            dsp.write(base | 0x02, (pitch & 0xff) as u8);
+            dsp.write(base | 0x03, (pitch >> 8) as u8);
+
+            if let Value::Table(vol) = v.get(ctx, "vol") {
+                dsp.write(base, clamp_i8(geti(ctx, vol, "l").unwrap_or(0)));
+                dsp.write(base | 0x01, clamp_i8(geti(ctx, vol, "r").unwrap_or(0)));
+            } else {
+                dsp.write(base, 0);
+                dsp.write(base | 0x01, 0);
+            }
+
+            let (a, d, s, r) = if let Value::Table(adsr) = v.get(ctx, "adsr") {
+                (
+                    geti(ctx, adsr, "a").unwrap_or(0) & 0x0f,
+                    geti(ctx, adsr, "d").unwrap_or(0) & 0x07,
+                    geti(ctx, adsr, "s").unwrap_or(0) & 0x07,
+                    geti(ctx, adsr, "r").unwrap_or(0) & 0x1f,
+                )
+            } else {
+                (0, 0, 0, 0)
+            };
+            let gain = geti(ctx, v, "gain");
+            let adsr1 = match gain {
+                Some(_) => ((d as u8) << 4) | (a as u8), // GAIN mode: bit7 clear
+                None => 0x80 | ((d as u8) << 4) | (a as u8), // ADSR mode: bit7 set
+            };
+            dsp.write(base | 0x05, adsr1);
+            dsp.write(base | 0x06, ((s as u8) << 5) | (r as u8));
+            if let Some(g) = gain {
+                dsp.write(base | 0x07, (g & 0xff) as u8);
+            }
+        }
+    }
+    dsp.write(0x3d, non);
+    dsp.write(0x2d, pmon);
+    dsp.write(0x4d, eon);
+
+    if let Value::Table(d) = ctx.get_global("dsp") {
+        if let Value::Table(mvol) = d.get(ctx, "mvol") {
+            dsp.write(0x0c, clamp_i8(geti(ctx, mvol, "l").unwrap_or(0)));
+            dsp.write(0x1c, clamp_i8(geti(ctx, mvol, "r").unwrap_or(0)));
+        }
+        if let Value::Table(evol) = d.get(ctx, "evol") {
+            dsp.write(0x2c, clamp_i8(geti(ctx, evol, "l").unwrap_or(0)));
+            dsp.write(0x3c, clamp_i8(geti(ctx, evol, "r").unwrap_or(0)));
+        }
+
+        let mut delay = 0i64;
+        if let Value::Table(echo) = d.get(ctx, "echo") {
+            dsp.write(0x0d, clamp_i8(geti(ctx, echo, "feedback").unwrap_or(0)));
+            if let Value::Table(fir) = echo.get(ctx, "fir") {
+                for i in 0i64..8 {
+                    let c = fir.get(ctx, i + 1).to_int().unwrap_or(0);
+                    dsp.write(((i as u8) << 4) | 0x0f, clamp_i8(c));
+                }
+            } else {
+                for i in 0i64..8 {
+                    dsp.write(((i as u8) << 4) | 0x0f, 0);
+                }
+            }
+            delay = geti(ctx, echo, "delay").unwrap_or(0).clamp(0, 15);
+        }
+        dsp.write(0x7d, delay as u8);
+        // Echo RAM sits at the TOP of ARAM: delay 0 is the documented "no
+        // echo writes" sentinel (ESA 0xff); every other delay ends its
+        // buffer exactly at 0x10000 (ESA*0x100 + delay*0x800 == 0x10000).
+        let esa = if delay == 0 {
+            0xff
+        } else {
+            (0x100 - delay * 8) as u8
+        };
+        dsp.write(0x6d, esa);
+
+        let noise_clock = geti(ctx, d, "noise_clock").unwrap_or(0) & 0x1f;
+        let mute = d.get(ctx, "mute").to_bool();
+        let flg = ((mute as u8) << 6) | (((delay == 0) as u8) << 5) | (noise_clock as u8);
+        dsp.write(0x6c, flg);
+    }
 }
 
 /// Register values are integers to the chip but numbers to the author —

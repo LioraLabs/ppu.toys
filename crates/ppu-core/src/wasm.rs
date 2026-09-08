@@ -160,6 +160,19 @@ impl PpuCore {
         serde_wasm_bindgen::to_value(self.engine.import_reports()).map_err(Into::into)
     }
 
+    /// The last frame's interleaved stereo audio (L,R per sample, 32000 Hz).
+    /// Empty before the first `frame()` (M12/audio).
+    pub fn audio(&self) -> Vec<i16> {
+        self.engine.audio().to_vec()
+    }
+
+    /// A decoded snapshot of the live S-DSP registers for the UI inspector
+    /// (M12/audio).
+    #[wasm_bindgen(js_name = dspState)]
+    pub fn dsp_state(&self) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(&self.engine.dsp_view()).map_err(Into::into)
+    }
+
     /// Controller bitmask for the next frame (bit order: LuaEngine::PAD_NAMES).
     #[wasm_bindgen(js_name = setPad)]
     pub fn set_pad(&mut self, mask: u16) {
