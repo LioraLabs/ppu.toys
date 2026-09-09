@@ -270,3 +270,24 @@ play any audio at all.
 
 See also: [Sources](sources.md), [`dma()`](dma.md), [Controller input](pad.md),
 [Scanline effects](scanlines.md).
+
+## Live mixer
+
+The Studio Audio panel edits sound while the song keeps running. Each of the eight
+voices has volume trims, semitone transposition, echo, mute, and solo. Trims and
+transposition follow the song's changing notes; mute and solo leave the envelopes
+and sequencer running.
+
+Select a voice for envelope, sample, and advanced controls. Pin a field to keep
+its value across song writes; release it to follow the song again. Sample changes
+take effect on the next note. Trigger and Release note send one key event while
+playing. Raw signed volume values retain phase inversion. Master/echo trims,
+delay, feedback, noise clock, and FIR taps are below the voice controls. Echo delay
+changes that overlap loaded samples are rejected.
+
+Adjustments are live until **Save mix** writes `audio.mix.json` into the toy's
+files. This file travels with exports and published toys; the core reads it as
+mixer settings, never as Lua. Saving only the mix does not recompile the song or
+restart its timers. **Load saved** discards live changes; **Release all** clears
+all adjustments (save afterward to persist that reset). Opening another toy
+clears the previous toy's live adjustments.

@@ -112,3 +112,16 @@ fn float_register_values_floor_instead_of_being_dropped() {
     assert_eq!((lt.rows[0].wh0, lt.rows[0].wh1), (10, 200));
     assert_eq!(e.memory().vram[0x0800], 0x201f);
 }
+
+#[test]
+fn bg3_priority_poke_survives_scanline_state_restoration() {
+    let mut e = LuaEngine::new();
+    e.set_source(
+        "function frame() bg3_priority=true hdma(40,80,function(y) bg3_priority=false end) end",
+    )
+    .unwrap();
+    let lt = e.frame(0.0, 0).unwrap();
+    assert!(lt.rows[0].bg3_priority);
+    assert!(!lt.rows[40].bg3_priority);
+    assert!(lt.rows[81].bg3_priority);
+}

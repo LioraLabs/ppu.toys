@@ -63,3 +63,21 @@ sub screens, color math, VRAM, CGRAM, OAM, and per-scanline register changes.
 Modes 5 and 6, interlace, overscan, and read-only counter registers are not
 modelled yet. Sound is modelled too: the S-DSP's eight voices, BRR samples,
 timers, and echo — see [Audio](audio.md).
+
+## Register spreadsheet
+
+The Studio Registers panel shows all 40 resolved PPU registers at the selected
+scanline. Edit the hex or decimal cell, or click a bit, to write a frame-wide
+poke. Enter and Tab apply, Escape cancels, and the up/down arrows move between
+rows. Scroll fields accept 13-bit values; Mode 7 matrices accept 16-bit signed
+Q8 bit patterns (`FF00` means `-1.0`). COLDATA is a resolved 15-bit color.
+Disabled bits are unused or not modelled; raw value entry still follows the
+core's masking rules. The selected scanline changes the readout, not the poke's
+scope. Use the Backgrounds or Mode 7 panel for scanline keyframes.
+
+Search by address, register, or Lua field; filter by subsystem or existing pokes.
+Hover the decoded fields or bit controls for their full meaning. The Poke column
+marks registers with pokes and lets you reset them. Cells and bit controls
+always use the current live register value. Values are saved in `pokes.lua`; `apply_pokes()` must run in
+`frame()`. Later script writes win, so move `apply_pokes()` after them if you want
+the pokes to take precedence. `bg3_priority` now exposes BGMODE bit 3 in Lua.

@@ -480,3 +480,6 @@ mod tests {
         assert_eq!(mosaic.value, 0x55);
     }
 }
+
+mod audio_mix;
+pub use audio_mix::{AudioMix, VoiceMix, AUDIO_MIX_FILE};

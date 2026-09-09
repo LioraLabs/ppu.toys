@@ -11,7 +11,9 @@ use piccolo::{
     StaticError, Table, Value,
 };
 
-use crate::{rgb15, Dsp, LineTable, LineTableBuilder, LineTableRow, Memory, HEIGHT};
+use crate::{
+    rgb15, AudioMix, Dsp, LineTable, LineTableBuilder, LineTableRow, Memory, AUDIO_MIX_FILE, HEIGHT,
+};
 
 /// Per-frame placement diagnostics surfaced to the UI (assets panel/inspector).
 #[derive(Clone, Debug, serde::Serialize)]
@@ -172,6 +174,11 @@ pub struct LuaEngine {
     /// re-serializes the table and flags a change for the host to persist.
     sram_json: String,
     sram_dirty: bool,
+    saved_mix: AudioMix,
+    live_mix: Option<AudioMix>,
+    unmixed_dsp: Option<DspView>,
+    mix_kon: u8,
+    mix_koff: u8,
 }
 
 /// One `timer(n, div, fn)` registration, resolved to half-sample (`h`) units
@@ -288,7 +295,7 @@ impl LuaEngine {
             lua.enter(move |ctx| install_dma(ctx, store, rec));
         }
         let dsp = power_on_dsp();
-        lua.enter(|ctx| seed_dsp_tables(ctx, &dsp));
+        lua.enter(|ctx| seed_dsp_tables(ctx, &dsp, None));
         LuaEngine {
             lua: Rc::new(RefCell::new(lua)),
             frame_fn: None,
@@ -308,6 +315,11 @@ impl LuaEngine {
             timers: Vec::new(),
             sram_json: "{}".to_string(),
             sram_dirty: false,
+            saved_mix: AudioMix::default(),
+            live_mix: None,
+            unmixed_dsp: None,
+            mix_kon: 0,
+            mix_koff: 0,
         }
     }
 
@@ -410,11 +422,54 @@ impl LuaEngine {
     /// has run (`main.lua` is convention, not special-cased); `init()` runs
     /// once if present. Errors carry `{file, line?, message}`.
     pub fn set_sources(&mut self, files: &[(&str, &str)]) -> Result<(), LuaError> {
+        let saved_mix = AudioMix::parse(
+            files
+                .iter()
+                .find(|(name, _)| *name == AUDIO_MIX_FILE)
+                .map(|(_, s)| *s)
+                .unwrap_or("{}"),
+        )
+        .map_err(|message| LuaError {
+            message,
+            line: None,
+            file: Some(AUDIO_MIX_FILE.into()),
+        })?;
+        // Saving only the mix must preserve the VM, timer phase, and sounding notes.
+        if !self.source_dirty
+            && !self.program_sources.is_empty()
+            && files.iter().copied().ne(self
+                .program_sources
+                .iter()
+                .map(|(n, s)| (n.as_str(), s.as_str())))
+            && files
+                .iter()
+                .filter(|(n, _)| *n != AUDIO_MIX_FILE)
+                .copied()
+                .eq(self
+                    .program_sources
+                    .iter()
+                    .filter(|(n, _)| n != AUDIO_MIX_FILE)
+                    .map(|(n, s)| (n.as_str(), s.as_str())))
+        {
+            saved_mix
+                .validate_samples(&self.dsp_view().samples)
+                .map_err(|message| LuaError {
+                    message,
+                    line: None,
+                    file: Some(AUDIO_MIX_FILE.into()),
+                })?;
+            self.saved_mix = saved_mix;
+            self.program_sources = files
+                .iter()
+                .map(|(n, s)| ((*n).into(), (*s).into()))
+                .collect();
+            return Ok(());
+        }
         let mut lua = Lua::core();
         lua.enter(install_bindings);
         // Reseed voice[]/dsp from the LIVE registers (not reset) — a recompile
         // must not silence a sounding voice. See `seed_dsp_tables`.
-        lua.enter(|ctx| seed_dsp_tables(ctx, &self.dsp));
+        lua.enter(|ctx| seed_dsp_tables(ctx, &self.dsp, self.unmixed_dsp.as_ref()));
         let sram = self.sram_json.clone();
         lua.enter(|ctx| set_sram_table(ctx, &sram));
         // dma() records into a FRESH recorder, active for the init window
@@ -431,7 +486,12 @@ impl LuaEngine {
 
         let mut sourced: Vec<(&str, &str)> = Vec::with_capacity(files.len() + 1);
         sourced.push(("kit", Self::KIT_LUA));
-        sourced.extend_from_slice(files);
+        sourced.extend(
+            files
+                .iter()
+                .copied()
+                .filter(|(name, _)| *name != AUDIO_MIX_FILE),
+        );
         for (name, src) in &sourced {
             let load = lua.try_enter(|ctx| {
                 let closure = Closure::load(ctx, Some(*name), src.as_bytes())?;
@@ -528,6 +588,28 @@ impl LuaEngine {
                 file: init_file.clone(),
             });
         }
+        let mix_samples: Vec<_> = rec
+            .samples
+            .borrow()
+            .iter()
+            .map(|s| DspSampleView {
+                id: s.id,
+                name: s.name.clone(),
+                start: s.addr as u32,
+                end: s.end,
+            })
+            .collect();
+        for mix in [&saved_mix, self.live_mix.as_ref().unwrap_or(&saved_mix)] {
+            if let Err(message) = mix.validate_samples(&mix_samples) {
+                *rec.samples.borrow_mut() = prev_samples.clone();
+                return Err(LuaError {
+                    message,
+                    line: None,
+                    file: Some(AUDIO_MIX_FILE.into()),
+                });
+            }
+        }
+        self.saved_mix = saved_mix;
         // Sample placements write ARAM + the sample directory ONCE here,
         // after init() has succeeded (or there is none) and passed the
         // final echo-region check above — never in frame(), and never
@@ -595,6 +677,9 @@ impl LuaEngine {
     /// (recompile): that keeps the DSP/ARAM/timer phase running — it never
     /// resets anything.
     pub fn reset(&mut self) -> Result<(), LuaError> {
+        self.unmixed_dsp = None;
+        self.mix_kon = 0;
+        self.mix_koff = 0;
         self.dsp = power_on_dsp();
         self.aram.fill(0);
         self.audio.clear();
@@ -786,6 +871,32 @@ impl LuaEngine {
         Ok(lt)
     }
 
+    /// Replace live adjustments without recompiling the song. None restores the saved mix.
+    pub fn set_audio_mix(&mut self, json: Option<&str>) -> Result<(), String> {
+        let mix = json.map(AudioMix::parse).transpose()?;
+        mix.as_ref()
+            .unwrap_or(&self.saved_mix)
+            .validate_samples(&self.dsp_view().samples)?;
+        self.live_mix = mix;
+        Ok(())
+    }
+
+    pub fn audio_mix(&self) -> &AudioMix {
+        self.live_mix.as_ref().unwrap_or(&self.saved_mix)
+    }
+
+    pub fn trigger_voice(&mut self, voice: u8, release: bool) -> Result<(), String> {
+        if voice >= 8 {
+            return Err("Voice must be 0–7".into());
+        }
+        if release {
+            self.mix_koff |= 1 << voice;
+        } else {
+            self.mix_kon |= 1 << voice;
+        }
+        Ok(())
+    }
+
     /// Drain `aram[]`, write `voice[]`/`dsp` to the DSP registers wholesale,
     /// and flush KOF then KON (KON LAST, so a koff+kon in the same span
     /// restarts the voice — matches the Dsp's KON-deferred-to-next-render-
@@ -819,13 +930,20 @@ impl LuaEngine {
             // 2. voice[]/dsp -> DSP registers, wholesale and idempotent.
             // Never touches ENDX (0x7c) or the read-only ENVX/OUTX (n8/n9).
             write_dsp_regs(ctx, &mut self.dsp);
+            self.unmixed_dsp = Some(decode_dsp_view(&self.dsp));
+            self.live_mix
+                .as_ref()
+                .unwrap_or(&self.saved_mix)
+                .apply(&mut self.dsp);
 
             // 3. Flush KOF then KON.
             let kof = ctx.get_global("__dsp_koff").to_int().unwrap_or(0) as u8;
-            self.dsp.write(0x5c, kof);
+            self.dsp.write(0x5c, kof | self.mix_koff);
+            self.mix_koff = 0;
             ctx.set_global("__dsp_koff", 0).unwrap();
             let kon = ctx.get_global("__dsp_kon").to_int().unwrap_or(0) as u8;
-            self.dsp.write(0x4c, kon);
+            self.dsp.write(0x4c, kon | self.mix_kon);
+            self.mix_kon = 0;
             ctx.set_global("__dsp_kon", 0).unwrap();
         });
     }
@@ -1102,6 +1220,7 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     ctx.set_global("sram", Table::new(&ctx)).unwrap();
     // scalar registers
     ctx.set_global("mode", 1).unwrap();
+    ctx.set_global("bg3_priority", false).unwrap();
     ctx.set_global("brightness", 15).unwrap();
     // MOSAIC ($2106): global block size 0..15; per-layer enable via bg[n].mosaic.
     ctx.set_global("mosaic", 0).unwrap();
@@ -1442,8 +1561,8 @@ fn decode_dsp_view(dsp: &Dsp) -> DspView {
 /// currently holds (a fresh `Dsp` after the ADSR1=0x80 power-on writes, or
 /// the still-sounding registers across a recompile). Also republishes
 /// envx/outx/ended (see `publish_voice_readbacks`).
-fn seed_dsp_tables(ctx: piccolo::Context<'_>, dsp: &Dsp) {
-    let view = decode_dsp_view(dsp);
+fn seed_dsp_tables(ctx: piccolo::Context<'_>, dsp: &Dsp, unmixed: Option<&DspView>) {
+    let view = unmixed.cloned().unwrap_or_else(|| decode_dsp_view(dsp));
     let voices = Table::new(&ctx);
     for (n, vv) in view.voices.iter().enumerate() {
         let v = Table::new(&ctx);
@@ -1505,7 +1624,7 @@ fn seed_dsp_tables(ctx: piccolo::Context<'_>, dsp: &Dsp) {
     d.set(ctx, "mute", view.mute).unwrap();
     ctx.set_global("dsp", d).unwrap();
 
-    publish_voice_readbacks(ctx, &view);
+    publish_voice_readbacks(ctx, &decode_dsp_view(dsp));
 }
 
 /// Publish `voice[n].envx/.outx/.ended` from a decoded [`DspView`]. Called at
@@ -2551,6 +2670,7 @@ fn take_cgram_pokes(ctx: piccolo::Context<'_>, snap: &[Option<i64>]) -> Vec<(u8,
 
 fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
     let mut row = LineTableRow::default();
+    row.bg3_priority = ctx.get_global("bg3_priority").to_bool();
     if let Some(m) = ctx.get_global("mode").to_int() {
         row.mode = m as u8; // wrap; quantize::mode masks to 3 bits at build
     }
@@ -2749,6 +2869,7 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
 /// re-baseline globals before each hook and to restore sticky state after build).
 fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
     ctx.set_global("mode", row.mode as i64).unwrap();
+    ctx.set_global("bg3_priority", row.bg3_priority).unwrap();
     ctx.set_global("brightness", row.brightness as i64).unwrap();
     ctx.set_global("TM", row.tm as i64).unwrap();
     ctx.set_global("TS", row.ts as i64).unwrap();

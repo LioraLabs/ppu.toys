@@ -167,6 +167,25 @@ impl PpuCore {
         serde_wasm_bindgen::to_value(self.engine.import_reports()).map_err(Into::into)
     }
 
+    #[wasm_bindgen(js_name = setAudioMix)]
+    pub fn set_audio_mix(&mut self, json: Option<String>) -> Result<(), JsValue> {
+        self.engine
+            .set_audio_mix(json.as_deref())
+            .map_err(|e| JsValue::from_str(&e))
+    }
+
+    #[wasm_bindgen(js_name = audioMix)]
+    pub fn audio_mix(&self) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(self.engine.audio_mix()).map_err(Into::into)
+    }
+
+    #[wasm_bindgen(js_name = triggerVoice)]
+    pub fn trigger_voice(&mut self, voice: u8, release: bool) -> Result<(), JsValue> {
+        self.engine
+            .trigger_voice(voice, release)
+            .map_err(|e| JsValue::from_str(&e))
+    }
+
     /// The last frame's interleaved stereo audio (L,R per sample, 32000 Hz).
     /// Empty before the first `frame()` (M12/audio).
     pub fn audio(&self) -> Vec<i16> {
