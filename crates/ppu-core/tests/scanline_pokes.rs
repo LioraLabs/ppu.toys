@@ -7,6 +7,10 @@
 //!
 //! The Lua below is verbatim `pokesToLua` output — keep it byte-identical to
 //! what the generator emits (`pokes.test.ts` pins the same text on the TS side).
+//!
+//! The controls.lua band twin of these keyframe-curve checks (a `pki`/`pkf`
+//! ramp inside a named `hdma` band) lives in `tests/controls.rs`; this legacy
+//! `pokes.lua` + explicit `apply_pokes()` path stays as-is until PPU-152.
 
 use ppu_core::{LuaEngine, WIN_SCANLINE_STRIDE};
 

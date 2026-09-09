@@ -987,7 +987,15 @@ impl LuaEngine {
             0
         };
 
-        // Collect registered hooks (stash each fn with its [y0,y1]).
+        // Collect registered hooks (stash each fn with its [y0,y1]), then
+        // clear the registry so the synthetic frame-wide hook's per-row
+        // replay of apply_pokes (below) can't append 224x more (dead)
+        // entries per band into a table nothing reads again this frame.
+        // `hdma()` already no-ops when this global isn't a table; the next
+        // frame() recreates it. The only observable change: a hand-written
+        // apply_pokes that indexes `__ppu_hooks` directly during the per-row
+        // replay now errors (unsupported by the controls_env.lua contract
+        // anyway).
         let mut hooks: Vec<(usize, usize, StashedFunction, Option<String>)> = {
             let mut l = self.lua.borrow_mut();
             l.enter(|ctx| {
@@ -1005,6 +1013,7 @@ impl LuaEngine {
                         }
                     }
                 }
+                ctx.set_global("__ppu_hooks", Value::Nil).unwrap();
                 out
             })
         };

@@ -36,6 +36,38 @@ fn controls_with_scanlines(scanlines_body: &str, body: &str) -> String {
     )
 }
 
+/// Same as `controls_with_scanlines`, but with the `pk`/`pki`/`pkf`
+/// per-scanline-poke preamble spliced immediately before `apply_pokes` — the
+/// shape the generated document takes when any keyframe curve is present.
+/// Verbatim copy of the preamble text in `scanline_pokes.rs`'s `GENERATED`
+/// (from `-- Per-scanline pokes:` through the `pkf` one-liner) — keep it
+/// byte-identical to that.
+fn controls_with_curve(scanlines_body: &str, body: &str) -> String {
+    const PREAMBLE: &str = r#"-- Per-scanline pokes: keyframes {{y,value},…} interpolated down the frame,
+-- holding the end values outside the keyframed range.
+local function pk(kf, y)
+  local n = #kf
+  if y <= kf[1][1] then return kf[1][2] end
+  for i = 2, n do
+    local a, b = kf[i - 1], kf[i]
+    if y <= b[1] then
+      local d = b[1] - a[1]
+      if d <= 0 then return b[2] end
+      return a[2] + (b[2] - a[2]) * (y - a[1]) / d
+    end
+  end
+  return kf[n][2]
+end
+local function pki(kf, y) return floor(pk(kf, y) + 0.5) end
+local function pkf(kf, y) return pk(kf, y) end
+"#;
+    controls_with_scanlines(scanlines_body, body).replacen(
+        "function apply_pokes()",
+        &format!("{PREAMBLE}function apply_pokes()"),
+        1,
+    )
+}
+
 /// BRR/directory poke helpers, copied from `dsp_timers.rs` (see that file's
 /// doc comment for the layout) — a sounding voice 0 for the controls-only
 /// reload / invalid-controls / runtime-error tests, which must prove the DSP
@@ -750,4 +782,485 @@ fn controls_restore_runs_before_the_sticky_defaults_rebaseline() {
     plain.frame(0.0, 0).unwrap();
     let lt = plain.frame(0.0, 1).unwrap();
     assert_eq!(lt.rows[0].bg[1].scroll_x, 2);
+}
+
+// PPU-148: named-band HDMA (`scanlines.<name>` + `hdma(...)` calls inside
+// `apply_pokes`) — deterministic scope and overlap. Every program below sets
+// a known frame-wide baseline so "program value" below is always a
+// hand-derived literal, never a value read back from the engine.
+
+/// (a) A band's [first,last] range is inclusive on both ends, and a
+/// single-line band ([y,y]) touches exactly that row, not its neighbors.
+#[test]
+fn bands_are_inclusive_and_a_single_line_band_touches_exactly_that_row() {
+    let main = "function frame(t, f)\n  brightness = 9\n  bg[1].scroll.x = 0\n  mode = 1\nend\n";
+    let doc = controls_with_scanlines(
+        "  top = { first = 0, last = 0 },\n\
+         mid = { first = 100, last = 100 },\n\
+         bottom = { first = 223, last = 223 },\n",
+        "  hdma(scanlines.top.first, scanlines.top.last, function(y)\n\
+           brightness = 1\n\
+         end)\n\
+         hdma(scanlines.mid.first, scanlines.mid.last, function(y)\n\
+           brightness = 2\n\
+         end)\n\
+         hdma(scanlines.bottom.first, scanlines.bottom.last, function(y)\n\
+           brightness = 3\n\
+         end)\n",
+    );
+    let mut e = LuaEngine::new();
+    e.set_sources(&[("main.lua", main), ("controls.lua", &doc)])
+        .unwrap();
+    let lt = e.frame(0.0, 0).unwrap();
+    assert_eq!(lt.rows[0].brightness, 1, "top band touches row 0");
+    assert_eq!(lt.rows[100].brightness, 2, "mid band touches row 100");
+    assert_eq!(lt.rows[223].brightness, 3, "bottom band touches row 223");
+    for y in [1usize, 99, 101, 222] {
+        assert_eq!(
+            lt.rows[y].brightness, 9,
+            "row {y}: outside every band, the program value holds"
+        );
+    }
+
+    // A full-height [0,223] band covers every single row, no gaps at either edge.
+    let doc_full = controls_with_scanlines(
+        "  full = { first = 0, last = 223 },\n",
+        "  hdma(scanlines.full.first, scanlines.full.last, function(y)\n\
+           brightness = 4\n\
+         end)\n",
+    );
+    let mut e2 = LuaEngine::new();
+    e2.set_sources(&[("main.lua", main), ("controls.lua", &doc_full)])
+        .unwrap();
+    let lt2 = e2.frame(0.0, 0).unwrap();
+    for y in 0..224usize {
+        assert_eq!(
+            lt2.rows[y].brightness, 4,
+            "row {y}: full-height band covers it"
+        );
+    }
+}
+
+/// (b) Two overlapping bands: a later-registered band wins ONLY for a
+/// property both write on the overlapping lines; a property only the
+/// earlier band writes survives untouched there. Swapping registration
+/// order (and the scanlines table order with it) swaps which band wins the
+/// shared property.
+#[test]
+fn overlapping_bands_later_wins_only_the_shared_property() {
+    let main = "function frame(t, f)\n  brightness = 9\n  bg[1].scroll.x = 0\n  mode = 1\nend\n";
+    let doc_ab = controls_with_scanlines(
+        "  a = { first = 100, last = 150 },\n  b = { first = 120, last = 200 },\n",
+        "  hdma(scanlines.a.first, scanlines.a.last, function(y)\n\
+           bg[1].scroll.x = 1\n\
+           brightness = 5\n\
+         end)\n\
+         hdma(scanlines.b.first, scanlines.b.last, function(y)\n\
+           bg[1].scroll.x = 2\n\
+         end)\n",
+    );
+    let mut e = LuaEngine::new();
+    e.set_sources(&[("main.lua", main), ("controls.lua", &doc_ab)])
+        .unwrap();
+    let lt = e.frame(0.0, 0).unwrap();
+    assert_eq!(lt.rows[110].bg[0].scroll_x, 1, "row 110: only A covers it");
+    assert_eq!(lt.rows[110].brightness, 5, "row 110: only A covers it");
+    assert_eq!(
+        lt.rows[130].bg[0].scroll_x, 2,
+        "row 130: B registered later, wins the shared property"
+    );
+    assert_eq!(
+        lt.rows[130].brightness, 5,
+        "row 130: brightness is A-only, untouched by B"
+    );
+    assert_eq!(lt.rows[160].bg[0].scroll_x, 2, "row 160: only B covers it");
+    assert_eq!(
+        lt.rows[160].brightness, 9,
+        "row 160: neither band writes brightness there"
+    );
+    for y in [90usize, 210] {
+        assert_eq!(lt.rows[y].bg[0].scroll_x, 0, "row {y}: outside both bands");
+        assert_eq!(lt.rows[y].brightness, 9, "row {y}: outside both bands");
+    }
+
+    // Same doc, hooks (and table rows) in the opposite order: B first, A second.
+    let doc_ba = controls_with_scanlines(
+        "  b = { first = 120, last = 200 },\n  a = { first = 100, last = 150 },\n",
+        "  hdma(scanlines.b.first, scanlines.b.last, function(y)\n\
+           bg[1].scroll.x = 2\n\
+         end)\n\
+         hdma(scanlines.a.first, scanlines.a.last, function(y)\n\
+           bg[1].scroll.x = 1\n\
+           brightness = 5\n\
+         end)\n",
+    );
+    let mut e2 = LuaEngine::new();
+    e2.set_sources(&[("main.lua", main), ("controls.lua", &doc_ba)])
+        .unwrap();
+    let lt2 = e2.frame(0.0, 0).unwrap();
+    assert_eq!(
+        lt2.rows[130].bg[0].scroll_x, 1,
+        "reordered: A is now registered last, so it wins the shared property at row 130"
+    );
+    assert_eq!(lt2.rows[130].brightness, 5);
+}
+
+/// (c) A band beats the program's own authored `hdma` only where the band
+/// itself writes; a whole-frame controls override in turn beats the
+/// program's authored hdma everywhere it doesn't overlap a band, with the
+/// band still winning only where it writes on top of that.
+#[test]
+fn band_beats_authored_hdma_only_where_it_writes() {
+    let main = "function frame(t, f)\n\
+                  brightness = 9\n\
+                  bg[1].scroll.x = 0\n\
+                  mode = 1\n\
+                  hdma(100, 150, function(y)\n\
+                    bg[1].scroll.x = 7\n\
+                    brightness = 3\n\
+                  end)\n\
+                end\n";
+    let doc = controls_with_scanlines(
+        "  band = { first = 120, last = 223 },\n",
+        "  hdma(scanlines.band.first, scanlines.band.last, function(y)\n\
+           bg[1].scroll.x = 2\n\
+         end)\n",
+    );
+    let mut e = LuaEngine::new();
+    e.set_sources(&[("main.lua", main), ("controls.lua", &doc)])
+        .unwrap();
+    let lt = e.frame(0.0, 0).unwrap();
+    assert_eq!(lt.rows[130].bg[0].scroll_x, 2, "row 130: band wins scroll");
+    assert_eq!(
+        lt.rows[130].brightness, 3,
+        "row 130: the band never wrote brightness, main's hdma value stands"
+    );
+    assert_eq!(
+        lt.rows[110].bg[0].scroll_x, 7,
+        "row 110: outside the band, main's hdma stands"
+    );
+    assert_eq!(lt.rows[110].brightness, 3, "row 110: main's hdma value");
+    assert_eq!(
+        lt.rows[160].bg[0].scroll_x, 2,
+        "row 160: band wins, outside main's own hdma"
+    );
+    assert_eq!(
+        lt.rows[160].brightness, 9,
+        "row 160: program frame-wide brightness, nothing else touches it"
+    );
+
+    // Add a frame-wide `brightness = 12` to controls: it beats main's own
+    // hdma everywhere; the band still wins scroll only where it writes.
+    let doc2 = controls_with_scanlines(
+        "  band = { first = 120, last = 223 },\n",
+        "  brightness = 12\n\
+         hdma(scanlines.band.first, scanlines.band.last, function(y)\n\
+           bg[1].scroll.x = 2\n\
+         end)\n",
+    );
+    let mut e2 = LuaEngine::new();
+    e2.set_sources(&[("main.lua", main), ("controls.lua", &doc2)])
+        .unwrap();
+    let lt2 = e2.frame(0.0, 0).unwrap();
+    assert_eq!(
+        lt2.rows[110].brightness, 12,
+        "frame-wide beats the program's own hdma"
+    );
+    assert_eq!(
+        lt2.rows[130].brightness, 12,
+        "frame-wide beats it here too; the band doesn't write brightness"
+    );
+    assert_eq!(
+        lt2.rows[110].bg[0].scroll_x, 7,
+        "scroll unchanged from before: row 110 is outside the band"
+    );
+    assert_eq!(
+        lt2.rows[130].bg[0].scroll_x, 2,
+        "scroll unchanged from before: the band still wins here"
+    );
+}
+
+/// (d) A band's relative write must apply exactly once per row per frame —
+/// never twice, which a duplicate hook across fast-path reloads, or a stale
+/// hook left behind after remove/resize/rename, would produce — across
+/// several frames, and survive a run of fast-path (controls-only) edits:
+/// remove, disable, resize, and rename the band. (The `__ppu_hooks` nil-clear
+/// in lua.rs's `frame()` is NOT observable here — its dead entries were never
+/// read — and is pinned by nothing, by design: these tests never reach into
+/// the VM.)
+#[test]
+fn band_edits_over_the_fast_path_leave_no_stale_or_duplicate_effect() {
+    let main = "function frame(t, f)\n\
+                  brightness = 9\n\
+                  bg[1].scroll.x = 10\n\
+                  mode = 1\n\
+                end\n";
+    let doc = controls_with_scanlines(
+        "  a = { first = 100, last = 150 },\n",
+        "  hdma(scanlines.a.first, scanlines.a.last, function(y)\n\
+           bg[1].scroll.x = bg[1].scroll.x + 1\n\
+         end)\n",
+    );
+    let mut e = LuaEngine::new();
+    e.set_sources(&[("main.lua", main), ("controls.lua", &doc)])
+        .unwrap();
+    for f in 0..3u32 {
+        let lt = e.frame(0.0, f).unwrap();
+        for y in 100..=150usize {
+            assert_eq!(
+                lt.rows[y].bg[0].scroll_x, 11,
+                "frame {f} row {y}: exactly +1, never +2"
+            );
+        }
+        for y in [50usize, 200] {
+            assert_eq!(
+                lt.rows[y].bg[0].scroll_x, 10,
+                "frame {f} row {y}: outside the band"
+            );
+        }
+    }
+
+    // Fast path: remove the band entirely (controls.lua changes, main.lua doesn't).
+    let doc_removed = controls_with_scanlines("  a = { first = 100, last = 150 },\n", "");
+    e.set_sources(&[("main.lua", main), ("controls.lua", &doc_removed)])
+        .unwrap();
+    let lt = e.frame(0.0, 3).unwrap();
+    for y in 0..224usize {
+        assert_eq!(lt.rows[y].bg[0].scroll_x, 10, "row {y}: band removed");
+    }
+
+    // Fast path: disabled band (the generated table row + guarded-hook shape).
+    let doc_disabled = controls_with_scanlines(
+        "  a = { first = 100, last = 150, enabled = false },\n",
+        "  if scanlines.a.enabled ~= false then hdma(scanlines.a.first, scanlines.a.last, function(y)\n\
+           bg[1].scroll.x = bg[1].scroll.x + 1\n\
+         end) end\n",
+    );
+    e.set_sources(&[("main.lua", main), ("controls.lua", &doc_disabled)])
+        .unwrap();
+    let lt = e.frame(0.0, 4).unwrap();
+    for y in 0..224usize {
+        assert_eq!(lt.rows[y].bg[0].scroll_x, 10, "row {y}: band disabled");
+    }
+
+    // Fast path: resize 100..150 -> 160..200.
+    let doc_resized = controls_with_scanlines(
+        "  a = { first = 160, last = 200 },\n",
+        "  hdma(scanlines.a.first, scanlines.a.last, function(y)\n\
+           bg[1].scroll.x = bg[1].scroll.x + 1\n\
+         end)\n",
+    );
+    e.set_sources(&[("main.lua", main), ("controls.lua", &doc_resized)])
+        .unwrap();
+    let lt = e.frame(0.0, 5).unwrap();
+    for y in 100..=150usize {
+        assert_eq!(
+            lt.rows[y].bg[0].scroll_x, 10,
+            "row {y}: old range no longer touched"
+        );
+    }
+    for y in 160..=200usize {
+        assert_eq!(
+            lt.rows[y].bg[0].scroll_x, 11,
+            "row {y}: new range, exactly +1"
+        );
+    }
+
+    // Fast path: rename a -> sea (table row + every hook reference).
+    let doc_renamed = controls_with_scanlines(
+        "  sea = { first = 160, last = 200 },\n",
+        "  hdma(scanlines.sea.first, scanlines.sea.last, function(y)\n\
+           bg[1].scroll.x = bg[1].scroll.x + 1\n\
+         end)\n",
+    );
+    e.set_sources(&[("main.lua", main), ("controls.lua", &doc_renamed)])
+        .unwrap();
+    let lt = e.frame(0.0, 6).unwrap();
+    for y in 160..=200usize {
+        assert_eq!(
+            lt.rows[y].bg[0].scroll_x, 11,
+            "row {y}: renamed band, still exactly +1"
+        );
+    }
+}
+
+/// (e) A band's CGRAM poke lands only on the rows it covers, and a
+/// frame-wide CGRAM poke (already baked into the Phase A snapshot) is not
+/// re-reported as a per-row poke by the synthetic whole-frame hook.
+#[test]
+fn band_cgram_poke_lands_only_on_its_rows_and_frame_wide_cgram_is_not_re_reported() {
+    let main = "function frame(t, f)\n  brightness = 9\n  mode = 1\nend\n";
+    let doc = controls_with_scanlines(
+        "  band = { first = 50, last = 60 },\n",
+        "  hdma(scanlines.band.first, scanlines.band.last, function(y)\n\
+           cgram[1] = 0x7fff\n\
+         end)\n",
+    );
+    let mut e = LuaEngine::new();
+    e.set_sources(&[("main.lua", main), ("controls.lua", &doc)])
+        .unwrap();
+    let lt = e.frame(0.0, 0).unwrap();
+    assert!(
+        lt.rows[55].cgram.contains(&(1, 0x7fff)),
+        "row 55: inside the band, the poke is recorded"
+    );
+    assert!(
+        lt.rows[50].cgram.contains(&(1, 0x7fff)),
+        "row 50: band's first row (inclusive edge)"
+    );
+    assert!(
+        lt.rows[60].cgram.contains(&(1, 0x7fff)),
+        "row 60: band's last row (inclusive edge)"
+    );
+    assert!(
+        !lt.rows[49].cgram.iter().any(|&(i, _)| i == 1),
+        "row 49: outside the band, no poke recorded"
+    );
+    assert!(
+        !lt.rows[61].cgram.iter().any(|&(i, _)| i == 1),
+        "row 61: outside the band, no poke recorded"
+    );
+
+    let doc2 = controls("  cgram[2] = 0x1234\n");
+    let mut e2 = LuaEngine::new();
+    e2.set_sources(&[("main.lua", main), ("controls.lua", &doc2)])
+        .unwrap();
+    let lt2 = e2.frame(0.0, 0).unwrap();
+    assert_eq!(e2.memory().cgram[2], 0x1234);
+    for y in 0..224usize {
+        assert!(
+            !lt2.rows[y].cgram.iter().any(|&(i, _)| i == 2),
+            "row {y}: frame-wide cgram write must not be re-reported per-row"
+        );
+    }
+}
+
+/// (f) A keyframe curve (`pki` tables computing per-row values) inside a
+/// band survives, producing byte-identical numbers to the plain
+/// (non-band) generated document pinned in `scanline_pokes.rs`'s
+/// `GENERATED`.
+#[test]
+fn existing_keyframe_curves_survive_inside_a_band() {
+    let doc = controls_with_curve(
+        "  full = { first = 0, last = 223 },\n",
+        "  hdma(scanlines.full.first, scanlines.full.last, function(y)\n\
+           win.w1.hi = pki({{0,128},{112,198},{223,128}}, y)\n\
+           win.w1.lo = pki({{0,128},{112,58},{223,128}}, y)\n\
+         end)\n",
+    );
+    // No explicit apply_pokes() call: controls.lua's Phase A applies it
+    // automatically, unlike the legacy pokes.lua path in scanline_pokes.rs.
+    let main = "function frame(t, f)\n  mode = 1\n  brightness = 15\nend\n";
+    let mut e = LuaEngine::new();
+    e.set_sources(&[("main.lua", main), ("controls.lua", &doc)])
+        .unwrap();
+    let lt = e.frame(0.0, 0).unwrap();
+    let bytes = ppu_core::window_scanline_bytes(&lt);
+    let edges = |y: usize| {
+        (
+            bytes[y * ppu_core::WIN_SCANLINE_STRIDE],
+            bytes[y * ppu_core::WIN_SCANLINE_STRIDE + 1],
+        )
+    };
+    assert_eq!(edges(0), (128, 128), "first keyframe");
+    assert_eq!(edges(112), (58, 198), "middle keyframe");
+    assert_eq!(edges(223), (128, 128), "last keyframe");
+    assert_eq!(edges(56), (93, 163), "linear midpoint");
+    assert_eq!(
+        edges(1).0,
+        127,
+        "fractional interpolation must round, not drop"
+    );
+}
+
+/// (g) Ramps round integer registers exactly (`floor(v+0.5)`, per `pki`)
+/// and keep Mode 7's fractional Q8.8 registers (`pkf`, no rounding).
+#[test]
+fn ramps_round_integers_exactly_and_keep_mode7_fractions() {
+    let main = "function frame(t, f)\n  brightness = 9\n  mode = 7\nend\n";
+    let doc = controls_with_curve(
+        "  band = { first = 100, last = 103 },\n",
+        "  hdma(scanlines.band.first, scanlines.band.last, function(y)\n\
+           brightness = pki({{100,0},{103,1}}, y)\n\
+         end)\n",
+    );
+    let mut e = LuaEngine::new();
+    e.set_sources(&[("main.lua", main), ("controls.lua", &doc)])
+        .unwrap();
+    let lt = e.frame(0.0, 0).unwrap();
+    assert_eq!(lt.rows[100].brightness, 0, "0 -> floor(0.5) = 0");
+    assert_eq!(lt.rows[101].brightness, 0, "0.333 -> floor(0.833) = 0");
+    assert_eq!(lt.rows[102].brightness, 1, "0.667 -> floor(1.167) = 1");
+    assert_eq!(lt.rows[103].brightness, 1, "1 -> floor(1.5) = 1");
+
+    let doc_m7 = controls_with_curve(
+        "  full = { first = 0, last = 223 },\n",
+        "  hdma(scanlines.full.first, scanlines.full.last, function(y)\n\
+           m7.a = pkf({{0,1},{223,2}}, y)\n\
+         end)\n",
+    );
+    let mut e2 = LuaEngine::new();
+    e2.set_sources(&[("main.lua", main), ("controls.lua", &doc_m7)])
+        .unwrap();
+    let lt2 = e2.frame(0.0, 0).unwrap();
+    assert_eq!(lt2.rows[0].m7.a, 0x100, "y=0: a=1.0 in Q8.8");
+    assert_eq!(lt2.rows[223].m7.a, 0x200, "y=223: a=2.0 in Q8.8");
+    // y=111: a = 1 + 111/223 = 1.49776…; × 256 = 383.43 -> round = 383 = 0x17f
+    // (m7_matrix rounds to nearest, per quantize.rs).
+    assert_eq!(
+        lt2.rows[111].m7.a, 0x17f,
+        "fractional lerp reached the Q8.8 register"
+    );
+}
+
+/// (h) A single-line ramp (two keyframes at the same y) is defined and
+/// never divides by zero — `pk`'s first-keyframe short-circuit
+/// (`y <= kf[1][1]`) returns the first keyframe's value before the
+/// zero-width-interval branch is ever reached.
+#[test]
+fn a_single_line_ramp_is_defined_and_never_divides() {
+    let main = "function frame(t, f)\n  brightness = 9\nend\n";
+    let doc = controls_with_curve(
+        "  band = { first = 100, last = 100 },\n",
+        "  hdma(scanlines.band.first, scanlines.band.last, function(y)\n\
+           brightness = pki({{100,10},{100,20}}, y)\n\
+         end)\n",
+    );
+    let mut e = LuaEngine::new();
+    e.set_sources(&[("main.lua", main), ("controls.lua", &doc)])
+        .unwrap();
+    let lt = e.frame(0.0, 0).unwrap();
+    assert_eq!(lt.rows[100].brightness, 10);
+    assert_eq!(lt.rows[99].brightness, 9);
+    assert_eq!(lt.rows[101].brightness, 9);
+}
+
+/// (i) A hand-edited reversed range ([first,last] with first > last) is
+/// inert at the engine — `y0 <= y && y <= y1` never holds for any y when
+/// y0 > y1 — not an error; rejecting it up front is the TS codec's job, not
+/// the engine's (row-independent hdma semantics are kept as-is).
+#[test]
+fn a_reversed_hand_edited_range_is_inert_not_an_error() {
+    let main = "function frame(t, f)\n  brightness = 9\n  bg[1].scroll.x = 0\nend\n";
+    let doc = controls_with_scanlines(
+        "  band = { first = 200, last = 100 },\n",
+        "  hdma(scanlines.band.first, scanlines.band.last, function(y)\n\
+           brightness = 1\n\
+           bg[1].scroll.x = 1\n\
+         end)\n",
+    );
+    let mut e = LuaEngine::new();
+    e.set_sources(&[("main.lua", main), ("controls.lua", &doc)])
+        .unwrap();
+    let lt = e.frame(0.0, 0).unwrap();
+    for y in 0..224usize {
+        assert_eq!(
+            lt.rows[y].brightness, 9,
+            "row {y}: reversed band never applies"
+        );
+        assert_eq!(
+            lt.rows[y].bg[0].scroll_x, 0,
+            "row {y}: reversed band never applies"
+        );
+    }
 }
