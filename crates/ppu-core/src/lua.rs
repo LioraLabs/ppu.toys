@@ -1,5 +1,7 @@
 //! piccolo Lua VM + flat-global DSL binding. Runs `frame(t,f)` once to populate
-//! frame-wide defaults + CGRAM/OAM, registers `hdma` hooks, then resolves the
+//! frame-wide defaults + CGRAM/OAM, registers `hdma` hooks, then (Phase A)
+//! applies `controls.lua`'s `apply_pokes` as a synthetic frame-wide `hdma`
+//! hook spliced in after the program's own hooks, then resolves the
 //! LineTable by invoking each covering hook per scanline (later call wins).
 
 use std::cell::{Cell, RefCell};
@@ -7,8 +9,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use piccolo::{
-    Callback, CallbackReturn, Closure, Executor, Function, Lua, PrototypeError, StashedFunction,
-    StaticError, Table, Value,
+    Callback, CallbackReturn, Closure, Executor, FromMultiValue, Function, Lua, PrototypeError,
+    StashedFunction, StaticError, Table, Value,
 };
 
 use crate::{
@@ -108,6 +110,13 @@ pub struct DspView {
     pub samples: Vec<DspSampleView>,
 }
 
+/// The controls document's reserved file name (PPU-146's generated
+/// `controls.lua`): its `apply_pokes` is applied automatically every frame
+/// as a final visual override pass — see [`LuaEngine::load_controls`] and
+/// `frame()`'s Phase A. Filtered out of the normal multi-file chunk list the
+/// same way [`crate::AUDIO_MIX_FILE`] is.
+pub const CONTROLS_FILE: &str = "controls.lua";
+
 /// Compile/runtime error surfaced to the editor, matching the TS `LuaError` shape.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LuaError {
@@ -133,6 +142,11 @@ pub struct LuaEngine {
     init_fn: Option<StashedFunction>,
     /// Defining chunk of `frame_fn`, for runtime error attribution.
     frame_file: Option<String>,
+    /// `controls.lua`'s `apply_pokes`, stashed from the tracked
+    /// `__ppu_controls_env` (see [`Self::load_controls`]). `None` when the
+    /// current program carries no controls document — `frame()`'s Phase A
+    /// is then a no-op, matching pre-M147 behavior exactly.
+    controls_fn: Option<StashedFunction>,
     memory: Memory,
     /// The source store: decoded `addSource` payloads keyed by name — the
     /// graphics-data home (kind + depth + palettes + tiles + tilemap all
@@ -301,6 +315,7 @@ impl LuaEngine {
             frame_fn: None,
             init_fn: None,
             frame_file: None,
+            controls_fn: None,
             memory: Memory::new(),
             source_store,
             dma,
@@ -415,6 +430,10 @@ impl LuaEngine {
     /// see `kit.lua`'s own doc comment.
     const KIT_LUA: &'static str = include_str!("kit.lua");
 
+    /// The change-tracking environment `controls.lua` is compiled against —
+    /// see `controls_env.lua`'s own doc comment and [`Self::load_controls`].
+    const CONTROLS_ENV_LUA: &'static str = include_str!("controls_env.lua");
+
     /// Compile and load a multi-file sketch (PICO-8 scope): builds a fresh VM,
     /// installs bindings, then executes each `(name, source)` chunk **in list
     /// order** into ONE shared global environment, each compiled with its file
@@ -434,22 +453,31 @@ impl LuaEngine {
             line: None,
             file: Some(AUDIO_MIX_FILE.into()),
         })?;
-        // Saving only the mix must preserve the VM, timer phase, and sounding notes.
+        // Saving only the mix and/or controls.lua must preserve the VM,
+        // timer phase, and sounding notes. `live` names the files this fast
+        // path may reload in place without a full recompile — CONTROLS_FILE
+        // joins AUDIO_MIX_FILE here (PPU-147): a controls-only edit is
+        // exactly the same "reload without recompiling" shape a mix-only
+        // edit already was.
+        let live = |n: &str| n == AUDIO_MIX_FILE || n == CONTROLS_FILE;
+        let controls_present = |fs: &[(String, String)]| fs.iter().any(|(n, _)| n == CONTROLS_FILE);
         if !self.source_dirty
             && !self.program_sources.is_empty()
             && files.iter().copied().ne(self
                 .program_sources
                 .iter()
                 .map(|(n, s)| (n.as_str(), s.as_str())))
-            && files
+            && files.iter().filter(|(n, _)| !live(n)).copied().eq(self
+                .program_sources
                 .iter()
-                .filter(|(n, _)| *n != AUDIO_MIX_FILE)
-                .copied()
-                .eq(self
-                    .program_sources
-                    .iter()
-                    .filter(|(n, _)| n != AUDIO_MIX_FILE)
-                    .map(|(n, s)| (n.as_str(), s.as_str())))
+                .filter(|(n, _)| !live(n))
+                .map(|(n, s)| (n.as_str(), s.as_str())))
+            // A controls PRESENCE change (controls.lua added or removed
+            // outright, not just its text edited) is a full recompile by
+            // design — the fast path below only ever reloads controls.lua's
+            // text in place in the live VM, never installs it fresh.
+            && files.iter().any(|(n, _)| *n == CONTROLS_FILE)
+                == controls_present(&self.program_sources)
         {
             saved_mix
                 .validate_samples(&self.dsp_view().samples)
@@ -458,6 +486,22 @@ impl LuaEngine {
                     line: None,
                     file: Some(AUDIO_MIX_FILE.into()),
                 })?;
+            // A controls-only reload never recompiles: load the new text
+            // into the SAME live VM (same `__ppu_controls_env`/log, same
+            // frame/init/timers/DSP) and only touch `controls_fn` if the
+            // text actually changed — an unrelated push (e.g. mix-only)
+            // must leave the currently applying controls fn alone.
+            if let Some((_, new_src)) = files.iter().find(|(n, _)| *n == CONTROLS_FILE) {
+                let old_src = self
+                    .program_sources
+                    .iter()
+                    .find(|(n, _)| n == CONTROLS_FILE)
+                    .map(|(_, s)| s.as_str());
+                if old_src != Some(*new_src) {
+                    let mut l = self.lua.borrow_mut();
+                    self.controls_fn = Self::load_controls(&mut l, new_src)?;
+                }
+            }
             self.saved_mix = saved_mix;
             self.program_sources = files
                 .iter()
@@ -483,23 +527,48 @@ impl LuaEngine {
             let (store, rec) = (self.source_store.clone(), rec.clone());
             lua.enter(move |ctx| install_dma(ctx, store, rec));
         }
-
-        let mut sourced: Vec<(&str, &str)> = Vec::with_capacity(files.len() + 1);
-        sourced.push(("kit", Self::KIT_LUA));
-        sourced.extend(
-            files
-                .iter()
-                .copied()
-                .filter(|(name, _)| *name != AUDIO_MIX_FILE),
-        );
-        for (name, src) in &sourced {
+        // Run once per fresh VM, right before the chunk loop: installs the
+        // change-tracking `__ppu_controls_env` (a proxy of globals) and the
+        // `__ppu_controls_begin/dirty/restore` hooks controls.lua's
+        // `apply_pokes` runs under — see `controls_env.lua` and
+        // `Self::load_controls`. Static and self-contained: a load/exec
+        // failure here would be our own bug, not a user error.
+        {
             let load = lua.try_enter(|ctx| {
-                let closure = Closure::load(ctx, Some(*name), src.as_bytes())?;
+                let closure =
+                    Closure::load(ctx, Some("controls_env"), Self::CONTROLS_ENV_LUA.as_bytes())?;
                 Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
             });
-            if let Err(e) = load.and_then(|ex| lua.execute::<()>(&ex)) {
-                return Err(static_error_to_lua(e).in_file(name));
-            }
+            load.and_then(|ex| lua.execute::<()>(&ex))
+                .expect("controls_env.lua is static and must load/run cleanly");
+        }
+
+        let run_chunk = |lua: &mut Lua, name: &str, src: &str| -> Result<(), LuaError> {
+            let load = lua.try_enter(|ctx| {
+                let closure = Closure::load(ctx, Some(name), src.as_bytes())?;
+                Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
+            });
+            load.and_then(|ex| lua.execute::<()>(&ex))
+                .map_err(|e| static_error_to_lua(e).in_file(name))
+        };
+        run_chunk(&mut lua, "kit", Self::KIT_LUA)?;
+
+        // controls.lua runs FIRST among the sketch's files, wherever it sits
+        // in the list, so `markers`/`scanlines`/`apply_pokes` exist before
+        // any user chunk's top level runs (a pasted `markers.intro` must
+        // resolve). It compiles against the tracked env installed above, not
+        // the plain globals table the other chunks share — see
+        // `Self::load_controls`.
+        let controls_fn = match files.iter().find(|(name, _)| *name == CONTROLS_FILE) {
+            Some((_, src)) => Self::load_controls(&mut lua, src)?,
+            None => None,
+        };
+
+        for (name, src) in files
+            .iter()
+            .filter(|(name, _)| *name != AUDIO_MIX_FILE && *name != CONTROLS_FILE)
+        {
+            run_chunk(&mut lua, name, src)?;
         }
 
         let (frame_fn, frame_file, init_fn, init_file) = lua.enter(|ctx| {
@@ -518,6 +587,7 @@ impl LuaEngine {
         self.frame_fn = frame_fn;
         self.frame_file = frame_file;
         self.init_fn = init_fn;
+        self.controls_fn = controls_fn;
         // Snapshot the OLD recorder's placements before swapping it out: if
         // this compile fails below, nothing new was actually written to
         // ARAM, so these are what ARAM still holds — restoring them (instead
@@ -656,6 +726,57 @@ impl LuaEngine {
         Ok(())
     }
 
+    /// Compile `controls.lua`'s source against the tracked
+    /// `__ppu_controls_env` (installed by `controls_env.lua` — see
+    /// `set_sources`'s fresh-VM setup and its fast path) and stash
+    /// `apply_pokes` if the chunk defines one (`None` is treated exactly
+    /// like no controls.lua at all). Errors are attributed to
+    /// [`CONTROLS_FILE`].
+    ///
+    /// The whole load runs inside its own begin/restore bracket: a
+    /// RUNTIME failure partway through the chunk has already executed some
+    /// of its top-level writes straight onto the real globals (only logged
+    /// for undo) — `__ppu_controls_restore` unwinds exactly those before the
+    /// error returns, so a partially-applied controls text never leaves
+    /// stray globals live in the VM. Before executing the chunk, any
+    /// previously-stashed `apply_pokes` is nil'd out THROUGH the tracked env
+    /// too, so a text that no longer defines one doesn't leave the old
+    /// chunk's function re-stashed below, and that clear is itself undone by
+    /// the same restore on a load failure. On success the bracket is
+    /// re-begun (fresh, empty log) so nothing done here is later undone by
+    /// `frame()`'s own bracket.
+    fn load_controls(lua: &mut Lua, src: &str) -> Result<Option<StashedFunction>, LuaError> {
+        call_controls_hook::<()>(lua, "__ppu_controls_begin");
+
+        // Nil the previous apply_pokes THROUGH the tracked env first, so
+        // a text that no longer defines one doesn't re-stash the old
+        // chunk's function below — logged for undo like any other write, so
+        // a load failure below puts the old one right back.
+        let clear = lua.try_enter(|ctx| {
+            let env = controls_env(ctx);
+            let closure = Closure::load_with_env(ctx, None, "apply_pokes = nil".as_bytes(), env)?;
+            Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
+        });
+        clear
+            .and_then(|ex| lua.execute::<()>(&ex))
+            .unwrap_or_else(|e| panic!("clearing apply_pokes must not fail: {e}"));
+
+        let load = lua.try_enter(|ctx| {
+            let env = controls_env(ctx);
+            let closure = Closure::load_with_env(ctx, Some(CONTROLS_FILE), src.as_bytes(), env)?;
+            Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
+        });
+        if let Err(e) = load.and_then(|ex| lua.execute::<()>(&ex)) {
+            call_controls_hook::<()>(lua, "__ppu_controls_restore");
+            return Err(static_error_to_lua(e).in_file(CONTROLS_FILE));
+        }
+        call_controls_hook::<()>(lua, "__ppu_controls_begin");
+        Ok(lua.enter(|ctx| match ctx.get_global("apply_pokes") {
+            Value::Function(f) => Some(ctx.stash(f)),
+            _ => None,
+        }))
+    }
+
     /// Recompile the cached program sources (`frame()`'s dirty-source path and `reset()`).
     fn recompile(&mut self) -> Result<(), LuaError> {
         let files = self.program_sources.clone();
@@ -723,6 +844,18 @@ impl LuaEngine {
         Some(self.sram_json.clone())
     }
 
+    /// Undo the controls log if a controls chunk is loaded: every error
+    /// exit from `frame()` after `__ppu_controls_begin` must call this
+    /// before returning, so a partial frame (e.g. an explicit
+    /// `apply_pokes()` call the program made before erroring) never bakes
+    /// into the next frame's baseline.
+    fn restore_controls(&self) {
+        if self.controls_fn.is_some() {
+            let mut l = self.lua.borrow_mut();
+            call_controls_hook::<()>(&mut l, "__ppu_controls_restore");
+        }
+    }
+
     pub fn frame(&mut self, t: f64, f: u32) -> Result<LineTable, LuaError> {
         if self.source_dirty {
             self.recompile()?;
@@ -735,16 +868,33 @@ impl LuaEngine {
                 ctx.set_global("__ppu_hooks", Table::new(&ctx)).unwrap();
                 set_pad_table(ctx, pad);
             });
+            // Begin the controls undo bracket BEFORE the program's own
+            // frame() runs, not after — an explicit `apply_pokes()` call
+            // from inside frame() (or a timer hook) runs under the tracked
+            // env too, so its writes must be logged from the start or they
+            // escape undoing entirely. One begin() now covers the whole
+            // frame — Phase A no longer calls it, and the single restore()
+            // at the end of this function undoes everything logged since.
+            if self.controls_fn.is_some() {
+                call_controls_hook::<()>(&mut l, "__ppu_controls_begin");
+            }
             if let Some(frame) = self.frame_fn.clone() {
                 let ex = l.enter(|ctx| {
                     let func = ctx.fetch(&frame);
                     ctx.stash(Executor::start(ctx, func, (t, f as i64)))
                 });
-                l.execute::<()>(&ex).map_err(|e| {
+                if let Err(e) = l.execute::<()>(&ex) {
+                    // Restore here too (`l` is already borrowed, so not via
+                    // `restore_controls`) — an explicit `apply_pokes()`
+                    // call made before this error would otherwise stay
+                    // logged into the next frame's stale bracket.
+                    if self.controls_fn.is_some() {
+                        call_controls_hook::<()>(&mut l, "__ppu_controls_restore");
+                    }
                     let mut err = static_error_to_lua(e);
                     err.file = self.frame_file.clone();
-                    err
-                })?;
+                    return Err(err);
+                }
             }
         }
 
@@ -778,10 +928,67 @@ impl LuaEngine {
         // `voice[]`/`dsp` writes are flushed to the DSP only at the NEXT
         // frame's offset-0 flush, one frame later than a `frame()`-body or
         // timer-hook write — see the `kon`/`koff` callback comment below.
-        self.render_frame_audio()?;
+        self.render_frame_audio()
+            .inspect_err(|_| self.restore_controls())?;
+
+        // Controls Phase A (PPU-147): run `apply_pokes()` frame-wide, once,
+        // right after the program's own frame()/audio and BEFORE hooks are
+        // collected below, so any `hdma()` it registers joins the program's
+        // own. `n_program` counts only FUNCTION-bearing `__ppu_hooks`
+        // entries — the same predicate the collector below applies, so a
+        // program hook missing its function argument doesn't desync the two
+        // — and is the splice index for the synthetic whole-frame hook
+        // below: after the program's own hooks, before controls's own. The
+        // undo bracket (begun at the top of this function) covers every write made here, undone by
+        // the single restore() at the end of this function, so an override
+        // never bakes into the program's own baseline. That undo also
+        // covers `voice[]`/`dsp` table writes, so those never reach the
+        // NEXT frame's `flush_dsp_writes` — dropped by design (visual
+        // override pass only); `kon()`/`koff()` calls are NOT tracked (they
+        // set `__dsp_kon`/`__dsp_koff` from Rust) and do fire next frame.
+        // The second `read_memory` below overlays controls's OAM/VRAM/CGRAM
+        // pokes on the program's, frame-global only: a band-scoped `vram[]`
+        // /`obj[]` poke inside an `hdma` closure never reaches `memory()`
+        // (band cgram does, via `take_cgram_pokes`).
+        let n_program: usize = if let Some(cf) = self.controls_fn.clone() {
+            let n_program = {
+                let mut l = self.lua.borrow_mut();
+                l.enter(|ctx| match ctx.get_global("__ppu_hooks") {
+                    Value::Table(t) => (1..=t.length())
+                        .filter(|&idx| {
+                            matches!(
+                                t.get(ctx, idx),
+                                Value::Table(e) if matches!(e.get(ctx, 3), Value::Function(_))
+                            )
+                        })
+                        .count(),
+                    _ => 0,
+                })
+            };
+            let res = {
+                let mut l = self.lua.borrow_mut();
+                let ex = l.enter(|ctx| {
+                    let f = ctx.fetch(&cf);
+                    ctx.stash(Executor::start(ctx, f, ()))
+                });
+                l.execute::<()>(&ex)
+            };
+            if let Err(e) = res {
+                let mut l = self.lua.borrow_mut();
+                call_controls_hook::<()>(&mut l, "__ppu_controls_restore");
+                let mut err = static_error_to_lua(e);
+                err.file = Some(CONTROLS_FILE.to_string());
+                return Err(err);
+            }
+            let mut l = self.lua.borrow_mut();
+            l.enter(|ctx| read_memory(ctx, &mut self.memory));
+            n_program
+        } else {
+            0
+        };
 
         // Collect registered hooks (stash each fn with its [y0,y1]).
-        let hooks: Vec<(usize, usize, StashedFunction, Option<String>)> = {
+        let mut hooks: Vec<(usize, usize, StashedFunction, Option<String>)> = {
             let mut l = self.lua.borrow_mut();
             l.enter(|ctx| {
                 let mut out = Vec::new();
@@ -801,9 +1008,37 @@ impl LuaEngine {
                 out
             })
         };
+        // Splice the whole-frame controls override in between the program's
+        // hooks and controls's own (hooks[n_program..], registered by
+        // apply_pokes above, if any): it reuses the exact per-hook closure
+        // below (write_state(row)/run/read_state), so a property controls
+        // doesn't touch keeps whatever the program's hooks resolved for that
+        // row, and a controls hdma hook composes on top last-write-wins, same
+        // as any other hook. Skipped when apply_pokes touched nothing this
+        // frame (released controls) — no point re-running it 224 times.
+        if let Some(cf) = self.controls_fn.clone() {
+            let dirty: bool = {
+                let mut l = self.lua.borrow_mut();
+                call_controls_hook(&mut l, "__ppu_controls_dirty")
+            };
+            if dirty {
+                // `.min(hooks.len())`: n_program matches hooks.len() in the
+                // common case (see the Phase A comment above), but a
+                // hand-edited apply_pokes assigning `__ppu_hooks = {}` can
+                // shrink it out from under that count — clamp so the splice
+                // never goes out of range.
+                hooks.insert(
+                    n_program.min(hooks.len()),
+                    (0, HEIGHT - 1, cf, Some(CONTROLS_FILE.to_string())),
+                );
+            }
+        }
 
         // The frame-wide `cgram` table, so a hook's palette write can be told
-        // apart, recorded on its line, and put back (HDMA to CGRAM).
+        // apart, recorded on its line, and put back (HDMA to CGRAM). Taken
+        // AFTER Phase A, so a frame-wide controls cgram poke is already
+        // baked into the baseline here — per-row hooks (incl. the synthetic
+        // one above) won't re-report it as a per-row poke on top.
         let cg_snap: Rc<Vec<Option<i64>>> = {
             let mut l = self.lua.borrow_mut();
             Rc::new(l.enter(snapshot_cgram))
@@ -843,6 +1078,20 @@ impl LuaEngine {
         }
 
         let lt = builder.build(HEIGHT);
+
+        // Undo every write controls made this frame — including an explicit
+        // `apply_pokes()` call from inside the program's own frame(),
+        // Phase A's implicit call, and any per-row replay — now that the
+        // LineTable/Memory have captured them: the program's own globals
+        // return to exactly where its own frame() left them, so a released
+        // override never bakes in and an accumulator never compounds. See
+        // controls_env.lua. Runs BEFORE the sticky-globals restore below:
+        // a controls BAND hook's first logged write for a key holds
+        // that row's `write_state(row)` baseline as its "old" value, not the
+        // frame-wide default — restoring here first, then re-baselining to
+        // `defaults` below, makes the frame-wide write_state the one that
+        // sticks instead of a stray row value.
+        self.restore_controls();
 
         // Restore sticky globals to the frame-wide defaults (hooks mutated them).
         {
@@ -1054,6 +1303,36 @@ impl LuaEngine {
         l.enter(|ctx| publish_voice_readbacks(ctx, &view));
         Ok(())
     }
+}
+
+/// The `__ppu_controls_env` table controls_env.lua installs, looked up
+/// fresh per `enter`/`try_enter` call (its GC lifetime is tied to that
+/// call's `ctx`, so the `Table` itself can't be hoisted across calls — only
+/// this lookup can).
+fn controls_env<'gc>(ctx: piccolo::Context<'gc>) -> Table<'gc> {
+    match ctx.get_global("__ppu_controls_env") {
+        Value::Table(t) => t,
+        _ => panic!("controls_env.lua must define __ppu_controls_env"),
+    }
+}
+
+/// Call a zero-arg global Lua function defined by `controls_env.lua`
+/// (`__ppu_controls_begin`/`_dirty`/`_restore`) for its side effect and/or
+/// return value (`R`, e.g. `()` for begin/restore or `bool` for dirty).
+/// That chunk is static and shipped with the engine, so a missing global or
+/// a raise here is our own bug, not a user error — panics loudly (with the
+/// Lua error) instead of threading a `Result` a caller could never
+/// meaningfully recover from.
+fn call_controls_hook<R: for<'gc> FromMultiValue<'gc>>(lua: &mut Lua, name: &'static str) -> R {
+    let ex = lua.enter(|ctx| {
+        let f = match ctx.get_global(name) {
+            Value::Function(f) => f,
+            _ => panic!("controls_env.lua must define {name}"),
+        };
+        ctx.stash(Executor::start(ctx, f, ()))
+    });
+    lua.execute::<R>(&ex)
+        .unwrap_or_else(|e| panic!("{name} (controls_env.lua) must not raise: {e}"))
 }
 
 /// Publish `json` (a serde-normalized object/array) as the `sram` global.
