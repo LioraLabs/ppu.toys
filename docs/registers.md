@@ -61,4 +61,5 @@ end
 ppu.toys renders background modes 0–4 and Mode 7, sprites, windows, main and
 sub screens, color math, VRAM, CGRAM, OAM, and per-scanline register changes.
 Modes 5 and 6, interlace, overscan, and read-only counter registers are not
-modelled yet.
+modelled yet. Sound is modelled too: the S-DSP's eight voices, BRR samples,
+timers, and echo — see [Audio](audio.md).

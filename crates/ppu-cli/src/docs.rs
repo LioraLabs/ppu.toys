@@ -14,6 +14,7 @@ const TOPICS: &[(&str, &str)] = &[
     ("sources", include_str!("../../../docs/sources.md")),
     ("dma", include_str!("../../../docs/dma.md")),
     ("pad", include_str!("../../../docs/pad.md")),
+    ("audio", include_str!("../../../docs/audio.md")),
 ];
 
 pub fn docs(topic: Option<&str>) -> Result<String> {

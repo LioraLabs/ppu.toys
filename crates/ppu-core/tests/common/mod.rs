@@ -2,7 +2,10 @@
 //! Mirrors the private helpers in golden_demos.rs — that file predates this
 //! module and deliberately keeps its own copies (PPU-96 owns the unification).
 #![allow(dead_code)]
-use ppu_core::{convert_source, ConvertOptions, LuaEngine, SourceKind, HEIGHT, WIDTH};
+use ppu_core::{
+    convert_sample, convert_source, ConvertOptions, ConvertSampleOptions, LuaEngine, SourceKind,
+    HEIGHT, WIDTH,
+};
 
 /// Empty pokes.lua chunk — mirrors `pokesToLua([])` / `EMPTY_POKES` from
 /// web/src/studio/pokes/pokes.ts byte-for-byte.
@@ -48,6 +51,29 @@ pub fn add_sheet(e: &mut LuaEngine, name: &str, rgba: Vec<u8>, w: u32, h: u32, b
         ..Default::default()
     };
     let (payload, _) = convert_source(SourceKind::Sheet, &opts, &rgba, w, h).unwrap();
+    e.add_source(name, &payload.encode()).unwrap();
+}
+
+/// 40 BRR blocks × 9 bytes.
+pub const SAMPLE_BYTES: u32 = 360;
+
+/// Registers a looping 640-sample 1 kHz sine (32 samples/period, amplitude
+/// 20000) under `name` — the shared sample fixture for the audio golden
+/// tests (see `dsp_placement.rs::sine_640`/`add_sine`, same shape).
+pub fn add_sample(e: &mut LuaEngine, name: &str) {
+    let pcm: Vec<i16> = (0..640)
+        .map(|i| {
+            let phase = (i as f64) / 32.0 * std::f64::consts::TAU;
+            (phase.sin() * 20000.0).round() as i16
+        })
+        .collect();
+    let (payload, _meta) = convert_sample(
+        &pcm,
+        &ConvertSampleOptions {
+            loop_start: Some(0),
+        },
+    )
+    .unwrap();
     e.add_source(name, &payload.encode()).unwrap();
 }
 

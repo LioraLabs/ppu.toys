@@ -120,6 +120,7 @@ scanline. Use `ppu docs` for offline topics. Modes 0–4 and 7, tile layers,
 sprites, windows, mosaic, palette animation, color math, and main/sub screens
 can be combined. Register controls use friendly Lua fields, with raw aliases
 for screen/window/color-math registers. Direct `vram[]` and `cgram[]` writes
-allow generated graphics; `obj[]` controls OAM. This is a PPU playground, not
-a stock SNES CPU/DMA timing simulator. Modes 5/6, interlace, overscan, and
-read-only counter registers are not currently modelled.
+allow generated graphics; `obj[]` controls OAM. `voice[]`, `dsp`, `timer()`,
+and the music kit drive the S-DSP (see `ppu docs audio`). This is a PPU
+playground, not a stock SNES CPU/DMA timing simulator. Modes 5/6, interlace,
+overscan, and read-only counter registers are not currently modelled.

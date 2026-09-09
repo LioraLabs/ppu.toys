@@ -1545,42 +1545,41 @@ fn install_dma(
             _ => return Err(lua_err(ctx, "dma: opts must be a table")),
         };
         let opt = |key: &'static str| opts.map_or(Value::Nil, |t| t.get(ctx, key));
-        let (char_base, map_base, cgram_base) = if kind == SourceKind::M7
-            || kind == SourceKind::Sample
-        {
-            for k in ["char", "map", "pal"] {
-                if !matches!(opt(k), Value::Nil) {
-                    let msg = if kind == SourceKind::M7 {
-                        format!(
-                            "dma: '{name}' is an m7 source — chars+map always live \
+        let (char_base, map_base, cgram_base) =
+            if kind == SourceKind::M7 || kind == SourceKind::Sample {
+                for k in ["char", "map", "pal"] {
+                    if !matches!(opt(k), Value::Nil) {
+                        let msg = if kind == SourceKind::M7 {
+                            format!(
+                                "dma: '{name}' is an m7 source — chars+map always live \
                              interleaved at 0x0000 (palette at CGRAM 1), so it takes no '{k}' opt"
-                        )
-                    } else {
-                        format!(
+                            )
+                        } else {
+                            format!(
                             "dma: '{name}' is a sample source — it takes only 'addr', not '{k}'"
                         )
-                    };
-                    return Err(lua_err(ctx, &msg));
+                        };
+                        return Err(lua_err(ctx, &msg));
+                    }
                 }
-            }
-            (0, 0, 0)
-        } else {
-            let int_opt = |key: &'static str, default: i64, max: i64| match opt(key) {
-                Value::Nil => Ok(default),
-                v => match v.to_int() {
-                    Some(n) if (0..=max).contains(&n) => Ok(n),
-                    _ => Err(lua_err(
-                        ctx,
-                        &format!("dma: opts.{key} must be an integer in 0..{max:#x}"),
-                    )),
-                },
+                (0, 0, 0)
+            } else {
+                let int_opt = |key: &'static str, default: i64, max: i64| match opt(key) {
+                    Value::Nil => Ok(default),
+                    v => match v.to_int() {
+                        Some(n) if (0..=max).contains(&n) => Ok(n),
+                        _ => Err(lua_err(
+                            ctx,
+                            &format!("dma: opts.{key} must be an integer in 0..{max:#x}"),
+                        )),
+                    },
+                };
+                (
+                    int_opt("char", 0x1000, 0x7fff)?,
+                    int_opt("map", 0x0000, 0x7fff)?,
+                    int_opt("pal", 0, if kind == SourceKind::Obj { 7 } else { 0xff })?,
+                )
             };
-            (
-                int_opt("char", 0x1000, 0x7fff)?,
-                int_opt("map", 0x0000, 0x7fff)?,
-                int_opt("pal", 0, if kind == SourceKind::Obj { 7 } else { 0xff })?,
-            )
-        };
 
         let align_up = |n: usize, align: usize| (n + align - 1) & !(align - 1);
         let mut vram = Vec::<(usize, usize)>::new();

@@ -887,3 +887,62 @@ fn song_step_wraps_after_15() {
         "h.step never wrapped from 15 back to 0 over 400 frames"
     );
 }
+
+/// Run (`reset()`) re-runs the kit prelude and re-registers `song{}`'s
+/// timer at phase zero: the first step's key-on lands at absolute sample
+/// 1000 (one timer-0 period at div 250) on a warmed-then-reset engine,
+/// exactly as on a fresh one.
+#[test]
+fn song_first_step_offset_repeats_after_reset() {
+    const PROGRAM: &str = "local real_timer = timer\n\
+         function timer(n, div, fn)\n\
+           real_timer(n, div, function(off)\n\
+             __cur_off = off\n\
+             fn(off)\n\
+           end)\n\
+         end\n\
+         local real_kon = kon\n\
+         first_kon = nil\n\
+         function kon(v)\n\
+           first_kon = first_kon or __cur_off\n\
+           real_kon(v)\n\
+         end\n\
+         song{ tempo = 120, tracks = {\n\
+           { voice = 0, inst = instrument{ sample = 0 }, pattern = 'C2' },\n\
+         } }\n\
+         function frame(t, f)\n\
+           vram[0] = first_kon and 1 or 0\n\
+           vram[1] = first_kon or 0\n\
+         end\n";
+
+    // Absolute sample of the first key-on, read back through the one-frame
+    // lag (a hook fire during call f shows up in vram after call f + 1).
+    fn first_step(e: &mut LuaEngine) -> usize {
+        let mut frame_start = vec![0usize];
+        for f in 0..4usize {
+            e.frame(0.0, f as u32).unwrap();
+            if e.memory().vram[0] == 1 {
+                return frame_start[f - 1] + e.memory().vram[1] as usize;
+            }
+            frame_start.push(frame_start[f] + e.audio().len() / 2);
+        }
+        panic!("song never keyed on within 4 frames");
+    }
+
+    let mut fresh = LuaEngine::new();
+    fresh.set_source(PROGRAM).unwrap();
+    let want = first_step(&mut fresh);
+    assert_eq!(want, 1000, "fresh engine: first step at sample 1000");
+
+    let mut e = LuaEngine::new();
+    e.set_source(PROGRAM).unwrap();
+    for f in 0..7u32 {
+        e.frame(0.0, f).unwrap();
+    }
+    e.reset().unwrap();
+    assert_eq!(
+        first_step(&mut e),
+        want,
+        "after reset() the first song step must land at the same sample as on a fresh engine"
+    );
+}
