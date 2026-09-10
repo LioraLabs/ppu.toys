@@ -27,7 +27,6 @@ const MAIN_SRC: &str = r#"-- ppu.toys :: stage-lights (6/10 · two hdma spotligh
 -- (parallax-skyline, lesson 2, tells the full story).
 local stage = dma("stage", { char = 0x1000, map = 0x0000 })
 function frame(t, f)
-  apply_pokes()
   mode = 1; brightness = 15
   bg[1].char_base = stage.char; bg[1].map_base = stage.map
   screen.main.bg1 = true    -- the stage, alone on the main screen

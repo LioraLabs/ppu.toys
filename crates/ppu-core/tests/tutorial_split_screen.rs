@@ -38,7 +38,6 @@ dma("floor")   -- m7: chars+map at 0x0000, its 3-colour palette at CGRAM 1..
 -- palette lands on entries 1..3 holding the exact same values -- shared
 -- paint instead of a fight.
 function frame(t, f)
-  apply_pokes()
   mode = 1; brightness = 15    -- frame-wide default: every line starts in mode 1
 
   -- Top band: point BG1 at the city's VRAM home from the setup stage.

@@ -19,7 +19,6 @@ const MAIN_SRC: &str = r#"-- ppu.toys tutorial 9/10 :: extbg-direct-color — Mo
 -- 3 bits red, 3 bits green, 1 (dim) bit blue. Every byte poked below is
 -- simultaneously a colour and a priority. The pixel values ARE the lesson.
 function frame(t, f)
-  apply_pokes()
   mode = 7; brightness = 15
   -- EXTBG splits the ONE plane into two designatable halves: BG1 carries the
   -- low-priority pixels, BG2 the high ones — so both go on the main screen.

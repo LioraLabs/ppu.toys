@@ -60,7 +60,6 @@ local SPEED = 48                     -- camera pixels per second
 local ANIM_HZ = 6                    -- lava steps per second
 
 function frame(t, f)
-  apply_pokes()
   mode = 1; brightness = 15
   screen.main.bg1 = true    -- the level, alone on the main screen (TM)
 

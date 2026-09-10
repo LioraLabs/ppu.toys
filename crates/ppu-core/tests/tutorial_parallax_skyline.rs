@@ -36,7 +36,6 @@ local far  = dma("skyline_far",  { char = 0x4000, map = 0x0800 })
 -- global scope (PICO-8 style), so FAR_SPEED and band_speed() from skyline.lua
 -- are plain globals here. main.lua is a convention, not magic.
 function frame(t, f)
-  apply_pokes()
   mode = 1; brightness = 15
 
   -- DESIGNATE THE LAYERS. Both screens power on EMPTY: TM (screen.main) says

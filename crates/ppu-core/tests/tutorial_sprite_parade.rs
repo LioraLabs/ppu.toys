@@ -42,7 +42,6 @@ local sheet  = dma("parade", { char = 0x6000 })
 SPEED = 32           -- parade pace, pixels per second
 
 function frame(t, f)
-  apply_pokes()
   mode = 1; brightness = 15
   cgram[0] = rgb(96, 64, 128)   -- backdrop = dusk sky (CGRAM entry 0)
 

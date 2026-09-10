@@ -15,9 +15,9 @@ const MAIN_SRC: &str = r#"-- ppu.toys tutorial 1/10 :: first-light — registers
 --   brightness   the master fade, 0 (black) .. 15 (full) - INIDISP
 --   color.fixed  the fixed colour (COLDATA), here ADDed onto the backdrop
 -- frame(t, f) runs every frame: t = seconds, f = frame number. Edits re-run
--- live, and apply_pokes() replays your inspector tweaks (see pokes.lua).
+-- live; controls.lua applies your inspector tweaks automatically, last, after
+-- this frame() returns — no call needed here.
 function frame(t, f)
-  apply_pokes()
   brightness = 15
   cgram[0] = hsl(268 + sin(t / 7) * 14, 0.55, 0.24)  -- pre-dawn violet, drifting
 

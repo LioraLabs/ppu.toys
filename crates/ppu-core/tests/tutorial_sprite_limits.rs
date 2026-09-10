@@ -19,7 +19,6 @@ const MAIN_SRC: &str = r#"-- ppu.toys tutorial 10/10 :: sprite-limits — why 90
 -- STARTS (obj.first) each frame, so a DIFFERENT set pays the budget every
 -- frame — flicker, the fair alternative to permanent invisibility.
 function frame(t, f)
-  apply_pokes()
   mode = 1; brightness = 15
   screen.main.obj = true   -- sprites only: no BG is designated (TM)
   local ROTATE = true   -- flip to false: the SAME sprites vanish forever

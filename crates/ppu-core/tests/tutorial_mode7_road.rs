@@ -34,7 +34,6 @@ const MAIN_SRC: &str = r#"-- ppu.toys tutorial 3/10 :: mode7-road — the affine
 -- (parallax-skyline, lesson 2, tells the full setup-stage story.)
 dma("road")                        -- the ground image — swap in your own here
 function frame(t, f)
-  apply_pokes()
   mode = 7; brightness = 15        -- mode 7: BG1 is now the affine layer
   screen.main.bg1 = true           -- ...and BG1 is what you designate (TM)
 

@@ -78,6 +78,8 @@ scope. Use the Backgrounds or Mode 7 panel for scanline keyframes.
 Search by address, register, or Lua field; filter by subsystem or existing pokes.
 Hover the decoded fields or bit controls for their full meaning. The Poke column
 marks registers with pokes and lets you reset them. Cells and bit controls
-always use the current live register value. Values are saved in `pokes.lua`; `apply_pokes()` must run in
-`frame()`. Later script writes win, so move `apply_pokes()` after them if you want
-the pokes to take precedence. `bg3_priority` now exposes BGMODE bit 3 in Lua.
+always use the current live register value. Values are saved in `controls.lua`,
+which applies itself automatically every frame as the final override (then
+undoes it before the next) — no `apply_pokes()` call is needed, and a poke
+wins over both the program's own frame writes and its `hdma()`. `bg3_priority`
+now exposes BGMODE bit 3 in Lua.

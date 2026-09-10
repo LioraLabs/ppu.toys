@@ -214,7 +214,6 @@ end
 
 local was_a = false
 function frame(t, f)
-  apply_pokes()
   local pressed = pad.a and not was_a             -- edge, not level: sfx() restarts the voice every call
   was_a = pad.a
   if pressed then sfx(hit, 1, "C4") end
