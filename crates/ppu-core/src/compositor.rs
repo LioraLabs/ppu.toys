@@ -392,10 +392,12 @@ fn blend_pixel(
         rgb15(main[0], main[1], main[2])
     };
     let (sub15, sub_is_backdrop) = if row.add_subscreen() {
-        (
-            rgb15(sub[0], sub[1], sub[2]),
-            src_sub == PixelSource::Backdrop,
-        )
+        if src_sub == PixelSource::Backdrop {
+            // An empty sub-screen pixel selects COLDATA, not CGRAM[0].
+            (row.coldata, true)
+        } else {
+            (rgb15(sub[0], sub[1], sub[2]), false)
+        }
     } else {
         (row.coldata, false)
     };
@@ -1225,15 +1227,17 @@ mod tests {
     #[test]
     fn half_is_suppressed_when_sub_pixel_is_backdrop() {
         // Sub screen empty (TS=0) -> sub pixel is backdrop -> half NOT applied.
-        let (m, mut src) = two_screen_scene(rgb15(255, 0, 0), rgb15(0, 0, 255));
-        src.ts = 0x00; // sub = backdrop (black) everywhere
+        let (mut m, mut src) = two_screen_scene(rgb15(255, 0, 0), rgb15(0, 0, 255));
+        m.cgram[0] = rgb15(0, 255, 0); // must not become the math addend
+        src.coldata = rgb15(0, 0, 255);
+        src.ts = 0x00; // sub has no BG/OBJ pixels anywhere
         src.cgadsub = 0x40 | 0x01; // add + half + BG1
         src.cgwsel = 0x02; // addend = subscreen (which is backdrop here)
         let lt = LineTableBuilder::new(src).build(HEIGHT);
-        // main(31,0,0) + backdrop(0,0,0) = (31,0,0), half suppressed -> unchanged.
+        // main red + fixed blue = magenta, without half; CGRAM[0] is ignored.
         assert_eq!(
             &render_frame(&lt, &m)[0..4],
-            &unpack_rgb15(rgb15(255, 0, 0))
+            &unpack_rgb15(rgb15(255, 0, 255))
         );
     }
 
