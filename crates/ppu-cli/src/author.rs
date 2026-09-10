@@ -95,14 +95,28 @@ pub fn new_project(dir: &Path) -> Result<()> {
     let manifest = serde_json::json!({
         "title": dir.file_name().and_then(|n| n.to_str()).unwrap_or("My demo"),
         "description": "Mode 7 flight with per-scanline perspective and palette lighting.",
-        "files": ["timeline.lua", "main.lua"],
+        "files": [ppu_core::CONTROLS_FILE, "main.lua"],
         "sources": [{"name": "floor", "kind": "m7", "file": "assets/floor.png", "options": {}}]
     });
     fs::write(
         dir.join(MANIFEST),
         format!("{}\n", serde_json::to_string_pretty(&manifest)?),
     )?;
-    fs::write(dir.join("timeline.lua"), "-- timeline: end=8 in=0 out=8 loop=true\n-- loop markers: in=start out=loop_end\nmarkers = { start = 0, loop_end = 8 }\n")?;
+    // Hand-copied output of the TS `formatControls` (web/src/studio/pokes/
+    // controls.ts) for this exact timeline data (end=8 in=0 out=8 loop=true,
+    // markers start=0/loop_end=8) — NOT derived from it, since this is a Rust
+    // binary with no access to the TS formatter. MUST stay byte-identical to
+    // what `formatControls` emits for that data, or a scaffolded project
+    // silently diverges from what the web Studio would generate; pinned by a
+    // cross-language test in web/src/studio/pokes/controls.test.ts, which
+    // reads scaffold_controls.lua and asserts it against a real
+    // `formatControls` call — grep that file for "scaffold_controls.lua"
+    // (mirrors the `SCANLINE_PREAMBLE` doc comment in scanlinePokes.ts for
+    // the analogous hand-copied-fixture risk).
+    fs::write(
+        dir.join(ppu_core::CONTROLS_FILE),
+        include_str!("scaffold_controls.lua"),
+    )?;
     fs::write(dir.join("main.lua"), include_str!("starter.lua"))?;
     let mut pixels = Vec::with_capacity(128 * 128 * 4);
     for y in 0..128 {
@@ -175,14 +189,11 @@ fn engine(body: &FileBody) -> Result<LuaEngine> {
             .add_source(&source.name, &bytes)
             .map_err(|e| anyhow!("source {:?}: {e:?}", source.name))?;
     }
-    let mut files: Vec<_> = body
+    let files: Vec<_> = body
         .files
         .iter()
         .map(|f| (f.name.as_str(), f.source.as_str()))
         .collect();
-    if !files.iter().any(|f| f.0 == "pokes.lua") {
-        files.insert(0, ("pokes.lua", "function apply_pokes() end"));
-    }
     engine.set_sources(&files).map_err(lua_error)?;
     Ok(engine)
 }

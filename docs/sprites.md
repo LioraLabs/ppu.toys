@@ -111,6 +111,7 @@ OAM attributes remain frame-wide. Selecting a line changes inspection, not
 sprite placement or poke scope.
 
 Edit position, tile, palette, priority, size, flips, or Enabled to write that
-field into `pokes.lua`. Numbers apply on Enter or blur; Escape cancels.
+field into `controls.lua`, which applies it automatically every frame.
+Numbers apply on Enter or blur; Escape cancels.
 Click a poke marker to remove that field's poke. A hollow marker means the
 live value differs: a later script write or quantization has changed it.

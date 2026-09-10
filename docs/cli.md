@@ -73,7 +73,7 @@ packed artifact as well as the source directory.
 {
   "title": "My demo",
   "description": "A PPU graphics performance.",
-  "files": ["timeline.lua", "main.lua"],
+  "files": ["controls.lua", "main.lua"],
   "sources": [
     {
       "name": "floor",
@@ -109,8 +109,7 @@ ppu unpack downloaded.ppu.json editable-copy
 ppu pack editable-copy -o revised.ppu.json
 ```
 
-Unpack overwrites matching files: choose a fresh destination. The CLI adds
-Studio's no-op `apply_pokes()` shim when no `pokes.lua` is supplied.
+Unpack overwrites matching files: choose a fresh destination.
 
 ## Lua surface and effects
 

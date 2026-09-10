@@ -73,7 +73,8 @@ rows. Scroll fields accept 13-bit values; Mode 7 matrices accept 16-bit signed
 Q8 bit patterns (`FF00` means `-1.0`). COLDATA is a resolved 15-bit color.
 Disabled bits are unused or not modelled; raw value entry still follows the
 core's masking rules. The selected scanline changes the readout, not the poke's
-scope. Use the Backgrounds or Mode 7 panel for scanline keyframes.
+scope. Use the Scanlines panel for a value that only applies within a
+scanline range.
 
 Search by address, register, or Lua field; filter by subsystem or existing pokes.
 Hover the decoded fields or bit controls for their full meaning. The Poke column

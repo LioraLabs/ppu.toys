@@ -48,5 +48,11 @@ hdma(0, 223, function(y)
 end)
 ```
 
+The Studio's Scanlines panel generates the same shape — a named band is an
+`hdma()` hook over an inclusive scanline range (0–223), stored in
+`controls.lua` and applied automatically after your own code runs. That
+range is screen space; it is unrelated to the timeline's markers, which name
+points in seconds.
+
 See also: [Background scrolling](backgrounds.md#scroll-bgnhofs-and-bgnvofs-210d-2114),
 [Mode 7](mode7.md), [windows](windows.md), and [color math](color-math.md).
