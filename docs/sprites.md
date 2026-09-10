@@ -114,4 +114,5 @@ Edit position, tile, palette, priority, size, flips, or Enabled to write that
 field into `controls.lua`, which applies it automatically every frame.
 Numbers apply on Enter or blur; Escape cancels.
 Click a poke marker to remove that field's poke. A hollow marker means the
-live value differs: a later script write or quantization has changed it.
+live value differs: quantization has changed it, not a script override —
+controls apply last, so a script write cannot override a poke.
