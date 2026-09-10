@@ -1,5 +1,5 @@
--- Tracked environment for controls.lua (see LuaEngine::load_controls/frame's
--- Phase A). controls.lua is compiled with `__ppu_controls_env` as its _ENV,
+-- Tracked environment for ppuglobals.lua (see LuaEngine::load_controls/frame's
+-- Phase A). ppuglobals.lua is compiled with `__ppu_controls_env` as its _ENV,
 -- so every global read/write it makes (including nested table fields, e.g.
 -- `obj[0].x = 96`) passes through `track`'s proxy. A write is logged as
 -- (real table, key, old value) before it lands on the REAL table, so
@@ -10,11 +10,11 @@
 -- accumulator (see frame()'s Phase A doc comment). Reads do NOT pass
 -- through untouched: a nested-table read returns a PROXY, not the real
 -- table, so `#proxy`, `pairs(proxy)`, `rawget`, and identity comparisons all
--- give wrong answers inside controls.lua. Writing a table-valued READ
+-- give wrong answers inside ppuglobals.lua. Writing a table-valued READ
 -- elsewhere (e.g. `obj[0] = obj[1]`) stores that PROXY onto the real
 -- globals, not the underlying table — also unsupported. The generated
 -- document only ever does scalar reads/assignments and `hdma(...)` calls,
--- and those forms are the only ones supported inside controls.lua — no
+-- and those forms are the only ones supported inside ppuglobals.lua — no
 -- `__len`/`__pairs` is implemented.
 local G = _ENV
 local log = {}

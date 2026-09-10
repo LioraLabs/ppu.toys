@@ -15,7 +15,7 @@ const MAIN_SRC: &str = r#"-- ppu.toys tutorial 1/10 :: first-light — registers
 --   brightness   the master fade, 0 (black) .. 15 (full) - INIDISP
 --   color.fixed  the fixed colour (COLDATA), here ADDed onto the backdrop
 -- frame(t, f) runs every frame: t = seconds, f = frame number. Edits re-run
--- live; controls.lua applies your inspector tweaks automatically, last, after
+-- live; ppuglobals.lua applies your inspector tweaks automatically, last, after
 -- this frame() returns — no call needed here.
 function frame(t, f)
   brightness = 15

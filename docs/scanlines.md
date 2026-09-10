@@ -50,7 +50,7 @@ end)
 
 The Studio's Scanlines panel generates the same shape — a named band is an
 `hdma()` hook over an inclusive scanline range (0–223), stored in
-`controls.lua` and applied automatically after your own code runs. That
+`ppuglobals.lua` and applied automatically after your own code runs. That
 range is screen space; it is unrelated to the timeline's markers, which name
 points in seconds.
 

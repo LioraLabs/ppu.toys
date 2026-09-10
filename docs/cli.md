@@ -73,7 +73,7 @@ packed artifact as well as the source directory.
 {
   "title": "My demo",
   "description": "A PPU graphics performance.",
-  "files": ["controls.lua", "main.lua"],
+  "files": ["ppuglobals.lua", "main.lua"],
   "sources": [
     {
       "name": "floor",
