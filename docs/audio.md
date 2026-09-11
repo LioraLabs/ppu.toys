@@ -67,7 +67,7 @@ Read-only per frame, and one frame behind as described above:
 - `ended` — the raw ENDX bit; it also pulses when a looping sample passes
   its END block, not only when playback truly stops.
 
-Voice fields persist across frames — the tables *are* the register state.
+Voice fields persist across frames — the tables _are_ the register state.
 Set what a voice needs once in `init()`, then change only what varies per
 frame or per hit.
 
@@ -176,15 +176,56 @@ these globals (a user chunk that defines the same name wins):
   MIDI number, converted to a 14-bit pitch relative to `base` (default
   `"C4"`, the note the sample was recorded at).
 - `instrument{ sample =, adsr = ?, gain = ?, vol = 127, pan = 0, base =
-  "C4", noise = ?, pmod = ?, echo = ? }` — `pan` runs −1..1.
+"C4", noise = ?, pmod = ?, echo = ? }` — `pan` runs −1..1.
 - `sfx(inst, v [, n])` — applies an instrument preset to `voice[v]` (`pan`
   folds into `vol.l`/`vol.r`) and keys it on.
 - `song{ tempo, steps = 16, tracks = { { voice, inst, pattern = "C2 . - ^" }
-  } }` — runs on one `timer(0, ...)` and auto-plays. Pattern tokens: a note
+} }` — runs on one `timer(0, ...)` and auto-plays. Pattern tokens: a note
   name keys the voice on, `^` keys it off, `.` and `-` do nothing. A pattern
   shorter than `steps` loops on its own length, so tracks can run
   polymeters against each other. Returns `{ step, beat, playing, div, rate,
-  play(), stop() }`. Like `timer()`, `song{}` is setup-only.
+play(), stop() }`. Like `timer()`, `song{}` is setup-only.
+- `midi{ data, tracks = { [i] = { voices = { ... }, inst = ?, insts = ? } },
+loop = true, speed = 1 }` — plays the table a `.mid` upload generated (see
+  below). Setup-only. Returns `{ t, playing, length, play(), stop() }`;
+  `stop()` pauses and releases the voices, `play()` resumes.
+
+## Music from a MIDI file
+
+Drop a `.mid` on the Sources panel and it becomes a Lua data file in the toy,
+named after the file: a global table of tracks, each a list of `{ t, dur,
+key, vel }` notes in seconds, with the tempo map already applied. A MIDI
+track that uses several channels splits into one entry per channel. The
+file opens with a comment listing every track — its name, channel, note
+count, and key range — as a ready-to-paste `midi{}` call.
+
+Tie a sample to each track you want to hear. `data.tracks[i]` plays on
+`tracks[i]`; tracks you leave out stay silent:
+
+```lua
+local lead = instrument{ sample = dma("lead").id, base = "C4" }
+local bass = instrument{ sample = dma("bass").id, base = "C2" }
+local kick = instrument{ sample = dma("kick").id }
+local snare = instrument{ sample = dma("snare").id }
+
+local tune = midi{ data = castle, tracks = {
+  [1] = { inst = lead, voices = { 0, 1, 2 } },
+  [2] = { inst = bass, voices = { 3 } },
+  [4] = { insts = { [36] = kick, [38] = snare }, voices = { 4, 5 } },
+} }
+```
+
+`inst` pitches one sample by key, relative to its `base`. `insts` maps a
+MIDI key to its own preset, played at that preset's own pitch — a drum kit.
+A track's notes take turns on its `voices`, so a track that plays chords
+needs as many voices as it stacks notes; when they run out the oldest voice
+restarts on the new note. Velocity scales the preset's volume. The player
+runs on one `timer(0, 32, ...)`, a 4 ms grid, and loops the song unless
+`loop = false`; `speed = 2` plays it twice as fast.
+
+The generated file is ordinary Lua: edit notes by hand, delete tracks you
+don't use, or read `tune.t` in `frame()` to sync the picture to the music.
+Dropping the same `.mid` again adds a new file rather than replacing it.
 
 ## Your first note
 
@@ -246,26 +287,26 @@ play any audio at all.
 
 ## Register table
 
-| Register | Lua | Meaning |
-|---|---|---|
-| VOL (L/R) | `voice[n].vol.l` / `.r` | Per-voice volume |
-| P (PITCH L/H) | `voice[n].pitch` | 14-bit playback rate |
-| SRCN | `voice[n].sample` | Sample directory index |
-| ADSR1/ADSR2 | `voice[n].adsr` | Envelope rates |
-| GAIN | `voice[n].gain` | Direct envelope control (non-nil switches out of ADSR) |
-| ENVX/OUTX | `voice[n].envx` / `.outx` | Read-only, previous frame |
-| KON/KOFF | `kon()` / `koff()` | Edge-triggered key on/off |
-| ENDX | `voice[n].ended` | Raw end-of-sample bit |
-| MVOL | `dsp.mvol` | Master volume |
-| EVOL | `dsp.evol` | Echo volume |
-| EFB | `dsp.echo.feedback` | Echo feedback |
-| FLG | `dsp.mute` · `dsp.noise_clock` · echo-write-disable | Mute, noise clock, and the echo-write-off bit (set when `delay` is 0) |
-| PMON | `voice[n].pmod` | Pitch modulation enable |
-| NON | `voice[n].noise` | Noise enable |
-| EON | `voice[n].echo` | Echo enable |
-| DIR | fixed `0x0100` | Sample directory base; `dma()` fills it |
-| ESA/EDL | derived from `dsp.echo.delay` | Echo buffer start and length |
-| C0–C7 | `dsp.echo.fir` | FIR filter coefficients |
+| Register      | Lua                                                 | Meaning                                                               |
+| ------------- | --------------------------------------------------- | --------------------------------------------------------------------- |
+| VOL (L/R)     | `voice[n].vol.l` / `.r`                             | Per-voice volume                                                      |
+| P (PITCH L/H) | `voice[n].pitch`                                    | 14-bit playback rate                                                  |
+| SRCN          | `voice[n].sample`                                   | Sample directory index                                                |
+| ADSR1/ADSR2   | `voice[n].adsr`                                     | Envelope rates                                                        |
+| GAIN          | `voice[n].gain`                                     | Direct envelope control (non-nil switches out of ADSR)                |
+| ENVX/OUTX     | `voice[n].envx` / `.outx`                           | Read-only, previous frame                                             |
+| KON/KOFF      | `kon()` / `koff()`                                  | Edge-triggered key on/off                                             |
+| ENDX          | `voice[n].ended`                                    | Raw end-of-sample bit                                                 |
+| MVOL          | `dsp.mvol`                                          | Master volume                                                         |
+| EVOL          | `dsp.evol`                                          | Echo volume                                                           |
+| EFB           | `dsp.echo.feedback`                                 | Echo feedback                                                         |
+| FLG           | `dsp.mute` · `dsp.noise_clock` · echo-write-disable | Mute, noise clock, and the echo-write-off bit (set when `delay` is 0) |
+| PMON          | `voice[n].pmod`                                     | Pitch modulation enable                                               |
+| NON           | `voice[n].noise`                                    | Noise enable                                                          |
+| EON           | `voice[n].echo`                                     | Echo enable                                                           |
+| DIR           | fixed `0x0100`                                      | Sample directory base; `dma()` fills it                               |
+| ESA/EDL       | derived from `dsp.echo.delay`                       | Echo buffer start and length                                          |
+| C0–C7         | `dsp.echo.fir`                                      | FIR filter coefficients                                               |
 
 See also: [Sources](sources.md), [`dma()`](dma.md), [Controller input](pad.md),
 [Scanline effects](scanlines.md).

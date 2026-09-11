@@ -230,3 +230,151 @@ function song(cfg)
   end
   return h
 end
+
+-- midi{ data=, tracks={ [i]={ voices={...}, inst=?, insts=? } }, loop=true?,
+-- speed=1? } -> plays a table a .mid upload generated (see web
+-- assets/midi.ts): { length, tracks = { { name, ch, notes = { {t, dur, key,
+-- vel}, ... } } } }, times in seconds. cfg.tracks is keyed by data track
+-- index; unmapped tracks stay silent. A mapped track plays on its `voices`
+-- round-robin (chords need several; a stolen voice just restarts), `inst`
+-- pitches the sample by key, `insts[key]` picks a preset per key at that
+-- preset's own pitch (drum kits). Velocity scales the preset volume. One
+-- timer(0, 32, ...) = a 4 ms grid. Returns { t, playing, length, play(),
+-- stop() }; stop() pauses, play() resumes, a finished non-looping song
+-- rewinds. Setup-only, like song{}.
+function midi(cfg)
+  if cfg == nil or type(cfg.data) ~= "table" or type(cfg.data.tracks) ~= "table" then
+    error("midi: data must be the table a .mid upload generated")
+  end
+  if type(cfg.tracks) ~= "table" then
+    error("midi: tracks must be a table")
+  end
+  local speed = cfg.speed or 1
+  if type(speed) ~= "number" or speed <= 0 then
+    error("midi: speed must be > 0")
+  end
+  local length = cfg.data.length or 0
+  local tracks = {}
+  for i = 1, #cfg.data.tracks do
+    local tr = cfg.tracks[i]
+    if tr ~= nil then
+      if type(tr.voices) ~= "table" or #tr.voices == 0 then
+        error("midi: track " .. i .. " needs voices = { ... }")
+      end
+      for j = 1, #tr.voices do
+        local v = tr.voices[j]
+        if type(v) ~= "number" or v ~= math.floor(v) or v < 0 or v > 7 then
+          error("midi: track " .. i .. " voices must be 0..7")
+        end
+      end
+      if (type(tr.inst) ~= "table" or tr.inst.sample == nil) and type(tr.insts) ~= "table" then
+        error("midi: track " .. i .. " needs inst or insts")
+      end
+      local notes = cfg.data.tracks[i].notes or {}
+      for j = 1, #notes do
+        local e = notes[j][1] + notes[j][2]
+        if e > length then
+          length = e
+        end
+      end
+      tracks[#tracks + 1] = { notes = notes, inst = tr.inst, insts = tr.insts, voices = tr.voices, rr = 0, next = 1, active = {} }
+    end
+  end
+
+  local h = { t = 0, playing = true, length = length }
+  local loop = cfg.loop ~= false
+  local dt = 32 / 8000 * speed
+
+  -- Forget active notes on voice v without koff (kon restarts it anyway).
+  local function steal(tr, v)
+    local n = 0
+    for j = 1, #tr.active do
+      local a = tr.active[j]
+      if a.v ~= v then
+        n = n + 1
+        tr.active[n] = a
+      end
+    end
+    for j = #tr.active, n + 1, -1 do
+      tr.active[j] = nil
+    end
+  end
+  local function all_off()
+    for i = 1, #tracks do
+      local tr = tracks[i]
+      for j = 1, #tr.active do
+        koff(tr.active[j].v)
+      end
+      tr.active = {}
+    end
+  end
+  local function rewind()
+    for i = 1, #tracks do
+      tracks[i].next = 1
+    end
+  end
+
+  timer(0, 32, function(off)
+    if not h.playing then
+      return
+    end
+    local t = h.t
+    for i = 1, #tracks do
+      local tr = tracks[i]
+      local n = 0
+      for j = 1, #tr.active do
+        local a = tr.active[j]
+        if a.e <= t then
+          koff(a.v)
+        else
+          n = n + 1
+          tr.active[n] = a
+        end
+      end
+      for j = #tr.active, n + 1, -1 do
+        tr.active[j] = nil
+      end
+      while tr.next <= #tr.notes and tr.notes[tr.next][1] <= t do
+        local n = tr.notes[tr.next]
+        tr.next = tr.next + 1
+        local kit_inst = tr.insts and tr.insts[n[3]]
+        local inst = kit_inst or tr.inst
+        if inst ~= nil then
+          local v = tr.voices[tr.rr + 1]
+          tr.rr = (tr.rr + 1) % #tr.voices
+          steal(tr, v)
+          if kit_inst then
+            sfx(inst, v)
+          else
+            sfx(inst, v, n[3])
+          end
+          local vo = voice[v]
+          local g = n[4] / 127
+          vo.vol = { l = math.floor(vo.vol.l * g + 0.5), r = math.floor(vo.vol.r * g + 0.5) }
+          tr.active[#tr.active + 1] = { v = v, e = n[1] + n[2] }
+        end
+      end
+    end
+    h.t = t + dt
+    if h.length > 0 and h.t >= h.length then
+      all_off()
+      rewind()
+      if loop then
+        h.t = h.t - h.length
+      else
+        h.t = 0
+        h.playing = false
+      end
+    end
+  end)
+
+  -- stop() pauses (voices released, position kept); play() resumes.
+  h.play = function()
+    h.playing = true
+  end
+  h.stop = function()
+    h.playing = false
+    all_off()
+  end
+  return h
+end

@@ -946,3 +946,101 @@ fn song_first_step_offset_repeats_after_reset() {
         "after reset() the first song step must land at the same sample as on a fresh engine"
     );
 }
+
+// ---- midi{} -----------------------------------------------------------
+
+/// One mapped track, two notes, loop off: C4 (vel 127) at 0 s for 0.5 s,
+/// then E4 (vel 64) at 1.0 s for 0.25 s. Same shadow-and-log seam as the
+/// song{} tests. Expect kon at ~0 s and ~1.0 s, koff at ~0.5 s and ~1.25 s
+/// (all on the 4 ms / 128-sample grid, first fire one period in), the
+/// velocity-scaled volume after the second kon, and `playing` false once
+/// the 1.25 s length has passed.
+#[test]
+fn midi_plays_notes_on_time_with_velocity_and_stops_at_end() {
+    let mut e = LuaEngine::new();
+    e.set_source(&format!(
+        "local real_timer = timer\n\
+         function timer(n, div, fn)\n\
+           real_timer(n, div, function(off) __cur_off = off fn(off) end)\n\
+         end\n\
+         local real_kon, real_koff = kon, koff\n\
+         kon_log, koff_log = {{}}, {{}}\n\
+         function kon(v) kon_log[#kon_log + 1] = __cur_off real_kon(v) end\n\
+         function koff(v) koff_log[#koff_log + 1] = __cur_off real_koff(v) end\n\
+         lead = instrument{{ sample = 0, {adsr} }}\n\
+         tune = {{ length = 1.25, tracks = {{\n\
+           {{ name = 'x', ch = 0, notes = {{ {{0, 0.5, 60, 127}}, {{1.0, 0.25, 64, 64}} }} }},\n\
+           {{ name = 'silent', ch = 1, notes = {{ {{0, 9, 40, 127}} }} }},\n\
+         }} }}\n\
+         h = midi{{ data = tune, loop = false, tracks = {{ [1] = {{ inst = lead, voices = {{ 0 }} }} }} }}\n\
+         function frame(t, f)\n\
+           vram[0] = #kon_log\n\
+           for i = 1, #kon_log do vram[i] = kon_log[i] end\n\
+           vram[200] = #koff_log\n\
+           for i = 1, #koff_log do vram[200 + i] = koff_log[i] end\n\
+           vram[500] = voice[0].pitch\n\
+           vram[501] = voice[0].vol.l\n\
+           vram[502] = h.playing and 1 or 0\n\
+           kon_log, koff_log = {{}}, {{}}\n\
+         end\n",
+        adsr = FAST_ADSR,
+    ))
+    .unwrap();
+
+    let mut frame_start = vec![0usize];
+    let mut kons: Vec<usize> = Vec::new();
+    let mut koffs: Vec<usize> = Vec::new();
+    let mut vol_after_second_kon = None;
+    let mut playing_at_end = 1;
+    for f in 0..=120u32 {
+        e.frame(0.0, f).unwrap();
+        if f > 0 {
+            let base = frame_start[(f - 1) as usize];
+            let m = e.memory();
+            for i in 0..m.vram[0] as usize {
+                kons.push(base + m.vram[1 + i] as usize);
+                if kons.len() == 1 {
+                    assert_eq!(m.vram[500], 4096, "C4 on a C4-based inst is unity pitch");
+                }
+                if kons.len() == 2 {
+                    vol_after_second_kon = Some(m.vram[501]);
+                }
+            }
+            for i in 0..m.vram[200] as usize {
+                koffs.push(base + m.vram[201 + i] as usize);
+            }
+            playing_at_end = m.vram[502];
+        }
+        let n = e.audio().len() / 2;
+        frame_start.push(frame_start[f as usize] + n);
+    }
+    let near = |got: usize, want: usize| (got as i64 - want as i64).abs() <= 130;
+    assert_eq!(kons.len(), 2, "kons at {kons:?}");
+    assert!(
+        near(kons[0], 128) && near(kons[1], 32000),
+        "kons at {kons:?}"
+    );
+    assert_eq!(koffs.len(), 2, "koffs at {koffs:?}");
+    assert!(
+        near(koffs[0], 16000) && near(koffs[1], 40000),
+        "koffs at {koffs:?}"
+    );
+    assert_eq!(
+        vol_after_second_kon,
+        Some(64),
+        "vel 64 halves the preset's 127"
+    );
+    assert_eq!(playing_at_end, 0, "non-looping song stops after its length");
+}
+
+#[test]
+fn midi_unmapped_voice_errors_with_track_index() {
+    let mut e = LuaEngine::new();
+    let err = e
+        .set_source("midi{ data = { tracks = { { notes = {} } } }, tracks = { [1] = { inst = instrument{ sample = 0 }, voices = { 8 } } } }")
+        .unwrap_err();
+    assert!(
+        format!("{err:?}").contains("midi: track 1 voices must be 0..7"),
+        "{err:?}"
+    );
+}
