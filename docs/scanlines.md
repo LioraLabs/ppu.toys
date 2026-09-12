@@ -13,7 +13,9 @@ moves down the screen.
 function init()
   mode = 1
   screen.main.bg1 = true
+end
 
+function frame(t, f)
   hdma(0, 223, function(y)
     brightness = floor(y / 14)
   end)
@@ -21,8 +23,10 @@ end
 ```
 
 The callback receives `y`. Assignments inside it affect only that line;
-registers you do not touch keep their frame-wide values. `scanline()` is an
-alias for `hdma()`.
+registers you do not touch keep their frame-wide values. Hooks live for one
+frame: register them inside `frame()`, every frame, like the register writes
+they refine — a hook registered in `init()` or at the top level never runs.
+`scanline()` is an alias for `hdma()`.
 
 ## Raster effects
 

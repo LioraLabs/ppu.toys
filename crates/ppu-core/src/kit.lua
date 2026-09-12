@@ -109,7 +109,9 @@ function note(n, base)
 end
 
 -- instrument{ sample=, adsr=?, gain=?, vol=127?, pan=0?, base="C4"?,
--- noise=?, pmod=?, echo=? } -> the same table, defaults filled in.
+-- pitch=?, noise=?, pmod=?, echo=? } -> the same table, defaults filled in.
+-- `pitch` is what sfx() plays when it is given no note (default 0x1000):
+-- a drum recorded at 16 kHz sets pitch = 0x0800.
 function instrument(t)
   if t == nil or t.sample == nil then
     error("instrument: sample is required")
@@ -148,7 +150,7 @@ function sfx(inst, v, n)
     l = math.floor(vol * math.min(1, 1 - pan) + 0.5),
     r = math.floor(vol * math.min(1, 1 + pan) + 0.5),
   }
-  vo.pitch = n and note(n, inst.base) or 0x1000
+  vo.pitch = n and note(n, inst.base) or inst.pitch or 0x1000
   kon(v)
 end
 
@@ -231,6 +233,118 @@ function song(cfg)
   return h
 end
 
+-- Built-in sample presets (see crates/ppu-core/src/bank.rs for the sounds).
+-- Melodic loops are recorded at C4; drums at 16 kHz, hence pitch 0x0800.
+BANK = {
+  piano   = { adsr = { a = 15, d = 4, s = 5, r = 10 } },
+  bass    = { adsr = { a = 15, d = 5, s = 6, r = 12 }, base = "C4" },
+  lead    = { adsr = { a = 14, d = 7, s = 7, r = 14 } },
+  strings = { adsr = { a = 9, d = 7, s = 7, r = 10 } },
+  organ   = { adsr = { a = 15, d = 7, s = 7, r = 16 } },
+  bell    = { adsr = { a = 15, d = 3, s = 3, r = 8 } },
+  flute   = { adsr = { a = 12, d = 7, s = 7, r = 12 } },
+  pluck   = { adsr = { a = 15, d = 4, s = 4, r = 12 } },
+  kick    = { adsr = { a = 15, d = 7, s = 7, r = 0 }, pitch = 0x0800 },
+  snare   = { adsr = { a = 15, d = 7, s = 7, r = 0 }, pitch = 0x0800 },
+  hat     = { adsr = { a = 15, d = 7, s = 7, r = 0 }, pitch = 0x0800, vol = 110 },
+  ohat    = { adsr = { a = 15, d = 7, s = 7, r = 0 }, pitch = 0x0800, vol = 100 },
+  tom     = { adsr = { a = 15, d = 7, s = 7, r = 0 }, pitch = 0x0800 },
+  clap    = { adsr = { a = 15, d = 7, s = 7, r = 0 }, pitch = 0x0800 },
+  crash   = { adsr = { a = 15, d = 7, s = 7, r = 0 }, pitch = 0x0800, vol = 100 },
+}
+
+-- bank(name [, opts]) -> an instrument{} over the built-in sample `name`,
+-- placed in sound RAM by dma() (which chains placements upward on its
+-- own; opts.addr pins one). Any other opts field (vol, pan, adsr, ...)
+-- overrides the preset. Setup-only, like dma().
+function bank(name, opts)
+  local preset = BANK[name]
+  if preset == nil then
+    error("bank: no built-in sample '" .. tostring(name) .. "'")
+  end
+  opts = opts or {}
+  local placed = dma(name, opts.addr and { addr = opts.addr } or nil)
+  local inst = { sample = placed.id, addr = placed.addr, next_addr = placed.next_addr }
+  for _, k in ipairs({ "adsr", "gain", "vol", "pan", "base", "pitch", "noise", "pmod", "echo" }) do
+    if opts[k] ~= nil then
+      inst[k] = opts[k]
+    elseif preset[k] ~= nil then
+      inst[k] = preset[k]
+    end
+  end
+  return instrument(inst)
+end
+
+-- General MIDI -> bank names, used by midi{} when no tracks are given.
+local GM_FAMILY = { "piano", "bell", "organ", "pluck", "bass", "strings", "strings", "lead",
+  "flute", "flute", "lead", "strings", "bell", "pluck", "pluck", "lead" }
+local GM_DRUM = {
+  [35] = "kick", [36] = "kick", [37] = "hat", [38] = "snare", [39] = "clap", [40] = "snare",
+  [41] = "tom", [42] = "hat", [43] = "tom", [44] = "hat", [45] = "tom", [46] = "ohat",
+  [47] = "tom", [48] = "tom", [49] = "crash", [50] = "tom", [51] = "ohat", [52] = "crash",
+  [53] = "ohat", [54] = "hat", [55] = "crash", [56] = "hat", [57] = "crash", [59] = "ohat",
+}
+
+-- Auto-map every data track to the built-in bank: channel 10 tracks get the
+-- GM drum kit (only the keys they use) on 2 voices, the rest split the remaining voices evenly (at
+-- least one each; tracks past the eighth stay silent). One bank() per
+-- distinct sound, so two piano tracks share a placement.
+local function auto_tracks(data)
+  local insts = {}
+  local function inst_of(name)
+    if insts[name] == nil then
+      insts[name] = bank(name)
+    end
+    return insts[name]
+  end
+  local drums, melodic = {}, {}
+  for i = 1, #data.tracks do
+    local tr = data.tracks[i]
+    if tr.ch == 9 then
+      drums[#drums + 1] = i
+    else
+      melodic[#melodic + 1] = i
+    end
+  end
+  local voices_left = 8
+  local out = {}
+  if #drums > 0 then
+    -- Only the drums the song actually hits get placed in sound RAM.
+    local kit = {}
+    for _, i in ipairs(drums) do
+      local notes = data.tracks[i].notes or {}
+      for j = 1, #notes do
+        local key = notes[j][3]
+        if kit[key] == nil then
+          kit[key] = inst_of(GM_DRUM[key] or "hat")
+        end
+      end
+    end
+    local dv = { 6, 7 }
+    voices_left = 6
+    for _, i in ipairs(drums) do
+      out[i] = { insts = kit, voices = dv }
+    end
+  end
+  if #melodic > 0 then
+    local per = math.max(1, math.floor(voices_left / #melodic))
+    local v = 0
+    for _, i in ipairs(melodic) do
+      if v + per > voices_left then
+        break
+      end
+      local vs = {}
+      for k = 1, per do
+        vs[k] = v + k - 1
+      end
+      v = v + per
+      local prog = data.tracks[i].prog or 0
+      out[i] = { inst = inst_of(GM_FAMILY[math.floor(prog / 8) + 1] or "piano"), voices = vs }
+    end
+  end
+  return out
+end
+
 -- midi{ data=, tracks={ [i]={ voices={...}, inst=?, insts=? } }, loop=true?,
 -- speed=1? } -> plays a table a .mid upload generated (see web
 -- assets/midi.ts): { length, tracks = { { name, ch, notes = { {t, dur, key,
@@ -246,7 +360,9 @@ function midi(cfg)
   if cfg == nil or type(cfg.data) ~= "table" or type(cfg.data.tracks) ~= "table" then
     error("midi: data must be the table a .mid upload generated")
   end
-  if type(cfg.tracks) ~= "table" then
+  if cfg.tracks == nil then
+    cfg.tracks = auto_tracks(cfg.data)
+  elseif type(cfg.tracks) ~= "table" then
     error("midi: tracks must be a table")
   end
   local speed = cfg.speed or 1

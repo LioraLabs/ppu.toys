@@ -62,6 +62,10 @@ pub use source::*;
 mod dsp;
 pub use dsp::*;
 
+// Built-in sample bank: `dma("piano")` etc. with no upload; user sources of
+// the same name shadow it at both lookup sites in lua.rs.
+pub mod bank;
+
 /// Native SNES PPU output dimensions (the only resolution v1 targets).
 pub const WIDTH: usize = 256;
 pub const HEIGHT: usize = 224;

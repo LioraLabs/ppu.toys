@@ -705,9 +705,13 @@ impl LuaEngine {
         // The name was already validated against the store at `dma()` call
         // time, moments ago, so it's expected to still resolve.
         for sp in rec.samples.borrow().iter() {
-            if let Some(crate::source::SourcePayload::Sample(src)) =
-                self.source_store.borrow().get(&sp.name)
-            {
+            let payload = self
+                .source_store
+                .borrow()
+                .get(&sp.name)
+                .cloned()
+                .or_else(|| crate::bank::get(&sp.name));
+            if let Some(crate::source::SourcePayload::Sample(src)) = payload {
                 let addr = sp.addr as usize;
                 let end = sp.end as usize;
                 self.aram[addr..end].copy_from_slice(&src.brr);
@@ -2128,8 +2132,13 @@ fn install_dma(
                 ))
             }
         };
-        let source = match store.borrow().get(&name) {
-            Some(p) => p.clone(),
+        let source = match store
+            .borrow()
+            .get(&name)
+            .cloned()
+            .or_else(|| crate::bank::get(&name))
+        {
+            Some(p) => p,
             None => return Err(lua_err(ctx, &format!("dma: no source named '{name}'"))),
         };
         let kind = source.kind();
@@ -2306,8 +2315,17 @@ fn install_dma(
                     ));
                 }
                 let id = recorded as u8;
+                // No addr: chain below the highest placement so far, so a
+                // sequence of default dma() calls never overlaps.
                 let addr: u32 = match opt("addr") {
-                    Value::Nil => SAMPLE_DIR_END,
+                    Value::Nil => rec
+                        .samples
+                        .borrow()
+                        .iter()
+                        .map(|s| s.end)
+                        .max()
+                        .unwrap_or(SAMPLE_DIR_END)
+                        .max(SAMPLE_DIR_END),
                     v => match v.to_int() {
                         Some(n) if (0..=0xffff).contains(&n) => n as u32,
                         _ => {

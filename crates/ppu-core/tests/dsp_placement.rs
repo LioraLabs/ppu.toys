@@ -212,10 +212,10 @@ fn placement_rejects_sample_overlap() {
 #[test]
 fn removed_sample_source_fails_loudly_like_graphics() {
     let mut e = LuaEngine::new();
-    add_sine(&mut e, "kick");
+    add_sine(&mut e, "thud");
     let program = format!(
         "function init()\n\
-           dma(\"kick\", {{ addr = 0x0500 }})\n\
+           dma(\"thud\", {{ addr = 0x0500 }})\n\
          end\n\
          {frame}",
         frame = voice0_frame("0", -1),
@@ -223,11 +223,11 @@ fn removed_sample_source_fails_loudly_like_graphics() {
     assert!(e.set_source(&program).is_ok());
     assert!(e.frame(0.0, 0).is_ok());
 
-    assert!(e.remove_source("kick"));
+    assert!(e.remove_source("thud"));
 
     let err = e.frame(0.0, 1).unwrap_err();
     assert!(
-        err.message.contains("no source named 'kick'"),
+        err.message.contains("no source named 'thud'"),
         "message was: {}",
         err.message
     );

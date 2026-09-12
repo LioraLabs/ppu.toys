@@ -126,13 +126,15 @@ local kick = dma("kick")
 voice[0].sample = kick.id
 ```
 
-Chain a second placement below the first with its `next_addr` — here the
-same source twice, since this chapter has one sample; a second `.wav` in
-the Sources panel gets its own name and `id`:
+Without an `addr`, each placement lands right after the highest one so
+far, so a sequence of `dma()` calls never overlaps; pass `addr` to pin one.
+Here the same source twice, since this chapter has one sample; a second
+`.wav` in the Sources panel gets its own name and `id`:
 
 ```lua
 local kick = dma("kick")
-local kick2 = dma("kick", { addr = kick.next_addr })
+local kick2 = dma("kick")
+assert(kick2.addr == kick.next_addr)
 ```
 
 Placement writes sound RAM **once**, at compile time — unlike VRAM, it is
@@ -176,19 +178,63 @@ these globals (a user chunk that defines the same name wins):
   MIDI number, converted to a 14-bit pitch relative to `base` (default
   `"C4"`, the note the sample was recorded at).
 - `instrument{ sample =, adsr = ?, gain = ?, vol = 127, pan = 0, base =
-"C4", noise = ?, pmod = ?, echo = ? }` — `pan` runs −1..1.
+"C4", pitch = 0x1000, noise = ?, pmod = ?, echo = ? }` — `pan` runs −1..1;
+  `pitch` is what `sfx()` plays when given no note.
 - `sfx(inst, v [, n])` — applies an instrument preset to `voice[v]` (`pan`
-  folds into `vol.l`/`vol.r`) and keys it on.
+  folds into `vol.l`/`vol.r`) and keys it on. With no note it plays at the
+  preset's `pitch` (default `0x1000`).
+- `bank(name [, opts])` — places a [built-in sample](#built-in-samples) with
+  `dma()` and returns its `instrument{}` preset; `opts` override any preset
+  field (`vol`, `pan`, `adsr`, `addr`, ...). Setup-only.
 - `song{ tempo, steps = 16, tracks = { { voice, inst, pattern = "C2 . - ^" }
 } }` — runs on one `timer(0, ...)` and auto-plays. Pattern tokens: a note
   name keys the voice on, `^` keys it off, `.` and `-` do nothing. A pattern
   shorter than `steps` loops on its own length, so tracks can run
   polymeters against each other. Returns `{ step, beat, playing, div, rate,
 play(), stop() }`. Like `timer()`, `song{}` is setup-only.
-- `midi{ data, tracks = { [i] = { voices = { ... }, inst = ?, insts = ? } },
-loop = true, speed = 1 }` — plays the table a `.mid` upload generated (see
-  below). Setup-only. Returns `{ t, playing, length, play(), stop() }`;
-  `stop()` pauses and releases the voices, `play()` resumes.
+- `midi{ data, tracks = ?, loop = true, speed = 1 }` — plays the table a
+  `.mid` upload generated (see below) through the built-in bank, or through
+  your own `tracks = { [i] = { voices = { ... }, inst = ?, insts = ? } }`.
+  Setup-only. Returns `{ t, playing, length, play(), stop() }`; `stop()`
+  pauses and releases the voices, `play()` resumes.
+
+## Built-in samples
+
+Every toy can `dma()` these names with nothing uploaded. They are
+synthesized, chip-sized, and deterministic: the same bytes in the Studio,
+the CLI, and a published toy. An uploaded source with the same name takes
+the name over.
+
+| Name                                             | Sound                                     | Bytes    |
+| ------------------------------------------------ | ----------------------------------------- | -------- |
+| `piano`                                          | bright attack settling into a mellow loop | 621      |
+| `bass`                                           | warm, round low tone                      | 207      |
+| `lead`                                           | 25% pulse, chip lead                      | 207      |
+| `strings`                                        | sawtooth; give it a slow attack           | 207      |
+| `organ`                                          | drawbar-style harmonics                   | 207      |
+| `bell`                                           | inharmonic strike fading to a pure loop   | 621      |
+| `flute`                                          | near-sine with a breathy attack           | 414      |
+| `pluck`                                          | very bright attack, quick to mellow       | 1035     |
+| `kick` `snare` `hat` `ohat` `tom` `clap` `crash` | a drum kit, one-shots                     | 630–4500 |
+
+Melodic samples loop and are recorded at C4, so `note()` and `song{}`
+pitch them correctly with the default `base`. Drums are recorded at 16 kHz
+like period games: play them at pitch `0x0800`, which `bank()` does for you.
+
+```lua
+local piano = bank("piano")
+local kick = bank("kick")
+local hat = bank("hat", { vol = 70, pan = 0.4 })
+
+local tune = song{ tempo = 110, tracks = {
+  { voice = 0, inst = piano, pattern = "C4 . E4 . G4 . E4 ." },
+  { voice = 1, inst = kick, pattern = "C4 . . . C4 . . ." },
+  { voice = 2, inst = hat, pattern = ". . C4 . . . C4 ." },
+} }
+```
+
+Raw `dma("kick")` works too and returns the usual `{ id, addr, next_addr }`;
+built-ins and your own uploads share the same auto-chaining placement.
 
 ## Music from a MIDI file
 
@@ -196,17 +242,30 @@ Drop a `.mid` on the Sources panel and it becomes a Lua data file in the toy,
 named after the file: a global table of tracks, each a list of `{ t, dur,
 key, vel }` notes in seconds, with the tempo map already applied. A MIDI
 track that uses several channels splits into one entry per channel. The
-file opens with a comment listing every track — its name, channel, note
-count, and key range — as a ready-to-paste `midi{}` call.
+file opens with a comment listing every track — its name, channel, program,
+note count, and key range — as a ready-to-paste `midi{}` call.
 
-Tie a sample to each track you want to hear. `data.tracks[i]` plays on
-`tracks[i]`; tracks you leave out stay silent:
+One line plays it through the built-in bank:
 
 ```lua
-local lead = instrument{ sample = dma("lead").id, base = "C4" }
-local bass = instrument{ sample = dma("bass").id, base = "C2" }
-local kick = instrument{ sample = dma("kick").id }
-local snare = instrument{ sample = dma("snare").id }
+local tune = midi{ data = castle }
+```
+
+Each track's General MIDI program picks a bank sound (pianos, organs,
+basses, strings, leads, flutes, bells, plucks), channel 10 tracks play the
+drum kit, and the eight voices are shared out: two for drums, the rest split
+evenly across the melodic tracks. Only the drums the song hits are placed in
+sound RAM.
+
+To choose your own sounds, tie an instrument to each track you want to
+hear. `data.tracks[i]` plays on `tracks[i]`; tracks you leave out stay
+silent:
+
+```lua
+local lead = bank("lead")
+local bass = instrument{ sample = dma("mybass").id, base = "C2" }
+local kick = bank("kick")
+local snare = bank("snare")
 
 local tune = midi{ data = castle, tracks = {
   [1] = { inst = lead, voices = { 0, 1, 2 } },
@@ -230,8 +289,8 @@ Dropping the same `.mid` again adds a new file rather than replacing it.
 ## Your first note
 
 This toy plays a bass line automatically, fires a hit when you press A, and
-drives brightness from the bass voice's envelope. It needs a sample source
-named `kick` in the Sources panel.
+drives brightness from the bass voice's envelope. `kick` is a built-in
+sample, so it runs as-is; upload your own `kick` to replace it.
 
 ```lua
 -- ppu.toys tutorial :: first-note — a sample, a song, an sfx on A, and a light that follows the envelope
