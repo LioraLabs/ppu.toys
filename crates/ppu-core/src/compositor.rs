@@ -67,15 +67,20 @@ enum Slot {
     Obj { prio: u8 },
 }
 
+/// The screen-designation bit for a ladder rung, per the TM/TS/TMW/TSW layout:
+/// bits 0-3 = BG1..BG4, bit 4 = OBJ.
+fn slot_bit(slot: &Slot) -> u8 {
+    match slot {
+        Slot::Bg { layer, .. } => *layer as u8,
+        Slot::Obj { .. } => 4,
+    }
+}
+
 /// Is the layer behind ladder rung `slot` enabled on the screen whose
 /// designation bitmask is `mask` (TM for main, TS for sub)? Bits 0-4 =
 /// BG1,BG2,BG3,BG4,OBJ.
 fn slot_enabled(mask: u8, slot: &Slot) -> bool {
-    let bit = match slot {
-        Slot::Bg { layer, .. } => *layer as u8,
-        Slot::Obj { .. } => 4,
-    };
-    mask & (1 << bit) != 0
+    mask & (1 << slot_bit(slot)) != 0
 }
 
 /// Which layer produced a resolved pixel, for the color-math blend: backdrop,
@@ -246,22 +251,23 @@ pub(crate) fn composite_screen(
             // (bit 7) interleaved with OBJ prio via `mode7_extbg_ladder`. Resolve
             // per pixel like the tile-mode path; the only BG participant is the
             // Mode-7 plane at layer 0.
-            let m7 = if row.bg[0].visible {
+            let m7 = if row.bg[0].visible && mask & 0x01 != 0 {
                 render_mode7_scanline_px(row, mem, y, WIDTH)
             } else {
                 vec![None; WIDTH]
             };
-            let obj = render_scanline_for(mem, obj, y, WIDTH);
+            let obj = if mask & (1 << 4) != 0 {
+                render_scanline_for(mem, obj, y, WIDTH)
+            } else {
+                vec![None; WIDTH]
+            };
             let ladder = mode7_extbg_ladder();
             for (x, slot) in line.iter_mut().enumerate() {
                 for rung in &ladder {
                     if !slot_enabled(mask, rung) {
                         continue;
                     }
-                    let layer_bit = match rung {
-                        Slot::Bg { layer, .. } => *layer,
-                        Slot::Obj { .. } => 4,
-                    };
+                    let layer_bit = slot_bit(rung) as usize;
                     if hidden(layer_bit, x) {
                         continue;
                     }
@@ -318,26 +324,37 @@ pub(crate) fn composite_screen(
         // layer produce one candidate per x; the ladder (front->back) picks the
         // frontmost occupied rung, interleaving tilemap priority bit x mode layer
         // order x sprite priority. Backdrop shows through if no rung hits.
-        let bgs: Vec<Vec<Option<BgPixel>>> = row
-            .bg
-            .iter()
-            .map(|l| render_bg_layer_scanline_px(l, mem, y, WIDTH))
-            .collect();
-        let obj = render_scanline_for(mem, obj, y, WIDTH);
         let ladder = if row.mode == 1 {
             mode1_ladder(row.bg3_priority)
         } else {
             tile_mode_ladder(row.mode)
+        };
+        // Only sample layers this screen can show: on the ladder AND enabled
+        // in `mask`. Everything else is a per-pixel walk nobody reads.
+        let used = ladder.iter().fold(0u8, |m, r| m | 1 << slot_bit(r)) & mask;
+        let bgs: Vec<Vec<Option<BgPixel>>> = row
+            .bg
+            .iter()
+            .enumerate()
+            .map(|(i, l)| {
+                if used & (1 << i) != 0 {
+                    render_bg_layer_scanline_px(l, mem, y, WIDTH)
+                } else {
+                    vec![None; WIDTH]
+                }
+            })
+            .collect();
+        let obj = if used & (1 << 4) != 0 {
+            render_scanline_for(mem, obj, y, WIDTH)
+        } else {
+            vec![None; WIDTH]
         };
         for (x, slot) in line.iter_mut().enumerate() {
             for rung in &ladder {
                 if !slot_enabled(mask, rung) {
                     continue;
                 }
-                let layer_bit = match rung {
-                    Slot::Bg { layer, .. } => *layer,
-                    Slot::Obj { .. } => 4,
-                };
+                let layer_bit = slot_bit(rung) as usize;
                 if hidden(layer_bit, x) {
                     continue;
                 }
