@@ -7,6 +7,7 @@
 //! while the last valid controls keep applying. Driven entirely through
 //! `LuaEngine`'s public API (`set_sources`/`frame`/`memory`/`audio`,
 //! `LineTable.rows[y]`) — never reaching into the VM.
+mod common;
 use ppu_core::LuaEngine;
 
 /// A hand-copied fixture of the document shape `web/src/studio/pokes/controls.ts`
@@ -1292,4 +1293,282 @@ fn legacy_generated_name_is_supported_but_user_controls_are_ordinary_code() {
     ])
     .unwrap();
     assert_eq!(e.frame(0.0, 1).unwrap().rows[0].brightness, 7);
+}
+
+/// The synthetic whole-frame hook replays only the REGISTER writes Phase A
+/// logged, once per row, instead of re-executing apply_pokes 224x per
+/// frame: a frame-wide register poke still overrides the program's own hdma
+/// hook on every row (even one that writes the frame-wide default back),
+/// while thousands of frame-only `vram[]` pokes (a tilemap paint) cost one
+/// execution per frame, not 224.
+#[test]
+fn frame_wide_pokes_replay_per_row_without_rerunning_apply_pokes() {
+    let main = "function frame(t, f)\n\
+                  bg[1].scroll.x = 7\n\
+                  hdma(0, 10, function(y) bg[1].scroll.x = 0; brightness = 3 end)\n\
+                end\n";
+    let mut body = String::from("  bg[1].scroll.x = 7\n  brightness = 15\n");
+    for i in 0..4000 {
+        body += &format!(
+            "  vram[0x{:x}] = 0x{:x} -- tilemap cell\n",
+            0x1000 + i,
+            i & 0x3ff
+        );
+    }
+    let mut e = LuaEngine::new();
+    e.set_sources(&[("main.lua", main), ("ppuglobals.lua", &controls(&body))])
+        .unwrap();
+    let t0 = std::time::Instant::now();
+    let lt = e.frame(0.0, 0).unwrap();
+    let elapsed = t0.elapsed();
+    assert_eq!(
+        lt.rows[5].bg[0].scroll_x, 7,
+        "controls override wins over the program hook"
+    );
+    assert_eq!(
+        lt.rows[5].brightness, 15,
+        "controls override wins over the program hook"
+    );
+    assert_eq!(lt.rows[100].bg[0].scroll_x, 7);
+    assert_eq!(
+        e.memory().vram[0x1000 + 3999],
+        3999 & 0x3ff,
+        "frame-only pokes still land"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "4000 frame-wide pokes took {elapsed:?}: apply_pokes is being re-run per row again"
+    );
+}
+
+/// `controls` with a `dma(...)` line at the document's top level, between
+/// the scanlines table and `apply_pokes` — the shape the DMA panel emits.
+fn controls_with_dma(dma_line: &str, body: &str) -> String {
+    controls(body).replace(
+        "\nfunction apply_pokes()",
+        &format!("{dma_line}\n\nfunction apply_pokes()"),
+    )
+}
+
+fn solid_green() -> Vec<u8> {
+    [0u8, 255, 0, 255].repeat(256 * 224)
+}
+
+/// A `dma()` at ppuglobals.lua's top level places the source exactly like
+/// one in main.lua: recorded in the memory map and replayed into VRAM.
+#[test]
+fn controls_top_level_dma_places_the_source() {
+    let mut e = LuaEngine::new();
+    common::add_bg(&mut e, "sky", solid_green(), 256, 224, 4);
+    e.set_sources(&[
+        ("main.lua", "function frame(t, f) end"),
+        (
+            "ppuglobals.lua",
+            &controls_with_dma("dma(\"sky\", { char = 0x1000, map = 0x0, pal = 0 })", ""),
+        ),
+    ])
+    .unwrap();
+    e.frame(0.0, 0).unwrap();
+    let map = e.memory_map();
+    assert_eq!(map.placements.len(), 1);
+    assert_eq!(map.placements[0].name, "sky");
+    assert_eq!(map.placements[0].char, 0x1000);
+    assert_eq!(map.placements[0].map, 0);
+    assert!(map
+        .vram
+        .iter()
+        .any(|r| r.name == "sky" && r.start == 0x1000));
+    assert!(map.cgram.iter().any(|r| r.name == "sky" && r.start == 0));
+    assert!(
+        e.memory().vram[0x1010..0x1020].iter().any(|&w| w != 0),
+        "placed chars should land in VRAM (tile 0 is the reserved blank; tile 1 is the green one)"
+    );
+}
+
+/// Changing a controls document's `dma(` line must recompile (the init
+/// window is the only place `dma()` runs); an apply_pokes-only change must
+/// still take the hot fast path (init does not rerun).
+#[test]
+fn controls_dma_line_change_recompiles_but_poke_change_stays_hot() {
+    let main = "function init() n = 0 end\n\
+                function frame(t, f) n = n + 1; bg[2].scroll.x = n end\n";
+    let sky = |map: &str| format!("dma(\"sky\", {{ char = 0x1000, map = {map}, pal = 0 }})");
+    let mut e = LuaEngine::new();
+    common::add_bg(&mut e, "sky", solid_green(), 256, 224, 4);
+    e.set_sources(&[
+        ("main.lua", main),
+        ("ppuglobals.lua", &controls_with_dma(&sky("0x0"), "")),
+    ])
+    .unwrap();
+    for f in 0..3 {
+        e.frame(0.0, f).unwrap();
+    }
+
+    // apply_pokes-only change: fast path, accumulator continues 3 -> 4.
+    e.set_sources(&[
+        ("main.lua", main),
+        (
+            "ppuglobals.lua",
+            &controls_with_dma(&sky("0x0"), "  brightness = 4\n"),
+        ),
+    ])
+    .unwrap();
+    let lt = e.frame(0.0, 3).unwrap();
+    assert_eq!(lt.rows[0].brightness, 4);
+    assert_eq!(
+        lt.rows[0].bg[1].scroll_x, 4,
+        "fast path must not rerun init"
+    );
+    assert_eq!(e.memory_map().placements[0].map, 0);
+
+    // dma line change: accepted (not "dma runs during setup"), recompiled
+    // (init reruns, n resets), new placement visible.
+    e.set_sources(&[
+        ("main.lua", main),
+        (
+            "ppuglobals.lua",
+            &controls_with_dma(&sky("0x400"), "  brightness = 4\n"),
+        ),
+    ])
+    .unwrap();
+    let lt = e.frame(0.0, 4).unwrap();
+    assert_eq!(lt.rows[0].bg[1].scroll_x, 1, "a dma change recompiles");
+    assert_eq!(lt.rows[0].brightness, 4);
+    assert_eq!(e.memory_map().placements[0].map, 0x400);
+}
+
+fn controls_with_setup(setup_body: &str, pokes_body: &str) -> String {
+    controls(pokes_body).replace(
+        "\nfunction apply_pokes()",
+        &format!("function apply_setup()\n{setup_body}end\n\nfunction apply_pokes()"),
+    )
+}
+
+/// `apply_setup()` runs after every user/data chunk AND after `init()`,
+/// still inside the init window: it can reach a data chunk's global and
+/// make setup-only calls (`midi{}` registers a timer through `bank()`/
+/// `timer()`), and its own writes land on top of init()'s.
+#[test]
+fn controls_apply_setup_runs_after_init_inside_the_init_window() {
+    let main = "function init() n = 1 end\n\
+                function frame(t, f) bg[2].scroll.x = n end\n";
+    let data = "castle = { length = 1, tracks = {} }\n";
+    let mut e = LuaEngine::new();
+    e.set_sources(&[
+        ("main.lua", main),
+        ("castle.lua", data),
+        (
+            "ppuglobals.lua",
+            &controls_with_setup("  played = midi{ data = castle }\n  n = n + 10\n", ""),
+        ),
+    ])
+    .expect("midi{} and a data global must both resolve from apply_setup");
+    let lt = e.frame(0.0, 0).unwrap();
+    assert_eq!(
+        lt.rows[0].bg[1].scroll_x, 11,
+        "apply_setup ran after init()"
+    );
+}
+
+/// An error inside `apply_setup()` is attributed to ppuglobals.lua, and the
+/// next good push renders again.
+#[test]
+fn controls_apply_setup_error_is_attributed_and_recoverable() {
+    let main = "function frame(t, f) bg[2].scroll.x = 3 end";
+    let mut e = LuaEngine::new();
+    let err = e
+        .set_sources(&[
+            ("main.lua", main),
+            (
+                "ppuglobals.lua",
+                &controls_with_setup("  nothing.x = 1\n", ""),
+            ),
+        ])
+        .unwrap_err();
+    assert_eq!(err.file.as_deref(), Some("ppuglobals.lua"));
+    e.set_sources(&[
+        ("main.lua", main),
+        (
+            "ppuglobals.lua",
+            &controls_with_setup("  ok = true\n", "  brightness = 7\n"),
+        ),
+    ])
+    .unwrap();
+    let lt = e.frame(0.0, 0).unwrap();
+    assert_eq!(lt.rows[0].brightness, 7);
+    assert_eq!(lt.rows[0].bg[1].scroll_x, 3);
+}
+
+/// A controls-only push that changes the `apply_setup` block recompiles
+/// (init reruns), while one that only touches apply_pokes stays hot.
+#[test]
+fn controls_apply_setup_change_recompiles_but_poke_change_stays_hot() {
+    let main = "function init() n = 0 end\n\
+                function frame(t, f) n = n + 1; bg[2].scroll.x = n end\n";
+    let mut e = LuaEngine::new();
+    e.set_sources(&[
+        ("main.lua", main),
+        ("ppuglobals.lua", &controls_with_setup("  a = 1\n", "")),
+    ])
+    .unwrap();
+    for f in 0..3 {
+        e.frame(0.0, f).unwrap();
+    }
+    e.set_sources(&[
+        ("main.lua", main),
+        (
+            "ppuglobals.lua",
+            &controls_with_setup("  a = 1\n", "  brightness = 4\n"),
+        ),
+    ])
+    .unwrap();
+    let lt = e.frame(0.0, 3).unwrap();
+    assert_eq!(lt.rows[0].brightness, 4);
+    assert_eq!(
+        lt.rows[0].bg[1].scroll_x, 4,
+        "fast path must not rerun init"
+    );
+    e.set_sources(&[
+        ("main.lua", main),
+        (
+            "ppuglobals.lua",
+            &controls_with_setup("  a = 2\n", "  brightness = 4\n"),
+        ),
+    ])
+    .unwrap();
+    let lt = e.frame(0.0, 4).unwrap();
+    assert_eq!(
+        lt.rows[0].bg[1].scroll_x, 1,
+        "an apply_setup change recompiles"
+    );
+    assert_eq!(lt.rows[0].brightness, 4);
+}
+
+/// `midi{}` inside apply_setup reads the data chunk through the controls
+/// tracking proxy, so `#tune.tracks` and the per-note reads must see the real
+/// table (the proxy forwards `__len`/`__pairs`): the track's sample gets
+/// placed in sound RAM. Before that forwarding, `#` read as 0 and the song
+/// was silently empty.
+#[test]
+fn controls_apply_setup_midi_sees_the_data_chunk_through_the_proxy() {
+    let data = "tune = { length = 1, tracks = { { name = 'x', ch = 0, prog = 0, notes = { {0, 0.5, 60, 100} } } } }";
+    let doc = controls_with_setup(
+        "  midi{ data = tune, tracks = { [1] = { inst = \"bell\", voices = { 0, 1 } } } }\n",
+        "",
+    );
+    let mut e = LuaEngine::new();
+    e.set_sources(&[
+        ("main.lua", "function frame(t, f) end"),
+        ("tune.lua", data),
+        ("ppuglobals.lua", &doc),
+    ])
+    .unwrap();
+    let placed: Vec<String> = e
+        .dsp_view()
+        .samples
+        .iter()
+        .map(|s| s.name.clone())
+        .collect();
+    assert_eq!(placed, vec!["bell"]);
+    e.frame(0.0, 0).unwrap();
 }

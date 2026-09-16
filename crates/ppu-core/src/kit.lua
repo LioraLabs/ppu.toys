@@ -161,10 +161,21 @@ end
 -- is how many hook fires make one step when a single tick can't reach it.
 -- Tokens (parsed once here): a note name, "." rest, "-" hold, "^" key off.
 -- `timer` is setup-only, so `song{}` is too (engine's own error, unwrapped).
+-- A song is meant to be heard: power-on master volume is silence, so a
+-- song{}/midi{} started while nothing has set `dsp.mvol` opens it fully. A
+-- program that sets its own level (before or after) keeps it.
+local function ensure_audible()
+  local mv = dsp.mvol
+  if mv == nil or ((mv.l or 0) == 0 and (mv.r or 0) == 0) then
+    dsp.mvol = { l = 127, r = 127 }
+  end
+end
+
 function song(cfg)
   if cfg == nil or cfg.tempo == nil or cfg.tempo <= 0 then
     error("song: tempo must be > 0")
   end
+  ensure_audible()
   if type(cfg.tracks) ~= "table" then
     error("song: tracks must be a table")
   end
@@ -285,18 +296,50 @@ local GM_DRUM = {
   [53] = "ohat", [54] = "hat", [55] = "crash", [56] = "hat", [57] = "crash", [59] = "ohat",
 }
 
+-- One placement per distinct name across a midi{} call: a built-in goes
+-- through bank() (its preset pitch/adsr), an uploaded sample name becomes a
+-- plain instrument recorded at C4. Shared by auto_tracks and the
+-- `inst = "name"` / `drums = true` / `inst = "gm"` shorthands midi{} accepts
+-- (what the Studio's Audio panel writes).
+local function inst_cache()
+  local insts = {}
+  return function(name)
+    if insts[name] == nil then
+      if BANK[name] ~= nil then
+        insts[name] = bank(name)
+      else
+        insts[name] = instrument{ sample = dma(name).id }
+      end
+    end
+    return insts[name]
+  end
+end
+
+-- The GM drum kit for the keys the given data tracks actually hit.
+local function drum_kit(data, indices, inst_of)
+  local kit = {}
+  for _, i in ipairs(indices) do
+    local notes = data.tracks[i].notes or {}
+    for j = 1, #notes do
+      local key = notes[j][3]
+      if kit[key] == nil then
+        kit[key] = inst_of(GM_DRUM[key] or "hat")
+      end
+    end
+  end
+  return kit
+end
+
+local function gm_name(tr)
+  return GM_FAMILY[math.floor((tr.prog or 0) / 8) + 1] or "piano"
+end
+
 -- Auto-map every data track to the built-in bank: channel 10 tracks get the
 -- GM drum kit (only the keys they use) on 2 voices, the rest split the remaining voices evenly (at
 -- least one each; tracks past the eighth stay silent). One bank() per
 -- distinct sound, so two piano tracks share a placement.
 local function auto_tracks(data)
-  local insts = {}
-  local function inst_of(name)
-    if insts[name] == nil then
-      insts[name] = bank(name)
-    end
-    return insts[name]
-  end
+  local inst_of = inst_cache()
   local drums, melodic = {}, {}
   for i = 1, #data.tracks do
     local tr = data.tracks[i]
@@ -310,16 +353,7 @@ local function auto_tracks(data)
   local out = {}
   if #drums > 0 then
     -- Only the drums the song actually hits get placed in sound RAM.
-    local kit = {}
-    for _, i in ipairs(drums) do
-      local notes = data.tracks[i].notes or {}
-      for j = 1, #notes do
-        local key = notes[j][3]
-        if kit[key] == nil then
-          kit[key] = inst_of(GM_DRUM[key] or "hat")
-        end
-      end
-    end
+    local kit = drum_kit(data, drums, inst_of)
     local dv = { 6, 7 }
     voices_left = 6
     for _, i in ipairs(drums) do
@@ -338,8 +372,7 @@ local function auto_tracks(data)
         vs[k] = v + k - 1
       end
       v = v + per
-      local prog = data.tracks[i].prog or 0
-      out[i] = { inst = inst_of(GM_FAMILY[math.floor(prog / 8) + 1] or "piano"), voices = vs }
+      out[i] = { inst = inst_of(gm_name(data.tracks[i])), voices = vs }
     end
   end
   return out
@@ -360,6 +393,7 @@ function midi(cfg)
   if cfg == nil or type(cfg.data) ~= "table" or type(cfg.data.tracks) ~= "table" then
     error("midi: data must be the table a .mid upload generated")
   end
+  ensure_audible()
   if cfg.tracks == nil then
     cfg.tracks = auto_tracks(cfg.data)
   elseif type(cfg.tracks) ~= "table" then
@@ -368,6 +402,28 @@ function midi(cfg)
   local speed = cfg.speed or 1
   if type(speed) ~= "number" or speed <= 0 then
     error("midi: speed must be > 0")
+  end
+  -- Shorthands: `inst = "piano"` (built-in or uploaded sample name),
+  -- `inst = "gm"` (this track's General MIDI program, drums on ch10), and
+  -- `drums = true` (the GM kit for the keys this track uses).
+  local inst_of = inst_cache()
+  for i = 1, #cfg.data.tracks do
+    local tr = cfg.tracks[i]
+    if type(tr) == "table" then
+      if tr.inst == "gm" then
+        tr.inst = nil
+        if cfg.data.tracks[i].ch == 9 then
+          tr.drums = true
+        else
+          tr.inst = inst_of(gm_name(cfg.data.tracks[i]))
+        end
+      elseif type(tr.inst) == "string" then
+        tr.inst = inst_of(tr.inst)
+      end
+      if tr.drums then
+        tr.insts = drum_kit(cfg.data, { i }, inst_of)
+      end
+    end
   end
   local length = cfg.data.length or 0
   local tracks = {}

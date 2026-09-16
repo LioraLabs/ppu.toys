@@ -34,6 +34,33 @@ pub enum ImportBudget {
     },
 }
 
+/// One `dma()`-claimed span of VRAM (word addresses) or CGRAM (entries),
+/// `start..end` half-open, tagged with the source that owns it.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct MemoryRange {
+    pub name: String,
+    pub start: usize,
+    pub end: usize,
+}
+
+/// One recorded `dma()` placement as the DMA panel sees it.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct PlacementView {
+    pub name: String,
+    pub char: u16,
+    pub map: u16,
+    pub pal: u8,
+}
+
+/// What the current program's init window placed where — the DMA panel's
+/// memory map. Recorded at recompile, so it only changes with one.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct MemoryMap {
+    pub vram: Vec<MemoryRange>,
+    pub cgram: Vec<MemoryRange>,
+    pub placements: Vec<PlacementView>,
+}
+
 /// L/R pair for a signed 8-bit volume-style register (VOL, MVOL, EVOL).
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -264,7 +291,7 @@ struct DmaRecorder {
     active: Cell<bool>,
     placements: RefCell<Vec<DmaPlacement>>,
     vram_ranges: RefCell<Vec<(String, usize, usize)>>,
-    cgram_ranges: RefCell<Vec<(usize, usize)>>,
+    cgram_ranges: RefCell<Vec<(String, usize, usize)>>,
     obj_base: Cell<Option<u16>>,
     /// Sample placements recorded during the init window, in call order.
     /// Never replayed — `replay_dma`'s `Sample(_) => {}` arm is a deliberate
@@ -369,6 +396,32 @@ impl LuaEngine {
     /// Per-layer import budgets from the most recent `frame()` (m4/inspector).
     pub fn import_reports(&self) -> &[ImportBudget] {
         &self.reports
+    }
+
+    /// Every VRAM/CGRAM span and placement the last recompile's `dma()`
+    /// calls recorded (samples excluded — they live in ARAM).
+    pub fn memory_map(&self) -> MemoryMap {
+        let range = |(name, start, end): &(String, usize, usize)| MemoryRange {
+            name: name.clone(),
+            start: *start,
+            end: *end,
+        };
+        MemoryMap {
+            vram: self.dma.vram_ranges.borrow().iter().map(range).collect(),
+            cgram: self.dma.cgram_ranges.borrow().iter().map(range).collect(),
+            placements: self
+                .dma
+                .placements
+                .borrow()
+                .iter()
+                .map(|p| PlacementView {
+                    name: p.name.clone(),
+                    char: p.char_base,
+                    map: p.map_base,
+                    pal: p.cgram_base,
+                })
+                .collect(),
+        }
     }
 
     /// Mutable mirrored memory — used by the wasm shim (e.g. to clear OAM on-flags
@@ -478,6 +531,20 @@ impl LuaEngine {
         // edit already was.
         let live = |n: &str| n == AUDIO_MIX_FILE || n == CONTROLS_FILE;
         let controls_present = |fs: &[(String, String)]| fs.iter().any(|(n, _)| n == CONTROLS_FILE);
+        // `dma()` only works inside the init window, which the fast path
+        // never reopens — ppuglobals.lua's top-level `dma(...)` lines (the
+        // DMA panel's placements) take effect only via a full recompile,
+        // where ppuglobals.lua runs FIRST inside that window. So a
+        // controls-only push that changes those lines must recompile.
+        let old_setup = self
+            .program_sources
+            .iter()
+            .find(|(n, _)| n == CONTROLS_FILE)
+            .map(|(_, s)| setup_text(s));
+        let new_setup = files
+            .iter()
+            .find(|(n, _)| *n == CONTROLS_FILE)
+            .map(|(_, s)| setup_text(s));
         if !self.source_dirty
             && !self.program_sources.is_empty()
             && files.iter().copied().ne(self
@@ -495,6 +562,7 @@ impl LuaEngine {
             // text in place in the live VM, never installs it fresh.
             && files.iter().any(|(n, _)| *n == CONTROLS_FILE)
                 == controls_present(&self.program_sources)
+            && old_setup == new_setup
         {
             saved_mix
                 .validate_samples(&self.dsp_view().samples)
@@ -515,8 +583,12 @@ impl LuaEngine {
                     .find(|(n, _)| n == CONTROLS_FILE)
                     .map(|(_, s)| s.as_str());
                 if old_src != Some(*new_src) {
+                    // The `dma(` lines are unchanged (checked above) and
+                    // already in effect from the last recompile; reloading
+                    // them here would hit the init-window gate, so they are
+                    // blanked (line numbers kept) before the in-place load.
                     let mut l = self.lua.borrow_mut();
-                    self.controls_fn = Self::load_controls(&mut l, new_src)?;
+                    self.controls_fn = Self::load_controls(&mut l, &without_dma_lines(new_src))?;
                 }
             }
             self.saved_mix = saved_mix;
@@ -616,27 +688,46 @@ impl LuaEngine {
         // drop them now regardless of whether init() below succeeds.
         self.timers.clear();
 
-        if let Some(init) = self.init_fn.clone() {
+        // Two setup-window calls, in order: the program's own `init()`, then
+        // the controls document's `apply_setup()` (the panels' setup-only
+        // calls — `midi{}`, and anything else that needs every user/data
+        // chunk's globals to exist, which is why it can't run at
+        // ppuglobals.lua's own top level). Both share one failure shape: the
+        // init window closes, and nothing was written to ARAM yet (that
+        // happens after the `?` below), so the OLD program's placements
+        // (recorded above, before this compile's dma() calls) are restored —
+        // a failed setup keeps reporting what ARAM still actually holds.
+        let setup_fn = self
+            .lua
+            .borrow_mut()
+            .enter(|ctx| match ctx.get_global("apply_setup") {
+                Value::Function(f) => Some(ctx.stash(f)),
+                _ => None,
+            });
+        let calls = [
+            (self.init_fn.clone(), init_file.clone()),
+            (setup_fn, Some(CONTROLS_FILE.to_string())),
+        ];
+        let mut res = Ok(());
+        for (func, file) in calls {
+            let Some(func) = func else { continue };
             let mut l = self.lua.borrow_mut();
             let ex = l.enter(|ctx| {
-                let f = ctx.fetch(&init);
+                let f = ctx.fetch(&func);
                 ctx.stash(Executor::start(ctx, f, ()))
             });
-            let res = l.execute::<()>(&ex);
-            rec.active.set(false); // init window closes even on error
-            res.map_err(|e| {
-                // Nothing was written to ARAM yet (that happens after this
-                // `?`) — restore the OLD program's placements (recorded
-                // above, before this compile's dma() calls), so a failed
-                // init keeps reporting what ARAM still actually holds.
-                *rec.samples.borrow_mut() = prev_samples.clone();
+            if let Err(e) = l.execute::<()>(&ex) {
                 let mut err = static_error_to_lua(e);
-                err.file = init_file.clone();
-                err
-            })?;
-        } else {
-            rec.active.set(false);
+                err.file = file;
+                res = Err(err);
+                break;
+            }
         }
+        rec.active.set(false); // init window closes even on error
+        res.map_err(|e| {
+            *rec.samples.borrow_mut() = prev_samples.clone();
+            e
+        })?;
         // Re-check the echo region here against the FINAL `dsp.echo.delay`
         // (init() may have changed it after a sample dma() call already
         // placed against an earlier value — the dma() arm only ever sees
@@ -769,13 +860,18 @@ impl LuaEngine {
     fn load_controls(lua: &mut Lua, src: &str) -> Result<Option<StashedFunction>, LuaError> {
         call_controls_hook::<()>(lua, "__ppu_controls_begin");
 
-        // Nil the previous apply_pokes THROUGH the tracked env first, so
-        // a text that no longer defines one doesn't re-stash the old
+        // Nil the previous apply_pokes/apply_setup THROUGH the tracked env
+        // first, so a text that no longer defines one doesn't re-stash the old
         // chunk's function below — logged for undo like any other write, so
         // a load failure below puts the old one right back.
         let clear = lua.try_enter(|ctx| {
             let env = controls_env(ctx);
-            let closure = Closure::load_with_env(ctx, None, "apply_pokes = nil".as_bytes(), env)?;
+            let closure = Closure::load_with_env(
+                ctx,
+                None,
+                "apply_pokes = nil; apply_setup = nil".as_bytes(),
+                env,
+            )?;
             Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
         });
         clear
@@ -1009,14 +1105,9 @@ impl LuaEngine {
         };
 
         // Collect registered hooks (stash each fn with its [y0,y1]), then
-        // clear the registry so the synthetic frame-wide hook's per-row
-        // replay of apply_pokes (below) can't append 224x more (dead)
-        // entries per band into a table nothing reads again this frame.
+        // clear the registry: nothing reads it again this frame, and
         // `hdma()` already no-ops when this global isn't a table; the next
-        // frame() recreates it. The only observable change: a hand-written
-        // apply_pokes that indexes `__ppu_hooks` directly during the per-row
-        // replay now errors (unsupported by the controls_env.lua contract
-        // anyway).
+        // frame() recreates it.
         let mut hooks: Vec<(usize, usize, StashedFunction, Option<String>)> = {
             let mut l = self.lua.borrow_mut();
             l.enter(|ctx| {
@@ -1044,14 +1135,24 @@ impl LuaEngine {
         // below (write_state(row)/run/read_state), so a property controls
         // doesn't touch keeps whatever the program's hooks resolved for that
         // row, and a controls hdma hook composes on top last-write-wins, same
-        // as any other hook. Skipped when apply_pokes touched nothing this
-        // frame (released controls) — no point re-running it 224 times.
-        if let Some(cf) = self.controls_fn.clone() {
-            let dirty: bool = {
+        // as any other hook. The hook is `__ppu_controls_replay`, which
+        // re-applies the register writes Phase A logged (frozen here), not
+        // apply_pokes itself: re-executing apply_pokes 224x/frame made every
+        // frame-wide poke cost 224 tracked writes, and a tilemap paint's
+        // thousands of `vram[]` pokes (which no row reads) dominated the
+        // frame. Skipped when apply_pokes wrote no register this frame.
+        if self.controls_fn.is_some() {
+            let replay: Option<StashedFunction> = {
                 let mut l = self.lua.borrow_mut();
-                call_controls_hook(&mut l, "__ppu_controls_dirty")
+                let dirty: bool = call_controls_hook(&mut l, "__ppu_controls_freeze");
+                dirty.then(|| {
+                    l.enter(|ctx| match ctx.get_global("__ppu_controls_replay") {
+                        Value::Function(f) => ctx.stash(f),
+                        _ => panic!("controls_env.lua must define __ppu_controls_replay"),
+                    })
+                })
             };
-            if dirty {
+            if let Some(replay) = replay {
                 // `.min(hooks.len())`: n_program matches hooks.len() in the
                 // common case (see the Phase A comment above), but a
                 // hand-edited apply_pokes assigning `__ppu_hooks = {}` can
@@ -1059,7 +1160,7 @@ impl LuaEngine {
                 // never goes out of range.
                 hooks.insert(
                     n_program.min(hooks.len()),
-                    (0, HEIGHT - 1, cf, Some(CONTROLS_FILE.to_string())),
+                    (0, HEIGHT - 1, replay, Some(CONTROLS_FILE.to_string())),
                 );
             }
         }
@@ -1347,8 +1448,8 @@ fn controls_env<'gc>(ctx: piccolo::Context<'gc>) -> Table<'gc> {
 }
 
 /// Call a zero-arg global Lua function defined by `controls_env.lua`
-/// (`__ppu_controls_begin`/`_dirty`/`_restore`) for its side effect and/or
-/// return value (`R`, e.g. `()` for begin/restore or `bool` for dirty).
+/// (`__ppu_controls_begin`/`_freeze`/`_restore`) for its side effect and/or
+/// return value (`R`, e.g. `()` for begin/restore or `bool` for freeze).
 /// That chunk is static and shipped with the engine, so a missing global or
 /// a raise here is our own bug, not a user error — panics loudly (with the
 /// Lua error) instead of threading a `Result` a caller could never
@@ -1363,6 +1464,44 @@ fn call_controls_hook<R: for<'gc> FromMultiValue<'gc>>(lua: &mut Lua, name: &'st
     });
     lua.execute::<R>(&ex)
         .unwrap_or_else(|e| panic!("{name} (controls_env.lua) must not raise: {e}"))
+}
+
+/// The setup-only part of a controls document, in order — what the fast
+/// path cannot reload in place: the top-level `dma(` calls, plus the whole
+/// `function apply_setup()` … column-0 `end` block (only ever CALLED on a
+/// recompile, after `init()`). A change to any of it forces a recompile.
+fn setup_text(src: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut in_setup = false;
+    for line in src.lines() {
+        let t = line.trim_start();
+        if in_setup {
+            out.push(line);
+            if line == "end" {
+                in_setup = false;
+            }
+        } else if t.starts_with("dma(") {
+            out.push(t);
+        } else if t.starts_with("function apply_setup(") {
+            in_setup = true;
+            out.push(line);
+        }
+    }
+    out
+}
+
+/// `src` with every `dma(` line blanked, line count preserved.
+fn without_dma_lines(src: &str) -> String {
+    src.lines()
+        .map(|l| {
+            if l.trim_start().starts_with("dma(") {
+                ""
+            } else {
+                l
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Publish `json` (a serde-normalized object/array) as the `sram` global.
@@ -2433,7 +2572,7 @@ fn install_dma(
             .cgram_ranges
             .borrow()
             .iter()
-            .any(|&(start, end)| cgram.0 != start && cgram.0 < end && start < cgram.1)
+            .any(|(_, start, end)| cgram.0 != *start && cgram.0 < *end && *start < cgram.1)
         {
             return Err(lua_err(
                 ctx,
@@ -2443,7 +2582,9 @@ fn install_dma(
         rec.vram_ranges
             .borrow_mut()
             .extend(vram.into_iter().map(|(s, e)| (name.clone(), s, e)));
-        rec.cgram_ranges.borrow_mut().push(cgram);
+        rec.cgram_ranges
+            .borrow_mut()
+            .push((name.clone(), cgram.0, cgram.1));
         rec.placements.borrow_mut().push(DmaPlacement {
             name,
             char_base: char_base as u16,

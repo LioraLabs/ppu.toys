@@ -101,7 +101,9 @@ reusing its voice.
 - `noise_clock` (0..31).
 - `mute`.
 
-Power-on `mvol` is `{ l = 0, r = 0 }` — nothing is audible until you set it.
+Power-on `mvol` is `{ l = 0, r = 0 }` — nothing is audible until you set it,
+except that starting a `song{}` or `midi{}` while it is still zero opens it
+to full, so a song is heard without a mixer line.
 
 ```lua
 function init()
@@ -276,11 +278,21 @@ local tune = midi{ data = castle, tracks = {
 
 `inst` pitches one sample by key, relative to its `base`. `insts` maps a
 MIDI key to its own preset, played at that preset's own pitch — a drum kit.
+Three shorthands save the setup lines: `inst = "bell"` names a built-in or
+an uploaded sample, `inst = "gm"` follows that track's General MIDI program
+(the drum kit on channel 10), and `drums = true` builds the kit for the keys
+the track uses. This is what the Audio panel's per-track pickers write.
 A track's notes take turns on its `voices`, so a track that plays chords
 needs as many voices as it stacks notes; when they run out the oldest voice
 restarts on the new note. Velocity scales the preset's volume. The player
 runs on one `timer(0, 32, ...)`, a 4 ms grid, and loops the song unless
 `loop = false`; `speed = 2` plays it twice as fast.
+
+The Studio's Audio panel lists every generated MIDI file with a **play**
+toggle; that toggle writes the same one-line `midi{}` call into
+`ppuglobals.lua` for you. Uploaded samples and the built-in bank can be
+placed in sound RAM from the DMA panel the same way, then chosen as a
+voice's sample in Audio.
 
 The generated file is ordinary Lua: edit notes by hand, delete tracks you
 don't use, or read `tune.t` in `frame()` to sync the picture to the music.

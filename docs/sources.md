@@ -2,7 +2,8 @@
 
 A source is a PNG translated into data the SNES PPU can actually read: tiles,
 tilemaps, and BGR555 palette colors. Add one from the Studio's Sources panel,
-choose what the image represents, then place it in memory with [`dma()`](dma.md).
+choose what the image represents, then place it in memory with [`dma()`](dma.md)
+or from the Studio's DMA panel.
 
 The preview shows the quantized image, its palettes, tile use, and any hardware
 limit the conversion reached.

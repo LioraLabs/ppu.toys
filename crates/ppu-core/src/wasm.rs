@@ -167,6 +167,13 @@ impl PpuCore {
         serde_wasm_bindgen::to_value(self.engine.import_reports()).map_err(Into::into)
     }
 
+    /// The last recompile's `dma()` placements and the VRAM/CGRAM spans they
+    /// claim (DMA panel memory map).
+    #[wasm_bindgen(js_name = memoryMap)]
+    pub fn memory_map(&self) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(&self.engine.memory_map()).map_err(Into::into)
+    }
+
     #[wasm_bindgen(js_name = setAudioMix)]
     pub fn set_audio_mix(&mut self, json: Option<String>) -> Result<(), JsValue> {
         self.engine

@@ -159,6 +159,100 @@ fn midi_auto_maps_gm_to_the_bank() {
     );
 }
 
+/// The shorthands the Studio's Audio panel writes: `inst = "name"` resolves a
+/// built-in through bank(), `inst = "gm"` follows the track's program (or the
+/// drum kit on ch10), `drums = true` builds the kit for the keys used, and one
+/// name is placed once however many tracks share it.
+#[test]
+fn midi_track_shorthands_resolve_names_gm_and_drums() {
+    let mut e = LuaEngine::new();
+    e.set_source(
+        "kon_log = {}\n\
+         local real_kon = kon\n\
+         function kon(v) kon_log[#kon_log + 1] = v real_kon(v) end\n\
+         tune = { length = 1, tracks = {\n\
+           { name = 'Bass', ch = 1, prog = 33, notes = { {0, 0.5, 36, 100} } },\n\
+           { name = 'Lead', ch = 2, prog = 80, notes = { {0, 0.5, 72, 100} } },\n\
+           { name = 'Drums', ch = 9, notes = { {0, 0.1, 36, 100}, {0, 0.1, 42, 80} } },\n\
+         } }\n\
+         h = midi{ data = tune, tracks = {\n\
+           [1] = { inst = 'bell', voices = { 0 } },\n\
+           [2] = { inst = 'gm', voices = { 1, 2 } },\n\
+           [3] = { drums = true, voices = { 5 } },\n\
+         } }\n\
+         function frame(t, f)\n\
+           vram[0] = #kon_log\n\
+           for i = 1, #kon_log do vram[i] = kon_log[i] end\n\
+         end",
+    )
+    .unwrap();
+    let mut placed: Vec<String> = e
+        .dsp_view()
+        .samples
+        .iter()
+        .map(|s| s.name.clone())
+        .collect();
+    placed.sort();
+    assert_eq!(
+        placed,
+        vec!["bell", "hat", "kick", "lead"],
+        "prog 80 is the lead family"
+    );
+    for f in 0..3 {
+        e.frame(0.0, f).unwrap();
+    }
+    let v = &e.memory().vram;
+    let mut voices: Vec<u16> = (1..=v[0] as usize).map(|i| v[i]).collect();
+    voices.sort();
+    assert_eq!(
+        voices,
+        vec![0, 1, 5, 5],
+        "bell on 0, lead on 1, both drums round-robin on 5"
+    );
+}
+
+/// `midi{ data = tune }` on a program that never touches the mixer is audible:
+/// the kit opens the power-on-silent master volume when it starts a song. A
+/// program that set its own level keeps it.
+#[test]
+fn midi_opens_master_volume_when_unset() {
+    let data = "tune = { length = 2, tracks = { { name = 'x', ch = 0, prog = 0, notes = { {0, 0.5, 60, 100}, {0.5, 0.5, 64, 100} } } } }";
+    let mut e = LuaEngine::new();
+    e.set_source(&format!(
+        "{data}\nh = midi{{ data = tune }}\nfunction frame(t, f) end"
+    ))
+    .unwrap();
+    let mut peak = 0i32;
+    for f in 0..30 {
+        e.frame(f as f64 / 60.0, f).unwrap();
+        peak = peak.max(
+            e.audio()
+                .iter()
+                .map(|&s| (s as i32).abs())
+                .max()
+                .unwrap_or(0),
+        );
+    }
+    assert!(
+        peak > 1000,
+        "peak {peak}: the song should be audible with no mixer line"
+    );
+    assert_eq!(e.dsp_view().mvol.l, 127);
+
+    let mut quiet = LuaEngine::new();
+    quiet
+        .set_source(&format!(
+            "{data}\ndsp.mvol = {{ l = 20, r = 20 }}\nh = midi{{ data = tune }}\nfunction frame(t, f) end"
+        ))
+        .unwrap();
+    quiet.frame(0.0, 0).unwrap();
+    assert_eq!(
+        quiet.dsp_view().mvol.l,
+        20,
+        "an explicit level is left alone"
+    );
+}
+
 /// Renders a showcase of every bank sound to `$BANK_DEMO_WAV` (16-bit
 /// stereo 32 kHz) and prints each sample's size and encoder SNR. Ignored:
 /// it is a listening aid, not an assertion.

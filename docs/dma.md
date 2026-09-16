@@ -7,6 +7,17 @@ registers need.
 Call `dma()` at the top level or in `init()`. Placement is setup work, so it is
 not available from `frame()` or an `hdma()` callback.
 
+## Place from the Studio
+
+The Studio's DMA panel does the same thing without code: it draws what every
+`dma()` call has claimed in VRAM and CGRAM, and **Place** writes one
+`dma("name", { char = …, map = …, pal = … })` line into `ppuglobals.lua` at the
+first free aligned addresses. **bg1**–**bg4** then poke that layer's
+`char_base`/`map_base` and turn it on; **sprites** does the same for
+`obj.char_base`. Uploaded samples and the built-in bank get a **Place** too,
+chaining into sound RAM. A program's own `dma()` calls show hatched and stay
+read-only. Delete the line in `ppuglobals.lua` (or press ×) to unplace.
+
 ## Place a background
 
 Backgrounds need character tiles, a tilemap, and palettes.
