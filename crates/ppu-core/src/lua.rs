@@ -138,6 +138,12 @@ impl LuaError {
 /// PPU memory. Globals persist across frames (sticky registers).
 pub struct LuaEngine {
     lua: Rc<RefCell<Lua>>,
+    /// Pre-interned glue keys for `lua` (see [`Keys`]); swapped with it.
+    keys: Rc<StashedKeys>,
+    /// Diff-on-write baseline for `write_state` (see [`Mirror`]). Valid only
+    /// between one `read_state` and the next `write_state` with no other
+    /// global writes in between — `frame()` resets it around everything else.
+    mirror: Rc<RefCell<Mirror>>,
     frame_fn: Option<StashedFunction>,
     init_fn: Option<StashedFunction>,
     /// Defining chunk of `frame_fn`, for runtime error attribution.
@@ -303,7 +309,8 @@ impl LuaEngine {
         let source_store = Rc::new(RefCell::new(HashMap::new()));
         let dma = Rc::new(DmaRecorder::default()); // inactive: no code has run
         let mut lua = Lua::core();
-        lua.enter(install_bindings);
+        let keys = Rc::new(lua.enter(StashedKeys::new));
+        lua.enter(|ctx| install_bindings(ctx, &keys.fetch(ctx)));
         {
             let (store, rec) = (source_store.clone(), dma.clone());
             lua.enter(move |ctx| install_dma(ctx, store, rec));
@@ -312,6 +319,8 @@ impl LuaEngine {
         lua.enter(|ctx| seed_dsp_tables(ctx, &dsp, None));
         LuaEngine {
             lua: Rc::new(RefCell::new(lua)),
+            keys,
+            mirror: Rc::default(),
             frame_fn: None,
             init_fn: None,
             frame_file: None,
@@ -527,7 +536,8 @@ impl LuaEngine {
             return Ok(());
         }
         let mut lua = Lua::core();
-        lua.enter(install_bindings);
+        let keys = Rc::new(lua.enter(StashedKeys::new));
+        lua.enter(|ctx| install_bindings(ctx, &keys.fetch(ctx)));
         // Reseed voice[]/dsp from the LIVE registers (not reset) — a recompile
         // must not silence a sounding voice. See `seed_dsp_tables`.
         lua.enter(|ctx| seed_dsp_tables(ctx, &self.dsp, self.unmixed_dsp.as_ref()));
@@ -601,6 +611,8 @@ impl LuaEngine {
         });
 
         self.lua = Rc::new(RefCell::new(lua));
+        self.keys = keys;
+        *self.mirror.borrow_mut() = Mirror::default();
         self.frame_fn = frame_fn;
         self.frame_file = frame_file;
         self.init_fn = init_fn;
@@ -925,6 +937,8 @@ impl LuaEngine {
         // raw vram[] (final authority).
         let defaults = {
             let mut l = self.lua.borrow_mut();
+            let keys = &self.keys;
+            let mut mirror = self.mirror.borrow_mut();
             l.enter(|ctx| {
                 self.memory.vram = [0u16; 0x8000];
                 self.memory.cgram = [0u16; 256];
@@ -936,7 +950,7 @@ impl LuaEngine {
                     &mut self.memory,
                 );
                 read_memory(ctx, &mut self.memory);
-                read_state(ctx)
+                read_state(ctx, &keys.fetch(ctx), &mut mirror)
             })
         };
 
@@ -1069,16 +1083,24 @@ impl LuaEngine {
         // AFTER Phase A, so a frame-wide controls cgram poke is already
         // baked into the baseline here — per-row hooks (incl. the synthetic
         // one above) won't re-report it as a per-row poke on top.
-        let cg_snap: Rc<Vec<Option<i64>>> = {
+        let cg_snap: Rc<[Option<i64>; 256]> = {
             let mut l = self.lua.borrow_mut();
-            Rc::new(l.enter(snapshot_cgram))
+            Rc::new(l.enter(|ctx| snapshot_cgram(ctx, &self.keys.fetch(ctx))))
         };
+        // Everything since the `defaults` read wrote globals behind the
+        // mirror's back (the program's frame(), timer hooks, apply_pokes, the
+        // controls bracket): forget it, so the first per-row write_state is
+        // a full write. Inside the loop only hooks write, and each is
+        // followed by the read_state that refreshes the mirror.
+        *self.mirror.borrow_mut() = Mirror::default();
         // Resolve the line table: each hook becomes a closure that re-baselines
         // globals to the working row, runs fn(y), and reads the row back.
         let err_sink: Rc<RefCell<Option<LuaError>>> = Rc::new(RefCell::new(None));
         let mut builder = LineTableBuilder::new(defaults.clone());
         for (y0, y1, sf, file) in hooks {
             let lua = self.lua.clone();
+            let keys = self.keys.clone();
+            let mirror = self.mirror.clone();
             let sink = err_sink.clone();
             let snap = cg_snap.clone();
             builder.hdma(y0, y1, move |y, row| {
@@ -1086,7 +1108,7 @@ impl LuaEngine {
                     return;
                 }
                 let mut l = lua.borrow_mut();
-                l.enter(|ctx| write_state(ctx, row));
+                l.enter(|ctx| write_state(ctx, &keys.fetch(ctx), &mut mirror.borrow_mut(), row));
                 let ex = l.enter(|ctx| {
                     let func = ctx.fetch(&sf);
                     ctx.stash(Executor::start(ctx, func, (y as i64,)))
@@ -1094,8 +1116,10 @@ impl LuaEngine {
                 match l.execute::<()>(&ex) {
                     Ok(()) => {
                         let mut pokes = std::mem::take(&mut row.cgram);
-                        *row = l.enter(read_state);
-                        pokes.extend(l.enter(|ctx| take_cgram_pokes(ctx, &snap)));
+                        *row = l.enter(|ctx| {
+                            read_state(ctx, &keys.fetch(ctx), &mut mirror.borrow_mut())
+                        });
+                        pokes.extend(l.enter(|ctx| take_cgram_pokes(ctx, &keys.fetch(ctx), &snap)));
                         row.cgram = pokes;
                     }
                     Err(e) => {
@@ -1123,10 +1147,15 @@ impl LuaEngine {
         // sticks instead of a stray row value.
         self.restore_controls();
 
-        // Restore sticky globals to the frame-wide defaults (hooks mutated them).
+        // Restore sticky globals to the frame-wide defaults (hooks mutated
+        // them; the controls restore above and any erroring hook wrote
+        // globals behind the mirror, so this is a full write).
         {
             let mut l = self.lua.borrow_mut();
-            l.enter(|ctx| write_state(ctx, &defaults));
+            let keys = &self.keys;
+            let mut mirror = self.mirror.borrow_mut();
+            *mirror = Mirror::default();
+            l.enter(|ctx| write_state(ctx, &keys.fetch(ctx), &mut mirror, &defaults));
         }
 
         if let Some(e) = err_sink.borrow_mut().take() {
@@ -1522,7 +1551,9 @@ fn set_pad_table(ctx: piccolo::Context<'_>, mask: u16) {
     ctx.set_global("pad", pad).unwrap();
 }
 
-fn install_bindings(ctx: piccolo::Context<'_>) {
+fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
+    // Throwaway: an empty mirror makes every sync_* write unconditional; the engine's own mirror starts empty too.
+    let m = &mut Mirror::default();
     // controller: all released until the host sets a mask; init() may read it.
     set_pad_table(ctx, 0);
     // battery-backed save data; set_sources overwrites it from the host blob.
@@ -1737,7 +1768,7 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     color.set(ctx, "on", Table::new(&ctx)).unwrap();
     ctx.set_global("color", color).unwrap();
     ctx.set_global("__color_base", Table::new(&ctx)).unwrap();
-    sync_color(ctx, 0, 0, 0); // power-on defaults = decode of zeroed registers
+    sync_color(ctx, k, m, 0, 0, 0); // power-on defaults = decode of zeroed registers
 
     // Friendly screen-designation namespace over TM/TS ($212C/$212D). Same
     // baseline change-detection pattern as `color` above; `__screen_base`
@@ -1747,7 +1778,7 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     screen.set(ctx, "sub", Table::new(&ctx)).unwrap();
     ctx.set_global("screen", screen).unwrap();
     ctx.set_global("__screen_base", Table::new(&ctx)).unwrap();
-    sync_screen(ctx, 0x00, 0x00); // decode of the power-on TM/TS (both empty)
+    sync_screen(ctx, k, m, 0x00, 0x00); // decode of the power-on TM/TS (both empty)
 
     // Friendly window namespace over WH0-3, W12SEL/W34SEL/WOBJSEL, WBGLOG/
     // WOBJLOG, TMW/TSW. Same baseline change-detection pattern as `color`/
@@ -1761,11 +1792,12 @@ fn install_bindings(ctx: piccolo::Context<'_>) {
     win.set(ctx, "w1", Table::new(&ctx)).unwrap();
     win.set(ctx, "w2", Table::new(&ctx)).unwrap();
     for l in &WIN_LAYERS {
-        win.set(ctx, l.name, Table::new(&ctx)).unwrap();
+        win.set(ctx, k.win_names()[l.name], Table::new(&ctx))
+            .unwrap();
     }
     ctx.set_global("win", win).unwrap();
     ctx.set_global("__win_base", Table::new(&ctx)).unwrap();
-    sync_win(ctx, &[0u8; 11]); // power-on: every window register is zero
+    sync_win(ctx, k, m, &[0u8; 11]); // power-on: every window register is zero
 
     // M12/audio: `aram[addr] = byte` poke surface, drained (once) at the
     // start of `render_frame_audio` — never rebuilt, so echo-unit writes
@@ -2561,10 +2593,147 @@ fn static_error_to_lua(e: StaticError) -> LuaError {
     }
 }
 
-fn value_to_string(v: Value<'_>) -> Option<String> {
-    match v {
-        Value::String(s) => Some(String::from_utf8_lossy(s.as_bytes()).into_owned()),
-        _ => None,
+/// Every Lua string the per-scanline glue (`write_state` / hook /
+/// `read_state` / `take_cgram_pokes`) touches, interned ONCE at engine
+/// construction and re-fetched per `enter`. Passing a `&'static str` to
+/// piccolo re-interns it on every access (a hash-set probe per key per
+/// line); a fetched `Value::String` skips that entirely. Field names are
+/// the Lua spelling (raw register mnemonics stay uppercase).
+macro_rules! keys {
+    ($($f:ident: $s:literal),* $(,)?) => {
+        #[allow(non_snake_case)]
+        struct StashedKeys { $($f: piccolo::registry::StashedString),* }
+        #[allow(non_snake_case)]
+        #[derive(Clone, Copy)]
+        struct Keys<'gc> { $($f: Value<'gc>),* }
+        impl StashedKeys {
+            fn new(ctx: piccolo::Context<'_>) -> Self {
+                Self { $($f: ctx.stash(ctx.intern_static($s.as_bytes()))),* }
+            }
+            fn fetch<'gc>(&self, ctx: piccolo::Context<'gc>) -> Keys<'gc> {
+                Keys { $($f: Value::String(ctx.fetch(&self.$f))),* }
+            }
+        }
+    };
+}
+keys! {
+    mode: "mode", bg3_priority: "bg3_priority", brightness: "brightness",
+    TM: "TM", TS: "TS", WH0: "WH0", WH1: "WH1", WH2: "WH2", WH3: "WH3",
+    W12SEL: "W12SEL", W34SEL: "W34SEL", WOBJSEL: "WOBJSEL", WBGLOG: "WBGLOG",
+    WOBJLOG: "WOBJLOG", TMW: "TMW", TSW: "TSW", CGWSEL: "CGWSEL",
+    CGADSUB: "CGADSUB", COLDATA: "COLDATA", mosaic: "mosaic",
+    direct_color: "direct_color", force_blank: "force_blank",
+    screen: "screen", screen_base: "__screen_base", tm: "tm", ts: "ts",
+    main: "main", sub: "sub", bg1: "bg1", bg2: "bg2", bg3: "bg3", bg4: "bg4",
+    obj: "obj", backdrop: "backdrop", color: "color",
+    win: "win", win_base: "__win_base", w1: "w1", w2: "w2", lo: "lo", hi: "hi",
+    invert: "invert", combine: "combine", or_: "OR", and_: "AND", xor: "XOR",
+    xnor: "XNOR", wh0: "wh0", wh1: "wh1", wh2: "wh2", wh3: "wh3",
+    w12sel: "w12sel", w34sel: "w34sel", wobjsel: "wobjsel", wbglog: "wbglog",
+    wobjlog: "wobjlog", tmw: "tmw", tsw: "tsw",
+    color_base: "__color_base", cgwsel: "cgwsel", cgadsub: "cgadsub",
+    coldata: "coldata", op: "op", half: "half", on: "on", addend: "addend",
+    region: "region", fixed: "fixed", add: "add", everywhere: "everywhere",
+    inside: "inside", outside: "outside", never: "never",
+    bg: "bg", scroll: "scroll", x: "x", y: "y", visible: "visible",
+    tile_size: "tile_size", map_base: "map_base", screen_size: "screen_size",
+    char_base: "char_base",
+    m7: "m7", a: "a", b: "b", c: "c", d: "d", cx: "cx", cy: "cy", wrap: "wrap",
+    flip_x: "flip_x", flip_y: "flip_y", extbg: "extbg",
+    cgram: "cgram",
+}
+
+impl<'gc> Keys<'gc> {
+    /// The five TM/TS layer-enable fields, LSB-first.
+    fn screen_layers(&self) -> [(Value<'gc>, u8); 5] {
+        [
+            (self.bg1, 0x01),
+            (self.bg2, 0x02),
+            (self.bg3, 0x04),
+            (self.bg4, 0x08),
+            (self.obj, 0x10),
+        ]
+    }
+    /// CGADSUB layer-enable fields (`color.on.*`), LSB-first.
+    fn color_on(&self) -> [(Value<'gc>, u8); 6] {
+        [
+            (self.bg1, 0x01),
+            (self.bg2, 0x02),
+            (self.bg3, 0x04),
+            (self.bg4, 0x08),
+            (self.obj, 0x10),
+            (self.backdrop, 0x20),
+        ]
+    }
+    /// `__win_base` keys in `WinBytes` order.
+    fn win_base_keys(&self) -> [Value<'gc>; 11] {
+        [
+            self.wh0,
+            self.wh1,
+            self.wh2,
+            self.wh3,
+            self.w12sel,
+            self.w34sel,
+            self.wobjsel,
+            self.wbglog,
+            self.wobjlog,
+            self.tmw,
+            self.tsw,
+        ]
+    }
+    /// The raw window mnemonics (WH0-3, W12SEL, W34SEL, WOBJSEL, WBGLOG,
+    /// WOBJLOG, TMW, TSW) in `WinBytes` order — same order as
+    /// `win_base_keys`, but the globals' own names, not `__win_base`'s.
+    fn win_raw_keys(&self) -> [Value<'gc>; 11] {
+        [
+            self.WH0,
+            self.WH1,
+            self.WH2,
+            self.WH3,
+            self.W12SEL,
+            self.W34SEL,
+            self.WOBJSEL,
+            self.WBGLOG,
+            self.WOBJLOG,
+            self.TMW,
+            self.TSW,
+        ]
+    }
+    /// `win.<layer>` keys in `WIN_LAYERS` order.
+    fn win_names(&self) -> [Value<'gc>; 6] {
+        [self.bg1, self.bg2, self.bg3, self.bg4, self.obj, self.color]
+    }
+    /// win.w1/.w2 edge fields in WinBytes order (WH0, WH1, WH2, WH3).
+    fn win_edges(&self) -> [(Value<'gc>, Value<'gc>); 4] {
+        [
+            (self.w1, self.lo),
+            (self.w1, self.hi),
+            (self.w2, self.lo),
+            (self.w2, self.hi),
+        ]
+    }
+    /// The eleven enumerated-string values `Raw::S`/`S_*` index into, in
+    /// `S_*` order (add, sub, fixed, everywhere, inside, outside, never,
+    /// OR, AND, XOR, XNOR) — the one spelling of this set; `string` and
+    /// `rd_s` both index it instead of repeating the list.
+    fn strings(&self) -> [Value<'gc>; 11] {
+        [
+            self.add,
+            self.sub,
+            self.fixed,
+            self.everywhere,
+            self.inside,
+            self.outside,
+            self.never,
+            self.or_,
+            self.and_,
+            self.xor,
+            self.xnor,
+        ]
+    }
+    /// `strings()[i]` — the friendly string value for an `S_*`/`Raw::S` index.
+    fn string(&self, i: u8) -> Value<'gc> {
+        self.strings()[i as usize]
     }
 }
 
@@ -2573,25 +2742,169 @@ fn value_to_string(v: Value<'_>) -> Option<String> {
 /// (clip-to-black) are NOT color's — leave them to the raw byte.
 const COLOR_CGWSEL_MASK: u8 = 0x32;
 
+/// One register global's RAW Lua value as of the last `read_state` /
+/// `write_state`: the diff-on-write baseline. `None` means "unknown, or
+/// something the row cannot reproduce exactly" (nil, a float in an integer
+/// slot, an unrecognised string, a table that was out of reach) and forces
+/// the next write, so a hook that leaves a wrong-typed or out-of-range value
+/// behind is still reset exactly as a full write would.
+#[derive(Clone, Copy, PartialEq)]
+enum Raw {
+    I(i64),
+    B(bool),
+    /// `f64::to_bits`, so -0.0 / NaN payloads compare exactly, not by value.
+    F(u64),
+    /// Index into `Keys::string`.
+    S(u8),
+}
+type Slot = Option<Raw>;
+
+// `Raw::S` indices (`Keys::string`); the four combine ops are contiguous
+// from `S_OR` in WBGLOG/WOBJLOG slot order (OR, AND, XOR, XNOR).
+const S_ADD: u8 = 0;
+const S_SUB: u8 = 1;
+const S_FIXED: u8 = 2;
+const S_EVERYWHERE: u8 = 3;
+const S_INSIDE: u8 = 4;
+const S_OUTSIDE: u8 = 5;
+const S_NEVER: u8 = 6;
+const S_OR: u8 = 7;
+
+/// The raw values every register global held after the last `read_state`
+/// / `write_state` (see [`Raw`]). Arrays follow the iteration order of the
+/// reader/writer pair that owns them. `Default` = all unknown = the next
+/// `write_state` writes everything.
+#[derive(Default)]
+struct Mirror {
+    mode: Slot,
+    bg3_priority: Slot,
+    brightness: Slot,
+    tm: Slot,
+    ts: Slot,
+    /// WH0-3, W12SEL, W34SEL, WOBJSEL, WBGLOG, WOBJLOG, TMW, TSW — the raw
+    /// mnemonics in `WinBytes`/`Keys::win_raw_keys` order.
+    win_raw: [Slot; 11],
+    cgwsel: Slot,
+    cgadsub: Slot,
+    coldata: Slot,
+    mosaic: Slot,
+    direct_color: Slot,
+    force_blank: Slot,
+    /// `screen.main` / `screen.sub` x `Keys::screen_layers`.
+    screen: [[Slot; 5]; 2],
+    /// `__screen_base.tm/.ts`.
+    screen_base: [Slot; 2],
+    /// `win.w1.lo/.hi`, `win.w2.lo/.hi` (`Keys::win_edges`).
+    win_edge: [Slot; 4],
+    /// `WIN_LAYERS` x (w1, w2, invert, combine, main, sub).
+    win: [[Slot; 6]; 6],
+    /// `__win_base` in `WinBytes` order.
+    win_base: [Slot; 11],
+    /// `color.op/.half/.addend/.region/.fixed`.
+    color: [Slot; 5],
+    /// `color.on` x `Keys::color_on`.
+    color_on: [Slot; 6],
+    /// `__color_base.cgwsel/.cgadsub/.coldata`.
+    color_base: [Slot; 3],
+    /// `bg[n]` x (scroll.x, scroll.y, visible, tile_size, map_base,
+    /// screen_size, char_base, mosaic).
+    bg: [[Slot; 8]; 4],
+    /// `m7` x (a, b, c, d, cx, cy, wrap, flip_x, flip_y, extbg).
+    m7: [Slot; 10],
+}
+
+/// Record a raw read into its mirror slot; returns the value untouched so
+/// the existing normalisation (`to_int` / `to_bool` / `to_number`) stays.
+fn rd<'gc>(v: Value<'gc>, slot: &mut Slot) -> Value<'gc> {
+    *slot = match v {
+        Value::Integer(i) => Some(Raw::I(i)),
+        Value::Boolean(b) => Some(Raw::B(b)),
+        Value::Number(f) => Some(Raw::F(f.to_bits())),
+        _ => None,
+    };
+    v
+}
+
+/// `rd` for the enumerated-string fields: the `Keys::string` index of the
+/// value if it is one of them (also recorded in the slot), else `None`.
+/// Matches against `k.strings()` — the single spelling of the enumerated
+/// set, shared with `Keys::string`/`put` — by content (piccolo `String` is
+/// `PartialEq` by bytes, not identity).
+fn rd_s<'gc>(v: Value<'gc>, k: &Keys<'gc>, slot: &mut Slot) -> Option<u8> {
+    let id = match v {
+        Value::String(s) => k
+            .strings()
+            .iter()
+            .position(|t| matches!(t, Value::String(t) if s == *t))
+            .map(|i| i as u8),
+        _ => None,
+    };
+    *slot = id.map(Raw::S);
+    id
+}
+
+/// Write `raw` to `t[key]` unless the mirror says the slot already holds
+/// exactly that, then record it.
+fn put<'gc>(
+    ctx: piccolo::Context<'gc>,
+    k: &Keys<'gc>,
+    t: Table<'gc>,
+    key: Value<'gc>,
+    raw: Raw,
+    slot: &mut Slot,
+) {
+    if *slot == Some(raw) {
+        return;
+    }
+    let v = match raw {
+        Raw::I(i) => Value::Integer(i),
+        Raw::B(b) => Value::Boolean(b),
+        Raw::F(bits) => Value::Number(f64::from_bits(bits)),
+        Raw::S(i) => k.string(i),
+    };
+    t.set(ctx, key, v).unwrap();
+    *slot = Some(raw);
+}
+
 /// The CGWSEL/CGADSUB/COLDATA bytes as of the last install_bindings/
 /// write_state — the baseline the friendly `color` fold diffs against.
-fn read_color_base(ctx: piccolo::Context<'_>) -> (u8, u8, u16) {
-    match ctx.get_global("__color_base") {
+fn read_color_base<'gc>(
+    ctx: piccolo::Context<'gc>,
+    k: &Keys<'gc>,
+    m: &mut Mirror,
+) -> (u8, u8, u16) {
+    match ctx.get_global(k.color_base) {
         Value::Table(t) => (
-            t.get(ctx, "cgwsel").to_int().unwrap_or(0) as u8,
-            t.get(ctx, "cgadsub").to_int().unwrap_or(0) as u8,
-            t.get(ctx, "coldata").to_int().unwrap_or(0) as u16,
+            rd(t.get(ctx, k.cgwsel), &mut m.color_base[0])
+                .to_int()
+                .unwrap_or(0) as u8,
+            rd(t.get(ctx, k.cgadsub), &mut m.color_base[1])
+                .to_int()
+                .unwrap_or(0) as u8,
+            rd(t.get(ctx, k.coldata), &mut m.color_base[2])
+                .to_int()
+                .unwrap_or(0) as u16,
         ),
-        _ => (0, 0, 0),
+        _ => {
+            m.color_base = Default::default();
+            (0, 0, 0)
+        }
     }
 }
 
 /// Pack the friendly `color` table into (cgwsel-bits, cgadsub, coldata).
 /// Any field that is nil/unrecognized takes its bits from `base` (absent
 /// friendly -> the raw register keeps those bits, i.e. "no change").
-fn pack_color(ctx: piccolo::Context<'_>, base: (u8, u8, u16)) -> (u8, u8, u16) {
+fn pack_color<'gc>(
+    ctx: piccolo::Context<'gc>,
+    k: &Keys<'gc>,
+    m: &mut Mirror,
+    base: (u8, u8, u16),
+) -> (u8, u8, u16) {
     let (base_w, base_a, base_c) = base;
-    let Value::Table(color) = ctx.get_global("color") else {
+    let Value::Table(color) = ctx.get_global(k.color) else {
+        m.color = Default::default();
+        m.color_on = Default::default();
         return base;
     };
     let bit = |v: Value<'_>, mask: u8, base_byte: u8| -> u8 {
@@ -2601,39 +2914,33 @@ fn pack_color(ctx: piccolo::Context<'_>, base: (u8, u8, u16)) -> (u8, u8, u16) {
             _ => base_byte & mask,
         }
     };
-    let mut a = match value_to_string(color.get(ctx, "op")).as_deref() {
-        Some("add") => 0,
-        Some("sub") => 0x80,
+    let mut a = match rd_s(color.get(ctx, k.op), k, &mut m.color[0]) {
+        Some(S_ADD) => 0,
+        Some(S_SUB) => 0x80,
         _ => base_a & 0x80,
     };
-    a |= bit(color.get(ctx, "half"), 0x40, base_a);
-    if let Value::Table(on) = color.get(ctx, "on") {
-        for (name, mask) in [
-            ("bg1", 0x01),
-            ("bg2", 0x02),
-            ("bg3", 0x04),
-            ("bg4", 0x08),
-            ("obj", 0x10),
-            ("backdrop", 0x20),
-        ] {
-            a |= bit(on.get(ctx, name), mask, base_a);
+    a |= bit(rd(color.get(ctx, k.half), &mut m.color[1]), 0x40, base_a);
+    if let Value::Table(on) = color.get(ctx, k.on) {
+        for (i, (name, mask)) in k.color_on().into_iter().enumerate() {
+            a |= bit(rd(on.get(ctx, name), &mut m.color_on[i]), mask, base_a);
         }
     } else {
+        m.color_on = Default::default();
         a |= base_a & 0x3f;
     }
-    let mut w = match value_to_string(color.get(ctx, "addend")).as_deref() {
-        Some("sub") => 0x02,
-        Some("fixed") => 0,
+    let mut w = match rd_s(color.get(ctx, k.addend), k, &mut m.color[2]) {
+        Some(S_SUB) => 0x02,
+        Some(S_FIXED) => 0,
         _ => base_w & 0x02,
     };
-    w |= match value_to_string(color.get(ctx, "region")).as_deref() {
-        Some("everywhere") => 0x00,
-        Some("inside") => 0x10,  // prevent-math OUTSIDE the window
-        Some("outside") => 0x20, // prevent-math INSIDE the window
-        Some("never") => 0x30,   // always prevent
+    w |= match rd_s(color.get(ctx, k.region), k, &mut m.color[3]) {
+        Some(S_EVERYWHERE) => 0x00,
+        Some(S_INSIDE) => 0x10,  // prevent-math OUTSIDE the window
+        Some(S_OUTSIDE) => 0x20, // prevent-math INSIDE the window
+        Some(S_NEVER) => 0x30,   // always prevent
         _ => base_w & 0x30,
     };
-    let c = match color.get(ctx, "fixed").to_int() {
+    let c = match rd(color.get(ctx, k.fixed), &mut m.color[4]).to_int() {
         Some(v) => (v as u16) & 0x7fff,
         None => base_c,
     };
@@ -2643,49 +2950,68 @@ fn pack_color(ctx: piccolo::Context<'_>, base: (u8, u8, u16)) -> (u8, u8, u16) {
 /// Unpack CGWSEL/CGADSUB/COLDATA into the friendly `color` fields (mirror
 /// live values so hooks can read them — HDMA persistence, matching m7) and
 /// record the bytes in `__color_base` for read_state's change detection.
-fn sync_color(ctx: piccolo::Context<'_>, cgwsel: u8, cgadsub: u8, coldata: u16) {
-    if let Value::Table(color) = ctx.get_global("color") {
-        let s = |v: &str| ctx.intern(v.as_bytes());
-        color
-            .set(
-                ctx,
-                "op",
-                s(if cgadsub & 0x80 != 0 { "sub" } else { "add" }),
-            )
-            .unwrap();
-        color.set(ctx, "half", cgadsub & 0x40 != 0).unwrap();
-        if let Value::Table(on) = color.get(ctx, "on") {
-            for (name, mask) in [
-                ("bg1", 0x01u8),
-                ("bg2", 0x02),
-                ("bg3", 0x04),
-                ("bg4", 0x08),
-                ("obj", 0x10),
-                ("backdrop", 0x20),
-            ] {
-                on.set(ctx, name, cgadsub & mask != 0).unwrap();
+fn sync_color<'gc>(
+    ctx: piccolo::Context<'gc>,
+    k: &Keys<'gc>,
+    m: &mut Mirror,
+    cgwsel: u8,
+    cgadsub: u8,
+    coldata: u16,
+) {
+    if let Value::Table(color) = ctx.get_global(k.color) {
+        let op = if cgadsub & 0x80 != 0 { S_SUB } else { S_ADD };
+        put(ctx, k, color, k.op, Raw::S(op), &mut m.color[0]);
+        put(
+            ctx,
+            k,
+            color,
+            k.half,
+            Raw::B(cgadsub & 0x40 != 0),
+            &mut m.color[1],
+        );
+        if let Value::Table(on) = color.get(ctx, k.on) {
+            for (i, (name, mask)) in k.color_on().into_iter().enumerate() {
+                put(
+                    ctx,
+                    k,
+                    on,
+                    name,
+                    Raw::B(cgadsub & mask != 0),
+                    &mut m.color_on[i],
+                );
             }
         }
-        color
-            .set(
-                ctx,
-                "addend",
-                s(if cgwsel & 0x02 != 0 { "sub" } else { "fixed" }),
-            )
-            .unwrap();
+        let addend = if cgwsel & 0x02 != 0 { S_SUB } else { S_FIXED };
+        put(ctx, k, color, k.addend, Raw::S(addend), &mut m.color[2]);
         let region = match (cgwsel >> 4) & 0x03 {
-            0 => "everywhere",
-            1 => "inside",
-            2 => "outside",
-            _ => "never",
+            0 => S_EVERYWHERE,
+            1 => S_INSIDE,
+            2 => S_OUTSIDE,
+            _ => S_NEVER,
         };
-        color.set(ctx, "region", s(region)).unwrap();
-        color.set(ctx, "fixed", (coldata & 0x7fff) as i64).unwrap();
+        put(ctx, k, color, k.region, Raw::S(region), &mut m.color[3]);
+        let fixed = Raw::I((coldata & 0x7fff) as i64);
+        put(ctx, k, color, k.fixed, fixed, &mut m.color[4]);
     }
-    if let Value::Table(b) = ctx.get_global("__color_base") {
-        b.set(ctx, "cgwsel", cgwsel as i64).unwrap();
-        b.set(ctx, "cgadsub", cgadsub as i64).unwrap();
-        b.set(ctx, "coldata", (coldata & 0x7fff) as i64).unwrap();
+    if let Value::Table(b) = ctx.get_global(k.color_base) {
+        put(
+            ctx,
+            k,
+            b,
+            k.cgwsel,
+            Raw::I(cgwsel as i64),
+            &mut m.color_base[0],
+        );
+        put(
+            ctx,
+            k,
+            b,
+            k.cgadsub,
+            Raw::I(cgadsub as i64),
+            &mut m.color_base[1],
+        );
+        let coldata = Raw::I((coldata & 0x7fff) as i64);
+        put(ctx, k, b, k.coldata, coldata, &mut m.color_base[2]);
     }
 }
 
@@ -2693,43 +3019,49 @@ fn sync_color(ctx: piccolo::Context<'_>, cgwsel: u8, cgadsub: u8, coldata: u16) 
 /// BG1..BG4, OBJ. Bits 5-7 are unused by hardware — leave them to the raw byte.
 const SCREEN_MASK: u8 = 0x1f;
 
-/// The five TM/TS layer-enable fields, LSB-first.
-const SCREEN_LAYERS: [(&str, u8); 5] = [
-    ("bg1", 0x01),
-    ("bg2", 0x02),
-    ("bg3", 0x04),
-    ("bg4", 0x08),
-    ("obj", 0x10),
-];
-
 /// The TM/TS bytes as of the last install_bindings/write_state — the
 /// baseline the friendly `screen` fold diffs against.
-fn read_screen_base(ctx: piccolo::Context<'_>) -> (u8, u8) {
-    match ctx.get_global("__screen_base") {
+fn read_screen_base<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>, m: &mut Mirror) -> (u8, u8) {
+    match ctx.get_global(k.screen_base) {
         Value::Table(t) => (
-            t.get(ctx, "tm").to_int().unwrap_or(0) as u8,
-            t.get(ctx, "ts").to_int().unwrap_or(0) as u8,
+            rd(t.get(ctx, k.tm), &mut m.screen_base[0])
+                .to_int()
+                .unwrap_or(0) as u8,
+            rd(t.get(ctx, k.ts), &mut m.screen_base[1])
+                .to_int()
+                .unwrap_or(0) as u8,
         ),
-        _ => (0, 0),
+        _ => {
+            m.screen_base = Default::default();
+            (0, 0)
+        }
     }
 }
 
 /// Pack the friendly `screen` table into (tm, ts). Any field that is
 /// nil/non-boolean takes its bits from `base` (absent friendly -> the raw
 /// register keeps those bits, i.e. "no change").
-fn pack_screen(ctx: piccolo::Context<'_>, base: (u8, u8)) -> (u8, u8) {
+fn pack_screen<'gc>(
+    ctx: piccolo::Context<'gc>,
+    k: &Keys<'gc>,
+    m: &mut Mirror,
+    base: (u8, u8),
+) -> (u8, u8) {
     fn side<'gc>(
         ctx: piccolo::Context<'gc>,
+        k: &Keys<'gc>,
+        slots: &mut [Slot; 5],
         screen: Table<'gc>,
-        name: &'static str,
+        name: Value<'gc>,
         base_byte: u8,
     ) -> u8 {
         let Value::Table(t) = screen.get(ctx, name) else {
+            *slots = Default::default();
             return base_byte & SCREEN_MASK;
         };
         let mut out = 0u8;
-        for (field, mask) in SCREEN_LAYERS {
-            out |= match t.get(ctx, field) {
+        for (i, (field, mask)) in k.screen_layers().into_iter().enumerate() {
+            out |= match rd(t.get(ctx, field), &mut slots[i]) {
                 Value::Boolean(true) => mask,
                 Value::Boolean(false) => 0,
                 _ => base_byte & mask,
@@ -2738,41 +3070,46 @@ fn pack_screen(ctx: piccolo::Context<'_>, base: (u8, u8)) -> (u8, u8) {
         out
     }
     let (base_tm, base_ts) = base;
-    let Value::Table(screen) = ctx.get_global("screen") else {
+    let Value::Table(screen) = ctx.get_global(k.screen) else {
+        m.screen = Default::default();
         return base;
     };
+    let [main, sub] = &mut m.screen;
     (
-        side(ctx, screen, "main", base_tm),
-        side(ctx, screen, "sub", base_ts),
+        side(ctx, k, main, screen, k.main, base_tm),
+        side(ctx, k, sub, screen, k.sub, base_ts),
     )
 }
 
 /// Unpack TM/TS into the friendly `screen` fields (mirror live values so
 /// hooks can read them — HDMA persistence, matching `color`) and record the
 /// bytes in `__screen_base` for read_state's change detection.
-fn sync_screen(ctx: piccolo::Context<'_>, tm: u8, ts: u8) {
-    if let Value::Table(screen) = ctx.get_global("screen") {
-        for (name, byte) in [("main", tm), ("sub", ts)] {
+fn sync_screen<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>, m: &mut Mirror, tm: u8, ts: u8) {
+    if let Value::Table(screen) = ctx.get_global(k.screen) {
+        for (si, (name, byte)) in [(k.main, tm), (k.sub, ts)].into_iter().enumerate() {
             if let Value::Table(t) = screen.get(ctx, name) {
-                for (field, mask) in SCREEN_LAYERS {
-                    t.set(ctx, field, byte & mask != 0).unwrap();
+                for (i, (field, mask)) in k.screen_layers().into_iter().enumerate() {
+                    put(
+                        ctx,
+                        k,
+                        t,
+                        field,
+                        Raw::B(byte & mask != 0),
+                        &mut m.screen[si][i],
+                    );
                 }
             }
         }
     }
-    if let Value::Table(b) = ctx.get_global("__screen_base") {
-        b.set(ctx, "tm", tm as i64).unwrap();
-        b.set(ctx, "ts", ts as i64).unwrap();
+    if let Value::Table(b) = ctx.get_global(k.screen_base) {
+        put(ctx, k, b, k.tm, Raw::I(tm as i64), &mut m.screen_base[0]);
+        put(ctx, k, b, k.ts, Raw::I(ts as i64), &mut m.screen_base[1]);
     }
 }
 
-/// Friendly `win` byte order (indexes `WinBytes`, `WIN_BASE_KEYS`,
+/// Friendly `win` byte order (indexes `WinBytes`, `Keys::win_base_keys`,
 /// `WIN_MASKS`): WH0-3, W12SEL, W34SEL, WOBJSEL, WBGLOG, WOBJLOG, TMW, TSW.
 type WinBytes = [u8; 11];
-
-const WIN_BASE_KEYS: [&str; 11] = [
-    "wh0", "wh1", "wh2", "wh3", "w12sel", "w34sel", "wobjsel", "wbglog", "wobjlog", "tmw", "tsw",
-];
 
 /// Bits `win` owns per byte. The WH edges, the three SEL bytes and WBGLOG
 /// are fully covered by friendly fields; WOBJLOG's bits 4-7 are unused by
@@ -2797,13 +3134,11 @@ const WIN_W1_ENABLE: u8 = 0x2;
 const WIN_W2_ENABLE: u8 = 0x8;
 const WIN_INVERT_BITS: u8 = 0x5;
 
-/// WBGLOG/WOBJLOG 2-bit slot values, in order.
-const WIN_COMBINE: [&str; 4] = ["OR", "AND", "XOR", "XNOR"];
-
 /// One friendly window layer: its SEL nibble, LOG slot and TMW/TSW bit.
-/// `sel`/`log` offset into the WinBytes SEL (4..=6) / LOG (7..=8) bytes.
+/// `sel`/`log` offset into the WinBytes SEL (4..=6) / LOG (7..=8) bytes;
+/// `name` indexes `Keys::win_names` and `Mirror::win`.
 struct WinLayer {
-    name: &'static str,
+    name: usize,
     sel: usize,
     sel_shift: u8,
     log: usize,
@@ -2814,25 +3149,26 @@ struct WinLayer {
 
 #[rustfmt::skip]
 const WIN_LAYERS: [WinLayer; 6] = [
-    WinLayer { name: "bg1",   sel: 0, sel_shift: 0, log: 0, log_shift: 0, mask_bit: Some(0) },
-    WinLayer { name: "bg2",   sel: 0, sel_shift: 4, log: 0, log_shift: 2, mask_bit: Some(1) },
-    WinLayer { name: "bg3",   sel: 1, sel_shift: 0, log: 0, log_shift: 4, mask_bit: Some(2) },
-    WinLayer { name: "bg4",   sel: 1, sel_shift: 4, log: 0, log_shift: 6, mask_bit: Some(3) },
-    WinLayer { name: "obj",   sel: 2, sel_shift: 0, log: 1, log_shift: 0, mask_bit: Some(4) },
-    WinLayer { name: "color", sel: 2, sel_shift: 4, log: 1, log_shift: 2, mask_bit: None },
+    WinLayer { name: 0, sel: 0, sel_shift: 0, log: 0, log_shift: 0, mask_bit: Some(0) }, // bg1
+    WinLayer { name: 1, sel: 0, sel_shift: 4, log: 0, log_shift: 2, mask_bit: Some(1) }, // bg2
+    WinLayer { name: 2, sel: 1, sel_shift: 0, log: 0, log_shift: 4, mask_bit: Some(2) }, // bg3
+    WinLayer { name: 3, sel: 1, sel_shift: 4, log: 0, log_shift: 6, mask_bit: Some(3) }, // bg4
+    WinLayer { name: 4, sel: 2, sel_shift: 0, log: 1, log_shift: 0, mask_bit: Some(4) }, // obj
+    WinLayer { name: 5, sel: 2, sel_shift: 4, log: 1, log_shift: 2, mask_bit: None },    // color
 ];
-
-/// win.w1/.w2 edge fields in WinBytes order (WH0, WH1, WH2, WH3).
-const WIN_EDGES: [(&str, &str); 4] = [("w1", "lo"), ("w1", "hi"), ("w2", "lo"), ("w2", "hi")];
 
 /// The eleven window-register bytes as of the last install_bindings/
 /// write_state — the baseline the friendly `win` fold diffs against.
-fn read_win_base(ctx: piccolo::Context<'_>) -> WinBytes {
+fn read_win_base<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>, m: &mut Mirror) -> WinBytes {
     let mut out = [0u8; 11];
-    if let Value::Table(t) = ctx.get_global("__win_base") {
-        for (i, k) in WIN_BASE_KEYS.iter().enumerate() {
-            out[i] = t.get(ctx, *k).to_int().unwrap_or(0) as u8;
+    if let Value::Table(t) = ctx.get_global(k.win_base) {
+        for (i, key) in k.win_base_keys().into_iter().enumerate() {
+            out[i] = rd(t.get(ctx, key), &mut m.win_base[i])
+                .to_int()
+                .unwrap_or(0) as u8;
         }
+    } else {
+        m.win_base = Default::default();
     }
     out
 }
@@ -2843,9 +3179,16 @@ fn read_win_base(ctx: piccolo::Context<'_>) -> WinBytes {
 /// pair is base-aware: decode is lossy (either bit set reads true), so an
 /// UNCHANGED bool reproduces the base bits verbatim — only a moved bool
 /// expands to both bits / neither.
-fn pack_win(ctx: piccolo::Context<'_>, base: &WinBytes) -> WinBytes {
+fn pack_win<'gc>(
+    ctx: piccolo::Context<'gc>,
+    k: &Keys<'gc>,
+    m: &mut Mirror,
+    base: &WinBytes,
+) -> WinBytes {
     let mut out = *base;
-    let Value::Table(win) = ctx.get_global("win") else {
+    let Value::Table(win) = ctx.get_global(k.win) else {
+        m.win_edge = Default::default();
+        m.win = Default::default();
         return out;
     };
     let bit = |v: Value<'_>, mask: u8, base_bits: u8| -> u8 {
@@ -2855,22 +3198,27 @@ fn pack_win(ctx: piccolo::Context<'_>, base: &WinBytes) -> WinBytes {
             _ => base_bits & mask,
         }
     };
-    for (i, (w, edge)) in WIN_EDGES.iter().enumerate() {
-        if let Value::Table(t) = win.get(ctx, *w) {
-            if let Some(v) = t.get(ctx, *edge).to_int() {
+    for (i, (w, edge)) in k.win_edges().into_iter().enumerate() {
+        if let Value::Table(t) = win.get(ctx, w) {
+            if let Some(v) = rd(t.get(ctx, edge), &mut m.win_edge[i]).to_int() {
                 out[i] = v.clamp(0, 255) as u8;
             }
+        } else {
+            m.win_edge[i] = None;
         }
     }
+    let names = k.win_names();
     for l in &WIN_LAYERS {
-        let Value::Table(t) = win.get(ctx, l.name) else {
+        let s = &mut m.win[l.name];
+        let Value::Table(t) = win.get(ctx, names[l.name]) else {
+            *s = Default::default();
             continue;
         };
         let sel_i = 4 + l.sel;
         let base_nib = (base[sel_i] >> l.sel_shift) & 0xf;
-        let mut nib = bit(t.get(ctx, "w1"), WIN_W1_ENABLE, base_nib)
-            | bit(t.get(ctx, "w2"), WIN_W2_ENABLE, base_nib);
-        nib |= match t.get(ctx, "invert") {
+        let mut nib = bit(rd(t.get(ctx, k.w1), &mut s[0]), WIN_W1_ENABLE, base_nib)
+            | bit(rd(t.get(ctx, k.w2), &mut s[1]), WIN_W2_ENABLE, base_nib);
+        nib |= match rd(t.get(ctx, k.invert), &mut s[2]) {
             Value::Boolean(b) if b != (base_nib & WIN_INVERT_BITS != 0) => {
                 if b {
                     WIN_INVERT_BITS
@@ -2883,14 +3231,15 @@ fn pack_win(ctx: piccolo::Context<'_>, base: &WinBytes) -> WinBytes {
         out[sel_i] = (out[sel_i] & !(0xf << l.sel_shift)) | (nib << l.sel_shift);
         let log_i = 7 + l.log;
         let base_slot = (base[log_i] >> l.log_shift) & 0x3;
-        let slot = value_to_string(t.get(ctx, "combine"))
-            .and_then(|s| WIN_COMBINE.iter().position(|c| *c == s))
-            .map_or(base_slot, |p| p as u8);
+        let slot = match rd_s(t.get(ctx, k.combine), k, &mut s[3]) {
+            Some(id) if id >= S_OR => id - S_OR,
+            _ => base_slot,
+        };
         out[log_i] = (out[log_i] & !(0x3 << l.log_shift)) | (slot << l.log_shift);
         if let Some(b) = l.mask_bit {
-            let m = 1u8 << b;
-            out[9] = (out[9] & !m) | bit(t.get(ctx, "main"), m, base[9]);
-            out[10] = (out[10] & !m) | bit(t.get(ctx, "sub"), m, base[10]);
+            let mask = 1u8 << b;
+            out[9] = (out[9] & !mask) | bit(rd(t.get(ctx, k.main), &mut s[4]), mask, base[9]);
+            out[10] = (out[10] & !mask) | bit(rd(t.get(ctx, k.sub), &mut s[5]), mask, base[10]);
         }
     }
     out
@@ -2900,37 +3249,62 @@ fn pack_win(ctx: piccolo::Context<'_>, base: &WinBytes) -> WinBytes {
 /// values so hooks can read them — HDMA persistence, matching `color`/
 /// `screen`) and record the bytes in `__win_base` for read_state's change
 /// detection. Shared decode: `invert` reads true if EITHER invert bit is set.
-fn sync_win(ctx: piccolo::Context<'_>, bytes: &WinBytes) {
-    if let Value::Table(win) = ctx.get_global("win") {
-        for (i, (w, edge)) in WIN_EDGES.iter().enumerate() {
-            if let Value::Table(t) = win.get(ctx, *w) {
-                t.set(ctx, *edge, bytes[i] as i64).unwrap();
+fn sync_win<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>, m: &mut Mirror, bytes: &WinBytes) {
+    if let Value::Table(win) = ctx.get_global(k.win) {
+        for (i, (w, edge)) in k.win_edges().into_iter().enumerate() {
+            if let Value::Table(t) = win.get(ctx, w) {
+                put(ctx, k, t, edge, Raw::I(bytes[i] as i64), &mut m.win_edge[i]);
             }
         }
+        let names = k.win_names();
         for l in &WIN_LAYERS {
-            let Value::Table(t) = win.get(ctx, l.name) else {
+            let Value::Table(t) = win.get(ctx, names[l.name]) else {
                 continue;
             };
+            let s = &mut m.win[l.name];
             let nib = (bytes[4 + l.sel] >> l.sel_shift) & 0xf;
-            t.set(ctx, "w1", nib & WIN_W1_ENABLE != 0).unwrap();
-            t.set(ctx, "w2", nib & WIN_W2_ENABLE != 0).unwrap();
-            t.set(ctx, "invert", nib & WIN_INVERT_BITS != 0).unwrap();
-            let slot = (bytes[7 + l.log] >> l.log_shift) & 0x3;
-            t.set(
+            put(ctx, k, t, k.w1, Raw::B(nib & WIN_W1_ENABLE != 0), &mut s[0]);
+            put(ctx, k, t, k.w2, Raw::B(nib & WIN_W2_ENABLE != 0), &mut s[1]);
+            put(
                 ctx,
-                "combine",
-                ctx.intern(WIN_COMBINE[slot as usize].as_bytes()),
-            )
-            .unwrap();
+                k,
+                t,
+                k.invert,
+                Raw::B(nib & WIN_INVERT_BITS != 0),
+                &mut s[2],
+            );
+            let slot = (bytes[7 + l.log] >> l.log_shift) & 0x3;
+            put(ctx, k, t, k.combine, Raw::S(S_OR + slot), &mut s[3]);
             if let Some(b) = l.mask_bit {
-                t.set(ctx, "main", bytes[9] & (1 << b) != 0).unwrap();
-                t.set(ctx, "sub", bytes[10] & (1 << b) != 0).unwrap();
+                put(
+                    ctx,
+                    k,
+                    t,
+                    k.main,
+                    Raw::B(bytes[9] & (1 << b) != 0),
+                    &mut s[4],
+                );
+                put(
+                    ctx,
+                    k,
+                    t,
+                    k.sub,
+                    Raw::B(bytes[10] & (1 << b) != 0),
+                    &mut s[5],
+                );
             }
         }
     }
-    if let Value::Table(base) = ctx.get_global("__win_base") {
-        for (i, k) in WIN_BASE_KEYS.iter().enumerate() {
-            base.set(ctx, *k, bytes[i] as i64).unwrap();
+    if let Value::Table(base) = ctx.get_global(k.win_base) {
+        for (i, key) in k.win_base_keys().into_iter().enumerate() {
+            put(
+                ctx,
+                k,
+                base,
+                key,
+                Raw::I(bytes[i] as i64),
+                &mut m.win_base[i],
+            );
         }
     }
 }
@@ -2955,9 +3329,9 @@ fn row_win_bytes(row: &LineTableRow) -> WinBytes {
 /// Read the per-scanline register globals into a `LineTableRow`. Missing globals
 /// keep their `LineTableRow::default()` value (sticky semantics).
 /// The `cgram` table as frame() left it: one slot per entry, None = unset.
-fn snapshot_cgram(ctx: piccolo::Context<'_>) -> Vec<Option<i64>> {
-    let mut out = vec![None; 256];
-    if let Value::Table(cg) = ctx.get_global("cgram") {
+fn snapshot_cgram<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) -> [Option<i64>; 256] {
+    let mut out = [None; 256];
+    if let Value::Table(cg) = ctx.get_global(k.cgram) {
         for (i, slot) in out.iter_mut().enumerate() {
             *slot = cg.get(ctx, i as i64).to_int();
         }
@@ -2969,11 +3343,20 @@ fn snapshot_cgram(ctx: piccolo::Context<'_>) -> Vec<Option<i64>> {
 /// frame snapshot is that line's poke, and the table is put back so the
 /// write reaches neither the next line nor the next frame. A hook setting
 /// an entry to nil is "no override".
-fn take_cgram_pokes(ctx: piccolo::Context<'_>, snap: &[Option<i64>]) -> Vec<(u8, u16)> {
+fn take_cgram_pokes<'gc>(
+    ctx: piccolo::Context<'gc>,
+    k: &Keys<'gc>,
+    snap: &[Option<i64>; 256],
+) -> Vec<(u8, u16)> {
     let mut pokes = Vec::new();
-    let Value::Table(cg) = ctx.get_global("cgram") else {
+    let Value::Table(cg) = ctx.get_global(k.cgram) else {
         return pokes;
     };
+    // 256 direct probes. A live-entry walk (iterate the table, then restore
+    // the snapshot entries it missed) was measured slower on the film drafts,
+    // whose frame() fills all 256 entries: piccolo's `next` is dearer than a
+    // `get` per slot and the second pass is an extra 256 anyway. It only won
+    // on toys with a sparse cgram, which are already far under budget.
     for (i, was) in snap.iter().enumerate() {
         let now = cg.get(ctx, i as i64).to_int();
         if now == *was {
@@ -2982,28 +3365,26 @@ fn take_cgram_pokes(ctx: piccolo::Context<'_>, snap: &[Option<i64>]) -> Vec<(u8,
         if let Some(c) = now {
             pokes.push((i as u8, (c as u16) & 0x7fff));
         }
-        let back = match was {
-            Some(v) => Value::Integer(*v),
-            None => Value::Nil,
-        };
-        cg.set(ctx, i as i64, back).unwrap();
+        cg.set(ctx, i as i64, was.map_or(Value::Nil, Value::Integer))
+            .unwrap();
     }
     pokes
 }
 
-fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
+fn read_state<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>, m: &mut Mirror) -> LineTableRow {
     let mut row = LineTableRow::default();
-    row.bg3_priority = ctx.get_global("bg3_priority").to_bool();
-    if let Some(m) = ctx.get_global("mode").to_int() {
-        row.mode = m as u8; // wrap; quantize::mode masks to 3 bits at build
+    let g = ctx.globals();
+    row.bg3_priority = rd(g.get(ctx, k.bg3_priority), &mut m.bg3_priority).to_bool();
+    if let Some(v) = rd(g.get(ctx, k.mode), &mut m.mode).to_int() {
+        row.mode = v as u8; // wrap; quantize::mode masks to 3 bits at build
     }
-    if let Some(b) = ctx.get_global("brightness").to_int() {
+    if let Some(b) = rd(g.get(ctx, k.brightness), &mut m.brightness).to_int() {
         row.brightness = b as u8; // wrap; quantize::brightness masks to 4 bits
     }
-    if let Some(v) = ctx.get_global("TM").to_int() {
+    if let Some(v) = rd(g.get(ctx, k.TM), &mut m.tm).to_int() {
         row.tm = v as u8; // wrap; quantize::screen_mask masks to 5 bits at build
     }
-    if let Some(v) = ctx.get_global("TS").to_int() {
+    if let Some(v) = rd(g.get(ctx, k.TS), &mut m.ts).to_int() {
         row.ts = v as u8;
     }
     // Friendly `screen.*` fold — same coexistence contract as the `color`
@@ -3013,44 +3394,17 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
     // same-cycle raw write); untouched bits keep the raw TM/TS byte, so
     // raw-only scripts (incl. inside hooks) and the both-off power-on state
     // stay byte-identical.
-    let sbase = read_screen_base(ctx);
-    let (f_tm, f_ts) = pack_screen(ctx, sbase);
+    let sbase = read_screen_base(ctx, k, m);
+    let (f_tm, f_ts) = pack_screen(ctx, k, m, sbase);
     let changed_tm = (f_tm ^ sbase.0) & SCREEN_MASK;
     row.tm = (row.tm & !changed_tm) | (f_tm & changed_tm);
     let changed_ts = (f_ts ^ sbase.1) & SCREEN_MASK;
     row.ts = (row.ts & !changed_ts) | (f_ts & changed_ts);
-    if let Some(v) = ctx.get_global("WH0").to_int() {
-        row.wh0 = v as u8;
-    }
-    if let Some(v) = ctx.get_global("WH1").to_int() {
-        row.wh1 = v as u8;
-    }
-    if let Some(v) = ctx.get_global("WH2").to_int() {
-        row.wh2 = v as u8;
-    }
-    if let Some(v) = ctx.get_global("WH3").to_int() {
-        row.wh3 = v as u8;
-    }
-    if let Some(v) = ctx.get_global("W12SEL").to_int() {
-        row.w12sel = v as u8;
-    }
-    if let Some(v) = ctx.get_global("W34SEL").to_int() {
-        row.w34sel = v as u8;
-    }
-    if let Some(v) = ctx.get_global("WOBJSEL").to_int() {
-        row.wobjsel = v as u8;
-    }
-    if let Some(v) = ctx.get_global("WBGLOG").to_int() {
-        row.wbglog = v as u8;
-    }
-    if let Some(v) = ctx.get_global("WOBJLOG").to_int() {
-        row.wobjlog = v as u8;
-    }
-    if let Some(v) = ctx.get_global("TMW").to_int() {
-        row.tmw = v as u8;
-    }
-    if let Some(v) = ctx.get_global("TSW").to_int() {
-        row.tsw = v as u8;
+    let mut wrow = row_win_bytes(&row);
+    for (i, key) in k.win_raw_keys().into_iter().enumerate() {
+        if let Some(v) = rd(g.get(ctx, key), &mut m.win_raw[i]).to_int() {
+            wrow[i] = v as u8;
+        }
     }
     // Friendly `win.*` fold — same coexistence contract as the `screen`/
     // `color` folds: XOR the packed friendly bytes against the `__win_base`
@@ -3060,9 +3414,8 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
     // TMW/TSW 5-7) pass through untouched. Exception: the WH edges (indices
     // 0..3) are scalar coordinates, not bitfields — a moved friendly edge
     // replaces the byte whole (the COLDATA precedent), never a bitwise blend.
-    let wbase = read_win_base(ctx);
-    let fwin = pack_win(ctx, &wbase);
-    let mut wrow = row_win_bytes(&row);
+    let wbase = read_win_base(ctx, k, m);
+    let fwin = pack_win(ctx, k, m, &wbase);
     for (i, b) in wrow.iter_mut().enumerate() {
         let changed = (fwin[i] ^ wbase[i]) & WIN_MASKS[i];
         if i < 4 {
@@ -3088,19 +3441,19 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
     row.wobjlog = wrow[8];
     row.tmw = wrow[9];
     row.tsw = wrow[10];
-    if let Some(v) = ctx.get_global("CGWSEL").to_int() {
+    if let Some(v) = rd(g.get(ctx, k.CGWSEL), &mut m.cgwsel).to_int() {
         row.cgwsel = v as u8;
     }
     // Friendly alias: direct_color=true forces CGWSEL bit 0 (raw CGWSEL still works;
     // OR keeps both authoring styles valid and both-off byte-identical).
-    if ctx.get_global("direct_color").to_bool() {
+    if rd(g.get(ctx, k.direct_color), &mut m.direct_color).to_bool() {
         row.cgwsel |= 0x01;
     }
-    row.force_blank = ctx.get_global("force_blank").to_bool();
-    if let Some(v) = ctx.get_global("CGADSUB").to_int() {
+    row.force_blank = rd(g.get(ctx, k.force_blank), &mut m.force_blank).to_bool();
+    if let Some(v) = rd(g.get(ctx, k.CGADSUB), &mut m.cgadsub).to_int() {
         row.cgadsub = v as u8;
     }
-    if let Some(v) = ctx.get_global("COLDATA").to_int() {
+    if let Some(v) = rd(g.get(ctx, k.COLDATA), &mut m.coldata).to_int() {
         row.coldata = v as u16;
     }
     // Friendly `color.*` fold — the coexistence contract, generalizing the
@@ -3112,8 +3465,8 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
     // raw-only scripts (incl. inside hooks) and the both-off power-on state
     // stay byte-identical. Known limit: re-assigning a friendly field its
     // current value is indistinguishable from not touching it.
-    let base = read_color_base(ctx);
-    let (f_w, f_a, f_c) = pack_color(ctx, base);
+    let base = read_color_base(ctx, k, m);
+    let (f_w, f_a, f_c) = pack_color(ctx, k, m, base);
     let changed_w = (f_w ^ base.0) & COLOR_CGWSEL_MASK;
     row.cgwsel = (row.cgwsel & !changed_w) | (f_w & changed_w);
     let changed_a = f_a ^ base.1;
@@ -3121,137 +3474,317 @@ fn read_state(ctx: piccolo::Context<'_>) -> LineTableRow {
     if f_c != base.2 {
         row.coldata = f_c;
     }
-    if let Some(v) = ctx.get_global("mosaic").to_int() {
+    if let Some(v) = rd(g.get(ctx, k.mosaic), &mut m.mosaic).to_int() {
         row.mosaic_size = v as u8; // wrap; quantize::mosaic_size masks to 4 bits at build
     }
-    if let Value::Table(bg) = ctx.get_global("bg") {
+    if let Value::Table(bg) = ctx.get_global(k.bg) {
         for i in 0..4 {
-            if let Value::Table(layer) = bg.get(ctx, (i + 1) as i64) {
-                if let Value::Table(scroll) = layer.get(ctx, "scroll") {
-                    if let Some(x) = scroll.get(ctx, "x").to_number() {
-                        row.bg[i].scroll_x = x as f32;
-                    }
-                    if let Some(y) = scroll.get(ctx, "y").to_number() {
-                        row.bg[i].scroll_y = y as f32;
-                    }
+            let s = &mut m.bg[i];
+            let Value::Table(layer) = bg.get(ctx, (i + 1) as i64) else {
+                *s = Default::default();
+                continue;
+            };
+            if let Value::Table(scroll) = layer.get(ctx, k.scroll) {
+                if let Some(x) = rd(scroll.get(ctx, k.x), &mut s[0]).to_number() {
+                    row.bg[i].scroll_x = x as f32;
                 }
-                row.bg[i].visible = match layer.get(ctx, "visible") {
-                    Value::Nil => true,
-                    v => v.to_bool(),
-                };
-                // Binding registers (quantize-on-write at RegRow build time).
-                if let Some(v) = layer.get(ctx, "tile_size").to_int() {
-                    row.bg[i].tile_size = v as u8;
+                if let Some(y) = rd(scroll.get(ctx, k.y), &mut s[1]).to_number() {
+                    row.bg[i].scroll_y = y as f32;
                 }
-                if let Some(v) = layer.get(ctx, "map_base").to_int() {
-                    row.bg[i].map_base = v as u32;
-                }
-                if let Some(v) = layer.get(ctx, "screen_size").to_int() {
-                    row.bg[i].screen_size = v as u8;
-                }
-                if let Some(v) = layer.get(ctx, "char_base").to_int() {
-                    row.bg[i].char_base = v as u32;
-                }
-                // MOSAIC per-BG enable; unset/nil -> false (off, matches default).
-                row.mosaic_enable[i] = layer.get(ctx, "mosaic").to_bool();
+            } else {
+                s[0] = None;
+                s[1] = None;
             }
+            row.bg[i].visible = match rd(layer.get(ctx, k.visible), &mut s[2]) {
+                Value::Nil => true,
+                v => v.to_bool(),
+            };
+            // Binding registers (quantize-on-write at RegRow build time).
+            if let Some(v) = rd(layer.get(ctx, k.tile_size), &mut s[3]).to_int() {
+                row.bg[i].tile_size = v as u8;
+            }
+            if let Some(v) = rd(layer.get(ctx, k.map_base), &mut s[4]).to_int() {
+                row.bg[i].map_base = v as u32;
+            }
+            if let Some(v) = rd(layer.get(ctx, k.screen_size), &mut s[5]).to_int() {
+                row.bg[i].screen_size = v as u8;
+            }
+            if let Some(v) = rd(layer.get(ctx, k.char_base), &mut s[6]).to_int() {
+                row.bg[i].char_base = v as u32;
+            }
+            // MOSAIC per-BG enable; unset/nil -> false (off, matches default).
+            row.mosaic_enable[i] = rd(layer.get(ctx, k.mosaic), &mut s[7]).to_bool();
         }
+    } else {
+        m.bg = Default::default();
     }
-    if let Value::Table(m7) = ctx.get_global("m7") {
-        if let Some(v) = m7.get(ctx, "a").to_number() {
+    if let Value::Table(m7) = ctx.get_global(k.m7) {
+        let s = &mut m.m7;
+        let num = |key: Value<'gc>, slot: &mut Slot| rd(m7.get(ctx, key), slot).to_number();
+        if let Some(v) = num(k.a, &mut s[0]) {
             row.m7.a = v as f32;
         }
-        if let Some(v) = m7.get(ctx, "b").to_number() {
+        if let Some(v) = num(k.b, &mut s[1]) {
             row.m7.b = v as f32;
         }
-        if let Some(v) = m7.get(ctx, "c").to_number() {
+        if let Some(v) = num(k.c, &mut s[2]) {
             row.m7.c = v as f32;
         }
-        if let Some(v) = m7.get(ctx, "d").to_number() {
+        if let Some(v) = num(k.d, &mut s[3]) {
             row.m7.d = v as f32;
         }
-        if let Some(v) = m7.get(ctx, "cx").to_number() {
+        if let Some(v) = num(k.cx, &mut s[4]) {
             row.m7.cx = v as f32;
         }
-        if let Some(v) = m7.get(ctx, "cy").to_number() {
+        if let Some(v) = num(k.cy, &mut s[5]) {
             row.m7.cy = v as f32;
         }
         // M7SEL binding registers (`wrap` = spec's `m7.repeat`, keyword-renamed).
-        if let Some(v) = m7.get(ctx, "wrap").to_int() {
+        if let Some(v) = rd(m7.get(ctx, k.wrap), &mut s[6]).to_int() {
             row.m7.repeat = v as u8;
         }
-        row.m7.flip_x = m7.get(ctx, "flip_x").to_bool();
-        row.m7.flip_y = m7.get(ctx, "flip_y").to_bool();
+        row.m7.flip_x = rd(m7.get(ctx, k.flip_x), &mut s[7]).to_bool();
+        row.m7.flip_y = rd(m7.get(ctx, k.flip_y), &mut s[8]).to_bool();
         // SETINI.6 EXTBG: fold the DSL bool into the register byte's bit 6.
-        row.setini = (row.setini & !0x40) | ((m7.get(ctx, "extbg").to_bool() as u8) << 6);
+        let extbg = rd(m7.get(ctx, k.extbg), &mut s[9]).to_bool();
+        row.setini = (row.setini & !0x40) | ((extbg as u8) << 6);
+    } else {
+        m.m7 = Default::default();
     }
     row
 }
 
 /// Write a `LineTableRow` back into the per-scanline register globals (used to
-/// re-baseline globals before each hook and to restore sticky state after build).
-fn write_state(ctx: piccolo::Context<'_>, row: &LineTableRow) {
-    ctx.set_global("mode", row.mode as i64).unwrap();
-    ctx.set_global("bg3_priority", row.bg3_priority).unwrap();
-    ctx.set_global("brightness", row.brightness as i64).unwrap();
-    ctx.set_global("TM", row.tm as i64).unwrap();
-    ctx.set_global("TS", row.ts as i64).unwrap();
-    sync_screen(ctx, row.tm, row.ts);
-    ctx.set_global("WH0", row.wh0 as i64).unwrap();
-    ctx.set_global("WH1", row.wh1 as i64).unwrap();
-    ctx.set_global("WH2", row.wh2 as i64).unwrap();
-    ctx.set_global("WH3", row.wh3 as i64).unwrap();
-    ctx.set_global("W12SEL", row.w12sel as i64).unwrap();
-    ctx.set_global("W34SEL", row.w34sel as i64).unwrap();
-    ctx.set_global("WOBJSEL", row.wobjsel as i64).unwrap();
-    ctx.set_global("WBGLOG", row.wbglog as i64).unwrap();
-    ctx.set_global("WOBJLOG", row.wobjlog as i64).unwrap();
-    ctx.set_global("TMW", row.tmw as i64).unwrap();
-    ctx.set_global("TSW", row.tsw as i64).unwrap();
-    sync_win(ctx, &row_win_bytes(row));
-    ctx.set_global("CGWSEL", row.cgwsel as i64).unwrap();
-    ctx.set_global("CGADSUB", row.cgadsub as i64).unwrap();
-    ctx.set_global("COLDATA", row.coldata as i64).unwrap();
-    ctx.set_global("mosaic", row.mosaic_size as i64).unwrap();
-    ctx.set_global("direct_color", (row.cgwsel & 0x01) != 0)
-        .unwrap();
-    sync_color(ctx, row.cgwsel, row.cgadsub, row.coldata);
-    ctx.set_global("force_blank", row.force_blank).unwrap();
-    if let Value::Table(bg) = ctx.get_global("bg") {
+/// re-baseline globals before each hook and to restore sticky state after
+/// build). Diff-on-write: a global the mirror says already holds exactly the
+/// target raw value is skipped — see [`Mirror`]; the caller resets the mirror
+/// wherever globals were written behind its back.
+fn write_state<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>, m: &mut Mirror, row: &LineTableRow) {
+    // Diff-on-write assumes every mirrored table is reached by exactly one
+    // path (bg[1].scroll, screen.main, __win_base, ...). A hook that aliases
+    // two of those paths to the same table — `bg[1] = bg[2]`, `screen.main =
+    // screen.sub`, `win.bg1 = win.bg2`, `bg[1] = _G` — breaks that: `put`
+    // writes the first path, then skips the second because the shared
+    // table's slot already matches, leaving the aliased table holding the
+    // first path's value instead of the old code's last-path-wins result.
+    // Detect any aliasing among the ~25 tables this function and its sync_*
+    // helpers write into (a cheap O(n^2) scan — `Table`'s `PartialEq` is
+    // `Gc::ptr_eq`, i.e. identity) and, if found, wipe the mirror so every
+    // `put` below is a full write — exact by construction, since a full
+    // write is what the pre-mirror code always did regardless of aliasing.
+    {
+        let g = ctx.globals();
+        let get_t = |t: Table<'gc>, key: Value<'gc>| match t.get(ctx, key) {
+            Value::Table(t) => Some(t),
+            _ => None,
+        };
+        let screen = get_t(g, k.screen);
+        let win = get_t(g, k.win);
+        let bg_tbl = get_t(g, k.bg);
+        let color = get_t(g, k.color);
+        let bg1 = bg_tbl.and_then(|t| get_t(t, Value::Integer(1)));
+        let bg2 = bg_tbl.and_then(|t| get_t(t, Value::Integer(2)));
+        let bg3 = bg_tbl.and_then(|t| get_t(t, Value::Integer(3)));
+        let bg4 = bg_tbl.and_then(|t| get_t(t, Value::Integer(4)));
+        let tables: [Option<Table<'gc>>; 25] = [
+            Some(g),
+            get_t(g, k.screen_base),
+            get_t(g, k.win_base),
+            get_t(g, k.color_base),
+            screen.and_then(|t| get_t(t, k.main)),
+            screen.and_then(|t| get_t(t, k.sub)),
+            win.and_then(|t| get_t(t, k.w1)),
+            win.and_then(|t| get_t(t, k.w2)),
+            win.and_then(|t| get_t(t, k.bg1)),
+            win.and_then(|t| get_t(t, k.bg2)),
+            win.and_then(|t| get_t(t, k.bg3)),
+            win.and_then(|t| get_t(t, k.bg4)),
+            win.and_then(|t| get_t(t, k.obj)),
+            win.and_then(|t| get_t(t, k.color)),
+            color,
+            color.and_then(|t| get_t(t, k.on)),
+            bg1,
+            bg2,
+            bg3,
+            bg4,
+            bg1.and_then(|t| get_t(t, k.scroll)),
+            bg2.and_then(|t| get_t(t, k.scroll)),
+            bg3.and_then(|t| get_t(t, k.scroll)),
+            bg4.and_then(|t| get_t(t, k.scroll)),
+            get_t(g, k.m7),
+        ];
+        let mut aliased = false;
+        'outer: for i in 0..tables.len() {
+            if let Some(a) = tables[i] {
+                for b in tables[i + 1..].iter().flatten() {
+                    if a == *b {
+                        aliased = true;
+                        break 'outer;
+                    }
+                }
+            }
+        }
+        if aliased {
+            *m = Mirror::default();
+        }
+    }
+    let g = ctx.globals();
+    put(ctx, k, g, k.mode, Raw::I(row.mode as i64), &mut m.mode);
+    put(
+        ctx,
+        k,
+        g,
+        k.bg3_priority,
+        Raw::B(row.bg3_priority),
+        &mut m.bg3_priority,
+    );
+    put(
+        ctx,
+        k,
+        g,
+        k.brightness,
+        Raw::I(row.brightness as i64),
+        &mut m.brightness,
+    );
+    put(ctx, k, g, k.TM, Raw::I(row.tm as i64), &mut m.tm);
+    put(ctx, k, g, k.TS, Raw::I(row.ts as i64), &mut m.ts);
+    sync_screen(ctx, k, m, row.tm, row.ts);
+    let wrow = row_win_bytes(row);
+    for (i, key) in k.win_raw_keys().into_iter().enumerate() {
+        put(ctx, k, g, key, Raw::I(wrow[i] as i64), &mut m.win_raw[i]);
+    }
+    sync_win(ctx, k, m, &wrow);
+    put(
+        ctx,
+        k,
+        g,
+        k.CGWSEL,
+        Raw::I(row.cgwsel as i64),
+        &mut m.cgwsel,
+    );
+    put(
+        ctx,
+        k,
+        g,
+        k.CGADSUB,
+        Raw::I(row.cgadsub as i64),
+        &mut m.cgadsub,
+    );
+    put(
+        ctx,
+        k,
+        g,
+        k.COLDATA,
+        Raw::I(row.coldata as i64),
+        &mut m.coldata,
+    );
+    put(
+        ctx,
+        k,
+        g,
+        k.mosaic,
+        Raw::I(row.mosaic_size as i64),
+        &mut m.mosaic,
+    );
+    let direct_color = Raw::B((row.cgwsel & 0x01) != 0);
+    put(ctx, k, g, k.direct_color, direct_color, &mut m.direct_color);
+    sync_color(ctx, k, m, row.cgwsel, row.cgadsub, row.coldata);
+    put(
+        ctx,
+        k,
+        g,
+        k.force_blank,
+        Raw::B(row.force_blank),
+        &mut m.force_blank,
+    );
+    if let Value::Table(bg) = ctx.get_global(k.bg) {
         for i in 0..4 {
             if let Value::Table(layer) = bg.get(ctx, (i + 1) as i64) {
-                if let Value::Table(scroll) = layer.get(ctx, "scroll") {
-                    scroll.set(ctx, "x", row.bg[i].scroll_x as f64).unwrap();
-                    scroll.set(ctx, "y", row.bg[i].scroll_y as f64).unwrap();
+                let s = &mut m.bg[i];
+                let r = &row.bg[i];
+                if let Value::Table(scroll) = layer.get(ctx, k.scroll) {
+                    put(
+                        ctx,
+                        k,
+                        scroll,
+                        k.x,
+                        Raw::F((r.scroll_x as f64).to_bits()),
+                        &mut s[0],
+                    );
+                    put(
+                        ctx,
+                        k,
+                        scroll,
+                        k.y,
+                        Raw::F((r.scroll_y as f64).to_bits()),
+                        &mut s[1],
+                    );
                 }
-                layer.set(ctx, "visible", row.bg[i].visible).unwrap();
-                layer
-                    .set(ctx, "tile_size", row.bg[i].tile_size as i64)
-                    .unwrap();
-                layer
-                    .set(ctx, "map_base", row.bg[i].map_base as i64)
-                    .unwrap();
-                layer
-                    .set(ctx, "screen_size", row.bg[i].screen_size as i64)
-                    .unwrap();
-                layer
-                    .set(ctx, "char_base", row.bg[i].char_base as i64)
-                    .unwrap();
-                layer.set(ctx, "mosaic", row.mosaic_enable[i]).unwrap();
+                put(ctx, k, layer, k.visible, Raw::B(r.visible), &mut s[2]);
+                put(
+                    ctx,
+                    k,
+                    layer,
+                    k.tile_size,
+                    Raw::I(r.tile_size as i64),
+                    &mut s[3],
+                );
+                put(
+                    ctx,
+                    k,
+                    layer,
+                    k.map_base,
+                    Raw::I(r.map_base as i64),
+                    &mut s[4],
+                );
+                put(
+                    ctx,
+                    k,
+                    layer,
+                    k.screen_size,
+                    Raw::I(r.screen_size as i64),
+                    &mut s[5],
+                );
+                put(
+                    ctx,
+                    k,
+                    layer,
+                    k.char_base,
+                    Raw::I(r.char_base as i64),
+                    &mut s[6],
+                );
+                put(
+                    ctx,
+                    k,
+                    layer,
+                    k.mosaic,
+                    Raw::B(row.mosaic_enable[i]),
+                    &mut s[7],
+                );
             }
         }
     }
-    if let Value::Table(m7) = ctx.get_global("m7") {
-        m7.set(ctx, "a", row.m7.a as f64).unwrap();
-        m7.set(ctx, "b", row.m7.b as f64).unwrap();
-        m7.set(ctx, "c", row.m7.c as f64).unwrap();
-        m7.set(ctx, "d", row.m7.d as f64).unwrap();
-        m7.set(ctx, "cx", row.m7.cx as f64).unwrap();
-        m7.set(ctx, "cy", row.m7.cy as f64).unwrap();
-        m7.set(ctx, "wrap", row.m7.repeat as i64).unwrap();
-        m7.set(ctx, "flip_x", row.m7.flip_x).unwrap();
-        m7.set(ctx, "flip_y", row.m7.flip_y).unwrap();
-        m7.set(ctx, "extbg", row.setini & 0x40 != 0).unwrap();
+    if let Value::Table(m7) = ctx.get_global(k.m7) {
+        let s = &mut m.m7;
+        let r = &row.m7;
+        let f = |v: f32| Raw::F((v as f64).to_bits());
+        put(ctx, k, m7, k.a, f(r.a), &mut s[0]);
+        put(ctx, k, m7, k.b, f(r.b), &mut s[1]);
+        put(ctx, k, m7, k.c, f(r.c), &mut s[2]);
+        put(ctx, k, m7, k.d, f(r.d), &mut s[3]);
+        put(ctx, k, m7, k.cx, f(r.cx), &mut s[4]);
+        put(ctx, k, m7, k.cy, f(r.cy), &mut s[5]);
+        put(ctx, k, m7, k.wrap, Raw::I(r.repeat as i64), &mut s[6]);
+        put(ctx, k, m7, k.flip_x, Raw::B(r.flip_x), &mut s[7]);
+        put(ctx, k, m7, k.flip_y, Raw::B(r.flip_y), &mut s[8]);
+        put(
+            ctx,
+            k,
+            m7,
+            k.extbg,
+            Raw::B(row.setini & 0x40 != 0),
+            &mut s[9],
+        );
     }
 }
 
@@ -3409,6 +3942,44 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
                     mem.vram[addr as usize] = word as u16;
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod alias_tests {
+    use super::*;
+
+    /// F1: `bg[1] = bg[2]` inside an `hdma` hook aliases the two tables
+    /// `write_state` mirrors independently. Without the aliasing guard,
+    /// diff-on-write's `put` writes bg[1]'s path first and then skips
+    /// bg[2]'s path because the (now-shared) table's slot already matches,
+    /// so bg[2]'s own values never land. The pre-mirror code always fully
+    /// rewrote every path in order, so the correct result — reproduced here
+    /// — is last-path-wins: once aliased, both `bg[1]` and `bg[2]` read back
+    /// as bg[2]'s values.
+    #[test]
+    fn aliased_bg_tables_resolve_last_path_wins() {
+        let mut e = LuaEngine::new();
+        e.set_sources(&[(
+            "main.lua",
+            r#"
+function frame(t, f)
+  bg[1].scroll.x = 10
+  bg[2].scroll.x = 20
+  bg[2].tile_size = 16
+  hdma(0, 223, function(y) bg[1] = bg[2] end)
+end
+"#,
+        )])
+        .unwrap();
+        let lt = e.frame(0.0, 0).unwrap();
+        for y in [1usize, 100] {
+            let row = &lt.rows[y];
+            assert_eq!(row.bg[0].scroll_x, 20, "row {y} bg[1] (aliased to bg[2])");
+            assert_eq!(row.bg[0].tile_size, 16, "row {y} bg[1] tile_size");
+            assert_eq!(row.bg[1].scroll_x, 20, "row {y} bg[2]");
+            assert_eq!(row.bg[1].tile_size, 16, "row {y} bg[2] tile_size");
         }
     }
 }
