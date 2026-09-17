@@ -1,0 +1,39 @@
+# Cookfile for the ppu engine + CLI: release orchestration only. Building and
+# testing is cargo's job, and contributors never need cook.
+#
+#   cook bump 0.2.0     rewrite every version claim, refresh Cargo.lock
+#   cook check          version sync + the suite
+#   cook release 0.2.0  tag and push (gated on check); the Release workflow builds the binaries
+#   cook tap 0.2.0      regenerate the Homebrew formula, push the tap
+#   cook aur 0.2.0      refresh the AUR checksums from the release, push ppu-cli-bin
+#   cook publish        push piccolo-ppu, ppu-core, ppu-cli to crates.io, bottom-up
+#
+# A full release: cook bump X → commit → cook release X → (workflow green) →
+# cook tap X, cook aur X, cook publish.
+
+chore version-sync
+    python3 scripts/check-version-sync.py
+
+chore test
+    cargo test --workspace --locked
+
+chore check: version-sync test
+
+# Not gated: bump is how you fix a red version-sync.
+chore bump version
+    python3 scripts/bump-version.py $<version>
+
+chore release version: check
+    sh scripts/release.sh $<version>
+
+chore publish: check
+    sh scripts/publish-crates.sh
+
+# Downstream packages pin checksums, so these run after the Release workflow
+# has published the tarballs, not before.
+chore tap version
+    sh scripts/update-tap.sh $<version>
+
+chore aur version
+    python3 scripts/update-aur.py $<version>
+    sh scripts/push-aur.sh

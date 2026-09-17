@@ -9,10 +9,6 @@
 # will likely look very different (and much more reasonable).
 # See Cargo.toml.orig for the original contents.
 
-# LOCAL DELTA (PPU-97): its own workspace root, so `cargo test` inside
-# vendor/piccolo works without the crate joining the ppu.toys workspace.
-[workspace]
-
 # LOCAL DELTA (PPU-97): rustc caps lints for a registry dependency but not for a
 # path one, so vendoring surfaces three warning sites upstream never had to fix.
 # Both are form lints, never correctness ones, and they are named rather than
@@ -29,13 +25,18 @@ mismatched_lifetime_syntaxes = "allow"
 
 [package]
 edition = "2021"
-name = "piccolo"
-version = "0.3.3"
+name = "piccolo-ppu"
+version = "0.3.4"
 authors = ["kyren <catherine@kyju.org>"]
-description = "Stackless Lua VM implemented in pure Rust"
+description = "Stackless Lua VM implemented in pure Rust: piccolo 0.3.3 plus the unreleased RawTable::set fix, as used by ppu.toys"
 readme = "README.md"
 license = "MIT"
-repository = "https://github.com/kyren/piccolo"
+repository = "https://github.com/LioraLabs/ppu.toys"
+
+# LOCAL DELTA (PPU-97): published under a new name, but the library is still
+# `piccolo` so its own tests and every `use piccolo::` keep compiling.
+[lib]
+name = "piccolo"
 
 [dependencies.ahash]
 version = "0.8"

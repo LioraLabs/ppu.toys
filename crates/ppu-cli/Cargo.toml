@@ -1,8 +1,11 @@
 [package]
 name = "ppu-cli"
-version = "0.1.0"
-edition = "2021"
-publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "The ppu command: author SNES PPU toys for ppu.toys offline (new, check, render, pack, docs)"
 
 [[bin]]
 name = "ppu"
@@ -13,7 +16,7 @@ anyhow = "1"
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-ppu-core = { path = "../ppu-core" }
+ppu-core = { path = "../ppu-core", version = "0.1.0" }
 png = "0.17"
 
 [dev-dependencies]

@@ -14,5 +14,6 @@ jobs:
         with:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all --check
+      - run: python3 scripts/check-version-sync.py
+      - run: cargo fmt -p ppu-core -p ppu-cli --check
       - run: cargo test --workspace --locked

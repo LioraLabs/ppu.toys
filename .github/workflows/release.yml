@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Every version claim agrees
+        run: python3 scripts/check-version-sync.py
+      - name: Tag must match the crate version
+        run: |
+          MANIFEST=$(cargo metadata --format-version 1 --no-deps \
+            | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="ppu-cli"))')
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "$MANIFEST" != "$TAG" ]; then
+            echo "::error::tag $GITHUB_REF_NAME implies version $TAG but Cargo.toml says $MANIFEST"
+            exit 1
+          fi
+          echo "version $MANIFEST matches tag $GITHUB_REF_NAME"
+      - run: cargo test --workspace --locked
+
+  build:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            os: macos-14
+          - target: aarch64-apple-darwin
+            os: macos-14
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Install musl tools
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }} -p ppu-cli
+      - name: Package
+        run: |
+          ARCHIVE="ppu-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir "$ARCHIVE"
+          cp "target/${{ matrix.target }}/release/ppu" README.md LICENSE "$ARCHIVE/"
+          tar czf "$ARCHIVE.tar.gz" "$ARCHIVE"
+          # The same contents under a versionless name, so a consumer can fetch
+          # releases/latest/download/ppu-<target>.tar.gz without asking an API
+          # which version "latest" is. SHA256SUMS covers both names.
+          ALIAS="ppu-${{ matrix.target }}"
+          mv "$ARCHIVE" "$ALIAS"
+          tar czf "$ALIAS.tar.gz" "$ALIAS"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: "*.tar.gz"
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Checksums
+        run: sha256sum *.tar.gz | tee SHA256SUMS
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "ppu $GITHUB_REF_NAME" \
+            --generate-notes \
+            *.tar.gz SHA256SUMS

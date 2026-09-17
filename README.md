@@ -11,6 +11,17 @@ publish it.
 
 ## Install
 
+Prebuilt binaries for macOS and Linux, Intel and ARM:
+
+```sh
+brew install lioralabs/tap/ppu   # macOS and Linux
+yay -S ppu-cli-bin               # Arch Linux, from the AUR
+cargo install ppu-cli            # from crates.io
+```
+
+Or build from this repository, or grab a tarball from the
+[releases page](https://github.com/LioraLabs/ppu.toys/releases):
+
 ```sh
 cargo install --git https://github.com/LioraLabs/ppu.toys.git --locked ppu-cli
 ```
@@ -25,8 +36,8 @@ ppu pack my-demo -o my-demo.ppu.json
 ```
 
 Then open `my-demo.ppu.json` at [ppu.toys](https://ppu.toys). `ppu docs` prints
-the same guides that live in [docs/](docs/). Start with
-[the authoring loop](docs/cli.md) and [the PPU pipeline](docs/registers.md).
+the same guides that live in [crates/ppu-cli/docs/](crates/ppu-cli/docs/). Start with
+[the authoring loop](crates/ppu-cli/docs/cli.md) and [the PPU pipeline](crates/ppu-cli/docs/registers.md).
 
 ## Layout
 
@@ -36,7 +47,7 @@ the same guides that live in [docs/](docs/). Start with
 - `crates/ppu-cli` is the `ppu` binary: new, pack, unpack, check, render, docs.
 - `vendor/piccolo` is the Lua VM, crates.io 0.3.3 plus one backported fix. Its
   README says when to drop it.
-- `docs/` holds the authoring guides, embedded into both the CLI and the site.
+- `crates/ppu-cli/docs/` holds the authoring guides, embedded into both the CLI and the site.
 
 ## Develop
 
@@ -44,8 +55,14 @@ the same guides that live in [docs/](docs/). Start with
 cargo test --workspace
 ```
 
-The Lua fences in `docs/audio.md` are executed by the test suite, so doc edits
+The Lua fences in `crates/ppu-cli/docs/audio.md` are executed by the test suite, so doc edits
 are covered by `cargo test`.
+
+## Releasing
+
+Maintainers cut releases with cook: `cook bump`, `cook release`, then `cook tap`,
+`cook aur`, and `cook publish` once the Release workflow is green. The Cookfile
+has the details.
 
 ## License
 

@@ -1,8 +1,11 @@
 [package]
 name = "ppu-core"
-version = "0.0.0"
-edition = "2021"
-publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Emulated SNES PPU and S-DSP driven from Lua: the engine behind ppu.toys"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -10,7 +13,11 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-piccolo = "0.3.3"
+# piccolo 0.3.3 aborts the VM on two ordinary table shapes (PPU-97). The fix has
+# been on piccolo's master since 2024 but was never released, and upstream is
+# unmaintained. vendor/piccolo is 0.3.3 plus that one fix, published to crates.io
+# as piccolo-ppu so `cargo install ppu-cli` gets it too. See vendor/piccolo/README.md.
+piccolo = { package = "piccolo-ppu", version = "0.3.4", path = "../../vendor/piccolo" }
 ahash = "=0.8.11" # pin: forces single getrandom 0.2 so wasm32 builds
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

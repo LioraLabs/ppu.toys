@@ -206,7 +206,7 @@ fn regen_golden_first_note() {
     std::fs::write(GOLDEN_PCM, bytes).unwrap();
 }
 
-const AUDIO_CHAPTER: &str = include_str!("../../../docs/audio.md");
+const AUDIO_CHAPTER: &str = include_str!("../../ppu-cli/docs/audio.md");
 
 #[test]
 fn chapter_carries_the_toy_verbatim() {
