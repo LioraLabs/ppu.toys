@@ -180,6 +180,9 @@ pub struct LuaEngine {
     /// current program carries no controls document — `frame()`'s Phase A
     /// is then a no-op, matching pre-M147 behavior exactly.
     controls_fn: Option<StashedFunction>,
+    /// Painted tiles captured from `ppuglobals.lua`'s `apply_vram()` at load;
+    /// overlaid onto VRAM every frame after all Lua has run.
+    controls_vram: Vec<(u16, u16)>,
     memory: Memory,
     /// The source store: decoded `addSource` payloads keyed by name — the
     /// graphics-data home (kind + depth + palettes + tiles + tilemap all
@@ -352,6 +355,7 @@ impl LuaEngine {
             init_fn: None,
             frame_file: None,
             controls_fn: None,
+            controls_vram: Vec::new(),
             memory: Memory::new(),
             source_store,
             dma,
@@ -598,6 +602,7 @@ impl LuaEngine {
                     // blanked (line numbers kept) before the in-place load.
                     let mut l = self.lua.borrow_mut();
                     self.controls_fn = Self::load_controls(&mut l, &without_dma_lines(new_src))?;
+                    self.controls_vram = Self::read_controls_vram(&mut l);
                 }
             }
             self.saved_mix = saved_mix;
@@ -665,6 +670,10 @@ impl LuaEngine {
             Some((_, src)) => Self::load_controls(&mut lua, src)?,
             None => None,
         };
+        let controls_vram = match controls_fn {
+            Some(_) => Self::read_controls_vram(&mut lua),
+            None => Vec::new(),
+        };
 
         for (name, src) in files
             .iter()
@@ -692,6 +701,7 @@ impl LuaEngine {
         self.frame_file = frame_file;
         self.init_fn = init_fn;
         self.controls_fn = controls_fn;
+        self.controls_vram = controls_vram;
         // Snapshot the OLD recorder's placements before swapping it out: if
         // this compile fails below, nothing new was actually written to
         // ARAM, so these are what ARAM still holds — restoring them (instead
@@ -903,15 +913,40 @@ impl LuaEngine {
             return Err(static_error_to_lua(e).in_file(CONTROLS_FILE));
         }
         call_controls_hook::<()>(lua, "__ppu_controls_begin");
-        // What runs every frame is `apply_vram()` (the painted tiles, if the
-        // text defines it) THEN `apply_pokes()`, as one function — see
-        // `__ppu_controls_entry`. Neither calls the other in the generated
-        // text: tiles are applied implicitly, like pokes.
-        call_controls_hook::<()>(lua, "__ppu_controls_entry");
-        Ok(lua.enter(|ctx| match ctx.get_global("__ppu_controls_fn") {
+        // Painted tiles: run `apply_vram()` once, capturing its `vr()` words
+        // (see `__ppu_controls_capture_vram`); `read_controls_vram` lifts them
+        // into Rust. Any other write it made is undone like a failed load's.
+        let cap = lua.try_enter(|ctx| match ctx.get_global("__ppu_controls_capture_vram") {
+            Value::Function(f) => Ok(ctx.stash(Executor::start(ctx, f, ()))),
+            _ => panic!("controls_env.lua must define __ppu_controls_capture_vram"),
+        });
+        let captured = cap.and_then(|ex| lua.execute::<()>(&ex));
+        call_controls_hook::<()>(lua, "__ppu_controls_restore");
+        if let Err(e) = captured {
+            return Err(static_error_to_lua(e).in_file(CONTROLS_FILE));
+        }
+        call_controls_hook::<()>(lua, "__ppu_controls_begin");
+        Ok(lua.enter(|ctx| match ctx.get_global("apply_pokes") {
             Value::Function(f) => Some(ctx.stash(f)),
             _ => None,
         }))
+    }
+
+    /// The words the last `load_controls` captured from `apply_vram()`.
+    fn read_controls_vram(lua: &mut Lua) -> Vec<(u16, u16)> {
+        lua.enter(|ctx| {
+            let mut out = Vec::new();
+            if let Value::Table(t) = ctx.get_global("__ppu_controls_vram") {
+                for (k, v) in t {
+                    if let (Some(a), Some(w)) = (k.to_int(), v.to_int()) {
+                        if (0..0x8000).contains(&a) {
+                            out.push((a as u16, w as u16));
+                        }
+                    }
+                }
+            }
+            out
+        })
     }
 
     /// Recompile the cached program sources (`frame()`'s dirty-source path and `reset()`).
@@ -1125,6 +1160,12 @@ impl LuaEngine {
         } else {
             0
         };
+        // Painted tiles, last of all: over the program's and apply_pokes()'s
+        // own VRAM writes. `read_memory` rebuilt VRAM this frame, so a word
+        // that left the list is simply not re-applied.
+        for &(addr, word) in &self.controls_vram {
+            self.memory.vram[addr as usize] = word;
+        }
 
         // Collect registered hooks (stash each fn with its [y0,y1]), then
         // clear the registry: nothing reads it again this frame, and

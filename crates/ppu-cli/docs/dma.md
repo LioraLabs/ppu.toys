@@ -136,6 +136,11 @@ tilemap row reads as a row:
 vr(0x4000, { 0x0001, 0x0002, 0x0003 })   -- same as vram[0x4000..0x4002]
 ```
 
+In a Studio-generated `ppuglobals.lua`, painted tiles live in `apply_vram()`.
+The engine evaluates it once when the file loads and overlays those words
+onto VRAM every frame, after all Lua has run, so painted tiles cost no frame
+time and still win over the program's own writes.
+
 VRAM spans word addresses `0x0000` through `0x7fff`. CGRAM has 256 colors.
 Each frame rebuilds VRAM from sources, friendly tilemap writes, and finally raw
 `vram[]` writes, so raw writes win when addresses overlap.

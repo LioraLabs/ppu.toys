@@ -78,32 +78,44 @@ end
 
 G.__ppu_controls_env = track(G)
 
+-- While `apply_vram()` is being captured (once per load, see below), `vr`
+-- records its words instead of writing them. Outside that window it is a
+-- tracked write like any other line in this file.
+local capture
+
 tracked_vr = function(addr, words)
+  if capture then
+    for i = 1, #words do
+      capture[addr + i - 1] = words[i]
+    end
+    return
+  end
   local v = track(G).vram
   for i = 1, #words do
     v[addr + i - 1] = words[i]
   end
 end
 
--- The function the engine runs every frame for ppuglobals.lua, left in
--- `__ppu_controls_fn` (nil when the text defines neither): `apply_vram()`
--- first, then `apply_pokes()`. Rebuilt by load_controls after each load.
-function G.__ppu_controls_entry()
-  local v, p = G.apply_vram, G.apply_pokes
+-- The painted tiles are constant literals, so they never need to run as Lua
+-- at frame time: a 32x32 map through the tracked proxy cost ~20 ms EVERY
+-- frame. Instead `apply_vram()` runs ONCE per load with `vr` capturing, and
+-- the engine overlays the captured words onto VRAM in Rust each frame, after
+-- everything else (pokes always win). Leaves `__ppu_controls_vram` as a
+-- sparse {addr = word} table. Raises whatever apply_vram raises.
+function G.__ppu_controls_capture_vram()
+  G.__ppu_controls_vram = {}
+  local v = G.apply_vram
   if type(v) ~= "function" then
-    v = nil
+    return
   end
-  if type(p) ~= "function" then
-    p = nil
+  capture = {}
+  local ok, err = pcall(v)
+  local got = capture
+  capture = nil
+  if not ok then
+    error(err, 0)
   end
-  if v and p then
-    G.__ppu_controls_fn = function()
-      v()
-      p()
-    end
-  else
-    G.__ppu_controls_fn = v or p
-  end
+  G.__ppu_controls_vram = got
 end
 
 -- Frame-only roots (mirrors FRAME_ONLY_ROOTS in scanlinePokes.ts, plus
@@ -117,13 +129,6 @@ local FRAME_ONLY = {
 }
 local frozen = {}
 
--- Snapshot the register writes apply_pokes made frame-wide (Phase A) as
--- (real table, key, value-as-written) so `__ppu_controls_replay` can
--- re-apply exactly those per row instead of re-executing apply_pokes 224x.
--- Returns whether there is anything to replay. A relative frame-wide poke
--- (`x = x + 1`) therefore replays its frame-wide RESULT on every row rather
--- than composing on top of each row's program-hook value — the generated
--- document only ever writes literals, so nothing it emits can tell.
 function G.__ppu_controls_freeze()
   frozen = {}
   local m = 0
