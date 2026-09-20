@@ -189,7 +189,7 @@ pub fn derive_registers(row: &RegRow, obsel: &Obsel, prev: &HashMap<u16, i32>) -
             .enumerate()
             .map(|(i, &e)| (e as i32) << (4 + i))
             .sum::<i32>();
-    let entries: [(u16, &str, i32); 40] = [
+    let entries: [(u16, &str, i32); 42] = [
         (
             0x2100,
             "INIDISP",
@@ -217,6 +217,8 @@ pub fn derive_registers(row: &RegRow, obsel: &Obsel, prev: &HashMap<u16, i32>) -
         (0x211c, "M7B", m7(row.m7.b)),
         (0x211d, "M7C", m7(row.m7.c)),
         (0x211e, "M7D", m7(row.m7.d)),
+        (0x211f, "M7X", scroll(row.m7.cx)),
+        (0x2120, "M7Y", scroll(row.m7.cy)),
         (0x2123, "W12SEL", row.w12sel as i32),
         (0x2124, "W34SEL", row.w34sel as i32),
         (0x2125, "WOBJSEL", row.wobjsel as i32),
@@ -254,6 +256,16 @@ mod tests {
     use super::*;
     use crate::registers::{LineTableRow, Obsel, RegRow};
     use std::collections::HashMap;
+
+    #[test]
+    fn derive_registers_reports_mode7_centers() {
+        let mut row = RegRow::from(&LineTableRow::default());
+        row.m7.cx = 512;
+        row.m7.cy = -32;
+        let regs = derive_registers(&row, &Obsel::default(), &HashMap::new());
+        assert_eq!(regs.iter().find(|r| r.addr == 0x211f).unwrap().value, 512);
+        assert_eq!(regs.iter().find(|r| r.addr == 0x2120).unwrap().value, 0x1fe0);
+    }
 
     #[test]
     fn derive_registers_reports_inidisp_and_bgmode() {

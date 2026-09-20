@@ -651,6 +651,8 @@ impl LuaEngine {
                 .map_err(|e| static_error_to_lua(e).in_file(name))
         };
         run_chunk(&mut lua, "kit", Self::KIT_LUA)?;
+        run_chunk(&mut lua, "ramps", include_str!("ramps.lua"))?;
+        run_chunk(&mut lua, "mode7_helpers", include_str!("mode7_helpers.lua"))?;
 
         // ppuglobals.lua runs FIRST among the sketch's files, wherever it sits
         // in the list, so `markers`/`scanlines`/`apply_pokes` exist before

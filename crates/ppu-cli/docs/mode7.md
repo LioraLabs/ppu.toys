@@ -19,6 +19,60 @@ function init()
 end
 ```
 
+## Rotate, zoom, or make a floor from the Backgrounds panel
+
+With a Mode 7 texture loaded, open **Backgrounds → Layer settings → Mode 7 view**.
+**Rotate / zoom** sets angle (degrees), visual zoom, and texture center.
+**Floor** sets horizon, camera height, heading (degrees), and camera position X/Z.
+A zoom of 2 makes the texture twice as large. A floor exposes the existing
+backdrop at and above its horizon; it does not replace your palette or texture.
+
+These edits use the selected band (or Full frame), share normal poke undo, and
+can be released with **clear m7 pokes**. **identity** restores an unrotated,
+unscaled screen mapping. Open **Matrix registers** to adjust individual fields.
+
+The generated `ppuglobals.lua` is also the example to copy. It calculates one
+view with a built-in helper, then explicitly assigns its fields. The helpers
+are always available in `main.lua`, without any generated file:
+
+- `mode7_transform(angle, zoom, x, y)` centers texture `(x,y)` at screen `(128,112)`.
+  Angle is in degrees, zoom must be at least `1/127`, and centers wrap at 1024.
+- `mode7_floor(y, horizon, height, heading, x, z)` calculates one floor scanline.
+  Height is positive, heading is in degrees, and `(x,z)` is the camera position
+  on the texture. Its fixed focal length is 128 pixels. Near the horizon,
+  scale is capped at 127 to stay within the matrix register range.
+
+Both return a table with `a`, `b`, `c`, `d`, `cx`, `cy`, `scroll_x`, `scroll_y`,
+and `visible`. They only calculate values; assignments make them take effect.
+
+```lua
+function frame(t, f)
+  mode = 7
+  brightness = 15
+  m7.wrap = 0
+  m7.flip_x = false
+  m7.flip_y = false
+  m7.extbg = false
+  hdma(0, 223, function(y)
+    local view = mode7_floor(y, 80, 64, 0, 512, 512 - t * 60)
+    m7.a = view.a
+    m7.b = view.b
+    m7.c = view.c
+    m7.d = view.d
+    m7.cx = view.cx
+    m7.cy = view.cy
+    bg[1].scroll.x = view.scroll_x
+    bg[1].scroll.y = view.scroll_y
+    screen.main.bg1 = view.visible
+  end)
+end
+```
+
+For rotation, use `local view = mode7_transform(t * 30, 2, 512, 512)` and the
+same assignments directly inside `frame()`, without the `hdma()` wrapper.
+Release the corresponding visual pokes after moving their code into `main.lua`,
+otherwise the panel overrides still take precedence.
+
 ## Transform · M7A–M7D `$211B–$211E`
 
 The identity matrix is `a = 1`, `d = 1`, with `b` and `c` at zero. Rotation is
