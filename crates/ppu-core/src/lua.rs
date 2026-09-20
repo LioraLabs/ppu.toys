@@ -653,6 +653,7 @@ impl LuaEngine {
         run_chunk(&mut lua, "kit", Self::KIT_LUA)?;
         run_chunk(&mut lua, "ramps", include_str!("ramps.lua"))?;
         run_chunk(&mut lua, "mode7_helpers", include_str!("mode7_helpers.lua"))?;
+        run_chunk(&mut lua, "vram_helpers", include_str!("vram_helpers.lua"))?;
 
         // ppuglobals.lua runs FIRST among the sketch's files, wherever it sits
         // in the list, so `markers`/`scanlines`/`apply_pokes` exist before
@@ -883,7 +884,7 @@ impl LuaEngine {
             let closure = Closure::load_with_env(
                 ctx,
                 None,
-                "apply_pokes = nil; apply_setup = nil".as_bytes(),
+                "apply_pokes = nil; apply_vram = nil; apply_setup = nil".as_bytes(),
                 env,
             )?;
             Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
@@ -902,7 +903,12 @@ impl LuaEngine {
             return Err(static_error_to_lua(e).in_file(CONTROLS_FILE));
         }
         call_controls_hook::<()>(lua, "__ppu_controls_begin");
-        Ok(lua.enter(|ctx| match ctx.get_global("apply_pokes") {
+        // What runs every frame is `apply_vram()` (the painted tiles, if the
+        // text defines it) THEN `apply_pokes()`, as one function — see
+        // `__ppu_controls_entry`. Neither calls the other in the generated
+        // text: tiles are applied implicitly, like pokes.
+        call_controls_hook::<()>(lua, "__ppu_controls_entry");
+        Ok(lua.enter(|ctx| match ctx.get_global("__ppu_controls_fn") {
             Value::Function(f) => Some(ctx.stash(f)),
             _ => None,
         }))

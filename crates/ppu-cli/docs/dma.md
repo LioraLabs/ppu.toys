@@ -129,6 +129,13 @@ vram[0x0000] = 0x1234
 cgram[1] = rgb(255, 96, 32)
 ```
 
+`vr(addr, words)` writes a run of consecutive VRAM words in one call, so a
+tilemap row reads as a row:
+
+```lua
+vr(0x4000, { 0x0001, 0x0002, 0x0003 })   -- same as vram[0x4000..0x4002]
+```
+
 VRAM spans word addresses `0x0000` through `0x7fff`. CGRAM has 256 colors.
 Each frame rebuilds VRAM from sources, friendly tilemap writes, and finally raw
 `vram[]` writes, so raw writes win when addresses overlap.

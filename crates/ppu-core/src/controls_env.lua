@@ -29,6 +29,12 @@ local n = 0
 -- can tell a register write from a memory-table one.
 local cache = {}
 
+-- ppuglobals.lua's own `vr`: the built-in writes the REAL `vram`, which would
+-- skip the undo log and leave a released tile poke baked in. This one writes
+-- through the tracked proxy, one logged write per word like the raw
+-- `vram[addr] = word` lines it replaces. Assigned below, once `track` exists.
+local tracked_vr
+
 local function track(real, root)
   local proxy = cache[real]
   if proxy then
@@ -36,6 +42,9 @@ local function track(real, root)
   end
   proxy = setmetatable({}, {
     __index = function(_, k)
+      if real == G and k == "vr" then
+        return tracked_vr
+      end
       local v = real[k]
       if type(v) == "table" then
         return track(v, root or k)
@@ -68,6 +77,34 @@ local function track(real, root)
 end
 
 G.__ppu_controls_env = track(G)
+
+tracked_vr = function(addr, words)
+  local v = track(G).vram
+  for i = 1, #words do
+    v[addr + i - 1] = words[i]
+  end
+end
+
+-- The function the engine runs every frame for ppuglobals.lua, left in
+-- `__ppu_controls_fn` (nil when the text defines neither): `apply_vram()`
+-- first, then `apply_pokes()`. Rebuilt by load_controls after each load.
+function G.__ppu_controls_entry()
+  local v, p = G.apply_vram, G.apply_pokes
+  if type(v) ~= "function" then
+    v = nil
+  end
+  if type(p) ~= "function" then
+    p = nil
+  end
+  if v and p then
+    G.__ppu_controls_fn = function()
+      v()
+      p()
+    end
+  else
+    G.__ppu_controls_fn = v or p
+  end
+end
 
 -- Frame-only roots (mirrors FRAME_ONLY_ROOTS in scanlinePokes.ts, plus
 -- cgram, whose frame-wide pokes are baked into the row baseline before any
