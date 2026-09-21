@@ -657,7 +657,6 @@ impl LuaEngine {
         };
         run_chunk(&mut lua, "kit", Self::KIT_LUA)?;
         run_chunk(&mut lua, "ramps", include_str!("ramps.lua"))?;
-        run_chunk(&mut lua, "mode7_helpers", include_str!("mode7_helpers.lua"))?;
         run_chunk(&mut lua, "vram_helpers", include_str!("vram_helpers.lua"))?;
 
         // ppuglobals.lua runs FIRST among the sketch's files, wherever it sits
@@ -1890,6 +1889,88 @@ fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
         Ok(CallbackReturn::Return)
     });
     ctx.set_global("rgb", rgb).unwrap();
+
+    // mode7_transform / mode7_floor: pure "view" helpers — callers assign the
+    // returned fields (so generated ppuglobals.lua writes stay undo-tracked).
+    // Native, not Lua: the floor view is called once per scanline (224x a
+    // frame), where an interpreted body plus six argument checks cost ~2 ms
+    // native and several times that under WASM.
+    fn finite<'gc>(
+        ctx: piccolo::Context<'gc>,
+        v: Value<'gc>,
+        name: &str,
+    ) -> Result<f64, piccolo::Error<'gc>> {
+        match v {
+            Value::Integer(_) | Value::Number(_) => match v.to_number() {
+                Some(n) if n.is_finite() => Ok(n),
+                _ => Err(lua_err(ctx, &format!("{name} must be a finite number"))),
+            },
+            _ => Err(lua_err(ctx, &format!("{name} must be a finite number"))),
+        }
+    }
+    /// Degrees + texture position -> (cos, sin, wrapped cx, wrapped cy).
+    fn pose(angle: f64, x: f64, z: f64) -> (f64, f64, i64, i64) {
+        let r = angle * std::f64::consts::PI / 180.0;
+        let wrap = |v: f64| ((v + 0.5).floor() as i64).rem_euclid(1024);
+        (r.cos(), r.sin(), wrap(x), wrap(z))
+    }
+    fn view<'gc>(
+        ctx: piccolo::Context<'gc>,
+        m: [f64; 4],
+        cx: i64,
+        cy: i64,
+        scroll_y: i64,
+        visible: bool,
+    ) -> Table<'gc> {
+        let t = Table::new(&ctx);
+        for (k, v) in ["a", "b", "c", "d"].into_iter().zip(m) {
+            t.set(ctx, k, v).unwrap();
+        }
+        t.set(ctx, "cx", cx).unwrap();
+        t.set(ctx, "cy", cy).unwrap();
+        t.set(ctx, "scroll_x", cx - 128).unwrap();
+        t.set(ctx, "scroll_y", scroll_y).unwrap();
+        t.set(ctx, "visible", visible).unwrap();
+        t
+    }
+    // Degrees, visual magnification (2 = twice as large), texture center.
+    let mode7_transform = Callback::from_fn(&ctx, |ctx, _, mut stack| {
+        let zoom = finite(ctx, stack.get(1), "zoom")?;
+        if zoom < 1.0 / 127.0 {
+            return Err(lua_err(ctx, "zoom must be at least 1/127"));
+        }
+        let angle = finite(ctx, stack.get(0), "angle")?;
+        let x = finite(ctx, stack.get(2), "x")?;
+        let z = finite(ctx, stack.get(3), "z")?;
+        let (c, s, cx, cy) = pose(angle, x, z);
+        let t = view(ctx, [c / zoom, -s / zoom, s / zoom, c / zoom], cx, cy, cy - 112, true);
+        stack.replace(ctx, t);
+        Ok(CallbackReturn::Return)
+    });
+    ctx.set_global("mode7_transform", mode7_transform).unwrap();
+    // A level camera with focal length 128 pixels. Positions wrap over the
+    // 1024x1024 plane; rows at/above the horizon expose the existing backdrop.
+    let mode7_floor = Callback::from_fn(&ctx, |ctx, _, mut stack| {
+        let y = finite(ctx, stack.get(0), "scanline")?;
+        let horizon = finite(ctx, stack.get(1), "horizon")?;
+        let height = finite(ctx, stack.get(2), "height")?;
+        if height <= 0.0 {
+            return Err(lua_err(ctx, "height must be positive"));
+        }
+        let heading = finite(ctx, stack.get(3), "angle")?;
+        let x = finite(ctx, stack.get(4), "x")?;
+        let z = finite(ctx, stack.get(5), "z")?;
+        let (c, s, _, _) = pose(heading, x, z);
+        // The signed Q8.8 matrix tops out below 128.
+        let scale = (height / (y - horizon).max(1.0)).min(127.0);
+        let depth = 128.0 * scale;
+        let wrap = |v: f64| ((v + 0.5).floor() as i64).rem_euclid(1024);
+        let (cx, cy) = (wrap(x - s * depth), wrap(z + c * depth));
+        let t = view(ctx, [c * scale, 0.0, s * scale, 0.0], cx, cy, 0, y > horizon);
+        stack.replace(ctx, t);
+        Ok(CallbackReturn::Return)
+    });
+    ctx.set_global("mode7_floor", mode7_floor).unwrap();
 
     // hsl(h,s,l) -> packed 15-bit int
     let hsl = Callback::from_fn(&ctx, |ctx, _, mut stack| {

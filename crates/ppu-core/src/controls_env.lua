@@ -35,6 +35,23 @@ local cache = {}
 -- `vram[addr] = word` lines it replaces. Assigned below, once `track` exists.
 local tracked_vr
 
+-- Per-row phase (between `__ppu_controls_freeze` and the end-of-frame
+-- restore): a band hook's writes to a REGISTER root need no undo entry. The
+-- engine re-baselines every register to the frame defaults with a full
+-- `write_state(defaults)` right after the restore, and each row starts from
+-- its own `write_state(row)` — the same reason `__ppu_controls_replay` is
+-- unlogged. A Mode 7 floor view is 9 such writes x 224 rows; logging them was
+-- ~half the frame's Lua time for nothing. Only roots `write_state` owns are
+-- listed: anything else (memory tables, a hand-written global, a raw
+-- mnemonic not named here) is still logged — slower, never wrong.
+local REGISTER = {
+  bg = true, m7 = true, screen = true, win = true, color = true,
+  mode = true, brightness = true, mosaic = true, direct_color = true,
+  force_blank = true, TM = true, TS = true, CGWSEL = true, CGADSUB = true,
+  COLDATA = true,
+}
+local in_rows = false
+
 local function track(real, root)
   local proxy = cache[real]
   if proxy then
@@ -47,13 +64,21 @@ local function track(real, root)
       end
       local v = real[k]
       if type(v) == "table" then
+        -- per-row phase: writes under a register root are not logged (see
+        -- REGISTER), so hand back the real table and skip the proxy hops
+        -- for the rest of the path (`bg[1].scroll.x` was three of them)
+        if in_rows and REGISTER[root or k] then
+          return v
+        end
         return track(v, root or k)
       end
       return v
     end,
     __newindex = function(_, k, v)
-      n = n + 1
-      log[n] = { real, k, real[k], root or k }
+      if not (in_rows and REGISTER[root or k]) then
+        n = n + 1
+        log[n] = { real, k, real[k], root or k }
+      end
       real[k] = v
     end,
     -- `#` and pairs() see the real table (values still come back proxied),
@@ -139,6 +164,7 @@ function G.__ppu_controls_freeze()
       frozen[m] = { e[1], e[2], e[1][e[2]] }
     end
   end
+  in_rows = true -- the per-row phase starts right after this call
   return m > 0
 end
 
@@ -156,6 +182,7 @@ function G.__ppu_controls_begin()
   log = {}
   n = 0
   cache = {}
+  in_rows = false
 end
 
 function G.__ppu_controls_restore()
@@ -165,4 +192,5 @@ function G.__ppu_controls_restore()
   end
   log = {}
   n = 0
+  in_rows = false
 end
