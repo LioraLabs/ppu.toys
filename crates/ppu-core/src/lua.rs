@@ -653,11 +653,14 @@ impl LuaEngine {
                         line: None,
                         file: Some(AUDIO_MIX_FILE.into()),
                     })?;
-                // Songs first: one that names a sound its score didn't place at
-                // setup can't reload in place (`dma()` needs the init window), so
-                // it falls through to the full recompile below. The VM it touched
-                // is then dropped; if that recompile fails, the old VM keeps
-                // playing the old events, only its seq_<id> global redefined.
+                // Songs first, in two phases so a push reloads all its songs or
+                // none. Each is re-run and prepared; one that can't reload in
+                // place (no `song =` score plays it, or it names a sound its
+                // score didn't place at setup: `dma()` needs the init window)
+                // falls through to the full recompile below, before anything
+                // was swapped in. The old VM keeps its old events either way;
+                // only the re-run seq_<id> globals are new.
+                let mut commits = Vec::new();
                 for (name, id) in &songs {
                     let src = files
                         .iter()
@@ -665,19 +668,33 @@ impl LuaEngine {
                         .map_or("", |(_, s)| *s);
                     let mut l = self.lua.borrow_mut();
                     run_chunk(&mut l, name, src)?;
-                    let ex = l.enter(|ctx| match ctx.get_global("__score_reload") {
+                    let ex = l.enter(|ctx| match ctx.get_global("__score_prepare") {
                         Value::Function(f) => {
                             let id = ctx.intern(id.as_bytes());
                             ctx.stash(Executor::start(ctx, f, id))
                         }
-                        _ => panic!("kit.lua must define __score_reload"),
+                        _ => panic!("kit.lua must define __score_prepare"),
                     });
-                    let reloaded = l
-                        .execute::<bool>(&ex)
-                        .map_err(|e| static_error_to_lua(e).in_file(name))?;
-                    if !reloaded {
-                        break 'fast;
+                    l.finish(&ex);
+                    let prepared = l.try_enter(|ctx| {
+                        Ok(match ctx.fetch(&ex).take_result::<Value>(ctx)?? {
+                            Value::Function(f) => Some(ctx.stash(f)),
+                            _ => None,
+                        })
+                    });
+                    match prepared.map_err(|e| static_error_to_lua(e).in_file(name))? {
+                        Some(commit) => commits.push(commit),
+                        None => break 'fast,
                     }
+                }
+                for commit in commits {
+                    let mut l = self.lua.borrow_mut();
+                    let ex = l.enter(|ctx| {
+                        let f = ctx.fetch(&commit);
+                        ctx.stash(Executor::start(ctx, f, ()))
+                    });
+                    l.execute::<()>(&ex)
+                        .expect("a prepared score reload only swaps tables in");
                 }
                 // A controls-only reload never recompiles: load the new text
                 // into the SAME live VM (same `__ppu_controls_env`/log, same

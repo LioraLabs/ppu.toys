@@ -297,7 +297,8 @@ new data has an error, the old song keeps playing and the error names the
 file. There are two cases where the edit restarts the toy the usual way. One
 is a row naming a sound the song didn't have at setup, because sounds are
 placed only at setup. The other is a file that runs any other top-level code.
-A `data =` song never reloads.
+A song played with `data =` doesn't reload in place either: an edit to it
+restarts the toy.
 
 ## Music from a MIDI file
 

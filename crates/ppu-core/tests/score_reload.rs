@@ -137,18 +137,72 @@ fn a_length_shrinking_below_the_tick_wraps_or_stops() {
         let mut e = start(&beat("\"4...............\""), looping);
         run(&mut e, 0, 90); // tick ~375
         push(&mut e, &beat("\"4.......\""), looping).unwrap(); // length 250
-                                                               // Two frames: frame() runs before the timers, so the second sees the stop.
-        let after = run(&mut e, 90, 92);
-        assert_eq!(after["frames"], 92, "in place");
+                                                               // The readout never shows a tick past the new end, even before a frame.
         match e.score_view() {
-            Some(v) if looping => {
-                assert_eq!(v.length, 250);
-                assert!(v.tick < 10, "wrapped to {}", v.tick);
-            }
-            None if !looping => assert_eq!(after["playing"], false),
+            Some(v) if looping => assert_eq!((v.tick, v.length), (0, 250), "wrapped"),
+            None if !looping => {}
             other => panic!("loop = {looping}: {other:?}"),
         }
+        let after = run(&mut e, 90, 91);
+        assert_eq!(after["frames"], 91, "in place");
+        assert_eq!(after["playing"], looping);
     }
+}
+
+/// A `data =` score doesn't reload, so an edit to its song recompiles the
+/// toy rather than being dropped.
+#[test]
+fn an_edit_to_a_data_song_recompiles() {
+    let mut e = LuaEngine::new();
+    let files = |song: &str| {
+        [
+            ("beat.lua", song.to_string()),
+            (
+                "main.lua",
+                format!("{MAIN}\nfunction init() h = score{{ data = seq_beat() }} end"),
+            ),
+        ]
+    };
+    let push = |e: &mut LuaEngine, song: &str| {
+        let f = files(song);
+        e.set_sources(&[("beat.lua", &f[0].1), ("main.lua", &f[1].1)])
+    };
+    push(&mut e, &beat("\"4...............\"")).unwrap();
+    run(&mut e, 0, 30);
+    push(&mut e, &beat("\"4...4...4...4...\"")).unwrap();
+    assert_eq!(run(&mut e, 30, 31)["frames"], 1, "recompiled");
+}
+
+/// A push reloads all its songs or none: when one song's new data is bad,
+/// the other song's edit isn't half-applied in the running VM.
+#[test]
+fn a_push_reloads_every_song_or_none() {
+    let song = |id: &str, rows: &str, steps: &str| {
+        format!(
+            "function seq_{id}() return {{ tempo = 120, rows = {{ {rows} }},\n  \
+             patterns = {{ A = {{ {steps} }} }}, arrangement = {{ \"A\" }} }} end\n"
+        )
+    };
+    let main = "function init() a = score{ song = \"a\" } b = score{ song = \"b\" } end\n\
+                function frame(t, f) sram.f = f sram.a = #a.events end";
+    let kick = "{ sound = \"kick\" }";
+    let mut e = LuaEngine::new();
+    e.set_sources(&[
+        ("a.lua", &song("a", kick, "\"4...............\"")),
+        ("b.lua", &song("b", kick, "\"4...............\"")),
+        ("main.lua", main),
+    ])
+    .unwrap();
+    run(&mut e, 0, 10);
+    let err = e
+        .set_sources(&[
+            ("a.lua", &song("a", kick, "\"4...4...4...4...\"")),
+            ("b.lua", &song("b", kick, "\"4...x...........\"")),
+            ("main.lua", main),
+        ])
+        .unwrap_err();
+    assert_eq!(err.file.as_deref(), Some("b.lua"), "{err:?}");
+    assert_eq!(run(&mut e, 10, 11)["a"], 1, "a keeps its old events");
 }
 
 #[test]

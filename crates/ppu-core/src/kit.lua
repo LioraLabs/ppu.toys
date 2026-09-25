@@ -554,9 +554,10 @@ end
 
 -- score{ song = "<id>" | data = seq_<id>(), loop = true? } -> plays a
 -- sequencer song on the shared 8-voice pool. `song` names the global
--- seq_<id> function and binds the score to it: when the engine re-runs an
--- edited song file it calls __score_reload(id), which recompiles the score
--- in place, keeping its tick (h.song = id). `data` is a one-off table. `data` is { tempo, swing = 0 (0..75), rows = {
+-- seq_<id> function and binds the score to it (h.song = id): when the
+-- engine re-runs an edited song file, __score_prepare(id) recompiles the
+-- score in place, keeping its tick. `data` is a one-off table, never
+-- reloaded. The song is { tempo, swing = 0 (0..75), rows = {
 -- { sound, note = ? } }, patterns = { A = { "4...", "..3-" } }, arrangement
 -- = { "A", "B" } }: one step string per row, its length (8/16/32) the step
 -- count, each step a 16th. `1`-`4` hit at volume 32/64/96/127, `-` holds
@@ -742,15 +743,17 @@ end
 __score_songs = {}
 
 -- Called by the engine after it re-runs a changed song file in the live VM.
--- Recompiles every score bound to `id` from the new seq_<id>() in place,
--- keeping its tick. Returns false, touching nothing, when a row names a
--- sound its score didn't place at setup (placement needs the setup window,
--- so the engine recompiles instead). A data error raises, also touching
--- nothing: the old events keep playing.
-function __score_reload(id)
+-- Compiles every score bound to `id` from the new seq_<id>() and returns a
+-- function that swaps them all in, keeping each one's tick; nothing changes
+-- until the engine calls it, after every changed song has prepared. Returns
+-- false, touching nothing, when no score plays `id` by name (a `data =`
+-- song needs the recompile to pick up the edit) or a row names a sound its
+-- score didn't place at setup (placement needs the setup window). A data
+-- error raises: the old events keep playing.
+function __score_prepare(id)
   local list = __score_songs[id]
   if list == nil then
-    return true
+    return false
   end
   local d = song_data({ song = id })
   local commits = {}
@@ -761,10 +764,11 @@ function __score_reload(id)
     end
     commits[i] = commit
   end
-  for i = 1, #commits do
-    commits[i]()
+  return function()
+    for i = 1, #commits do
+      commits[i]()
+    end
   end
-  return true
 end
 
 function score(cfg)
@@ -820,9 +824,13 @@ function score(cfg)
           all_off()
         end
         rows, events, h.events, h.length = new_rows, new_events, new_events, new_length
-        -- Re-seek: the next event due at or after the next tick to play. A
-        -- tick past the new length is left to the timer's end branch, which
-        -- wraps (or stops, loop = false) on its next run.
+        -- A song now shorter than its position ends here, as the timer's end
+        -- branch would: it wraps, or stops (loop = false), rewound.
+        if h.tick >= h.length then
+          h.tick = 0
+          h.playing = h.playing and loop
+        end
+        -- Re-seek: the next event due at or after the next tick to play.
         cursor = 1
         while events[cursor] and events[cursor].start < h.tick do
           cursor = cursor + 1
