@@ -250,7 +250,7 @@ plays it:
 ```lua
 function seq_beat1() return {
   tempo = 120, swing = 0,
-  rows = { { sound = "kick" }, { sound = "snare" }, { sound = "piano", note = "E4" }, { sound = "mybass", note = "C2" } },
+  rows = { { sound = "kick" }, { sound = "snare" }, { sound = "piano", note = "E4" }, { sound = "mybass" } },
   patterns = {
     A = { "4...4...4...4...", "....3.......3...", "2---....2---....", "3-..3-..3-..3-.." },
     B = { "4.4.4.4.4.4.4.4.", "....3.......3-3-", "................", "3-..3-..3-..3-.." },
@@ -267,18 +267,18 @@ its preset envelope, anything else is an uploaded sample with a flat one.
 keeps its own pitch. Every pattern has one string per row, and the string's
 length is its step count (8, 16 or 32 sixteenths). In a string, `1` to `4`
 is a hit at volume 32, 64, 96 or 127 (scaled by the sound's own volume),
-`-` holds the hit before it, and `.` rests. `swing` (0 to 75) delays every
-odd step by that percentage of a step.
+`-` holds the hit before it, and `.` rests. `tempo` runs 1 to 400 BPM;
+`swing` (0 to 75) delays every odd step by that percentage of a step.
 
 `score{}` compiles the whole arrangement once, at setup, into
 `beat.events`: one `{ start, ["end"], voice, row, pitch, l, r }` per note,
 in 4 ms ticks, ordered by start. Voices are picked note by note: the lowest
-voice whose note has ended, or, when all eight are sounding, the one whose
-note started earliest, which is cut off. So a chord of nine held notes
-loses its oldest note rather than going silent. A bad step string, a
-pattern the arrangement names but doesn't define, or a sound that is
-neither built in nor uploaded stops the program with an error naming the
-row or pattern.
+voice whose note has ended, or, when all eight are sounding, the note that
+started earliest is cut — or, among notes that started together, the one on
+the lowest voice. So a chord of nine held notes doesn't go silent, it steals
+a voice from an earlier note instead. A bad step string, a pattern the
+arrangement names but doesn't define, or a sound that is neither built in
+nor uploaded stops the program with an error naming the row or pattern.
 
 The player runs on one `timer(0, 32, ...)`: it keys off notes that have
 ended, then starts the notes due. At the end it keys every voice off and,

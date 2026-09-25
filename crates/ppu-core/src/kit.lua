@@ -1,9 +1,10 @@
 -- Sequencer sugar, run as the "kit" chunk before every user chunk (see
--- LuaEngine::set_sources). Defines note/instrument/sfx/song as globals; a
--- user chunk defining the same name wins (chunks share one global env and
--- run in order). Never shadow `voice`/`kon`/`koff`/`timer` with locals here
--- — they must resolve as globals at call time so a later chunk can replace
--- them too (and so a user's `song{}` sees a shadowed `timer`/`kon`/`koff`).
+-- LuaEngine::set_sources). Defines note/instrument/sfx/bank/song/midi/score
+-- as globals; a user chunk defining the same name wins (chunks share one
+-- global env and run in order). Never shadow `voice`/`kon`/`koff`/`timer`
+-- with locals here — they must resolve as globals at call time so a later
+-- chunk can replace them too (and so a user's `song{}` sees a shadowed
+-- `timer`/`kon`/`koff`).
 --
 -- Note-name parsing has no stdlib help (no tonumber/string.byte/find in
 -- this VM), so it's done with string.sub + table lookups, one char at a
@@ -583,8 +584,11 @@ function score(cfg)
   if type(d) ~= "table" then
     error("score: data must be a song table, e.g. seq_beat1()")
   end
-  if type(d.tempo) ~= "number" or d.tempo <= 0 then
-    error("score: tempo must be > 0")
+  -- Capped at 400: a step is then >= 9.375 ticks, so even at swing 75 two
+  -- steps never round to the same tick, keeping compile order (slot, step,
+  -- row) identical to (start, row).
+  if type(d.tempo) ~= "number" or d.tempo <= 0 or d.tempo > 400 then
+    error("score: tempo must be 1..400")
   end
   local swing = d.swing or 0
   if type(swing) ~= "number" or swing < 0 or swing > 75 then
@@ -609,7 +613,11 @@ function score(cfg)
     end
     if insts[name] == nil then
       if BANK[name] ~= nil then
-        insts[name] = bank(name)
+        local ok, inst = pcall(bank, name)
+        if not ok then
+          error("score: row " .. i .. " sound '" .. name .. "': " .. tostring(inst))
+        end
+        insts[name] = inst
       else
         local ok, placed = pcall(dma, name)
         if not ok then

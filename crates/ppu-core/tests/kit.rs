@@ -1050,8 +1050,8 @@ fn midi_unmapped_voice_errors_with_track_index() {
 
 // ---- score{} ----------------------------------------------------------
 
-/// Run `src` for one frame with `song` bound to `sram.song`, then read back
-/// whatever the frame stored in `sram` as JSON.
+/// Run `src` for `frames` frames with `song` bound to `sram.song`, then read
+/// back whatever the last frame stored in `sram` as JSON.
 fn score_sram(e: &mut LuaEngine, song: &Value, src: &str, frames: u32) -> Value {
     e.set_sram(&serde_json::json!({ "song": song }).to_string());
     e.set_source(src).unwrap();
@@ -1072,7 +1072,7 @@ fn score_compiles_the_shared_allocation_fixture() {
         let got = score_sram(
             &mut e,
             &case["song"],
-            "h = score{ data = sram.song }\nfunction frame() sram.events = h.events end",
+            "h = score{ data = sram.song }\nfunction frame() sram.events = h.events; sram.length = h.length end",
             1,
         );
         let pick = |evs: &Value| -> Vec<[i64; 4]> {
@@ -1088,6 +1088,7 @@ fn score_compiles_the_shared_allocation_fixture() {
             "case {}",
             case["name"]
         );
+        assert_eq!(got["length"], case["length"], "case {}", case["name"]);
     }
 }
 
@@ -1124,7 +1125,11 @@ fn score_events_carry_pitch_velocity_and_flat_adsr_for_uploads() {
         (ev[1]["pitch"].as_i64(), ev[1]["l"].as_i64()),
         (Some(8192), Some(127))
     );
-    // By frame 9 (~tick 40) the second event (tick 31) reused voice 0.
+    // Voice reuse is decided at compile time (score()'s setup pass): the
+    // second event's start (tick 31) exactly meets the first event's end,
+    // so it compiles onto voice 0 too. Running to frame 9 (~tick 40) is
+    // only so that, by the time frame() reads voice[0].adsr below, both
+    // kons have fired and the second (flat-ADSR) one has overwritten it.
     assert_eq!(ev[1]["voice"], 0);
     assert_eq!(
         got["adsr"],
@@ -1205,6 +1210,38 @@ fn score_err(song: Value) -> String {
     err.message
 }
 
+/// A row's sound is a built-in (`bank(name)`), not an upload, but a sound-RAM
+/// failure on its `dma()` must still be caught and named the same way the
+/// upload path already is: pin a placement one sample-length short of the
+/// top of sound RAM, so the built-in's own auto-chained `dma()` inside
+/// `bank()` overflows and `score{}` must wrap that error too.
+#[test]
+fn score_built_in_sound_ram_failure_names_the_row() {
+    let song = serde_json::json!({
+        "tempo": 120,
+        "rows": [{ "sound": "bass" }],
+        "patterns": { "A": ["4......."] },
+        "arrangement": ["A"],
+    });
+    let mut e = LuaEngine::new();
+    e.set_sram(&serde_json::json!({ "song": song }).to_string());
+    let err = e
+        .set_sources(&[(
+            "main.lua",
+            "local b = dma('bass')\n\
+             local sz = b.next_addr - b.addr\n\
+             dma('bass', { addr = 0x10000 - sz })\n\
+             score{ data = sram.song }",
+        )])
+        .unwrap_err();
+    assert_eq!(err.file.as_deref(), Some("main.lua"), "{err:?}");
+    assert!(
+        err.message.contains("row 1 sound 'bass'"),
+        "got: {}",
+        err.message
+    );
+}
+
 #[test]
 fn score_setup_errors_name_the_row_or_pattern() {
     let rows = serde_json::json!([{ "sound": "kick" }, { "sound": "snare" }]);
@@ -1240,6 +1277,10 @@ fn score_setup_errors_name_the_row_or_pattern() {
         (
             serde_json::json!({ "tempo": 120, "swing": 80, "rows": rows, "patterns": {}, "arrangement": ["A"] }),
             "swing must be 0..75",
+        ),
+        (
+            serde_json::json!({ "tempo": 500, "rows": rows, "patterns": {}, "arrangement": ["A"] }),
+            "tempo must be 1..400",
         ),
     ];
     for (song, want) in cases {
