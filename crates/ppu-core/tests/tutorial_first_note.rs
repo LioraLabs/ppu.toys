@@ -241,18 +241,13 @@ fn every_lua_snippet_in_the_chapter_runs() {
     );
     for block in blocks {
         let first_line = block.lines().next().unwrap_or("");
-        // `castle` stands in for the data file a .mid upload generates, and
-        // `mybass` for a user's own sample, so the MIDI snippets run too.
-        let castle = "castle = { length = 1, tracks = {\n\
-          { name = 'Lead', ch = 0, prog = 80, notes = { {0, 0.5, 60, 100}, {0.5, 0.5, 64, 90} } },\n\
-          { name = 'Drums', ch = 9, prog = 0, notes = { {0, 0.1, 36, 100}, {0.5, 0.1, 38, 100} } },\n\
-        } }";
+        // `mybass` stands in for a user's own sample, so its snippets run too.
         let mut e = common::engine_with(
             &mut |e| {
                 common::add_sample(e, "kick");
                 common::add_sample(e, "mybass");
             },
-            &[("castle.lua", castle), ("main.lua", block)],
+            &[("main.lua", block)],
         );
         for f in 0..3u32 {
             // A is held on frame 1 only, so pad-gated branches run too.

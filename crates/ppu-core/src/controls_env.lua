@@ -82,8 +82,8 @@ local function track(real, root)
       real[k] = v
     end,
     -- `#` and pairs() see the real table (values still come back proxied),
-    -- so a setup call made from ppuglobals.lua — `midi{ data = tune }` in
-    -- apply_setup, walking `#tune.tracks` — reads the data chunk it names.
+    -- so a setup call made from ppuglobals.lua that walks a global table
+    -- with `#` or pairs() (in apply_setup, say) reads the chunk it names.
     __len = function()
       return #real
     end,

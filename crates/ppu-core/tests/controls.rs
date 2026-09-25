@@ -1446,23 +1446,23 @@ fn controls_with_setup(setup_body: &str, pokes_body: &str) -> String {
 
 /// `apply_setup()` runs after every user/data chunk AND after `init()`,
 /// still inside the init window: it can reach a data chunk's global and
-/// make setup-only calls (`midi{}` registers a timer through `bank()`/
+/// make setup-only calls (`score{}` registers a timer through `bank()`/
 /// `timer()`), and its own writes land on top of init()'s.
 #[test]
 fn controls_apply_setup_runs_after_init_inside_the_init_window() {
     let main = "function init() n = 1 end\n\
                 function frame(t, f) bg[2].scroll.x = n end\n";
-    let data = "castle = { length = 1, tracks = {} }\n";
+    let data = "tune = { tempo = 120, rows = { { sound = 'bell', note = 'C4' } }, patterns = { A = { '4.......' } }, arrangement = { 'A' } }\n";
     let mut e = LuaEngine::new();
     e.set_sources(&[
         ("main.lua", main),
-        ("castle.lua", data),
+        ("tune.lua", data),
         (
             "ppuglobals.lua",
-            &controls_with_setup("  played = midi{ data = castle }\n  n = n + 10\n", ""),
+            &controls_with_setup("  played = score{ data = tune }\n  n = n + 10\n", ""),
         ),
     ])
-    .expect("midi{} and a data global must both resolve from apply_setup");
+    .expect("score{} and a data global must both resolve from apply_setup");
     let lt = e.frame(0.0, 0).unwrap();
     assert_eq!(
         lt.rows[0].bg[1].scroll_x, 11,
@@ -1544,18 +1544,15 @@ fn controls_apply_setup_change_recompiles_but_poke_change_stays_hot() {
     assert_eq!(lt.rows[0].brightness, 4);
 }
 
-/// `midi{}` inside apply_setup reads the data chunk through the controls
-/// tracking proxy, so `#tune.tracks` and the per-note reads must see the real
+/// `score{}` inside apply_setup reads the data chunk through the controls
+/// tracking proxy, so `#tune.rows` and the per-step reads must see the real
 /// table (the proxy forwards `__len`/`__pairs`): the track's sample gets
 /// placed in sound RAM. Before that forwarding, `#` read as 0 and the song
 /// was silently empty.
 #[test]
-fn controls_apply_setup_midi_sees_the_data_chunk_through_the_proxy() {
-    let data = "tune = { length = 1, tracks = { { name = 'x', ch = 0, prog = 0, notes = { {0, 0.5, 60, 100} } } } }";
-    let doc = controls_with_setup(
-        "  midi{ data = tune, tracks = { [1] = { inst = \"bell\", voices = { 0, 1 } } } }\n",
-        "",
-    );
+fn controls_apply_setup_score_sees_the_data_chunk_through_the_proxy() {
+    let data = "tune = { tempo = 120, rows = { { sound = 'bell', note = 'C4' } }, patterns = { A = { '4.......' } }, arrangement = { 'A' } }";
+    let doc = controls_with_setup("  score{ data = tune }\n", "");
     let mut e = LuaEngine::new();
     e.set_sources(&[
         ("main.lua", "function frame(t, f) end"),

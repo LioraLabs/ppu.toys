@@ -102,7 +102,7 @@ reusing its voice.
 - `mute`.
 
 Power-on `mvol` is `{ l = 0, r = 0 }` — nothing is audible until you set it,
-except that starting a `song{}` or `midi{}` while it is still zero opens it
+except that starting a `song{}` or `score{}` while it is still zero opens it
 to full, so a song is heard without a mixer line.
 
 ```lua
@@ -194,11 +194,6 @@ these globals (a user chunk that defines the same name wins):
   shorter than `steps` loops on its own length, so tracks can run
   polymeters against each other. Returns `{ step, beat, playing, div, rate,
 play(), stop() }`. Like `timer()`, `song{}` is setup-only.
-- `midi{ data, tracks = ?, loop = true, speed = 1 }` — plays the table a
-  `.mid` upload generated (see below) through the built-in bank, or through
-  your own `tracks = { [i] = { voices = { ... }, inst = ?, insts = ? } }`.
-  Setup-only. Returns `{ t, playing, length, play(), stop() }`; `stop()`
-  pauses and releases the voices, `play()` resumes.
 - `score{ song = "<id>" | data, loop = true }` — plays a
   [sequencer song](#sequencer-songs) on all eight voices, chosen per note.
   Setup-only. Returns `{ tick, length, playing, events, song, play(), stop() }`.
@@ -309,63 +304,12 @@ song, so the edit restarts the toy.
 
 ## Music from a MIDI file
 
-Drop a `.mid` on the Sources panel and it becomes a Lua data file in the toy,
-named after the file: a global table of tracks, each a list of `{ t, dur,
-key, vel }` notes in seconds, with the tempo map already applied. A MIDI
-track that uses several channels splits into one entry per channel. The
-file opens with a comment listing every track — its name, channel, program,
-note count, and key range — as a ready-to-paste `midi{}` call.
-
-One line plays it through the built-in bank:
-
-```lua
-local tune = midi{ data = castle }
-```
-
-Each track's General MIDI program picks a bank sound (pianos, organs,
-basses, strings, leads, flutes, bells, plucks), channel 10 tracks play the
-drum kit, and the eight voices are shared out: two for drums, the rest split
-evenly across the melodic tracks. Only the drums the song hits are placed in
-sound RAM.
-
-To choose your own sounds, tie an instrument to each track you want to
-hear. `data.tracks[i]` plays on `tracks[i]`; tracks you leave out stay
-silent:
-
-```lua
-local lead = bank("lead")
-local bass = instrument{ sample = dma("mybass").id, base = "C2" }
-local kick = bank("kick")
-local snare = bank("snare")
-
-local tune = midi{ data = castle, tracks = {
-  [1] = { inst = lead, voices = { 0, 1, 2 } },
-  [2] = { inst = bass, voices = { 3 } },
-  [4] = { insts = { [36] = kick, [38] = snare }, voices = { 4, 5 } },
-} }
-```
-
-`inst` pitches one sample by key, relative to its `base`. `insts` maps a
-MIDI key to its own preset, played at that preset's own pitch — a drum kit.
-Three shorthands save the setup lines: `inst = "bell"` names a built-in or
-an uploaded sample, `inst = "gm"` follows that track's General MIDI program
-(the drum kit on channel 10), and `drums = true` builds the kit for the keys
-the track uses. This is what the Audio panel's per-track pickers write.
-A track's notes take turns on its `voices`, so a track that plays chords
-needs as many voices as it stacks notes; when they run out the oldest voice
-restarts on the new note. Velocity scales the preset's volume. The player
-runs on one `timer(0, 32, ...)`, a 4 ms grid, and loops the song unless
-`loop = false`; `speed = 2` plays it twice as fast.
-
-The Studio's Audio panel lists every generated MIDI file with a **play**
-toggle; that toggle writes the same one-line `midi{}` call into
-`ppuglobals.lua` for you. Uploaded samples and the built-in bank can be
-placed in sound RAM from the DMA panel the same way, then chosen as a
-voice's sample in Audio.
-
-The generated file is ordinary Lua: edit notes by hand, delete tracks you
-don't use, or read `tune.t` in `frame()` to sync the picture to the music.
-Dropping the same `.mid` again adds a new file rather than replacing it.
+Drop a `.mid` on the Sources panel and it becomes a
+[sequencer song](#sequencer-songs) file named after it: notes snap to the
+nearest sixteenth, each distinct track sound and key becomes a row (up to
+24, the most used kept), and every two bars become a pattern, with repeats
+shared through the arrangement. The import is one-way; the song file is
+ordinary Lua from then on, played by `score{}` like any other.
 
 ## Your first note
 

@@ -822,7 +822,7 @@ impl LuaEngine {
 
         // Two setup-window calls, in order: the program's own `init()`, then
         // the controls document's `apply_setup()` (the panels' setup-only
-        // calls — `midi{}`, and anything else that needs every user/data
+        // calls — `score{}`, and anything else that needs every user/data
         // chunk's globals to exist, which is why it can't run at
         // ppuglobals.lua's own top level). Both share one failure shape: the
         // init window closes, and nothing was written to ARAM yet (that
