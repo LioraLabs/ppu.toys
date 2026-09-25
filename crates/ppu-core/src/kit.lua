@@ -333,8 +333,10 @@ local function song_data(cfg)
   return cfg.data
 end
 
--- Validates `d` and compiles it into (rows, events, length, at), `at(i)`
--- being the tick step `i` (counted across the arrangement) starts at. `place(name)`
+-- Validates `d` and compiles it into (rows, events, length, at, slots),
+-- `at(i)` being the tick step `i` (counted across the arrangement) starts
+-- at, and slots[s] = { name, start, n } arrangement slot s's pattern name,
+-- first step and step count. `place(name)`
 -- turns a row's sound name into an instrument; returning nil (a reload
 -- that names a sound not placed at setup) makes compile return nil.
 local function compile(d, place)
@@ -431,10 +433,11 @@ local function compile(d, place)
     return math.floor(i * step_ticks + 0.5)
   end
 
-  local events, busy, base = {}, {}, 0
+  local events, busy, base, slots = {}, {}, 0, {}
   for slot = 1, #d.arrangement do
     local pat = d.patterns[d.arrangement[slot]]
     local n = steps[d.arrangement[slot]]
+    slots[slot] = { name = d.arrangement[slot], start = base, n = n }
     for k = 1, n do
       for r = 1, #rows do
         local vel = VELOCITY[string.sub(pat[r], k, k)]
@@ -472,7 +475,28 @@ local function compile(d, place)
     end
     base = base + n
   end
-  return rows, events, at(base), at
+  return rows, events, at(base), at, slots
+end
+
+-- The slot of `new` that is occurrence `s` of `old` (arrangement slots, as
+-- compile returns them): the same index while the two agree up to s, else
+-- counted from the end while they agree from s on (a slot inserted or
+-- deleted before it), else the same index, or nil when that's gone.
+local function same_slot(old, new, s)
+  local p = 0
+  while p < s and p < #new and old[p + 1].name == new[p + 1].name do
+    p = p + 1
+  end
+  if p < s then
+    local q = 0
+    while q <= #old - s and q < #new and old[#old - q].name == new[#new - q].name do
+      q = q + 1
+    end
+    if q > #old - s then
+      return #new - (#old - s)
+    end
+  end
+  return new[s] and s
 end
 
 -- Live `song = "<id>"` scores, by id: each entry is that handle's reloader.
@@ -519,7 +543,7 @@ end
 function score(cfg)
   cfg = cfg or {}
   local insts = {}
-  local rows, events, length, at = compile(song_data(cfg), function(name, i)
+  local rows, events, length, at, slots = compile(song_data(cfg), function(name, i)
     if insts[name] == nil then
       if BANK[name] ~= nil then
         local ok, inst = pcall(bank, name)
@@ -561,7 +585,7 @@ function score(cfg)
     local list = __score_songs[id] or {}
     __score_songs[id] = list
     list[#list + 1] = function(d)
-      local new_rows, new_events, new_length, new_at = compile(d, function(name)
+      local new_rows, new_events, new_length, new_at, new_slots = compile(d, function(name)
         return insts[name]
       end)
       if new_rows == nil then
@@ -571,19 +595,37 @@ function score(cfg)
         if h.playing then
           all_off()
         end
-        -- Keep the musical position, not the tick: the step the next tick
-        -- falls in and how far into it, placed on the new step times (the
-        -- offset kept inside that step). Unchanged step times map a tick to
-        -- itself.
+        -- Keep the musical position, not the tick: the arrangement slot the
+        -- next tick falls in, the step within it and how far into that step,
+        -- placed on the new arrangement (see same_slot) and step times, the
+        -- offset kept inside the step. A step past the slot's new length
+        -- lands on the slot's end: the next slot's start, or the song's end.
+        -- Unchanged step times map a tick to itself.
         local i = 0
         while at(i + 1) <= h.tick do
           i = i + 1
         end
-        local offset = math.min(h.tick - at(i), new_at(i + 1) - new_at(i) - 1)
-        h.tick = new_at(i) + offset
-        rows, events, at, h.events, h.length = new_rows, new_events, new_at, new_events, new_length
-        -- A song now shorter than its position ends here, as the timer's end
-        -- branch would: it wraps, or stops (loop = false), rewound.
+        local s = #slots
+        while s > 1 and slots[s].start > i do
+          s = s - 1
+        end
+        local ns = same_slot(slots, new_slots, s)
+        if ns and i < slots[s].start + slots[s].n then
+          local k = i - slots[s].start
+          if k < new_slots[ns].n then
+            local j = new_slots[ns].start + k
+            h.tick = new_at(j) + math.min(h.tick - at(i), new_at(j + 1) - new_at(j) - 1)
+          else
+            h.tick = new_at(new_slots[ns].start + new_slots[ns].n)
+          end
+        else
+          h.tick = new_length
+        end
+        rows, events, at, slots = new_rows, new_events, new_at, new_slots
+        h.events, h.length = new_events, new_length
+        -- A song now shorter than its position, or whose slot is gone, ends
+        -- here, as the timer's end branch would: it wraps, or stops (loop =
+        -- false), rewound.
         if h.tick >= h.length then
           h.tick = 0
           h.playing = h.playing and loop

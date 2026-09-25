@@ -581,7 +581,10 @@ impl LuaEngine {
         // Song files join them: a file whose text changed but which was, and
         // still is, a song file for the same `seq_<id>` (see `song_id`) is
         // re-run in the live VM and its bound `score{ song = id }`s reload in
-        // place. A song file added, removed or renamed to another id is not
+        // place. An added song file whose `seq_<id>` isn't already defined
+        // is live too: nothing can be playing it by name, so it prepares a
+        // no-op (or, while a `data =` score is set up, falls through to the
+        // recompile). A song file removed or renamed to another id is not
         // live, so it lands in the non-live comparison below and recompiles.
         let run_chunk = |lua: &mut Lua, name: &str, src: &str| -> Result<(), LuaError> {
             let load = lua.try_enter(|ctx| {
@@ -599,7 +602,14 @@ impl LuaEngine {
                 .iter()
                 .filter(|(n, _)| *n != AUDIO_MIX_FILE && *n != CONTROLS_FILE)
                 .filter_map(|&(n, new)| {
-                    let (_, old) = self.program_sources.iter().find(|(m, _)| m == n)?;
+                    let Some((_, old)) = self.program_sources.iter().find(|(m, _)| m == n) else {
+                        let id = song_id(&mut l, n, new)?;
+                        let taken = l.enter(|ctx| {
+                            !ctx.get_global(ctx.intern(format!("seq_{id}").as_bytes()))
+                                .is_nil()
+                        });
+                        return (!taken).then_some((n, id));
+                    };
                     if old == new {
                         return None;
                     }

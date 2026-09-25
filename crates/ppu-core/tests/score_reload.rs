@@ -216,18 +216,38 @@ fn a_file_with_other_top_level_code_is_not_a_song_file() {
     assert_eq!(run(&mut e, 30, 31)["frames"], 1, "recompiled");
 }
 
+/// A pushed file that wasn't there before: a new song file (its id not
+/// defined elsewhere) is live, since nothing can be playing it by name. It
+/// recompiles when it isn't a song file, when its id is already taken, or
+/// while a `data =` score is set up (that table may be any song's).
 #[test]
-fn an_added_song_file_recompiles() {
-    let mut e = start(&beat("\"4...............\""), true);
-    run(&mut e, 0, 30);
-    let init = "function init() h = score{ song = \"beat\" } end";
-    e.set_sources(&[
-        ("beat.lua", &beat("\"4...............\"")),
-        ("other.lua", "function seq_other() return {} end\n"),
-        ("main.lua", &format!("{MAIN}\n{init}")),
-    ])
-    .unwrap();
-    assert_eq!(run(&mut e, 30, 31)["frames"], 1, "recompiled");
+fn an_added_song_file_is_live_unless_a_data_score_is_set_up() {
+    let other = "function seq_other() return {} end\n";
+    let with = |main: &str, name: &str, added: &str| {
+        let mut e = LuaEngine::new();
+        let song = beat("\"4...............\"");
+        e.set_sources(&[("beat.lua", &song), ("main.lua", main)])
+            .unwrap();
+        let before = run(&mut e, 0, 30);
+        let at = e.score_view().unwrap().tick;
+        e.set_sources(&[("beat.lua", &song), (name, added), ("main.lua", main)])
+            .unwrap();
+        let tick = e.score_view().unwrap().tick;
+        let frames = run(&mut e, 30, 31)["frames"].as_i64().unwrap();
+        (frames == before["frames"].as_i64().unwrap() + 1, tick == at)
+    };
+    let by_name = format!("{MAIN}\nfunction init() h = score{{ song = \"beat\" }} end");
+    let by_data = format!("{MAIN}\nfunction init() h = score{{ data = seq_beat() }} end");
+
+    assert_eq!(with(&by_name, "other.lua", other), (true, true), "live");
+    assert_eq!(with(&by_data, "other.lua", other).0, false, "data = live");
+    assert_eq!(
+        with(&by_name, "other.lua", "x = 1\n").0,
+        false,
+        "not a song"
+    );
+    let again = beat("\"4...4...........\"");
+    assert_eq!(with(&by_name, "again.lua", &again).0, false, "id taken");
 }
 
 /// An edit to a song no score is bound to (and no `data =` score could be
@@ -314,4 +334,67 @@ fn a_swing_change_keeps_the_step() {
     let now = e.score_view().unwrap().tick;
     assert_eq!(now, step_at(120.0, 50.0, 5) + old - step_at(120.0, 0.0, 5));
     assert!((step_at(120.0, 50.0, 5)..step_at(120.0, 50.0, 6)).contains(&now));
+}
+
+/// One kick row at 120 BPM (a 16th is 31.25 ticks), 16-step patterns except
+/// `A` (`a_steps`), in the given arrangement.
+fn arranged(a_steps: usize, arrangement: &str) -> String {
+    let a = format!("\"4{}\"", ".".repeat(a_steps - 1));
+    let p = "\"4...............\"";
+    format!(
+        "function seq_beat() return {{ tempo = 120, rows = {{ {{ sound = \"kick\" }} }},\n  \
+         patterns = {{ A = {{ {a} }}, B = {{ {p} }}, C = {{ {p} }} }},\n  \
+         arrangement = {{ {arrangement} }} }} end\n"
+    )
+}
+
+/// The step (across the arrangement) that `tick` falls in at 120 BPM.
+fn step_of(tick: i64) -> i64 {
+    (0..).find(|&i| step_at(120.0, 0.0, i + 1) > tick).unwrap()
+}
+
+/// Shrinking an earlier pattern keeps the playhead in its arrangement slot,
+/// at the same step within it, rather than at the same step overall.
+#[test]
+fn shrinking_an_earlier_pattern_keeps_the_slot_and_step() {
+    let mut e = start(&arranged(16, "\"A\", \"B\", \"B\""), true);
+    run(&mut e, 0, 200); // tick ~833: slot 2 (steps 16..31), step 10
+    let old = e.score_view().unwrap().tick;
+    let i = step_of(old);
+    assert!((16..32).contains(&i), "slot 2, step {i}");
+
+    push(&mut e, &arranged(8, "\"A\", \"B\", \"B\""), true).unwrap();
+    let now = e.score_view().unwrap();
+    assert_eq!(now.length, step_at(120.0, 0.0, 40));
+    assert_eq!(
+        now.tick,
+        step_at(120.0, 0.0, i - 8) + old - step_at(120.0, 0.0, i),
+        "slot 2 now starts at step 8"
+    );
+}
+
+/// Deleting a slot before the playhead keeps playing the same occurrence of
+/// the pattern, now one slot earlier.
+#[test]
+fn deleting_an_earlier_slot_keeps_the_pattern_occurrence() {
+    let mut e = start(&arranged(16, "\"A\", \"B\", \"C\""), true);
+    run(&mut e, 0, 264); // tick ~1100: slot 3 (steps 32..47)
+    let old = e.score_view().unwrap().tick;
+    assert!((32..48).contains(&step_of(old)));
+
+    push(&mut e, &arranged(16, "\"B\", \"C\""), true).unwrap();
+    let now = e.score_view().unwrap();
+    assert_eq!((now.tick, now.length), (old - 500, 1000), "C, now slot 2");
+}
+
+/// A step past its slot's new length lands on that slot's end: the next
+/// slot's first step.
+#[test]
+fn a_step_past_its_shrunk_slot_moves_to_the_next_slot() {
+    let mut e = start(&arranged(16, "\"A\", \"B\""), true);
+    run(&mut e, 0, 80); // tick ~333: slot 1, step 10
+    assert!((8..16).contains(&step_of(e.score_view().unwrap().tick)));
+
+    push(&mut e, &arranged(8, "\"A\", \"B\""), true).unwrap();
+    assert_eq!(e.score_view().unwrap().tick, step_at(120.0, 0.0, 8));
 }
