@@ -335,10 +335,10 @@ end
 
 -- Validates `d` and compiles it into (rows, events, length, at, slots),
 -- `at(i)` being the tick step `i` (counted across the arrangement) starts
--- at, and slots[s] = { name, start, n } arrangement slot s's pattern name,
--- first step and step count. `place(name)`
--- turns a row's sound name into an instrument; returning nil (a reload
--- that names a sound not placed at setup) makes compile return nil.
+-- at, and slots[s] = { name, start, n } arrangement slot s's pattern
+-- name, first step and step count. `place(name)` turns a row's sound
+-- name into an instrument; returning nil (a reload that names a sound
+-- not placed at setup) makes compile return nil.
 local function compile(d, place)
   if type(d) ~= "table" then
     error("score: data must be a song table, e.g. seq_beat1()")
@@ -481,7 +481,8 @@ end
 -- The slot of `new` that is occurrence `s` of `old` (arrangement slots, as
 -- compile returns them): the same index while the two agree up to s, else
 -- counted from the end while they agree from s on (a slot inserted or
--- deleted before it), else the same index, or nil when that's gone.
+-- deleted before it), else the same index when the arrangement is still the
+-- same length (a slot replaced in place), or nil when the slot is gone.
 local function same_slot(old, new, s)
   local p = 0
   while p < s and p < #new and old[p + 1].name == new[p + 1].name do
@@ -496,7 +497,7 @@ local function same_slot(old, new, s)
       return #new - (#old - s)
     end
   end
-  return new[s] and s
+  return #new == #old and new[s] and s
 end
 
 -- Live `song = "<id>"` scores, by id: each entry is that handle's reloader.

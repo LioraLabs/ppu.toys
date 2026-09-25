@@ -398,3 +398,25 @@ fn a_step_past_its_shrunk_slot_moves_to_the_next_slot() {
     push(&mut e, &arranged(8, "\"A\", \"B\""), true).unwrap();
     assert_eq!(e.score_view().unwrap().tick, step_at(120.0, 0.0, 8));
 }
+
+/// Deleting the slot the playhead is in (not the last one) wraps or stops,
+/// like any other slot that's gone: it doesn't fall back to whatever slot
+/// now shares its index.
+#[test]
+fn deleting_the_playing_slot_wraps_or_stops() {
+    for looping in [true, false] {
+        let mut e = start(&arranged(16, "\"A\", \"C\", \"B\""), looping);
+        run(&mut e, 0, 170); // tick ~708: slot 2 (C, steps 16..31)
+        let old = e.score_view().unwrap().tick;
+        assert!((16..32).contains(&step_of(old)));
+
+        push(&mut e, &arranged(16, "\"A\", \"B\""), looping).unwrap();
+        match e.score_view() {
+            Some(v) if looping => assert_eq!((v.tick, v.length), (0, 1000), "wrapped"),
+            None if !looping => {}
+            other => panic!("loop = {looping}: {other:?}"),
+        }
+        let after = run(&mut e, 170, 171);
+        assert_eq!(after["playing"], looping);
+    }
+}
