@@ -552,8 +552,11 @@ function midi(cfg)
   return h
 end
 
--- score{ data = seq_<id>(), loop = true? } -> plays a sequencer song on the
--- shared 8-voice pool. `data` is { tempo, swing = 0 (0..75), rows = {
+-- score{ song = "<id>" | data = seq_<id>(), loop = true? } -> plays a
+-- sequencer song on the shared 8-voice pool. `song` names the global
+-- seq_<id> function and binds the score to it: when the engine re-runs an
+-- edited song file it calls __score_reload(id), which recompiles the score
+-- in place, keeping its tick (h.song = id). `data` is a one-off table. `data` is { tempo, swing = 0 (0..75), rows = {
 -- { sound, note = ? } }, patterns = { A = { "4...", "..3-" } }, arrangement
 -- = { "A", "B" } }: one step string per row, its length (8/16/32) the step
 -- count, each step a 16th. `1`-`4` hit at volume 32/64/96/127, `-` holds
@@ -572,15 +575,32 @@ end
 -- A built-in sound goes through bank() (preset ADSR/pitch); any other name
 -- is an uploaded sample with a flat ADSR. `note` pitches the row with
 -- note(row.note, base); without one a drum keeps its preset pitch.
--- Returns { tick, length, playing, events, play(), stop() }; stop() keys
+-- Returns { tick, length, playing, events, song, play(), stop() }; stop() keys
 -- every voice off and pauses, play() resumes, a finished loop = false
 -- song rewinds. Setup-only, like song{}.
 local VELOCITY = { ["1"] = 32, ["2"] = 64, ["3"] = 96, ["4"] = 127 }
 local STEP_COUNTS = { [8] = true, [16] = true, [32] = true }
 local FLAT = { a = 15, d = 0, s = 7, r = 0 }
 
-function score(cfg)
-  local d = cfg and cfg.data
+-- The song's data: `data` as given, or `seq_<id>()` for `song = "<id>"`.
+local function song_data(cfg)
+  if cfg.song ~= nil then
+    if cfg.data ~= nil then
+      error("score: give data or song, not both")
+    end
+    local f = _ENV["seq_" .. tostring(cfg.song)]
+    if type(f) ~= "function" then
+      error("score: no song function seq_" .. tostring(cfg.song) .. "()")
+    end
+    return f()
+  end
+  return cfg.data
+end
+
+-- Validates `d` and compiles it into (rows, events, length). `place(name)`
+-- turns a row's sound name into an instrument; returning nil (a reload
+-- that names a sound not placed at setup) makes compile return nil.
+local function compile(d, place)
   if type(d) ~= "table" then
     error("score: data must be a song table, e.g. seq_beat1()")
   end
@@ -604,29 +624,17 @@ function score(cfg)
     error("score: arrangement must name at least one pattern")
   end
 
-  local insts, rows = {}, {}
+  local rows = {}
   for i = 1, #d.rows do
     local row = d.rows[i]
     local name = type(row) == "table" and row.sound
     if type(name) ~= "string" then
       error("score: row " .. i .. " needs sound = \"name\"")
     end
-    if insts[name] == nil then
-      if BANK[name] ~= nil then
-        local ok, inst = pcall(bank, name)
-        if not ok then
-          error("score: row " .. i .. " sound '" .. name .. "': " .. tostring(inst))
-        end
-        insts[name] = inst
-      else
-        local ok, placed = pcall(dma, name)
-        if not ok then
-          error("score: row " .. i .. " sound '" .. name .. "': " .. tostring(placed))
-        end
-        insts[name] = instrument{ sample = placed.id, adsr = FLAT }
-      end
+    local inst = place(name, i)
+    if inst == nil then
+      return nil
     end
-    local inst = insts[name]
     local pitch = inst.pitch or 0x1000
     if row.note ~= nil then
       local ok, p = pcall(note, row.note, inst.base)
@@ -727,10 +735,63 @@ function score(cfg)
     end
     base = base + n
   end
+  return rows, events, at(base)
+end
+
+-- Live `song = "<id>"` scores, by id: each entry is that handle's reloader.
+__score_songs = {}
+
+-- Called by the engine after it re-runs a changed song file in the live VM.
+-- Recompiles every score bound to `id` from the new seq_<id>() in place,
+-- keeping its tick. Returns false, touching nothing, when a row names a
+-- sound its score didn't place at setup (placement needs the setup window,
+-- so the engine recompiles instead). A data error raises, also touching
+-- nothing: the old events keep playing.
+function __score_reload(id)
+  local list = __score_songs[id]
+  if list == nil then
+    return true
+  end
+  local d = song_data({ song = id })
+  local commits = {}
+  for i = 1, #list do
+    local commit = list[i](d)
+    if commit == nil then
+      return false
+    end
+    commits[i] = commit
+  end
+  for i = 1, #commits do
+    commits[i]()
+  end
+  return true
+end
+
+function score(cfg)
+  cfg = cfg or {}
+  local insts = {}
+  local rows, events, length = compile(song_data(cfg), function(name, i)
+    if insts[name] == nil then
+      if BANK[name] ~= nil then
+        local ok, inst = pcall(bank, name)
+        if not ok then
+          error("score: row " .. i .. " sound '" .. name .. "': " .. tostring(inst))
+        end
+        insts[name] = inst
+      else
+        local ok, placed = pcall(dma, name)
+        if not ok then
+          error("score: row " .. i .. " sound '" .. name .. "': " .. tostring(placed))
+        end
+        insts[name] = instrument{ sample = placed.id, adsr = FLAT }
+      end
+    end
+    return insts[name]
+  end)
 
   ensure_audible()
   local loop = cfg.loop ~= false
-  local h = { tick = 0, length = at(base), playing = true, events = events }
+  local h = { tick = 0, length = length, playing = true, events = events }
   -- The engine reads __score after every frame (LuaEngine::score_view) for
   -- the studio's playhead: the most recently started score is the one shown.
   __score = h
@@ -739,6 +800,34 @@ function score(cfg)
     for v = 0, 7 do
       koff(v)
       ends[v] = nil
+    end
+  end
+
+  if cfg.song ~= nil then
+    local id = tostring(cfg.song)
+    h.song = id
+    local list = __score_songs[id] or {}
+    __score_songs[id] = list
+    list[#list + 1] = function(d)
+      local new_rows, new_events, new_length = compile(d, function(name)
+        return insts[name]
+      end)
+      if new_rows == nil then
+        return nil
+      end
+      return function()
+        if h.playing then
+          all_off()
+        end
+        rows, events, h.events, h.length = new_rows, new_events, new_events, new_length
+        -- Re-seek: the next event due at or after the next tick to play. A
+        -- tick past the new length is left to the timer's end branch, which
+        -- wraps (or stops, loop = false) on its next run.
+        cursor = 1
+        while events[cursor] and events[cursor].start < h.tick do
+          cursor = cursor + 1
+        end
+      end
     end
   end
 

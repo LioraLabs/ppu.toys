@@ -199,9 +199,9 @@ play(), stop() }`. Like `timer()`, `song{}` is setup-only.
   your own `tracks = { [i] = { voices = { ... }, inst = ?, insts = ? } }`.
   Setup-only. Returns `{ t, playing, length, play(), stop() }`; `stop()`
   pauses and releases the voices, `play()` resumes.
-- `score{ data, loop = true }` — plays a [sequencer song](#sequencer-songs)
-  on all eight voices, chosen per note. Setup-only. Returns `{ tick, length,
-playing, events, play(), stop() }`.
+- `score{ song = "<id>" | data, loop = true }` — plays a
+  [sequencer song](#sequencer-songs) on all eight voices, chosen per note.
+  Setup-only. Returns `{ tick, length, playing, events, song, play(), stop() }`.
 
 ## Built-in samples
 
@@ -245,7 +245,8 @@ built-ins and your own uploads share the same auto-chaining placement.
 
 A sequencer song is a function returning plain data: rows of sounds,
 patterns of step strings, and an arrangement that chains them. `score{}`
-plays it:
+plays it, either by name (`song = "beat1"` finds `seq_beat1`) or as a table
+(`data = seq_beat1()`):
 
 ```lua
 function seq_beat1() return {
@@ -258,7 +259,7 @@ function seq_beat1() return {
   arrangement = { "A", "A", "B", "A" },
 } end
 
-local beat = score{ data = seq_beat1() }
+local beat = score{ song = "beat1" }
 ```
 
 Each row is a sound at a pitch: a built-in name plays through `bank()` with
@@ -285,6 +286,18 @@ ended, then starts the notes due. At the end it keys every voice off and,
 unless `loop = false`, starts again from tick 0. `beat.tick` and
 `beat.length` are the position and length in ticks; `beat.stop()` keys the
 voices off and pauses, `beat.play()` resumes.
+
+A song played by name reloads in place. When a file defines `seq_<id>` and
+nothing else at the top level, editing it while the song plays doesn't
+restart the toy. The engine re-runs the file, and every `score{ song = "<id>" }`
+recompiles from the new data and keeps its tick. Notes sounding at the moment
+of the edit are keyed off, the next note due plays on time, and a song that
+got shorter than its position wraps (or stops, with `loop = false`). If the
+new data has an error, the old song keeps playing and the error names the
+file. There are two cases where the edit restarts the toy the usual way. One
+is a row naming a sound the song didn't have at setup, because sounds are
+placed only at setup. The other is a file that runs any other top-level code.
+A `data =` song never reloads.
 
 ## Music from a MIDI file
 

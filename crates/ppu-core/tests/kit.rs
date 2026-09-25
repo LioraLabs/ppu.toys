@@ -1379,3 +1379,43 @@ fn score_setup_errors_name_the_row_or_pattern() {
         assert!(msg.contains(want), "want {want:?} in {msg:?}");
     }
 }
+
+/// `song = "<id>"` plays the global `seq_<id>()`, the same as `data =`
+/// with its result, and names the song in the readout. Giving both, or naming
+/// a song that doesn't exist, is a setup error.
+#[test]
+fn score_song_names_a_seq_function() {
+    let seq = "function seq_beat() return { tempo = 120, rows = { { sound = \"kick\" } },\n\
+               patterns = { A = { \"4...4...\" } }, arrangement = { \"A\" } } end\n";
+    let mut e = LuaEngine::new();
+    e.set_source(&format!(
+        "{seq}a = score{{ song = \"beat\" }}\nb = score{{ data = seq_beat() }}\n\
+         function frame() sram.same = #a.events == #b.events and a.length == b.length end"
+    ))
+    .unwrap();
+    e.frame(0.0, 0).unwrap();
+    let got: Value = serde_json::from_str(&e.take_sram().unwrap()).unwrap();
+    assert_eq!(got["same"], true);
+    assert_eq!(
+        e.score_view().unwrap().song,
+        None,
+        "b, a data score, is newest"
+    );
+
+    for (src, want) in [
+        (
+            "score{ song = \"beat\", data = seq_beat() }",
+            "give data or song, not both",
+        ),
+        ("score{ song = \"nope\" }", "no song function seq_nope()"),
+    ] {
+        let err = LuaEngine::new()
+            .set_source(&format!("{seq}{src}"))
+            .unwrap_err();
+        assert!(
+            err.message.contains(want),
+            "want {want:?} in {:?}",
+            err.message
+        );
+    }
+}

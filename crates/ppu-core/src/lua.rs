@@ -138,11 +138,14 @@ pub struct DspView {
 }
 
 /// Where the playing `score{}` is, in its 4 ms timer ticks — see
-/// [`LuaEngine::score_view`]. `tick` is the next tick to play, `0..length`.
+/// [`LuaEngine::score_view`]. `tick` is the next tick to play, `0..length-1`;
+/// `song` is the id of a `score{ song = "<id>" }` (absent for `data =`).
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct ScoreView {
     pub tick: i64,
     pub length: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub song: Option<String>,
 }
 
 /// The controls document's reserved file name (PPU-146's generated
@@ -509,6 +512,10 @@ impl LuaEngine {
             Some(ScoreView {
                 tick: h.get(ctx, "tick").to_int()? % length,
                 length,
+                song: match h.get(ctx, "song") {
+                    Value::String(s) => Some(s.to_str_lossy().into_owned()),
+                    _ => None,
+                },
             })
         })
     }
@@ -570,7 +577,40 @@ impl LuaEngine {
         // joins AUDIO_MIX_FILE here (PPU-147): a controls-only edit is
         // exactly the same "reload without recompiling" shape a mix-only
         // edit already was.
-        let live = |n: &str| n == AUDIO_MIX_FILE || n == CONTROLS_FILE;
+        //
+        // Song files join them: a file whose text changed but which was, and
+        // still is, a song file for the same `seq_<id>` (see `song_id`) is
+        // re-run in the live VM and its bound `score{ song = id }`s reload in
+        // place. A song file added, removed or renamed to another id is not
+        // live, so it lands in the non-live comparison below and recompiles.
+        let run_chunk = |lua: &mut Lua, name: &str, src: &str| -> Result<(), LuaError> {
+            let load = lua.try_enter(|ctx| {
+                let closure = Closure::load(ctx, Some(name), src.as_bytes())?;
+                Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
+            });
+            load.and_then(|ex| lua.execute::<()>(&ex))
+                .map_err(|e| static_error_to_lua(e).in_file(name))
+        };
+        let songs: Vec<(&str, String)> = if self.source_dirty || self.program_sources.is_empty() {
+            Vec::new()
+        } else {
+            let mut l = self.lua.borrow_mut();
+            files
+                .iter()
+                .filter(|(n, _)| *n != AUDIO_MIX_FILE && *n != CONTROLS_FILE)
+                .filter_map(|&(n, new)| {
+                    let (_, old) = self.program_sources.iter().find(|(m, _)| m == n)?;
+                    if old == new {
+                        return None;
+                    }
+                    let id = song_id(&mut l, n, new)?;
+                    (song_id(&mut l, n, old)? == id).then_some((n, id))
+                })
+                .collect()
+        };
+        let live = |n: &str| {
+            n == AUDIO_MIX_FILE || n == CONTROLS_FILE || songs.iter().any(|(m, _)| *m == n)
+        };
         let controls_present = |fs: &[(String, String)]| fs.iter().any(|(n, _)| n == CONTROLS_FILE);
         // `dma()` only works inside the init window, which the fast path
         // never reopens — ppuglobals.lua's top-level `dma(...)` lines (the
@@ -605,40 +645,69 @@ impl LuaEngine {
                 == controls_present(&self.program_sources)
             && old_setup == new_setup
         {
-            saved_mix
-                .validate_samples(&self.dsp_view().samples)
-                .map_err(|message| LuaError {
-                    message,
-                    line: None,
-                    file: Some(AUDIO_MIX_FILE.into()),
-                })?;
-            // A controls-only reload never recompiles: load the new text
-            // into the SAME live VM (same `__ppu_controls_env`/log, same
-            // frame/init/timers/DSP) and only touch `controls_fn` if the
-            // text actually changed — an unrelated push (e.g. mix-only)
-            // must leave the currently applying controls fn alone.
-            if let Some((_, new_src)) = files.iter().find(|(n, _)| *n == CONTROLS_FILE) {
-                let old_src = self
-                    .program_sources
-                    .iter()
-                    .find(|(n, _)| n == CONTROLS_FILE)
-                    .map(|(_, s)| s.as_str());
-                if old_src != Some(*new_src) {
-                    // The `dma(` lines are unchanged (checked above) and
-                    // already in effect from the last recompile; reloading
-                    // them here would hit the init-window gate, so they are
-                    // blanked (line numbers kept) before the in-place load.
+            'fast: {
+                saved_mix
+                    .validate_samples(&self.dsp_view().samples)
+                    .map_err(|message| LuaError {
+                        message,
+                        line: None,
+                        file: Some(AUDIO_MIX_FILE.into()),
+                    })?;
+                // Songs first: one that names a sound its score didn't place at
+                // setup can't reload in place (`dma()` needs the init window), so
+                // it falls through to the full recompile below. The VM it touched
+                // is then dropped; if that recompile fails, the old VM keeps
+                // playing the old events, only its seq_<id> global redefined.
+                for (name, id) in &songs {
+                    let src = files
+                        .iter()
+                        .find(|(n, _)| n == name)
+                        .map_or("", |(_, s)| *s);
                     let mut l = self.lua.borrow_mut();
-                    self.controls_fn = Self::load_controls(&mut l, &without_dma_lines(new_src))?;
-                    self.controls_vram = Self::read_controls_vram(&mut l);
+                    run_chunk(&mut l, name, src)?;
+                    let ex = l.enter(|ctx| match ctx.get_global("__score_reload") {
+                        Value::Function(f) => {
+                            let id = ctx.intern(id.as_bytes());
+                            ctx.stash(Executor::start(ctx, f, id))
+                        }
+                        _ => panic!("kit.lua must define __score_reload"),
+                    });
+                    let reloaded = l
+                        .execute::<bool>(&ex)
+                        .map_err(|e| static_error_to_lua(e).in_file(name))?;
+                    if !reloaded {
+                        break 'fast;
+                    }
                 }
+                // A controls-only reload never recompiles: load the new text
+                // into the SAME live VM (same `__ppu_controls_env`/log, same
+                // frame/init/timers/DSP) and only touch `controls_fn` if the
+                // text actually changed — an unrelated push (e.g. mix-only)
+                // must leave the currently applying controls fn alone.
+                if let Some((_, new_src)) = files.iter().find(|(n, _)| *n == CONTROLS_FILE) {
+                    let old_src = self
+                        .program_sources
+                        .iter()
+                        .find(|(n, _)| n == CONTROLS_FILE)
+                        .map(|(_, s)| s.as_str());
+                    if old_src != Some(*new_src) {
+                        // The `dma(` lines are unchanged (checked above) and
+                        // already in effect from the last recompile; reloading
+                        // them here would hit the init-window gate, so they are
+                        // blanked (line numbers kept) before the in-place load.
+                        let mut l = self.lua.borrow_mut();
+                        self.controls_fn =
+                            Self::load_controls(&mut l, &without_dma_lines(new_src))?;
+                        self.controls_vram = Self::read_controls_vram(&mut l);
+                    }
+                }
+                self.saved_mix = saved_mix;
+                self.program_sources = files
+                    .iter()
+                    .map(|(n, s)| ((*n).into(), (*s).into()))
+                    .collect();
+                return Ok(());
             }
-            self.saved_mix = saved_mix;
-            self.program_sources = files
-                .iter()
-                .map(|(n, s)| ((*n).into(), (*s).into()))
-                .collect();
-            return Ok(());
         }
         let mut lua = Lua::core();
         let keys = Rc::new(lua.enter(StashedKeys::new));
@@ -675,14 +744,6 @@ impl LuaEngine {
                 .expect("controls_env.lua is static and must load/run cleanly");
         }
 
-        let run_chunk = |lua: &mut Lua, name: &str, src: &str| -> Result<(), LuaError> {
-            let load = lua.try_enter(|ctx| {
-                let closure = Closure::load(ctx, Some(name), src.as_bytes())?;
-                Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
-            });
-            load.and_then(|ex| lua.execute::<()>(&ex))
-                .map_err(|e| static_error_to_lua(e).in_file(name))
-        };
         run_chunk(&mut lua, "kit", Self::KIT_LUA)?;
         run_chunk(&mut lua, "ramps", include_str!("ramps.lua"))?;
         run_chunk(&mut lua, "vram_helpers", include_str!("vram_helpers.lua"))?;
@@ -1569,6 +1630,37 @@ fn call_controls_hook<R: for<'gc> FromMultiValue<'gc>>(lua: &mut Lua, name: &'st
     });
     lua.execute::<R>(&ex)
         .unwrap_or_else(|e| panic!("{name} (controls_env.lua) must not raise: {e}"))
+}
+
+/// The `<id>` of a song file, or None. A song file defines `seq_<id>` and
+/// nothing else at top level. The check runs the chunk in an EMPTY
+/// environment (no globals to read, call or write through), so it can have
+/// no side effects. The chunk counts as a song file when it completes and
+/// leaves exactly one global: `seq_<id>`, a function. Top-level `local`s are
+/// accepted, since they can reach nothing either. Anything else, including a
+/// parse error or a top-level call, is not a song file, so the push takes the
+/// full recompile.
+fn song_id(lua: &mut Lua, name: &str, src: &str) -> Option<String> {
+    let (env, ex) = lua
+        .try_enter(|ctx| {
+            let env = Table::new(&ctx);
+            let closure = Closure::load_with_env(ctx, Some(name), src.as_bytes(), env)?;
+            Ok((
+                ctx.stash(env),
+                ctx.stash(Executor::start(ctx, closure.into(), ())),
+            ))
+        })
+        .ok()?;
+    lua.execute::<()>(&ex).ok()?;
+    lua.enter(|ctx| {
+        let env = ctx.fetch(&env);
+        let mut entries = env.iter();
+        let (Value::String(k), Value::Function(_)) = entries.next()? else {
+            return None;
+        };
+        let id = k.to_str().ok()?.strip_prefix("seq_")?;
+        (entries.next().is_none() && !id.is_empty()).then(|| id.to_owned())
+    })
 }
 
 /// The setup-only part of a controls document, in order — what the fast
