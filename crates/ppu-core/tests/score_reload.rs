@@ -1,6 +1,7 @@
 //! Hot reload of a playing song: a push that changes only a song file
 //! (`seq_<id>` and nothing else) re-runs it in the live VM, and every
-//! `score{ song = "<id>" }` recompiles in place, keeping its tick. Driven
+//! `score{ song = "<id>" }` recompiles in place, keeping its step (its
+//! position in the song). Driven
 //! through `set_sources`/`frame`/`score_view`/`take_sram`.
 
 use ppu_core::LuaEngine;

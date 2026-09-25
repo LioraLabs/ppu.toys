@@ -291,19 +291,21 @@ A song played by name reloads in place. When a file defines `seq_<id>` and
 nothing else at the top level, editing it while the song plays doesn't
 restart the toy. The engine re-runs the file, and every `score{ song = "<id>" }`
 recompiles from the new data and keeps its place in the song: the same step,
-the same distance into it. A tempo or swing edit moves the step's tick, so
-step 8 stays step 8 when the tempo halves. Notes sounding at the moment
-of the edit are keyed off, the next note due plays on time, and a song that
-got shorter than its position wraps (or stops, with `loop = false`). If the
-new data has an error, the old song keeps playing and the error names the
-file. Editing a song file that nothing is playing doesn't restart the toy
-either: the file is re-run and the playing song carries on.
+the same distance into it, capped at the step's end if the step got shorter.
+A tempo or swing edit moves the step's tick, so step 8 stays step 8 when the
+tempo halves. Notes sounding at the moment of the edit are keyed off, the
+next note due plays on time, and a song that got shorter than its position
+wraps (or stops, with `loop = false`). If the new data has an error, the old
+song keeps playing and the error names the file. Editing a song file doesn't
+restart the toy either when nothing is playing: the file is re-run and
+whatever is playing carries on.
 
 There are three cases where the edit restarts the toy the usual way. One
 is a row naming a sound the song didn't have at setup, because sounds are
 placed only at setup. Another is a file that runs any other top-level code.
-The third is any song while a `score{ data = ... }` is set up: that table
-may have come from the edited song, so the edit restarts the toy.
+The third is a song file no `score{ song = ... }` plays, while a
+`score{ data = ... }` is set up: that table may have come from the edited
+song, so the edit restarts the toy.
 
 ## Music from a MIDI file
 

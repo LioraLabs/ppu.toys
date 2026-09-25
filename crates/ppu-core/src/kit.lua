@@ -743,22 +743,24 @@ end
 -- Live `song = "<id>"` scores, by id: each entry is that handle's reloader.
 __score_songs = {}
 -- True once any `data = ` score is set up: its table may have come from any
--- seq_ function, so an edit to a song no score names can't reload in place.
-__score_data = false
+-- seq_ function, so an edit to a song no score plays by name can't reload
+-- in place; __score_prepare returns false for it instead.
+__score_data_live = false
 
 -- Called by the engine after it re-runs a changed song file in the live VM.
 -- Compiles every score bound to `id` from the new seq_<id>() and returns a
 -- function that swaps them all in, keeping each one's step; nothing changes
 -- until the engine calls it, after every changed song has prepared. A song
 -- no score plays by name commits as a no-op: the engine's re-run already
--- replaced seq_<id>. Returns false, touching nothing, when a `data =` score
--- is live (its table may be this song's; the recompile picks the edit up)
--- or a row names a sound its score didn't place at setup (placement needs
--- the setup window). A data error raises: the old events keep playing.
+-- replaced seq_<id>, unless a `data =` score is live, in which case it
+-- returns false, touching nothing (that table may be this song's; the
+-- recompile picks the edit up). A row that names a sound its score didn't
+-- place at setup also returns false (placement needs the setup window). A
+-- data error raises: the old events keep playing.
 function __score_prepare(id)
   local list = __score_songs[id]
   if list == nil then
-    if __score_data then
+    if __score_data_live then
       return false
     end
     return function() end
@@ -802,7 +804,7 @@ function score(cfg)
   end)
 
   if cfg.song == nil then
-    __score_data = true
+    __score_data_live = true
   end
   ensure_audible()
   local loop = cfg.loop ~= false
