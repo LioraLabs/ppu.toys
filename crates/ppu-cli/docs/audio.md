@@ -289,8 +289,13 @@ recompiles from the new data and keeps its place in the song: the same
 arrangement slot, the same step in it, the same distance into that step,
 capped at the step's end if the step got shorter. A tempo or swing edit moves
 the step's tick, so step 8 stays step 8 when the tempo halves. Shortening an
-earlier pattern, or adding or removing a slot before the one playing, keeps
-playing the same slot. Notes sounding at the moment of the edit are keyed off,
+earlier pattern keeps playing the same slot. So does removing slots, or
+inserting them, anywhere in the arrangement, even on both sides of the
+playing slot in one edit: deleting pattern `B` from `A B C B` while `C`
+plays keeps `C` playing, now as slot 2. Moving the playing slot one place
+earlier or later follows it. An arrangement the same length as before
+otherwise keeps the slot number, so renaming the playing slot's pattern
+plays the new one. Notes sounding at the moment of the edit are keyed off,
 and the next note due plays on time. If the playing step is past the end of
 its shortened pattern, the song moves on to the next slot. If there is no
 next slot, or the playing slot is gone, the song wraps (or stops, with

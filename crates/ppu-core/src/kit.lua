@@ -478,11 +478,30 @@ local function compile(d, place)
   return rows, events, at(base), at, slots
 end
 
+-- Whether the names of a[ai..aj] appear in b[bi..bj], in order.
+local function in_order(a, ai, aj, b, bi, bj)
+  while ai <= aj and bi <= bj do
+    if a[ai].name == b[bi].name then
+      ai = ai + 1
+    end
+    bi = bi + 1
+  end
+  return ai > aj
+end
+
 -- The slot of `new` that is occurrence `s` of `old` (arrangement slots, as
--- compile returns them): the same index while the two agree up to s, else
--- counted from the end while they agree from s on (a slot inserted or
--- deleted before it), else the same index when the arrangement is still the
--- same length (a slot replaced in place), or nil when the slot is gone.
+-- compile returns them), tried in this order:
+-- * the same index while the two agree up to s;
+-- * counted from the end while they agree from s on (a slot inserted or
+--   deleted before it);
+-- * s and a neighbour swapped, nothing else changed: the neighbour's index
+--   (the playing slot moved);
+-- * slots only removed, or only inserted, anywhere (the shorter
+--   arrangement's names appear in the longer one in order), s kept: its
+--   first new index that works;
+-- * the same index when the arrangement is still the same length (a slot
+--   replaced in place);
+-- * else nil: the slot is gone.
 local function same_slot(old, new, s)
   local p = 0
   while p < s and p < #new and old[p + 1].name == new[p + 1].name do
@@ -500,7 +519,37 @@ local function same_slot(old, new, s)
       return #new - (#old - s)
     end
   end
-  return #new == #old and new[s] and s
+  if #new == #old then
+    for _, t in ipairs({ s - 1, s + 1 }) do
+      if old[t] and new[s].name == old[t].name and new[t].name == old[s].name then
+        local same = true
+        for i = 1, #old do
+          if i ~= s and i ~= t and old[i].name ~= new[i].name then
+            same = false
+            break
+          end
+        end
+        if same then
+          return t
+        end
+      end
+    end
+    return s
+  end
+  for ns = 1, #new do
+    if new[ns].name == old[s].name then
+      local kept
+      if #new < #old then
+        kept = in_order(new, 1, ns - 1, old, 1, s - 1) and in_order(new, ns + 1, #new, old, s + 1, #old)
+      else
+        kept = in_order(old, 1, s - 1, new, 1, ns - 1) and in_order(old, s + 1, #old, new, ns + 1, #new)
+      end
+      if kept then
+        return ns
+      end
+    end
+  end
+  return nil
 end
 
 -- Live `song = "<id>"` scores, by id: each entry is that handle's reloader.

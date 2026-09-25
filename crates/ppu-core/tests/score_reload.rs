@@ -448,3 +448,56 @@ fn adding_or_removing_a_later_slot_keeps_the_playing_one() {
         "trailing slots dropped, same slot playing"
     );
 }
+
+/// Plays `from` (16-step slots, 500 ticks each) for `frames` frames, then
+/// pushes `to`: the tick before, and the tick and length after.
+fn moved(from: &str, frames: u32, to: &str) -> (i64, i64, i64) {
+    let mut e = start(&arranged(16, from), true);
+    run(&mut e, 0, frames);
+    let old = e.score_view().unwrap().tick;
+    push(&mut e, &arranged(16, to), true).unwrap();
+    let now = e.score_view().unwrap();
+    (old, now.tick, now.length)
+}
+
+/// Deleting a pattern strips every slot it fills, on both sides of the
+/// playhead in one write: the slots left are the old ones in order, so the
+/// playing slot keeps playing at its new position.
+#[test]
+fn removing_slots_on_both_sides_keeps_the_playing_one() {
+    // tick ~1100: slot 3 (C, steps 32..47)
+    let (old, now, len) = moved("\"A\", \"B\", \"C\", \"B\"", 264, "\"A\", \"C\"");
+    assert!((32..48).contains(&step_of(old)));
+    assert_eq!((now, len), (old - 500, 1000), "C, now slot 2");
+
+    // The second A plays; B goes from both sides.
+    let (old, now, len) = moved("\"A\", \"B\", \"A\", \"B\"", 264, "\"A\", \"A\"");
+    assert_eq!((now, len), (old - 500, 1000), "second A, now slot 2");
+}
+
+/// Slots inserted on both sides of the playhead in one write keep the
+/// playing slot too.
+#[test]
+fn inserting_slots_on_both_sides_keeps_the_playing_one() {
+    let (old, now, len) = moved(
+        "\"A\", \"B\", \"C\"",
+        264,
+        "\"A\", \"B\", \"B\", \"C\", \"A\"",
+    );
+    assert!((32..48).contains(&step_of(old)));
+    assert_eq!((now, len), (old + 500, 2500), "C, now slot 4");
+}
+
+/// Moving the playing slot one step earlier or later follows it: the
+/// pattern keeps playing, not the neighbour that took its index.
+#[test]
+fn moving_the_playing_slot_follows_it() {
+    // tick ~1100: slot 3 (C) moves earlier.
+    let (old, now, len) = moved("\"A\", \"B\", \"C\"", 264, "\"A\", \"C\", \"B\"");
+    assert_eq!((now, len), (old - 500, 1500), "C, now slot 2");
+
+    // tick ~708: slot 2 (C) moves later.
+    let (old, now, len) = moved("\"A\", \"C\", \"B\"", 170, "\"A\", \"B\", \"C\"");
+    assert!((16..32).contains(&step_of(old)));
+    assert_eq!((now, len), (old + 500, 1500), "C, now slot 3");
+}
