@@ -556,7 +556,7 @@ end
 -- sequencer song on the shared 8-voice pool. `song` names the global
 -- seq_<id> function and binds the score to it (h.song = id): when the
 -- engine re-runs an edited song file, __score_prepare(id) recompiles the
--- score in place, keeping its tick. `data` is a one-off table, never
+-- score in place, keeping its step. `data` is a one-off table, never
 -- reloaded. The song is { tempo, swing = 0 (0..75), rows = {
 -- { sound, note = ? } }, patterns = { A = { "4...", "..3-" } }, arrangement
 -- = { "A", "B" } }: one step string per row, its length (8/16/32) the step
@@ -598,7 +598,8 @@ local function song_data(cfg)
   return cfg.data
 end
 
--- Validates `d` and compiles it into (rows, events, length). `place(name)`
+-- Validates `d` and compiles it into (rows, events, length, at), `at(i)`
+-- being the tick step `i` (counted across the arrangement) starts at. `place(name)`
 -- turns a row's sound name into an instrument; returning nil (a reload
 -- that names a sound not placed at setup) makes compile return nil.
 local function compile(d, place)
@@ -736,24 +737,31 @@ local function compile(d, place)
     end
     base = base + n
   end
-  return rows, events, at(base)
+  return rows, events, at(base), at
 end
 
 -- Live `song = "<id>"` scores, by id: each entry is that handle's reloader.
 __score_songs = {}
+-- True once any `data = ` score is set up: its table may have come from any
+-- seq_ function, so an edit to a song no score names can't reload in place.
+__score_data = false
 
 -- Called by the engine after it re-runs a changed song file in the live VM.
 -- Compiles every score bound to `id` from the new seq_<id>() and returns a
--- function that swaps them all in, keeping each one's tick; nothing changes
--- until the engine calls it, after every changed song has prepared. Returns
--- false, touching nothing, when no score plays `id` by name (a `data =`
--- song needs the recompile to pick up the edit) or a row names a sound its
--- score didn't place at setup (placement needs the setup window). A data
--- error raises: the old events keep playing.
+-- function that swaps them all in, keeping each one's step; nothing changes
+-- until the engine calls it, after every changed song has prepared. A song
+-- no score plays by name commits as a no-op: the engine's re-run already
+-- replaced seq_<id>. Returns false, touching nothing, when a `data =` score
+-- is live (its table may be this song's; the recompile picks the edit up)
+-- or a row names a sound its score didn't place at setup (placement needs
+-- the setup window). A data error raises: the old events keep playing.
 function __score_prepare(id)
   local list = __score_songs[id]
   if list == nil then
-    return false
+    if __score_data then
+      return false
+    end
+    return function() end
   end
   local d = song_data({ song = id })
   local commits = {}
@@ -774,7 +782,7 @@ end
 function score(cfg)
   cfg = cfg or {}
   local insts = {}
-  local rows, events, length = compile(song_data(cfg), function(name, i)
+  local rows, events, length, at = compile(song_data(cfg), function(name, i)
     if insts[name] == nil then
       if BANK[name] ~= nil then
         local ok, inst = pcall(bank, name)
@@ -793,6 +801,9 @@ function score(cfg)
     return insts[name]
   end)
 
+  if cfg.song == nil then
+    __score_data = true
+  end
   ensure_audible()
   local loop = cfg.loop ~= false
   local h = { tick = 0, length = length, playing = true, events = events }
@@ -813,7 +824,7 @@ function score(cfg)
     local list = __score_songs[id] or {}
     __score_songs[id] = list
     list[#list + 1] = function(d)
-      local new_rows, new_events, new_length = compile(d, function(name)
+      local new_rows, new_events, new_length, new_at = compile(d, function(name)
         return insts[name]
       end)
       if new_rows == nil then
@@ -823,7 +834,17 @@ function score(cfg)
         if h.playing then
           all_off()
         end
-        rows, events, h.events, h.length = new_rows, new_events, new_events, new_length
+        -- Keep the musical position, not the tick: the step the next tick
+        -- falls in and how far into it, placed on the new step times (the
+        -- offset kept inside that step). Unchanged step times map a tick to
+        -- itself.
+        local i = 0
+        while at(i + 1) <= h.tick do
+          i = i + 1
+        end
+        local offset = math.min(h.tick - at(i), new_at(i + 1) - new_at(i) - 1)
+        h.tick = new_at(i) + offset
+        rows, events, at, h.events, h.length = new_rows, new_events, new_at, new_events, new_length
         -- A song now shorter than its position ends here, as the timer's end
         -- branch would: it wraps, or stops (loop = false), rewound.
         if h.tick >= h.length then

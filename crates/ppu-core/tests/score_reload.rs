@@ -228,3 +228,89 @@ fn an_added_song_file_recompiles() {
     .unwrap();
     assert_eq!(run(&mut e, 30, 31)["frames"], 1, "recompiled");
 }
+
+/// An edit to a song no score is bound to (and no `data =` score could be
+/// built from) is live: the playing song keeps its VM and its tick.
+#[test]
+fn an_edit_to_a_song_that_is_not_playing_keeps_the_playing_one() {
+    let other = |steps: &str| {
+        format!(
+            "function seq_other() return {{ tempo = 90, rows = {{ {{ sound = \"snare\" }} }},\n  \
+             patterns = {{ A = {{ {steps} }} }}, arrangement = {{ \"A\" }} }} end\n"
+        )
+    };
+    let init = format!("{MAIN}\nfunction init() h = score{{ song = \"beat\" }} end");
+    let song = beat("\"4...............\"");
+    let mut e = LuaEngine::new();
+    e.set_sources(&[
+        ("beat.lua", &song),
+        ("other.lua", &other("\"4...............\"")),
+        ("main.lua", &init),
+    ])
+    .unwrap();
+    let before = run(&mut e, 0, 30);
+    let at = e.score_view().unwrap();
+
+    e.set_sources(&[
+        ("beat.lua", &song),
+        ("other.lua", &other("\"4...4...4...4...\"")),
+        ("main.lua", &init),
+    ])
+    .unwrap();
+    let now = e.score_view().unwrap();
+    assert_eq!((now.tick, now.song.as_deref()), (at.tick, Some("beat")));
+    assert_eq!(
+        run(&mut e, 30, 31)["frames"],
+        before["frames"].as_i64().unwrap() + 1,
+        "same VM"
+    );
+}
+
+fn timed(tempo: u32, swing: u32) -> String {
+    format!(
+        "function seq_beat() return {{ tempo = {tempo}, swing = {swing},\n  \
+         rows = {{ {{ sound = \"kick\" }} }}, patterns = {{ A = {{ \"4...............\" }} }},\n  \
+         arrangement = {{ \"A\" }} }} end\n"
+    )
+}
+
+/// kit.lua's step time: step `i` starts at this tick.
+fn step_at(tempo: f64, swing: f64, i: i64) -> i64 {
+    let s = if i % 2 == 1 {
+        i as f64 + swing / 100.0
+    } else {
+        i as f64
+    };
+    (s * 3750.0 / tempo + 0.5).floor() as i64
+}
+
+/// A tempo edit keeps the musical position: the same step, the same ticks
+/// into it, not the same tick.
+#[test]
+fn a_tempo_change_keeps_the_step() {
+    let mut e = start(&timed(120, 0), true);
+    run(&mut e, 0, 62); // tick ~258: step 8 starts at 250
+    let old = e.score_view().unwrap().tick;
+    assert!((step_at(120.0, 0.0, 8)..step_at(120.0, 0.0, 9)).contains(&old));
+
+    push(&mut e, &timed(60, 0), true).unwrap();
+    let now = e.score_view().unwrap();
+    assert_eq!(now.length, 1000);
+    assert_eq!(
+        now.tick,
+        step_at(60.0, 0.0, 8) + old - step_at(120.0, 0.0, 8)
+    );
+}
+
+#[test]
+fn a_swing_change_keeps_the_step() {
+    let mut e = start(&timed(120, 0), true);
+    run(&mut e, 0, 40); // tick ~166: odd step 5 starts at 156
+    let old = e.score_view().unwrap().tick;
+    assert!((step_at(120.0, 0.0, 5)..step_at(120.0, 0.0, 6)).contains(&old));
+
+    push(&mut e, &timed(120, 50), true).unwrap();
+    let now = e.score_view().unwrap().tick;
+    assert_eq!(now, step_at(120.0, 50.0, 5) + old - step_at(120.0, 0.0, 5));
+    assert!((step_at(120.0, 50.0, 5)..step_at(120.0, 50.0, 6)).contains(&now));
+}

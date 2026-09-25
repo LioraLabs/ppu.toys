@@ -654,9 +654,10 @@ impl LuaEngine {
                         file: Some(AUDIO_MIX_FILE.into()),
                     })?;
                 // Songs first, in two phases so a push reloads all its songs or
-                // none. Each is re-run and prepared; one that can't reload in
-                // place (no `song =` score plays it, or it names a sound its
-                // score didn't place at setup: `dma()` needs the init window)
+                // none. Each is re-run and prepared (a song no score plays
+                // prepares a no-op); one that can't reload in place (a
+                // `data =` score is set up, or it names a sound its score
+                // didn't place at setup: `dma()` needs the init window)
                 // falls through to the full recompile below, before anything
                 // was swapped in. The old VM keeps its old events either way;
                 // only the re-run seq_<id> globals are new.
