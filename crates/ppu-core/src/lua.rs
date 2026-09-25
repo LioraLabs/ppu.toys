@@ -503,9 +503,12 @@ impl LuaEngine {
             if !h.get(ctx, "playing").to_bool() {
                 return None;
             }
+            let length = h.get(ctx, "length").to_int().filter(|&l| l > 0)?;
+            // The timer leaves `tick == length` between the last tick and the
+            // wrap; the next tick to play is then 0.
             Some(ScoreView {
-                tick: h.get(ctx, "tick").to_int()?,
-                length: h.get(ctx, "length").to_int()?,
+                tick: h.get(ctx, "tick").to_int()? % length,
+                length,
             })
         })
     }

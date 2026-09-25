@@ -1202,7 +1202,8 @@ fn score_stop_keys_off_and_play_resumes() {
 
 /// The studio's playhead readout: `score_view()` reports the playing
 /// score's tick after every frame. 250 ticks/s at 60 frames/s is ~4.17 ticks
-/// a frame; the 250-tick song wraps back past 0 after 60 frames.
+/// a frame; the 250-tick song wraps back past 0 after 60 frames, and the
+/// reported tick stays below the length.
 #[test]
 fn score_view_reports_the_tick_every_frame_and_wraps() {
     let mut e = LuaEngine::new();
@@ -1230,12 +1231,18 @@ fn score_view_reports_the_tick_every_frame_and_wraps() {
     ])
     .unwrap();
     let mut ticks = vec![];
-    for f in 0..70u32 {
+    // Many loops, so a frame boundary lands between the last tick and the wrap.
+    for f in 0..1200u32 {
         e.frame(f as f64 / 60.0, f).unwrap();
         let v = e
             .score_view()
             .expect("a looping score started from apply_setup reports");
         assert_eq!(v.length, 250);
+        assert!(
+            v.tick < v.length,
+            "frame {f}: tick {} is past the end",
+            v.tick
+        );
         ticks.push(v.tick);
     }
     for f in 1..59 {
