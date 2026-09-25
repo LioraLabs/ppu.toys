@@ -1,0 +1,509 @@
+{
+  "about": "score{} voice allocation, shared by the engine (tests/kit.rs) and the web panel's TS mirror. Events are ordered by (start, row); ticks are 4 ms (timer(0, 32)); a step is a 16th = 3750/tempo ticks, step i starts at floor((i + swing/100 if i is odd) * step + 0.5) counted across the whole arrangement; a hit ends where the step after its last '-' starts. Voice: lowest with end <= start, else steal the earliest-started (lowest voice on a tie) and cut its end to the new start. row is 1-based.",
+  "cases": [
+    {
+      "name": "arrangement A B A of 8-step patterns, holds and a same-row retrigger",
+      "song": {
+        "tempo": 120,
+        "swing": 0,
+        "rows": [
+          {
+            "sound": "kick"
+          },
+          {
+            "sound": "snare"
+          },
+          {
+            "sound": "piano",
+            "note": "E4"
+          }
+        ],
+        "patterns": {
+          "A": ["4...4...", "..3-....", "2---1-.."],
+          "B": ["4.4.4.4.", "....3...", "........"]
+        },
+        "arrangement": ["A", "B", "A"]
+      },
+      "events": [
+        {
+          "row": 1,
+          "start": 0,
+          "end": 31,
+          "voice": 0
+        },
+        {
+          "row": 3,
+          "start": 0,
+          "end": 125,
+          "voice": 1
+        },
+        {
+          "row": 2,
+          "start": 63,
+          "end": 125,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 125,
+          "end": 156,
+          "voice": 0
+        },
+        {
+          "row": 3,
+          "start": 125,
+          "end": 188,
+          "voice": 1
+        },
+        {
+          "row": 1,
+          "start": 250,
+          "end": 281,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 313,
+          "end": 344,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 375,
+          "end": 406,
+          "voice": 0
+        },
+        {
+          "row": 2,
+          "start": 375,
+          "end": 406,
+          "voice": 1
+        },
+        {
+          "row": 1,
+          "start": 438,
+          "end": 469,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 500,
+          "end": 531,
+          "voice": 0
+        },
+        {
+          "row": 3,
+          "start": 500,
+          "end": 625,
+          "voice": 1
+        },
+        {
+          "row": 2,
+          "start": 563,
+          "end": 625,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 625,
+          "end": 656,
+          "voice": 0
+        },
+        {
+          "row": 3,
+          "start": 625,
+          "end": 688,
+          "voice": 1
+        }
+      ]
+    },
+    {
+      "name": "swing 50 on odd steps, fractional step length",
+      "song": {
+        "tempo": 97,
+        "swing": 50,
+        "rows": [
+          {
+            "sound": "hat"
+          },
+          {
+            "sound": "bass",
+            "note": "C2"
+          }
+        ],
+        "patterns": {
+          "A": ["1111111111111111", "4-..4-..4-..4-.."]
+        },
+        "arrangement": ["A", "A"]
+      },
+      "events": [
+        {
+          "row": 1,
+          "start": 0,
+          "end": 58,
+          "voice": 0
+        },
+        {
+          "row": 2,
+          "start": 0,
+          "end": 77,
+          "voice": 1
+        },
+        {
+          "row": 1,
+          "start": 58,
+          "end": 77,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 77,
+          "end": 135,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 135,
+          "end": 155,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 155,
+          "end": 213,
+          "voice": 0
+        },
+        {
+          "row": 2,
+          "start": 155,
+          "end": 232,
+          "voice": 1
+        },
+        {
+          "row": 1,
+          "start": 213,
+          "end": 232,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 232,
+          "end": 290,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 290,
+          "end": 309,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 309,
+          "end": 367,
+          "voice": 0
+        },
+        {
+          "row": 2,
+          "start": 309,
+          "end": 387,
+          "voice": 1
+        },
+        {
+          "row": 1,
+          "start": 367,
+          "end": 387,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 387,
+          "end": 445,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 445,
+          "end": 464,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 464,
+          "end": 522,
+          "voice": 0
+        },
+        {
+          "row": 2,
+          "start": 464,
+          "end": 541,
+          "voice": 1
+        },
+        {
+          "row": 1,
+          "start": 522,
+          "end": 541,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 541,
+          "end": 599,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 599,
+          "end": 619,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 619,
+          "end": 677,
+          "voice": 0
+        },
+        {
+          "row": 2,
+          "start": 619,
+          "end": 696,
+          "voice": 1
+        },
+        {
+          "row": 1,
+          "start": 677,
+          "end": 696,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 696,
+          "end": 754,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 754,
+          "end": 773,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 773,
+          "end": 831,
+          "voice": 0
+        },
+        {
+          "row": 2,
+          "start": 773,
+          "end": 851,
+          "voice": 1
+        },
+        {
+          "row": 1,
+          "start": 831,
+          "end": 851,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 851,
+          "end": 909,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 909,
+          "end": 928,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 928,
+          "end": 986,
+          "voice": 0
+        },
+        {
+          "row": 2,
+          "start": 928,
+          "end": 1005,
+          "voice": 1
+        },
+        {
+          "row": 1,
+          "start": 986,
+          "end": 1005,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 1005,
+          "end": 1063,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 1063,
+          "end": 1082,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 1082,
+          "end": 1140,
+          "voice": 0
+        },
+        {
+          "row": 2,
+          "start": 1082,
+          "end": 1160,
+          "voice": 1
+        },
+        {
+          "row": 1,
+          "start": 1140,
+          "end": 1160,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 1160,
+          "end": 1218,
+          "voice": 0
+        },
+        {
+          "row": 1,
+          "start": 1218,
+          "end": 1237,
+          "voice": 0
+        }
+      ]
+    },
+    {
+      "name": "ten held notes on eight voices: the earliest-started held notes are stolen",
+      "song": {
+        "tempo": 140,
+        "swing": 0,
+        "rows": [
+          {
+            "sound": "piano",
+            "note": "C3"
+          },
+          {
+            "sound": "piano",
+            "note": "D3"
+          },
+          {
+            "sound": "piano",
+            "note": "E3"
+          },
+          {
+            "sound": "piano",
+            "note": "F3"
+          },
+          {
+            "sound": "piano",
+            "note": "G3"
+          },
+          {
+            "sound": "piano",
+            "note": "A3"
+          },
+          {
+            "sound": "piano",
+            "note": "B3"
+          },
+          {
+            "sound": "piano",
+            "note": "C4"
+          },
+          {
+            "sound": "piano",
+            "note": "D4"
+          },
+          {
+            "sound": "piano",
+            "note": "E4"
+          }
+        ],
+        "patterns": {
+          "A": [
+            "1---------------",
+            ".1--------------",
+            "..1-------------",
+            "...1------------",
+            "....1-----------",
+            ".....1----------",
+            "......1---------",
+            ".......1--------",
+            "........1-------",
+            ".........1------"
+          ]
+        },
+        "arrangement": ["A"]
+      },
+      "events": [
+        {
+          "row": 1,
+          "start": 0,
+          "end": 214,
+          "voice": 0
+        },
+        {
+          "row": 2,
+          "start": 27,
+          "end": 241,
+          "voice": 1
+        },
+        {
+          "row": 3,
+          "start": 54,
+          "end": 429,
+          "voice": 2
+        },
+        {
+          "row": 4,
+          "start": 80,
+          "end": 429,
+          "voice": 3
+        },
+        {
+          "row": 5,
+          "start": 107,
+          "end": 429,
+          "voice": 4
+        },
+        {
+          "row": 6,
+          "start": 134,
+          "end": 429,
+          "voice": 5
+        },
+        {
+          "row": 7,
+          "start": 161,
+          "end": 429,
+          "voice": 6
+        },
+        {
+          "row": 8,
+          "start": 188,
+          "end": 429,
+          "voice": 7
+        },
+        {
+          "row": 9,
+          "start": 214,
+          "end": 429,
+          "voice": 0
+        },
+        {
+          "row": 10,
+          "start": 241,
+          "end": 429,
+          "voice": 1
+        }
+      ]
+    }
+  ]
+}

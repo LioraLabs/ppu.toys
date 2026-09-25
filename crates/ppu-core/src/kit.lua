@@ -550,3 +550,223 @@ function midi(cfg)
   end
   return h
 end
+
+-- score{ data = seq_<id>(), loop = true? } -> plays a sequencer song on the
+-- shared 8-voice pool. `data` is { tempo, swing = 0 (0..75), rows = {
+-- { sound, note = ? } }, patterns = { A = { "4...", "..3-" } }, arrangement
+-- = { "A", "B" } }: one step string per row, its length (8/16/32) the step
+-- count, each step a 16th. `1`-`4` hit at volume 32/64/96/127, `-` holds
+-- the previous hit, `.` rests. Swing delays odd steps by that percentage of
+-- a step; every step time is rounded from its absolute index, so a
+-- fractional step never drifts.
+--
+-- Setup compiles the whole arrangement into h.events, ordered by (start,
+-- row): { start, ["end"], voice, row, pitch, l, r } in 4 ms ticks
+-- (timer(0, 32)). Voices are chosen per note here, not at run time: the
+-- lowest voice whose note has ended (end <= start), else the one whose
+-- note started earliest (lowest voice on a tie) is stolen and that note's
+-- end cut to the stealer's start. The web panel mirrors this allocator;
+-- tests/fixtures/score_alloc.json holds both to the same answers.
+--
+-- A built-in sound goes through bank() (preset ADSR/pitch); any other name
+-- is an uploaded sample with a flat ADSR. `note` pitches the row with
+-- note(row.note, base); without one a drum keeps its preset pitch.
+-- Returns { tick, length, playing, events, play(), stop() }; stop() keys
+-- every voice off and pauses, play() resumes, a finished loop = false
+-- song rewinds. Setup-only, like song{}.
+local VELOCITY = { ["1"] = 32, ["2"] = 64, ["3"] = 96, ["4"] = 127 }
+local STEP_COUNTS = { [8] = true, [16] = true, [32] = true }
+local FLAT = { a = 15, d = 0, s = 7, r = 0 }
+
+function score(cfg)
+  local d = cfg and cfg.data
+  if type(d) ~= "table" then
+    error("score: data must be a song table, e.g. seq_beat1()")
+  end
+  if type(d.tempo) ~= "number" or d.tempo <= 0 then
+    error("score: tempo must be > 0")
+  end
+  local swing = d.swing or 0
+  if type(swing) ~= "number" or swing < 0 or swing > 75 then
+    error("score: swing must be 0..75")
+  end
+  if type(d.rows) ~= "table" or #d.rows == 0 then
+    error("score: rows must list at least one row")
+  end
+  if type(d.patterns) ~= "table" then
+    error("score: patterns must be a table")
+  end
+  if type(d.arrangement) ~= "table" or #d.arrangement == 0 then
+    error("score: arrangement must name at least one pattern")
+  end
+
+  local insts, rows = {}, {}
+  for i = 1, #d.rows do
+    local row = d.rows[i]
+    local name = type(row) == "table" and row.sound
+    if type(name) ~= "string" then
+      error("score: row " .. i .. " needs sound = \"name\"")
+    end
+    if insts[name] == nil then
+      if BANK[name] ~= nil then
+        insts[name] = bank(name)
+      else
+        local ok, placed = pcall(dma, name)
+        if not ok then
+          error("score: row " .. i .. " sound '" .. name .. "': " .. tostring(placed))
+        end
+        insts[name] = instrument{ sample = placed.id, adsr = FLAT }
+      end
+    end
+    local inst = insts[name]
+    local pitch = inst.pitch or 0x1000
+    if row.note ~= nil then
+      local ok, p = pcall(note, row.note, inst.base)
+      if not ok then
+        error("score: row " .. i .. " bad note '" .. tostring(row.note) .. "'")
+      end
+      pitch = p
+    end
+    local pan = math.max(-1, math.min(1, inst.pan or 0))
+    local vol = inst.vol or 127
+    rows[i] = { inst = inst, pitch = pitch, l = vol * math.min(1, 1 - pan), r = vol * math.min(1, 1 + pan) }
+  end
+
+  local steps = {}
+  for pname, pat in pairs(d.patterns) do
+    local where = "score: pattern " .. tostring(pname)
+    if type(pat) ~= "table" or #pat ~= #rows then
+      error(where .. " needs one step string per row (" .. #rows .. ")")
+    end
+    for r = 1, #rows do
+      local s = pat[r]
+      if type(s) ~= "string" then
+        error(where .. " row " .. r .. " must be a step string")
+      end
+      local n = string.len(s)
+      if not STEP_COUNTS[n] then
+        error(where .. " row " .. r .. " has " .. n .. " steps; use 8, 16 or 32")
+      end
+      if steps[pname] and n ~= steps[pname] then
+        error(where .. " row " .. r .. " has " .. n .. " steps, row 1 has " .. steps[pname])
+      end
+      steps[pname] = n
+      local prev = "."
+      for k = 1, n do
+        local c = string.sub(s, k, k)
+        if c == "-" and prev == "." then
+          error(where .. " row " .. r .. " step " .. k .. ": '-' holds nothing")
+        elseif c ~= "-" and c ~= "." and VELOCITY[c] == nil then
+          error(where .. " row " .. r .. " step " .. k .. ": bad '" .. c .. "' (use 1-4, - or .)")
+        end
+        prev = c
+      end
+    end
+  end
+  for i = 1, #d.arrangement do
+    if steps[d.arrangement[i]] == nil then
+      error("score: arrangement slot " .. i .. " names unknown pattern '" .. tostring(d.arrangement[i]) .. "'")
+    end
+  end
+
+  -- 250 ticks/s, 4 sixteenths/beat.
+  local step_ticks = 3750 / d.tempo
+  local function at(i)
+    if i % 2 == 1 then
+      i = i + swing / 100
+    end
+    return math.floor(i * step_ticks + 0.5)
+  end
+
+  local events, busy, base = {}, {}, 0
+  for slot = 1, #d.arrangement do
+    local pat = d.patterns[d.arrangement[slot]]
+    local n = steps[d.arrangement[slot]]
+    for k = 1, n do
+      for r = 1, #rows do
+        local vel = VELOCITY[string.sub(pat[r], k, k)]
+        if vel then
+          local e = k + 1
+          while e <= n and string.sub(pat[r], e, e) == "-" do
+            e = e + 1
+          end
+          local row = rows[r]
+          local ev = {
+            start = at(base + k - 1), ["end"] = at(base + e - 1), row = r, pitch = row.pitch,
+            l = math.floor(row.l * vel / 127 + 0.5), r = math.floor(row.r * vel / 127 + 0.5),
+          }
+          local v
+          for u = 0, 7 do
+            if busy[u] == nil or busy[u]["end"] <= ev.start then
+              v = u
+              break
+            end
+          end
+          if v == nil then
+            v = 0
+            for u = 1, 7 do
+              if busy[u].start < busy[v].start then
+                v = u
+              end
+            end
+            busy[v]["end"] = ev.start
+          end
+          ev.voice = v
+          busy[v] = ev
+          events[#events + 1] = ev
+        end
+      end
+    end
+    base = base + n
+  end
+
+  ensure_audible()
+  local loop = cfg.loop ~= false
+  local h = { tick = 0, length = at(base), playing = true, events = events }
+  local cursor, ends = 1, {}
+  local function all_off()
+    for v = 0, 7 do
+      koff(v)
+      ends[v] = nil
+    end
+  end
+
+  timer(0, 32, function()
+    if not h.playing then
+      return
+    end
+    local t = h.tick
+    if t >= h.length then
+      all_off()
+      cursor, t, h.tick = 1, 0, 0
+      if not loop then
+        h.playing = false
+        return
+      end
+    end
+    for v = 0, 7 do
+      if ends[v] and ends[v] <= t then
+        koff(v)
+        ends[v] = nil
+      end
+    end
+    while events[cursor] and events[cursor].start <= t do
+      local ev = events[cursor]
+      sfx(rows[ev.row].inst, ev.voice)
+      voice[ev.voice].pitch = ev.pitch
+      voice[ev.voice].vol = { l = ev.l, r = ev.r }
+      ends[ev.voice] = ev["end"]
+      cursor = cursor + 1
+    end
+    h.tick = t + 1
+  end)
+
+  h.play = function()
+    h.playing = true
+  end
+  h.stop = function()
+    h.playing = false
+    all_off()
+  end
+  return h
+end

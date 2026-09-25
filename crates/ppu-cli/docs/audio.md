@@ -199,6 +199,9 @@ play(), stop() }`. Like `timer()`, `song{}` is setup-only.
   your own `tracks = { [i] = { voices = { ... }, inst = ?, insts = ? } }`.
   Setup-only. Returns `{ t, playing, length, play(), stop() }`; `stop()`
   pauses and releases the voices, `play()` resumes.
+- `score{ data, loop = true }` — plays a [sequencer song](#sequencer-songs)
+  on all eight voices, chosen per note. Setup-only. Returns `{ tick, length,
+playing, events, play(), stop() }`.
 
 ## Built-in samples
 
@@ -237,6 +240,51 @@ local tune = song{ tempo = 110, tracks = {
 
 Raw `dma("kick")` works too and returns the usual `{ id, addr, next_addr }`;
 built-ins and your own uploads share the same auto-chaining placement.
+
+## Sequencer songs
+
+A sequencer song is a function returning plain data: rows of sounds,
+patterns of step strings, and an arrangement that chains them. `score{}`
+plays it:
+
+```lua
+function seq_beat1() return {
+  tempo = 120, swing = 0,
+  rows = { { sound = "kick" }, { sound = "snare" }, { sound = "piano", note = "E4" }, { sound = "mybass", note = "C2" } },
+  patterns = {
+    A = { "4...4...4...4...", "....3.......3...", "2---....2---....", "3-..3-..3-..3-.." },
+    B = { "4.4.4.4.4.4.4.4.", "....3.......3-3-", "................", "3-..3-..3-..3-.." },
+  },
+  arrangement = { "A", "A", "B", "A" },
+} end
+
+local beat = score{ data = seq_beat1() }
+```
+
+Each row is a sound at a pitch: a built-in name plays through `bank()` with
+its preset envelope, anything else is an uploaded sample with a flat one.
+`note` pitches the row with `note(row.note, base)`; a drum with no `note`
+keeps its own pitch. Every pattern has one string per row, and the string's
+length is its step count (8, 16 or 32 sixteenths). In a string, `1` to `4`
+is a hit at volume 32, 64, 96 or 127 (scaled by the sound's own volume),
+`-` holds the hit before it, and `.` rests. `swing` (0 to 75) delays every
+odd step by that percentage of a step.
+
+`score{}` compiles the whole arrangement once, at setup, into
+`beat.events`: one `{ start, ["end"], voice, row, pitch, l, r }` per note,
+in 4 ms ticks, ordered by start. Voices are picked note by note: the lowest
+voice whose note has ended, or, when all eight are sounding, the one whose
+note started earliest, which is cut off. So a chord of nine held notes
+loses its oldest note rather than going silent. A bad step string, a
+pattern the arrangement names but doesn't define, or a sound that is
+neither built in nor uploaded stops the program with an error naming the
+row or pattern.
+
+The player runs on one `timer(0, 32, ...)`: it keys off notes that have
+ended, then starts the notes due. At the end it keys every voice off and,
+unless `loop = false`, starts again from tick 0. `beat.tick` and
+`beat.length` are the position and length in ticks; `beat.stop()` keys the
+voices off and pauses, `beat.play()` resumes.
 
 ## Music from a MIDI file
 
