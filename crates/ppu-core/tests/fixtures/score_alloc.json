@@ -1,5 +1,5 @@
 {
-  "about": "score{} voice allocation, shared by the engine (tests/kit.rs) and the web panel's TS mirror. Ticks are 4 ms (timer(0, 32)); step = a 16th = 3750/tempo ticks; step index i is 0-based and counts across the whole arrangement (patterns concatenated in arrangement order); start(i) = floor((i + (swing/100 if i odd else 0)) * step + 0.5); a hit (1-4) holds through following '-' chars in the same string and ends at start(index of the first non-'-' step after it, or of the pattern's end) \u2014 holds never cross a pattern boundary; a '-' with no hit (or hold) immediately before it is a setup error; events are produced and allocated in order (slot, step, row), which equals (start, row) because tempo is capped at 400; each event's voice = the lowest voice 0..7 whose most recent note (after any cut) has end <= this start; if none, steal the voice whose most recent note has the smallest start (lowest voice on a tie) and set that note's end to this start (it may become zero-length); rows are 1-based; length = start(total steps).",
+  "about": "score{} voice allocation, shared by the engine (tests/kit.rs) and the web panel's TS mirror. Ticks are 4 ms (timer(0, 32)); step = a 16th = 3750/tempo ticks; step index i is 0-based and counts across the whole arrangement (patterns concatenated in arrangement order); start(i) = floor((i + (swing/100 if i odd else 0)) * step + 0.5); a hit (1-4) holds through following '-' chars in the same string and ends at start(index of the first non-'-' step after it, or of the pattern's end) — holds never cross a pattern boundary; a '-' with no hit (or hold) immediately before it is a setup error; events are produced and allocated in order (slot, step, row), which equals (start, row) because tempo is capped at 400; each event's voice = the lowest voice 0..7 whose most recent note (after any cut) has end <= this start; if none, steal the voice whose most recent note has the smallest start (lowest voice on a tie) and set that note's end to this start (it may become zero-length); rows are 1-based; length = start(total steps).",
   "cases": [
     {
       "name": "arrangement A B A of 8-step patterns, holds and a same-row retrigger",
@@ -638,9 +638,9 @@
           }
         ],
         "patterns": {
-          "S": ["4...3...", "1.1.1.1."],
-          "M": ["4.......3.......", "1.1.1.1.1.1.1.1."],
-          "L": ["4...............................", "1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1."]
+          "S": ["4...3...", ".1.1.1-1"],
+          "M": ["4.......3.......", ".2.2.2-2.2.2.2.2"],
+          "L": ["4...............................", ".1.1.1.1.1.1.1.1.1.1.1.1.1.1.1-1"]
         },
         "arrangement": ["S", "M", "L"]
       },
@@ -653,14 +653,14 @@
         },
         {
           "row": 2,
-          "start": 0,
-          "end": 50,
-          "voice": 1
+          "start": 50,
+          "end": 58,
+          "voice": 0
         },
         {
           "row": 2,
-          "start": 58,
-          "end": 108,
+          "start": 108,
+          "end": 115,
           "voice": 0
         },
         {
@@ -671,17 +671,17 @@
         },
         {
           "row": 2,
-          "start": 115,
-          "end": 166,
-          "voice": 1
-        },
-        {
-          "row": 2,
-          "start": 173,
+          "start": 166,
           "end": 224,
           "voice": 0
         },
         {
+          "row": 2,
+          "start": 224,
+          "end": 231,
+          "voice": 0
+        },
+        {
           "row": 1,
           "start": 231,
           "end": 281,
@@ -689,29 +689,29 @@
         },
         {
           "row": 2,
-          "start": 231,
-          "end": 281,
-          "voice": 1
-        },
-        {
-          "row": 2,
-          "start": 288,
-          "end": 339,
+          "start": 281,
+          "end": 288,
           "voice": 0
         },
         {
           "row": 2,
-          "start": 346,
-          "end": 397,
+          "start": 339,
+          "end": 346,
           "voice": 0
         },
         {
           "row": 2,
-          "start": 404,
+          "start": 397,
           "end": 454,
           "voice": 0
         },
         {
+          "row": 2,
+          "start": 454,
+          "end": 462,
+          "voice": 0
+        },
+        {
           "row": 1,
           "start": 462,
           "end": 512,
@@ -719,26 +719,26 @@
         },
         {
           "row": 2,
-          "start": 462,
-          "end": 512,
-          "voice": 1
-        },
-        {
-          "row": 2,
-          "start": 519,
-          "end": 570,
+          "start": 512,
+          "end": 519,
           "voice": 0
         },
         {
           "row": 2,
-          "start": 577,
-          "end": 627,
+          "start": 570,
+          "end": 577,
           "voice": 0
         },
         {
           "row": 2,
-          "start": 635,
-          "end": 685,
+          "start": 627,
+          "end": 635,
+          "voice": 0
+        },
+        {
+          "row": 2,
+          "start": 685,
+          "end": 692,
           "voice": 0
         },
         {
@@ -749,98 +749,98 @@
         },
         {
           "row": 2,
-          "start": 692,
-          "end": 743,
-          "voice": 1
-        },
-        {
-          "row": 2,
-          "start": 750,
-          "end": 800,
+          "start": 743,
+          "end": 750,
           "voice": 0
         },
         {
           "row": 2,
-          "start": 808,
-          "end": 858,
+          "start": 800,
+          "end": 808,
           "voice": 0
         },
         {
           "row": 2,
-          "start": 865,
-          "end": 916,
+          "start": 858,
+          "end": 865,
           "voice": 0
         },
         {
           "row": 2,
-          "start": 923,
-          "end": 974,
+          "start": 916,
+          "end": 923,
           "voice": 0
         },
         {
           "row": 2,
-          "start": 981,
-          "end": 1031,
+          "start": 974,
+          "end": 981,
           "voice": 0
         },
         {
           "row": 2,
-          "start": 1038,
-          "end": 1089,
+          "start": 1031,
+          "end": 1038,
           "voice": 0
         },
         {
           "row": 2,
-          "start": 1096,
-          "end": 1147,
+          "start": 1089,
+          "end": 1096,
           "voice": 0
         },
         {
           "row": 2,
-          "start": 1154,
-          "end": 1204,
+          "start": 1147,
+          "end": 1154,
           "voice": 0
         },
         {
           "row": 2,
-          "start": 1212,
-          "end": 1262,
+          "start": 1204,
+          "end": 1212,
           "voice": 0
         },
         {
           "row": 2,
-          "start": 1269,
-          "end": 1320,
+          "start": 1262,
+          "end": 1269,
           "voice": 0
         },
         {
           "row": 2,
-          "start": 1327,
-          "end": 1377,
+          "start": 1320,
+          "end": 1327,
           "voice": 0
         },
         {
           "row": 2,
-          "start": 1385,
-          "end": 1435,
+          "start": 1377,
+          "end": 1385,
           "voice": 0
         },
         {
           "row": 2,
-          "start": 1442,
-          "end": 1493,
+          "start": 1435,
+          "end": 1442,
           "voice": 0
         },
         {
           "row": 2,
-          "start": 1500,
-          "end": 1550,
+          "start": 1493,
+          "end": 1500,
           "voice": 0
         },
         {
           "row": 2,
-          "start": 1558,
+          "start": 1550,
           "end": 1608,
+          "voice": 0
+        },
+        {
+          "row": 2,
+          "start": 1608,
+          "end": 1615,
           "voice": 0
         }
       ],
