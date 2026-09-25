@@ -1200,6 +1200,86 @@ fn score_stop_keys_off_and_play_resumes() {
     assert!(got["resumed"].as_i64() > got["still"].as_i64());
 }
 
+/// The studio's playhead readout: `score_view()` reports the playing
+/// score's tick after every frame. 250 ticks/s at 60 frames/s is ~4.17 ticks
+/// a frame; the 250-tick song wraps back past 0 after 60 frames.
+#[test]
+fn score_view_reports_the_tick_every_frame_and_wraps() {
+    let mut e = LuaEngine::new();
+    e.set_source(
+        "function seq_beat() return { tempo = 120, rows = { { sound = \"kick\" } },\n\
+           patterns = { A = { \"4...4...\" } }, arrangement = { \"A\" } } end\n\
+         function frame() end",
+    )
+    .unwrap();
+    e.frame(0.0, 0).unwrap();
+    assert_eq!(e.score_view(), None, "no score: no readout");
+
+    let mut e = LuaEngine::new();
+    e.set_sources(&[
+        (
+            "main.lua",
+            "function seq_beat() return { tempo = 120, rows = { { sound = \"kick\" } },\n\
+               patterns = { A = { \"4...4...\" } }, arrangement = { \"A\" } } end\n\
+             function frame() end",
+        ),
+        (
+            "ppuglobals.lua",
+            "function apply_setup()\n  score{ data = seq_beat() }\nend\nfunction apply_pokes() end\n",
+        ),
+    ])
+    .unwrap();
+    let mut ticks = vec![];
+    for f in 0..70u32 {
+        e.frame(f as f64 / 60.0, f).unwrap();
+        let v = e
+            .score_view()
+            .expect("a looping score started from apply_setup reports");
+        assert_eq!(v.length, 250);
+        ticks.push(v.tick);
+    }
+    for f in 1..59 {
+        let step = ticks[f] - ticks[f - 1];
+        assert!((4..=5).contains(&step), "frame {f}: tick advanced {step}");
+    }
+    let wrap = ticks
+        .windows(2)
+        .position(|w| w[1] < w[0])
+        .expect("the loop wraps");
+    assert!((58..=60).contains(&wrap), "wrapped after frame {wrap}");
+    assert!(ticks[wrap + 1] < 10);
+}
+
+/// Absent, not stale: `stop()` and a finished `loop = false` song clear the
+/// readout; `play()` brings it back; the most recently started score wins.
+#[test]
+fn score_view_is_absent_when_stopped_or_finished() {
+    let song = serde_json::json!({
+        "tempo": 120, "rows": [{ "sound": "kick" }],
+        "patterns": { "A": ["4..............."] }, "arrangement": ["A"],
+    });
+    let mut e = LuaEngine::new();
+    e.set_sram(&serde_json::json!({ "song": song }).to_string());
+    e.set_source(
+        "a = score{ data = sram.song }\n\
+         b = score{ data = sram.song, loop = false }\n\
+         function frame(t, f)\n\
+           if f == 3 then b.stop() end\n\
+           if f == 5 then b.play() end\n\
+         end",
+    )
+    .unwrap();
+    let mut seen = vec![];
+    for f in 0..130u32 {
+        e.frame(f as f64 / 60.0, f).unwrap();
+        seen.push(e.score_view());
+    }
+    assert!(seen[2].is_some(), "b, the latest, is playing");
+    assert_eq!(seen[3], None, "b stopped");
+    assert!(seen[5].is_some(), "b resumed");
+    assert_eq!(seen[129], None, "b finished without looping");
+}
+
 fn score_err(song: Value) -> String {
     let mut e = LuaEngine::new();
     e.set_sram(&serde_json::json!({ "song": song }).to_string());

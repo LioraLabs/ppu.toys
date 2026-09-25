@@ -206,6 +206,13 @@ impl PpuCore {
         serde_wasm_bindgen::to_value(&self.engine.dsp_view()).map_err(Into::into)
     }
 
+    /// The playing `score{}`'s `{ tick, length }`, or undefined when none is
+    /// playing — the Sequencer playhead's per-frame readout.
+    #[wasm_bindgen(js_name = scoreState)]
+    pub fn score_state(&self) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(&self.engine.score_view()).map_err(Into::into)
+    }
+
     /// Controller bitmask for the next frame (bit order: LuaEngine::PAD_NAMES).
     #[wasm_bindgen(js_name = setPad)]
     pub fn set_pad(&mut self, mask: u16) {

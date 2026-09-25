@@ -731,6 +731,9 @@ function score(cfg)
   ensure_audible()
   local loop = cfg.loop ~= false
   local h = { tick = 0, length = at(base), playing = true, events = events }
+  -- The engine reads __score after every frame (LuaEngine::score_view) for
+  -- the studio's playhead: the most recently started score is the one shown.
+  __score = h
   local cursor, ends = 1, {}
   local function all_off()
     for v = 0, 7 do
@@ -771,6 +774,7 @@ function score(cfg)
 
   h.play = function()
     h.playing = true
+    __score = h
   end
   h.stop = function()
     h.playing = false

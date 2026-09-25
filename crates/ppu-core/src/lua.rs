@@ -137,6 +137,14 @@ pub struct DspView {
     pub samples: Vec<DspSampleView>,
 }
 
+/// Where the playing `score{}` is, in its 4 ms timer ticks — see
+/// [`LuaEngine::score_view`]. `tick` is the next tick to play, `0..length`.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct ScoreView {
+    pub tick: i64,
+    pub length: i64,
+}
+
 /// The controls document's reserved file name (PPU-146's generated
 /// `ppuglobals.lua`): its `apply_pokes` is applied automatically every frame
 /// as a final visual override pass — see [`LuaEngine::load_controls`] and
@@ -483,6 +491,23 @@ impl LuaEngine {
             })
             .collect();
         view
+    }
+
+    /// The most recently started `score{}` (kit.lua publishes its handle as
+    /// `__score`), or None when there is none or it is stopped/finished.
+    pub fn score_view(&self) -> Option<ScoreView> {
+        self.lua.borrow_mut().enter(|ctx| {
+            let Value::Table(h) = ctx.get_global("__score") else {
+                return None;
+            };
+            if !h.get(ctx, "playing").to_bool() {
+                return None;
+            }
+            Some(ScoreView {
+                tick: h.get(ctx, "tick").to_int()?,
+                length: h.get(ctx, "length").to_int()?,
+            })
+        })
     }
 
     /// Single-file sugar for [`Self::set_sources`]; the chunk keeps its
