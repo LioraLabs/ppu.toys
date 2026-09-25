@@ -296,9 +296,9 @@ A tempo or swing edit moves the step's tick, so step 8 stays step 8 when the
 tempo halves. Notes sounding at the moment of the edit are keyed off, the
 next note due plays on time, and a song that got shorter than its position
 wraps (or stops, with `loop = false`). If the new data has an error, the old
-song keeps playing and the error names the file. Editing a song file doesn't
-restart the toy either when nothing is playing: the file is re-run and
-whatever is playing carries on.
+song keeps playing and the error names the file. Editing a song file that no
+score plays doesn't restart the toy either: the file is re-run and anything
+playing carries on.
 
 There are three cases where the edit restarts the toy the usual way. One
 is a row naming a sound the song didn't have at setup, because sounds are
