@@ -135,9 +135,10 @@ fn a_bad_edit_keeps_the_old_song_playing_and_names_the_song_file() {
 fn a_length_shrinking_below_the_tick_wraps_or_stops() {
     for looping in [true, false] {
         let mut e = start(&beat("\"4...............\""), looping);
-        run(&mut e, 0, 90); // tick ~375
-        push(&mut e, &beat("\"4.......\""), looping).unwrap(); // length 250
-                                                               // The readout never shows a tick past the new end, even before a frame.
+        // To tick ~375, then a length of 250.
+        run(&mut e, 0, 90);
+        // The readout never shows a tick past the new end, even before a frame.
+        push(&mut e, &beat("\"4.......\""), looping).unwrap();
         match e.score_view() {
             Some(v) if looping => assert_eq!((v.tick, v.length), (0, 250), "wrapped"),
             None if !looping => {}

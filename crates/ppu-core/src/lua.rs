@@ -683,18 +683,18 @@ impl LuaEngine {
                         })
                     });
                     match prepared.map_err(|e| static_error_to_lua(e).in_file(name))? {
-                        Some(commit) => commits.push(commit),
+                        Some(commit) => commits.push((name, commit)),
                         None => break 'fast,
                     }
                 }
-                for commit in commits {
+                for (name, commit) in commits {
                     let mut l = self.lua.borrow_mut();
                     let ex = l.enter(|ctx| {
                         let f = ctx.fetch(&commit);
                         ctx.stash(Executor::start(ctx, f, ()))
                     });
                     l.execute::<()>(&ex)
-                        .expect("a prepared score reload only swaps tables in");
+                        .map_err(|e| static_error_to_lua(e).in_file(name))?;
                 }
                 // A controls-only reload never recompiles: load the new text
                 // into the SAME live VM (same `__ppu_controls_env`/log, same
