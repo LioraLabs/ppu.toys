@@ -420,3 +420,31 @@ fn deleting_the_playing_slot_wraps_or_stops() {
         assert_eq!(after["playing"], looping);
     }
 }
+
+/// Adding or removing a slot after the playing one is neither an insert nor
+/// a delete at the playhead: the prefix up to and including the playing
+/// slot still agrees, so it keeps playing that same slot, not wrap or stop
+/// as if it had vanished.
+#[test]
+fn adding_or_removing_a_later_slot_keeps_the_playing_one() {
+    let mut e = start(&arranged(16, "\"A\", \"B\", \"C\""), true);
+    run(&mut e, 0, 80); // tick ~333: slot 1 (A, steps 0..15)
+    let old = e.score_view().unwrap().tick;
+    assert!((0..16).contains(&step_of(old)));
+
+    push(&mut e, &arranged(16, "\"A\", \"B\", \"C\", \"B\""), true).unwrap();
+    let now = e.score_view().unwrap();
+    assert_eq!(
+        (now.tick, now.length),
+        (old, 2000),
+        "appended slot, same slot playing"
+    );
+
+    push(&mut e, &arranged(16, "\"A\", \"B\""), true).unwrap();
+    let now = e.score_view().unwrap();
+    assert_eq!(
+        (now.tick, now.length),
+        (old, 1000),
+        "trailing slots dropped, same slot playing"
+    );
+}

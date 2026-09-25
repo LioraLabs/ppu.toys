@@ -488,6 +488,9 @@ local function same_slot(old, new, s)
   while p < s and p < #new and old[p + 1].name == new[p + 1].name do
     p = p + 1
   end
+  if p == s then
+    return s
+  end
   if p < s then
     local q = 0
     while q <= #old - s and q < #new and old[#old - q].name == new[#new - q].name do
