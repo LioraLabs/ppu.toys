@@ -1282,6 +1282,10 @@ fn score_setup_errors_name_the_row_or_pattern() {
             serde_json::json!({ "tempo": 500, "rows": rows, "patterns": {}, "arrangement": ["A"] }),
             "tempo must be 1..400",
         ),
+        (
+            serde_json::json!({ "tempo": 0.5, "rows": rows, "patterns": {}, "arrangement": ["A"] }),
+            "tempo must be 1..400",
+        ),
     ];
     for (song, want) in cases {
         let msg = score_err(song);

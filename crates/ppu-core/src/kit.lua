@@ -587,7 +587,7 @@ function score(cfg)
   -- Capped at 400: a step is then >= 9.375 ticks, so even at swing 75 two
   -- steps never round to the same tick, keeping compile order (slot, step,
   -- row) identical to (start, row).
-  if type(d.tempo) ~= "number" or d.tempo <= 0 or d.tempo > 400 then
+  if type(d.tempo) ~= "number" or d.tempo < 1 or d.tempo > 400 then
     error("score: tempo must be 1..400")
   end
   local swing = d.swing or 0
