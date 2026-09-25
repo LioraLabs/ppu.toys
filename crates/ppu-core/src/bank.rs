@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::f64::consts::TAU;
 use std::sync::{Mutex, OnceLock};
 
-use crate::source::{convert_sample, ConvertSampleOptions, SourcePayload};
+use crate::source::{convert_sample, ConvertSampleOptions, SourceMeta, SourcePayload};
 
 /// One loop of the melodic waveforms, in samples. 16-aligned for BRR.
 const LOOP: usize = 368;
@@ -32,13 +32,17 @@ pub const NAMES: [&str; 15] = [
 
 /// The built-in payload for `name`, encoded on first request.
 pub fn get(name: &str) -> Option<SourcePayload> {
-    if !NAMES.contains(&name) {
-        return None;
-    }
-    static CACHE: OnceLock<Mutex<HashMap<&'static str, SourcePayload>>> = OnceLock::new();
+    get_with_meta(name).map(|(payload, _)| payload)
+}
+
+/// [`get`] plus the encode's meta (frame count, loop point), the pair
+/// `convert_sample` returns: what a host needs to preview the sound.
+pub fn get_with_meta(name: &str) -> Option<(SourcePayload, SourceMeta)> {
+    let key = NAMES.iter().find(|n| **n == name).copied()?;
+    static CACHE: OnceLock<Mutex<HashMap<&'static str, (SourcePayload, SourceMeta)>>> =
+        OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut cache = cache.lock().unwrap();
-    let key = NAMES.iter().find(|n| **n == name).copied()?;
     Some(
         cache
             .entry(key)
@@ -46,7 +50,6 @@ pub fn get(name: &str) -> Option<SourcePayload> {
                 let (pcm, loop_start) = render(key);
                 convert_sample(&pcm, &ConvertSampleOptions { loop_start })
                     .expect("built-in sample encodes")
-                    .0
             })
             .clone(),
     )

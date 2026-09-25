@@ -444,6 +444,24 @@ impl PpuCore {
         Ok(out.into())
     }
 
+    /// A built-in bank sound (`dma("piano")` with nothing uploaded) as
+    /// `{ payload: Uint8Array, meta: SourceMeta }`, the shape `convertSample`
+    /// returns, or undefined for a name the bank doesn't have.
+    #[wasm_bindgen(js_name = builtinSample)]
+    pub fn builtin_sample(&self, name: &str) -> Result<JsValue, JsValue> {
+        let Some((payload, meta)) = crate::bank::get_with_meta(name) else {
+            return Ok(JsValue::UNDEFINED);
+        };
+        let out = Object::new();
+        Reflect::set(
+            &out,
+            &"payload".into(),
+            &Uint8Array::from(payload.encode().as_slice()).into(),
+        )?;
+        Reflect::set(&out, &"meta".into(), &serde_wasm_bindgen::to_value(&meta)?)?;
+        Ok(out.into())
+    }
+
     /// Decode + register a payload in the source store. Never throws for a bad
     /// payload — returns `{ ok: false, error }` (the structured-diagnostic channel).
     #[wasm_bindgen(js_name = addSource)]

@@ -37,6 +37,22 @@ fn every_builtin_encodes_small_and_clean() {
     assert!(bank::get("nope").is_none());
 }
 
+/// `get_with_meta` is `get` plus the encode's meta: frames and loop point
+/// match a fresh `convert_sample` of the same sound.
+#[test]
+fn builtin_meta_matches_its_payload() {
+    for name in bank::NAMES {
+        let (payload, meta) = bank::get_with_meta(name).expect(name);
+        assert_eq!(payload, bank::get(name).unwrap(), "{name}");
+        let SourcePayload::Sample(s) = &payload else {
+            panic!("{name} is not a sample payload");
+        };
+        assert_eq!(meta.width as usize, s.brr.len() / 9 * 16, "{name}: frames");
+        assert_eq!(meta.height, 1);
+    }
+    assert!(bank::get_with_meta("nope").is_none());
+}
+
 /// `dma("piano")` with nothing uploaded places the built-in and a keyed
 /// voice sounds.
 #[test]
