@@ -320,6 +320,10 @@ struct SongPlayer {
     /// Per-row pitch, computed by kit.lua's `score{}` before `__song_start`
     /// (index = row).
     pitches: Vec<i64>,
+    /// The song and its timing map, kept so a reload can find where this
+    /// player is in it (see [`LuaEngine::reload_song`]).
+    song: crate::song::Song,
+    timing: crate::song::Timing,
 }
 
 /// Fixed ARAM home of the 256-entry sample directory (DIR pinned to page
@@ -444,15 +448,115 @@ impl LuaEngine {
     /// Decode + register a source payload under `name` (the `addSource` core).
     /// The store is the graphics-data home; `dma()` validates against it at
     /// init and the per-frame replay places from it (no importer on this path).
+    /// Re-adding a song source a score plays reloads it live, without the
+    /// recompile any other change triggers (see `reload_song`).
     pub fn add_source(
         &mut self,
         name: &str,
         payload: &[u8],
     ) -> Result<(), crate::source::PayloadError> {
         let p = crate::source::SourcePayload::decode(payload)?;
+        let live = match &p {
+            crate::source::SourcePayload::Song(bytes) => self.reload_song(name, bytes),
+            _ => false,
+        };
         self.source_store.borrow_mut().insert(name.to_string(), p);
-        self.source_dirty = !self.program_sources.is_empty();
+        if !live {
+            self.source_dirty = !self.program_sources.is_empty();
+        }
         Ok(())
+    }
+
+    /// A song source re-added under the same name, applied without a
+    /// recompile when it can be: every native player of `name` swaps in the
+    /// new song in place, keeping its musical position (see
+    /// [`crate::song::remap`]). A song past its new end wraps, or stops
+    /// rewound (loop = false). The voices of a playing one key off and it
+    /// re-seeks to the next event due. A player whose song decodes equal is
+    /// left untouched, and an update to a song source no player plays
+    /// touches nothing. Returns false, leaving everything as it was, when
+    /// the change needs the full recompile: a pending one, a first-time
+    /// add, a song that doesn't decode or compile (setup reports it), or a
+    /// row naming a sound nothing placed at setup.
+    fn reload_song(&mut self, name: &str, bytes: &[u8]) -> bool {
+        use crate::source::SourcePayload;
+        if self.source_dirty
+            || self.program_sources.is_empty()
+            || !matches!(
+                self.source_store.borrow().get(name),
+                Some(SourcePayload::Song(_))
+            )
+        {
+            return false;
+        }
+        let dma = self.dma.clone();
+        if !dma.songs.borrow().iter().any(|p| p.name == name) {
+            return true;
+        }
+        let Ok(song) = crate::song::decode(bytes) else {
+            return false;
+        };
+        let Ok(compiled) = crate::song::compile(&song) else {
+            return false;
+        };
+        let changed = |p: &SongPlayer| p.name == name && p.song != song;
+        if !dma.songs.borrow().iter().any(changed) {
+            return true;
+        }
+
+        let mut l = self.lua.borrow_mut();
+        let ex = l.enter(|ctx| {
+            let Value::Function(f) = ctx.get_global("__song_insts") else {
+                panic!("kit.lua must define __song_insts");
+            };
+            ctx.stash(Executor::start(ctx, f, (song_rows(ctx, &song),)))
+        });
+        l.finish(&ex);
+        let resolved = l.try_enter(|ctx| {
+            let (insts, pitches) = ctx.fetch(&ex).take_result::<(Value, Value)>(ctx)??;
+            let (Value::Table(insts), Value::Table(pitches)) = (insts, pitches) else {
+                return Ok(None);
+            };
+            let mut out = (Vec::new(), Vec::new());
+            for i in 1..=song.rows.len() as i64 {
+                let Value::Table(inst) = insts.get(ctx, i) else {
+                    return Ok(None);
+                };
+                out.0.push(ctx.stash(inst));
+                out.1.push(pitches.get(ctx, i).to_int().unwrap_or(0x1000));
+            }
+            Ok(Some(out))
+        });
+        let Ok(Some((insts, pitches))) = resolved else {
+            return false;
+        };
+
+        l.enter(|ctx| {
+            for p in dma.songs.borrow_mut().iter_mut().filter(|p| changed(p)) {
+                let old = (&p.song, &p.timing);
+                let mut tick = crate::song::remap(old, (&song, &compiled.timing), p.tick);
+                if p.playing {
+                    for v in (0..8u8).filter(|v| p.mask & (1 << v) != 0) {
+                        song_key(ctx, "__dsp_koff", v);
+                    }
+                }
+                if tick >= compiled.timing.length {
+                    tick = 0;
+                    p.playing &= p.looping;
+                }
+                p.tick = tick;
+                p.cursor = compiled.events.partition_point(|e| e.start < tick);
+                p.ends = [None; 8];
+                p.events = compiled.events.clone();
+                p.length = compiled.timing.length;
+                p.mask = song.voice_mask;
+                p.insts = insts.clone();
+                p.pitches = pitches.clone();
+                p.song = song.clone();
+                p.timing = compiled.timing.clone();
+            }
+        });
+        true
     }
 
     /// Forget the source registered under `name` (the `removeSource` core).
@@ -3156,6 +3260,19 @@ fn install_dma(
     install_song_natives(ctx, song_store, song_rec);
 }
 
+/// A song's rows as `__song_load` hands them to kit.lua: `{ sound, note? }`.
+fn song_rows<'gc>(ctx: piccolo::Context<'gc>, song: &crate::song::Song) -> Table<'gc> {
+    let rows = Table::new(&ctx);
+    for (i, row) in song.rows.iter().enumerate() {
+        let t = Table::new(&ctx);
+        t.set(ctx, "sound", ctx.intern(row.sound.as_bytes()))
+            .unwrap();
+        t.set(ctx, "note", row.note.map(|n| n as i64)).unwrap();
+        rows.set(ctx, i as i64 + 1, t).unwrap();
+    }
+    rows
+}
+
 /// Install `__song_load`/`__song_start`/`__song_get`/`__song_play`/
 /// `__song_stop` — the natives kit.lua's `score{ song = }` path drives (see
 /// `kit.lua`'s own doc comment). `load`/`start` share `dma`/`timer`'s
@@ -3196,6 +3313,7 @@ fn install_song_natives(
         let compiled = crate::song::compile(&song)
             .map_err(|e| lua_err(ctx, &format!("score: song '{name}': {e}")))?;
         let id = load_rec.songs.borrow().len();
+        let rows = song_rows(ctx, &song);
         load_rec.songs.borrow_mut().push(SongPlayer {
             name: name.clone(),
             events: compiled.events,
@@ -3208,23 +3326,9 @@ fn install_song_natives(
             ends: [None; 8],
             insts: Vec::new(),
             pitches: Vec::new(),
+            song,
+            timing: compiled.timing,
         });
-        let rows = Table::new(&ctx);
-        for (i, row) in song.rows.iter().enumerate() {
-            let t = Table::new(&ctx);
-            t.set(ctx, "sound", ctx.intern(row.sound.as_bytes()))
-                .unwrap();
-            t.set(
-                ctx,
-                "note",
-                match row.note {
-                    Some(n) => Value::Integer(n as i64),
-                    None => Value::Nil,
-                },
-            )
-            .unwrap();
-            rows.set(ctx, i as i64 + 1, t).unwrap();
-        }
         stack.clear();
         stack.replace(ctx, (id as i64, rows));
         Ok(CallbackReturn::Return)

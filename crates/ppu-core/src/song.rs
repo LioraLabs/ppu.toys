@@ -612,7 +612,7 @@ pub struct SlotTiming {
 }
 
 /// Global position <-> tick map for one arrangement.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Timing {
     pub slots: Vec<SlotTiming>,
     /// Total units.
@@ -716,6 +716,120 @@ impl Timing {
         let offset = pos - s.pos;
         tick_in_slot(s, offset, self.swing)
     }
+
+    /// Slot `s`'s 16th steps; an odd-length pattern's last one is short.
+    fn steps(&self, s: usize) -> u64 {
+        (self.slots[s].len as u64).div_ceil(UNITS_PER_16TH)
+    }
+
+    /// The tick step `k` of slot `s` starts at; `k == steps(s)` is the
+    /// slot's end.
+    fn step_tick(&self, s: usize, k: u64) -> i64 {
+        let slot = &self.slots[s];
+        tick_in_slot(slot, (k * UNITS_PER_16TH).min(slot.len as u64), self.swing)
+    }
+
+    /// The inverse of [`Self::tick`] at 16th resolution: the latest step
+    /// starting at or before `tick`, as (slot, step within it, ticks into
+    /// that step). `None` at or past the song's end.
+    pub fn position(&self, tick: i64) -> Option<(usize, u64, i64)> {
+        if tick < 0 || tick >= self.length {
+            return None;
+        }
+        let s = self
+            .slots
+            .partition_point(|sl| tick_in_slot(sl, 0, self.swing) <= tick)
+            - 1;
+        // Invariant: step `lo` starts at or before `tick`, step `hi` after.
+        let (mut lo, mut hi) = (0, self.steps(s));
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2;
+            if self.step_tick(s, mid) <= tick {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        Some((s, lo, tick - self.step_tick(s, lo)))
+    }
+}
+
+// --- live reload -----------------------------------------------------------
+
+/// Whether `a`'s names appear in `b`, in order.
+fn in_order(a: &[&str], b: &[&str]) -> bool {
+    let mut b = b.iter();
+    a.iter().all(|x| b.any(|y| y == x))
+}
+
+/// The slot of `new` that is occurrence `s` of `old` (arrangement slots by
+/// pattern name), tried in this order:
+/// * the same index while the two agree up to and including `s`;
+/// * counted from the end while they agree from `s` on (a slot inserted or
+///   deleted before it);
+/// * `s` and a neighbour swapped, nothing else changed: the neighbour's
+///   index (the playing slot moved);
+/// * the same index when the arrangement is still the same length (a slot
+///   replaced in place);
+/// * slots only removed, or only inserted, anywhere (the shorter
+///   arrangement's names appear in the longer one in order), `s` kept: its
+///   first new index that works;
+/// * else `None`: the slot is gone.
+pub fn same_slot(old: &[&str], new: &[&str], s: usize) -> Option<usize> {
+    let (l, n) = (old.len(), new.len());
+    if s < n && old[..=s] == new[..=s] {
+        return Some(s);
+    }
+    let tail = l - s;
+    if tail <= n && old[s..] == new[n - tail..] {
+        return Some(n - tail);
+    }
+    if n == l {
+        for t in [s.wrapping_sub(1), s + 1] {
+            if t < l
+                && new[s] == old[t]
+                && new[t] == old[s]
+                && (0..l).all(|i| i == s || i == t || old[i] == new[i])
+            {
+                return Some(t);
+            }
+        }
+        return Some(s);
+    }
+    (0..n).find(|&ns| {
+        new[ns] == old[s]
+            && if n < l {
+                in_order(&new[..ns], &old[..s]) && in_order(&new[ns + 1..], &old[s + 1..])
+            } else {
+                in_order(&old[..s], &new[..ns]) && in_order(&old[s + 1..], &new[ns + 1..])
+            }
+    })
+}
+
+/// Where `tick` of `old` lands in `new`, keeping the musical position: the
+/// same slot (see [`same_slot`]), the same 16th step within it, and the same
+/// ticks into that step, clamped inside the step. A step past its slot's new
+/// length lands on the slot's end (the next slot's start, or the song's
+/// end). A tick at or past the old end, or in a slot that's gone, lands on
+/// the new end. Unchanged step times map a tick to itself. The result may be
+/// `>= new timing.length`: the caller wraps or stops there.
+pub fn remap(old: (&Song, &Timing), new: (&Song, &Timing), tick: i64) -> i64 {
+    let ((old_song, old_t), (new_song, new_t)) = (old, new);
+    let Some((s, k, into)) = old_t.position(tick) else {
+        return new_t.length;
+    };
+    fn names<'a>(song: &'a Song, t: &Timing) -> Vec<&'a str> {
+        let name = |sl: &SlotTiming| song.patterns[sl.pattern as usize].name.as_str();
+        t.slots.iter().map(name).collect()
+    }
+    let Some(ns) = same_slot(&names(old_song, old_t), &names(new_song, new_t), s) else {
+        return new_t.length;
+    };
+    if k >= new_t.steps(ns) {
+        return new_t.step_tick(ns, new_t.steps(ns));
+    }
+    let at = new_t.step_tick(ns, k);
+    at + into.min(new_t.step_tick(ns, k + 1) - at - 1).max(0)
 }
 
 // --- compile / allocate --------------------------------------------------

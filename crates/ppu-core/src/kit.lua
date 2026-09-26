@@ -293,7 +293,9 @@ end
 -- `song` first tries a `song`-kind source named `<name>` (PSNG bytes,
 -- decoded/compiled/validated in Rust — see __song_load): the whole song
 -- plays natively on the audio tick, with no Lua timer, and the returned
--- handle reads live through __song_get (see below). When no such source
+-- handle reads live through __song_get (see below). Re-adding that source
+-- (add_source, same name) reloads it in place in Rust, keeping its musical
+-- position (LuaEngine::reload_song). When no such source
 -- exists, `song` falls back to the OLDER path: it names the global
 -- seq_<id> function and binds the score to it (h.song = id), so that when
 -- the engine re-runs an edited song file, __score_prepare(id) recompiles
@@ -644,6 +646,24 @@ local function row_pitch(row, inst, i)
     error("score: row " .. i .. " bad note '" .. tostring(row.note) .. "'")
   end
   return p
+end
+
+-- A reloaded song source's rows (as __song_load returns them), resolved
+-- against the sounds already placed: its per-row insts and pitches, or nil
+-- when a row names a sound nothing placed at setup (placing needs the
+-- setup window, so the engine recompiles instead). Called by the engine's
+-- add_source, outside setup.
+function __song_insts(rows)
+  local insts, pitches = {}, {}
+  for i = 1, #rows do
+    local inst = score_insts[rows[i].sound]
+    if inst == nil then
+      return nil
+    end
+    insts[i] = inst
+    pitches[i] = row_pitch(rows[i], inst, i)
+  end
+  return insts, pitches
 end
 
 function score(cfg)
