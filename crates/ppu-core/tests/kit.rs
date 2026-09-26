@@ -1180,6 +1180,7 @@ fn slot_step_song() -> Song {
         vel: 100,
         voice: None,
         nudge: 0,
+        end_nudge: 0,
     };
     Song {
         tempo: 12000,
