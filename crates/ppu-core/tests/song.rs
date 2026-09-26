@@ -259,6 +259,86 @@ fn trailing_bytes_in_a_body_is_rejected() {
     assert_eq!(err.0, "ARRG chunk has trailing bytes");
 }
 
+/// Builds one raw chunk: a 4-byte tag, a one-byte varint body length (the
+/// bodies these tests use always fit in one byte), and the body.
+fn build_chunk(tag: &[u8; 4], body: &[u8]) -> Vec<u8> {
+    assert!(body.len() < 128, "test body must fit a one-byte varint");
+    let mut out = Vec::new();
+    out.extend_from_slice(tag);
+    out.push(body.len() as u8);
+    out.extend_from_slice(body);
+    out
+}
+
+/// A `u32::MAX` element count, LEB128-encoded, on its own -- exactly what a
+/// hostile ROWS/PATT-notes/ARRG count would look like ahead of a body far
+/// too short to hold that many elements.
+const HUGE_COUNT_VARINT: [u8; 5] = [0xff, 0xff, 0xff, 0xff, 0x0f];
+
+/// A ROWS chunk declaring `u32::MAX` rows but supplying none must not size
+/// an allocation off that raw count (which would abort the process); it
+/// must fail gracefully once the short body runs out.
+#[test]
+fn rows_chunk_with_huge_count_and_short_body_is_truncated_not_aborted() {
+    let mut bytes = b"PSNG".to_vec();
+    bytes.push(1);
+    bytes.extend(build_chunk(b"ROWS", &HUGE_COUNT_VARINT));
+    let err = decode(&bytes).unwrap_err();
+    assert!(err.0.contains("ROWS chunk truncated"), "{}", err.0);
+}
+
+/// Same for a PATT chunk's note count.
+#[test]
+fn patt_chunk_with_huge_note_count_and_short_body_is_truncated_not_aborted() {
+    // name "" (varint len 0), length 4, tempo 0 (none), then the huge note count.
+    let mut body = vec![0x00, 0x04, 0x00];
+    body.extend_from_slice(&HUGE_COUNT_VARINT);
+    let mut bytes = b"PSNG".to_vec();
+    bytes.push(1);
+    bytes.extend(build_chunk(b"PATT", &body));
+    let err = decode(&bytes).unwrap_err();
+    assert!(err.0.contains("PATT chunk 1 truncated"), "{}", err.0);
+}
+
+/// Same for an ARRG chunk's slot count.
+#[test]
+fn arrg_chunk_with_huge_count_and_short_body_is_truncated_not_aborted() {
+    let mut bytes = b"PSNG".to_vec();
+    bytes.push(1);
+    bytes.extend(build_chunk(b"ARRG", &HUGE_COUNT_VARINT));
+    let err = decode(&bytes).unwrap_err();
+    assert!(err.0.contains("ARRG chunk truncated"), "{}", err.0);
+}
+
+/// A chunk header declaring a `u32::MAX` body length, with no such body
+/// present, is a truncation error, not a wrapped/underflowed bounds check
+/// that reads out of range. (On this host's 64-bit `usize` the old
+/// `pos + body_len > bytes.len()` already happened not to wrap -- this test
+/// pins the contract, and the fix matters on 32-bit targets such as wasm32,
+/// where `body_len` alone can equal `usize::MAX`.)
+#[test]
+fn chunk_header_with_huge_body_length_is_truncated_not_a_panic() {
+    let mut bytes = b"PSNG".to_vec();
+    bytes.push(1);
+    bytes.extend_from_slice(b"ROWS");
+    bytes.extend_from_slice(&HUGE_COUNT_VARINT);
+    let err = decode(&bytes).unwrap_err();
+    assert!(err.0.contains("ROWS chunk truncated"), "{}", err.0);
+}
+
+/// A row's `sound` string declaring a `u32::MAX` byte length, with no such
+/// body present, is a truncation error for the same reason.
+#[test]
+fn string_with_huge_length_is_truncated_not_a_panic() {
+    let mut body = vec![0x01]; // ROWS count = 1
+    body.extend_from_slice(&HUGE_COUNT_VARINT); // sound string length
+    let mut bytes = b"PSNG".to_vec();
+    bytes.push(1);
+    bytes.extend(build_chunk(b"ROWS", &body));
+    let err = decode(&bytes).unwrap_err();
+    assert!(err.0.contains("ROWS chunk truncated"), "{}", err.0);
+}
+
 // ---- 4. validation messages --------------------------------------------
 
 #[test]
@@ -316,6 +396,16 @@ fn validate_rejects_unknown_pattern_in_arrangement() {
     assert_eq!(err.0, "arrangement slot 1 names unknown pattern 5");
 }
 
+/// A note's row error names the row the same way the row-field errors do:
+/// 1-based (index 9 -> "row 10", not "row 9").
+#[test]
+fn validate_rejects_unknown_row_message_is_one_based() {
+    let mut song = valid_song(); // one row, at index 0
+    song.patterns[0].notes[0].row = 9;
+    let err = song.validate().unwrap_err();
+    assert_eq!(err.0, "pattern 'A' note 1: row 10 does not exist");
+}
+
 #[test]
 fn validate_rejects_tempo_out_of_range() {
     let mut song = valid_song();
@@ -333,6 +423,18 @@ fn compile_rejects_nudge_before_the_song_starts() {
     assert!(song.validate().is_ok(), "validate() has no timing to check");
     let err = compile(&song).unwrap_err();
     assert_eq!(err.0, "pattern 'A' note 1: nudge starts it before the song");
+}
+
+/// `validate()` caps the total notes an arrangement can play (summed per
+/// slot over its pattern's note count) at 1,000,000, computed before
+/// `compile()` ever allocates an events `Vec` off that count.
+#[test]
+fn validate_rejects_a_song_playing_over_a_million_notes() {
+    let notes: Vec<Note> = (0..1000u32).map(|i| note_at(i, 1, None)).collect();
+    let mut song = tick_song(0b1, 1000, notes); // 1 pattern of 1000 notes
+    song.arrangement = vec![0; 1001]; // * 1001 slots = 1,001,000 > MAX_EVENTS
+    let err = song.validate().unwrap_err();
+    assert_eq!(err.0, "the song plays over 1000000 notes");
 }
 
 // ---- 5. kit parity of timing --------------------------------------------
@@ -531,19 +633,231 @@ fn hand_computed_mixed_tempo_pinned_nudged_song() {
     assert_eq!(compiled.events, expected);
 }
 
-// ---- 7. allocator --------------------------------------------------------
+// ---- 6b. more swing coverage --------------------------------------------
 
-fn ev_at(start: i64, end: i64, pin: Option<u8>) -> Event {
-    Event {
-        start,
-        end,
+/// Same kit-lua parity check as `timing_matches_kit_lua_16th_grid_with_swing`
+/// above, but at an inexact tempo (60.24 BPM) and over 600 consecutive
+/// swung 16ths, to rule out accumulated rounding drift the round-tempo,
+/// 32-note case could hide.
+#[test]
+fn timing_matches_kit_lua_16th_grid_with_swing_at_an_inexact_tempo() {
+    const N: u32 = 600;
+    let notes: Vec<Note> = (0..N)
+        .map(|i| Note {
+            at: i * 12,
+            row: 0,
+            len: 12,
+            vel: 100,
+            voice: None,
+            nudge: 0,
+        })
+        .collect();
+    let song = Song {
+        tempo: 6024, // 60.24 BPM
+        swing: 30,
+        key: 0,
+        voice_mask: 0b1,
+        rows: vec![Row {
+            sound: "kick".into(),
+            note: None,
+            vol: 100,
+            pan: 0,
+        }],
+        patterns: vec![Pattern {
+            name: "A".into(),
+            length: N * 12,
+            tempo: None,
+            notes,
+        }],
+        arrangement: vec![0],
+    };
+    let compiled = compile(&song).expect("compiles");
+
+    let step_ticks = 3750.0_f64 / 60.24;
+    let w = 0.30_f64;
+    let at = |i: u32| -> i64 {
+        let mut x = i as f64;
+        if i % 2 == 1 {
+            x += w;
+        }
+        (x * step_ticks + 0.5).floor() as i64
+    };
+
+    assert_eq!(compiled.events.len(), N as usize);
+    for (i, e) in compiled.events.iter().enumerate() {
+        let gi = i as u32;
+        assert_eq!(e.start, at(gi), "start mismatch at 16th {gi}");
+        assert_eq!(e.end, at(gi + 1), "end mismatch at 16th {gi}");
+    }
+    assert_eq!(compiled.timing.length, at(N));
+}
+
+/// A swing pair whose phase lands on a 32nd (not a 16th boundary) still
+/// warps correctly. Swing 50%, tempo 120 (step_ticks 31.25), pattern length
+/// 48. Note at unit 6 (q=6 < 12): steps = 0 + 0.5*1.5 = 0.75 ->
+/// floor(0.75*31.25+0.5) = floor(23.9375) = 23. Note at unit 18 (q=18 >=
+/// 12): steps = 1 + 0.5 + 0.5*0.5 = 1.75 -> floor(1.75*31.25+0.5) =
+/// floor(55.1875) = 55.
+#[test]
+fn swing_warps_an_off_16th_pair_correctly() {
+    let song = Song {
+        tempo: 12000,
+        swing: 50,
+        key: 0,
+        voice_mask: 0b1,
+        rows: vec![Row {
+            sound: "kick".into(),
+            note: None,
+            vol: 100,
+            pan: 0,
+        }],
+        patterns: vec![Pattern {
+            name: "A".into(),
+            length: 48,
+            tempo: None,
+            notes: vec![
+                Note {
+                    at: 6,
+                    row: 0,
+                    len: 1,
+                    vel: 100,
+                    voice: None,
+                    nudge: 0,
+                },
+                Note {
+                    at: 18,
+                    row: 0,
+                    len: 1,
+                    vel: 100,
+                    voice: None,
+                    nudge: 0,
+                },
+            ],
+        }],
+        arrangement: vec![0],
+    };
+    let compiled = compile(&song).expect("compiles");
+    assert_eq!(compiled.events[0].start, 23);
+    assert_eq!(compiled.events[1].start, 55);
+}
+
+/// In an odd-length (36-unit) pattern with swing, only a 16th pair that
+/// lies wholly inside the pattern is warped. Swing 50%, tempo 120
+/// (step_ticks 31.25). The pair starting at 0 (units 0..24) fits, so the
+/// note at unit 12 (q=12, mid-pair) IS swung: steps = 1 + 0.5 + 0 = 1.5 ->
+/// floor(1.5*31.25+0.5) = floor(47.375) = 47. The pair starting at 24
+/// (units 24..48) does NOT fit (48 > 36), so the note at unit 30 is NOT
+/// swung: steps = 30/12 = 2.5 -> floor(2.5*31.25+0.5) = floor(78.625) = 78.
+/// In arrangement [odd, odd], the second slot's note at unit 12 uses the
+/// same pattern-relative phase (q=12, its own pair still fits) but the
+/// run's own offset r=48: steps = (48-12+12)/12 + 0.5 + 0 = 4.5 ->
+/// floor(4.5*31.25+0.5) = floor(141.125) = 141.
+#[test]
+fn swing_only_warps_a_pair_wholly_inside_an_odd_length_pattern() {
+    let pattern = Pattern {
+        name: "odd".into(),
+        length: 36,
+        tempo: None,
+        notes: vec![
+            Note {
+                at: 12,
+                row: 0,
+                len: 1,
+                vel: 100,
+                voice: None,
+                nudge: 0,
+            },
+            Note {
+                at: 30,
+                row: 0,
+                len: 1,
+                vel: 100,
+                voice: None,
+                nudge: 0,
+            },
+        ],
+    };
+    let row = Row {
+        sound: "kick".into(),
+        note: None,
+        vol: 100,
+        pan: 0,
+    };
+
+    let single = Song {
+        tempo: 12000,
+        swing: 50,
+        key: 0,
+        voice_mask: 0b1,
+        rows: vec![row],
+        patterns: vec![pattern],
+        arrangement: vec![0],
+    };
+    let compiled = compile(&single).expect("compiles");
+    assert_eq!(
+        compiled.events[0].start, 47,
+        "swung: its pair fits inside the pattern"
+    );
+    assert_eq!(
+        compiled.events[1].start, 78,
+        "not swung: its pair overruns the pattern"
+    );
+
+    let doubled = Song {
+        arrangement: vec![0, 0],
+        ..single
+    };
+    let compiled2 = compile(&doubled).expect("compiles");
+    let second_slot_note_at_12 = compiled2
+        .events
+        .iter()
+        .find(|e| e.slot == 1 && e.note == 0)
+        .expect("second slot's first note");
+    assert_eq!(
+        second_slot_note_at_12.start, 141,
+        "second slot uses pattern-relative phase but the run's own offset"
+    );
+}
+
+// ---- 7. allocator (through the public `compile()`, `allocate()` itself is
+// pub(crate) now: an unvalidated song must never reach it directly) --------
+
+/// A one-row, one-pattern, one-slot song at 312.5 BPM (centi-tempo 31250):
+/// with swing 0 that makes `step_ticks = 3750/312.5 = 12`, so a note's
+/// compiled tick lands exactly on its `at`/`len` unit value (`floor(r/12*12
+/// + 0.5) == r` for integer r). That lets these tests assert the exact
+/// start/end numbers the allocator produces while going through the public
+/// `compile()` API instead of calling `allocate()` directly.
+fn tick_song(mask: u8, pattern_len: u32, notes: Vec<Note>) -> Song {
+    Song {
+        tempo: 31250,
+        swing: 0,
+        key: 0,
+        voice_mask: mask,
+        rows: vec![Row {
+            sound: "kick".into(),
+            note: None,
+            vol: 100,
+            pan: 0,
+        }],
+        patterns: vec![Pattern {
+            name: "A".into(),
+            length: pattern_len,
+            tempo: None,
+            notes,
+        }],
+        arrangement: vec![0],
+    }
+}
+
+fn note_at(at: u32, len: u32, voice: Option<u32>) -> Note {
+    Note {
+        at,
         row: 0,
-        voice: 0,
-        pin,
-        l: 0,
-        r: 0,
-        slot: 0,
-        note: 0,
+        len,
+        vel: 100,
+        voice,
+        nudge: 0,
     }
 }
 
@@ -551,55 +865,78 @@ fn ev_at(start: i64, end: i64, pin: Option<u8>) -> Event {
 /// there.
 #[test]
 fn allocate_pin_cuts_what_sounds_on_its_voice() {
-    let mut events = vec![ev_at(0, 100, None), ev_at(50, 200, Some(0))];
-    allocate(&mut events, 0b1);
-    assert_eq!(events[0].voice, 0);
-    assert_eq!(events[0].end, 50, "cut to the pinned note's start");
-    assert_eq!(events[1].voice, 0);
-    assert_eq!(events[1].end, 200);
+    let song = tick_song(
+        0b1,
+        200,
+        vec![note_at(0, 100, None), note_at(50, 150, Some(0))],
+    );
+    let compiled = compile(&song).expect("compiles");
+    assert_eq!(compiled.events[0].voice, 0);
+    assert_eq!(compiled.events[0].end, 50, "cut to the pinned note's start");
+    assert_eq!(compiled.events[1].voice, 0);
+    assert_eq!(compiled.events[1].end, 200);
 }
 
 /// An unpinned note takes the lowest voice in the mask that isn't busy.
 #[test]
 fn allocate_picks_lowest_free_voice() {
-    let mut events = vec![
-        ev_at(0, 100, None),
-        ev_at(10, 100, None),
-        ev_at(20, 100, None),
-    ];
-    allocate(&mut events, 0b0111);
-    assert_eq!(events[0].voice, 0);
-    assert_eq!(events[1].voice, 1);
-    assert_eq!(events[2].voice, 2);
+    let song = tick_song(
+        0b0111,
+        200,
+        vec![
+            note_at(0, 100, None),
+            note_at(10, 100, None),
+            note_at(20, 100, None),
+        ],
+    );
+    let compiled = compile(&song).expect("compiles");
+    assert_eq!(compiled.events[0].voice, 0);
+    assert_eq!(compiled.events[1].voice, 1);
+    assert_eq!(compiled.events[2].voice, 2);
 }
 
 /// With no free voice, the earliest-started voice is stolen (lowest voice
 /// on a tie), and its event is cut to the stealing note's start.
 #[test]
 fn allocate_steals_earliest_started_voice_lowest_on_tie() {
-    let mut events = vec![
-        ev_at(0, 100, None),  // -> voice 0, started at 0
-        ev_at(0, 100, None),  // -> voice 1, started at 0 (tied with voice 0)
-        ev_at(50, 999, None), // no free voice; steals the tie's lowest voice
-    ];
-    allocate(&mut events, 0b0011);
-    assert_eq!(events[0].voice, 0);
-    assert_eq!(events[1].voice, 1);
-    assert_eq!(events[2].voice, 0);
+    let song = tick_song(
+        0b0011,
+        1000,
+        vec![
+            note_at(0, 100, None),  // -> voice 0, started at 0
+            note_at(0, 100, None),  // -> voice 1, started at 0 (tied with voice 0)
+            note_at(50, 949, None), // no free voice; steals the tie's lowest voice
+        ],
+    );
+    let compiled = compile(&song).expect("compiles");
+    assert_eq!(compiled.events[0].voice, 0);
+    assert_eq!(compiled.events[1].voice, 1);
+    assert_eq!(compiled.events[2].voice, 0);
     assert_eq!(
-        events[0].end, 50,
+        compiled.events[0].end, 50,
         "stolen event cut to the new note's start"
     );
-    assert_eq!(events[1].end, 100, "the other tied voice is untouched");
+    assert_eq!(
+        compiled.events[1].end, 100,
+        "the other tied voice is untouched"
+    );
 }
 
 /// A voice outside the mask is never chosen, even under contention that
 /// forces a steal.
 #[test]
 fn allocate_never_uses_a_voice_outside_the_mask() {
-    let mut events = vec![ev_at(0, 10, None), ev_at(0, 10, None), ev_at(0, 10, None)];
-    allocate(&mut events, 0b1010_0000); // voices 5 and 7 only
-    for e in &events {
+    let song = tick_song(
+        0b1010_0000, // voices 5 and 7 only
+        20,
+        vec![
+            note_at(0, 10, None),
+            note_at(0, 10, None),
+            note_at(0, 10, None),
+        ],
+    );
+    let compiled = compile(&song).expect("compiles");
+    for e in &compiled.events {
         assert!(
             e.voice == 5 || e.voice == 7,
             "voice {} outside the mask",
@@ -761,7 +1098,7 @@ fn step_string(hits: &[Hit], pattern: usize, row: usize) -> String {
 }
 
 /// The equivalent PSNG notes for one (pattern, row) — a 16th is 12 units
-/// (`song::TICKS_PER_BEAT` / 4).
+/// (`song::UNITS_PER_BEAT` / 4).
 fn hit_notes(hits: &[Hit], pattern: usize, row: usize) -> Vec<Note> {
     hits.iter()
         .filter(|h| h.pattern == pattern && h.row == row)

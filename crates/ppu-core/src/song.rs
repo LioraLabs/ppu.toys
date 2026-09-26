@@ -10,7 +10,17 @@
 /// Units per beat for all song positions (`at`, `len`, pattern `length`):
 /// 1/48 beat. A 16th note is 12 units, a 32nd is 6, an 8th triplet is 16, a
 /// 16th triplet is 8.
-pub const TICKS_PER_BEAT: u32 = 48;
+pub const UNITS_PER_BEAT: u32 = 48;
+
+/// A 16th note, in [`UNITS_PER_BEAT`] units: the swing grid's step.
+const UNITS_PER_16TH: u64 = UNITS_PER_BEAT as u64 / 4;
+
+/// The largest total note count (summed over the arrangement) `Song::validate`
+/// allows, so `compile` never allocates an unbounded events `Vec`.
+const MAX_EVENTS: u64 = 1_000_000;
+
+/// Valid song/pattern tempo, in centi-BPM (1..400 BPM).
+const TEMPO_RANGE: std::ops::RangeInclusive<u32> = 100..=40000;
 
 /// A song: tempo/swing/key, the voices it may use, its rows, patterns and
 /// play order.
@@ -115,7 +125,7 @@ enum VarintErr {
 fn read_varint(bytes: &[u8], pos: &mut usize) -> Result<u32, VarintErr> {
     let mut result: u64 = 0;
     let mut shift = 0u32;
-    for i in 0..5 {
+    for _ in 0..5 {
         if *pos >= bytes.len() {
             return Err(VarintErr::Truncated);
         }
@@ -130,7 +140,6 @@ fn read_varint(bytes: &[u8], pos: &mut usize) -> Result<u32, VarintErr> {
             };
         }
         shift += 7;
-        let _ = i;
     }
     Err(VarintErr::Malformed)
 }
@@ -183,12 +192,17 @@ impl<'a> Cursor<'a> {
 
     fn string(&mut self) -> Result<String, SongError> {
         let len = self.varint()? as usize;
-        if self.pos + len > self.bytes.len() {
+        if len > self.bytes.len().saturating_sub(self.pos) {
             return Err(self.truncated());
         }
         let s = &self.bytes[self.pos..self.pos + len];
         self.pos += len;
         String::from_utf8(s.to_vec()).map_err(|_| self.malformed())
+    }
+
+    /// The bytes left unread in this chunk's body.
+    fn remaining(&self) -> usize {
+        self.bytes.len() - self.pos
     }
 
     fn finish(&self) -> Result<(), SongError> {
@@ -203,7 +217,7 @@ impl<'a> Cursor<'a> {
 fn parse_head(body: &[u8], ctx: &str) -> Result<(u32, u32, i32, u8), SongError> {
     let mut c = Cursor::new(body, ctx);
     let ticks_per_beat = c.varint()?;
-    if ticks_per_beat != TICKS_PER_BEAT {
+    if ticks_per_beat != UNITS_PER_BEAT {
         return Err(SongError(format!("{ctx}: ticks per beat must be 48")));
     }
     let tempo = c.varint()?;
@@ -217,7 +231,11 @@ fn parse_head(body: &[u8], ctx: &str) -> Result<(u32, u32, i32, u8), SongError> 
 fn parse_rows(body: &[u8], ctx: &str) -> Result<Vec<Row>, SongError> {
     let mut c = Cursor::new(body, ctx);
     let count = c.varint()?;
-    let mut rows = Vec::with_capacity(count as usize);
+    // Never trust a raw wire count to size an allocation: cap it by the
+    // bytes actually left (each row costs >= 1 byte), so a huge count on a
+    // short body can't abort the process before the truncation check below
+    // ever runs.
+    let mut rows = Vec::with_capacity((count as usize).min(c.remaining()));
     for _ in 0..count {
         let sound = c.string()?;
         let note_plus1 = c.varint()?;
@@ -250,7 +268,8 @@ fn parse_patt(body: &[u8], ctx: &str) -> Result<Pattern, SongError> {
         Some(tempo_raw)
     };
     let note_count = c.varint()?;
-    let mut notes = Vec::with_capacity(note_count as usize);
+    // See parse_rows: cap the raw wire count by the bytes left.
+    let mut notes = Vec::with_capacity((note_count as usize).min(c.remaining()));
     let mut prev: i64 = 0;
     for _ in 0..note_count {
         let delta = c.zigzag()? as i64;
@@ -285,7 +304,8 @@ fn parse_patt(body: &[u8], ctx: &str) -> Result<Pattern, SongError> {
 fn parse_arrg(body: &[u8], ctx: &str) -> Result<Vec<u32>, SongError> {
     let mut c = Cursor::new(body, ctx);
     let count = c.varint()?;
-    let mut arr = Vec::with_capacity(count as usize);
+    // See parse_rows: cap the raw wire count by the bytes left.
+    let mut arr = Vec::with_capacity((count as usize).min(c.remaining()));
     for _ in 0..count {
         arr.push(c.varint()?);
     }
@@ -327,7 +347,7 @@ pub fn decode(bytes: &[u8]) -> Result<Song, SongError> {
             format!("{} chunk", String::from_utf8_lossy(&tag))
         };
 
-        if pos + body_len > bytes.len() {
+        if body_len > bytes.len().saturating_sub(pos) {
             return Err(SongError(format!("{label} truncated")));
         }
         let body = &bytes[pos..pos + body_len];
@@ -388,13 +408,17 @@ fn write_string(out: &mut Vec<u8>, s: &str) {
 
 /// Encodes a [`Song`] to PSNG bytes, chunks in HEAD, ROWS, PATT..., ARRG
 /// order with minimal varints.
+///
+/// Precondition: `song` passes [`Song::validate`]. This is infallible and
+/// does not check that; out-of-range fields (e.g. a `vol` over 127) are
+/// written as given and are not preserved as errors.
 pub fn encode(song: &Song) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(b"PSNG");
     out.push(1u8);
 
     let mut head_body = Vec::new();
-    write_varint(&mut head_body, TICKS_PER_BEAT);
+    write_varint(&mut head_body, UNITS_PER_BEAT);
     write_varint(&mut head_body, song.tempo);
     write_varint(&mut head_body, song.swing);
     write_varint(&mut head_body, zigzag_encode(song.key));
@@ -453,7 +477,7 @@ impl Song {
     /// pattern's length and notes. Does not check timing (a note's nudge
     /// pushing its start negative needs [`compile`]).
     pub fn validate(&self) -> Result<(), SongError> {
-        if !(100..=40000).contains(&self.tempo) {
+        if !TEMPO_RANGE.contains(&self.tempo) {
             return Err(SongError("tempo must be 1..400 BPM".into()));
         }
         if self.swing > 75 {
@@ -487,9 +511,20 @@ impl Song {
                 )));
             }
         }
+        // Every arrangement slot names a valid pattern (checked above): sum
+        // the notes it plays with saturating u64 math, before compile ever
+        // allocates an events Vec sized off untrusted input.
+        let total_events: u64 = self
+            .arrangement
+            .iter()
+            .map(|&p| self.patterns[p as usize].notes.len() as u64)
+            .fold(0u64, |acc, n| acc.saturating_add(n));
+        if total_events > MAX_EVENTS {
+            return Err(SongError(format!("the song plays over {MAX_EVENTS} notes")));
+        }
         for pat in &self.patterns {
             if let Some(t) = pat.tempo {
-                if !(100..=40000).contains(&t) {
+                if !TEMPO_RANGE.contains(&t) {
                     return Err(SongError(format!(
                         "pattern '{}': tempo must be 1..400 BPM",
                         pat.name
@@ -503,39 +538,50 @@ impl Song {
                 )));
             }
             for (i, note) in pat.notes.iter().enumerate() {
-                let where_ = format!("pattern '{}' note {}", pat.name, i + 1);
+                let n = i + 1;
+                // Built lazily: only the branch that actually errors pays
+                // for this format!, not every note.
+                let where_ = || format!("pattern '{}' note {n}", pat.name);
                 if note.row as usize >= self.rows.len() {
                     return Err(SongError(format!(
-                        "{where_}: row {} does not exist",
-                        note.row
+                        "{}: row {} does not exist",
+                        where_(),
+                        note.row + 1
                     )));
                 }
                 if note.vel > 127 {
-                    return Err(SongError(format!("{where_}: vel {} is over 127", note.vel)));
+                    return Err(SongError(format!(
+                        "{}: vel {} is over 127",
+                        where_(),
+                        note.vel
+                    )));
                 }
                 if note.len < 1 {
-                    return Err(SongError(format!("{where_}: len must be at least 1")));
+                    return Err(SongError(format!("{}: len must be at least 1", where_())));
                 }
                 if note.at >= pat.length {
                     return Err(SongError(format!(
-                        "{where_}: starts past the pattern's end"
+                        "{}: starts past the pattern's end",
+                        where_()
                     )));
                 }
                 match note.voice {
                     Some(v) => {
                         if v > 7 {
-                            return Err(SongError(format!("{where_}: voice {v} is not 0..7")));
+                            return Err(SongError(format!("{}: voice {v} is not 0..7", where_())));
                         }
                         if self.voice_mask & (1 << v) == 0 {
                             return Err(SongError(format!(
-                                "{where_}: voice {v} is outside the song's voice mask"
+                                "{}: voice {v} is outside the song's voice mask",
+                                where_()
                             )));
                         }
                     }
                     None => {
                         if self.voice_mask == 0 {
                             return Err(SongError(format!(
-                                "{where_}: the song's voice mask is empty"
+                                "{}: the song's voice mask is empty",
+                                where_()
                             )));
                         }
                     }
@@ -585,18 +631,24 @@ pub struct Timing {
 fn tick_in_slot(s: &SlotTiming, offset: u64, swing: u32) -> i64 {
     let r = (s.pos - s.run_pos) + offset;
     let w = swing as f64 / 100.0;
-    let q = offset % 24;
+    let pair_units = UNITS_PER_16TH * 2;
+    let q = offset % pair_units;
     let pair_start = offset - q;
-    let swing_ok = w > 0.0 && pair_start + 24 <= s.len as u64;
+    let swing_ok = w > 0.0 && pair_start + pair_units <= s.len as u64;
+    let u16th = UNITS_PER_16TH as f64;
     let steps = if swing_ok {
-        if q < 12 {
-            ((r - q) as f64 / 12.0) + (q as f64 / 12.0) * (1.0 + w)
+        if q < UNITS_PER_16TH {
+            ((r - q) as f64 / u16th) + (q as f64 / u16th) * (1.0 + w)
         } else {
-            ((r - q + 12) as f64 / 12.0) + w + ((q - 12) as f64 / 12.0) * (1.0 - w)
+            ((r - q + UNITS_PER_16TH) as f64 / u16th)
+                + w
+                + ((q - UNITS_PER_16TH) as f64 / u16th) * (1.0 - w)
         }
     } else {
-        r as f64 / 12.0
+        r as f64 / u16th
     };
+    // 3750 = 250 engine ticks/s * 60 s/min / 4 sixteenths/beat: ticks per
+    // 16th note at 1 BPM.
     let step_ticks = 3750.0 / s.bpm;
     s.run_tick + (steps * step_ticks + 0.5).floor() as i64
 }
@@ -604,7 +656,7 @@ fn tick_in_slot(s: &SlotTiming, offset: u64, swing: u32) -> i64 {
 impl Timing {
     /// Builds the slot/run map for `song`'s arrangement. Assumes
     /// `song.validate()` passed.
-    pub fn new(song: &Song) -> Timing {
+    pub(crate) fn new(song: &Song) -> Timing {
         let mut slots = Vec::with_capacity(song.arrangement.len());
         let mut pos: u64 = 0;
         let mut run_pos: u64 = 0;
@@ -647,6 +699,7 @@ impl Timing {
     /// The slot containing `pos` (a boundary position belongs to the slot
     /// starting there; `pos == end` belongs to the last slot).
     pub fn slot_at(&self, pos: u64) -> usize {
+        debug_assert!(!self.slots.is_empty(), "slot_at on an empty arrangement");
         if pos >= self.end {
             return self.slots.len() - 1;
         }
@@ -747,7 +800,7 @@ pub fn compile(song: &Song) -> Result<Compiled, SongError> {
 /// an unpinned one takes the lowest free voice in the mask, or steals the
 /// one whose current event started earliest (lowest voice on a tie),
 /// cutting that event's end. A voice outside `mask` is never chosen.
-pub fn allocate(events: &mut [Event], mask: u8) {
+pub(crate) fn allocate(events: &mut [Event], mask: u8) {
     let mut last: [Option<usize>; 8] = [None; 8];
 
     for i in 0..events.len() {
