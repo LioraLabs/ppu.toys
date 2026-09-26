@@ -2,11 +2,10 @@
 //!
 //! A step is each 16th (12 units) of each arrangement slot, the Grid's
 //! resolution: a slot of `len` units has `ceil(len / 12)` steps, starting at
-//! the slot's position + 12k. A step's tick is `Timing::tick` of its start.
+//! the slot's position + 12k (`Timing::steps` / `Timing::step_tick`, the same
+//! steps `Timing::position` maps a tick back to).
 
-use crate::song::{compile, Event, Song, SongError, UNITS_PER_BEAT};
-
-const UNITS_PER_16TH: u64 = UNITS_PER_BEAT as u64 / 4;
+use crate::song::{compile, Event, Song, SongError};
 
 /// The most steps `analyze` lays out, so a hostile pattern length can't make
 /// it allocate unbounded step arrays (a million 16ths is over 4 hours at
@@ -37,11 +36,7 @@ pub struct Analysis {
 pub fn analyze(song: &Song) -> Result<Analysis, SongError> {
     let c = compile(song)?;
     let t = &c.timing;
-    let total: u64 = t
-        .slots
-        .iter()
-        .map(|s| (s.len as u64).div_ceil(UNITS_PER_16TH))
-        .sum();
+    let total: u64 = (0..t.slots.len()).map(|s| t.steps(s)).sum();
     if total > MAX_STEPS {
         return Err(SongError(format!(
             "the song is over {MAX_STEPS} sixteenths long"
@@ -50,13 +45,9 @@ pub fn analyze(song: &Song) -> Result<Analysis, SongError> {
 
     let mut ticks = Vec::with_capacity(total as usize);
     let mut slot_steps = Vec::with_capacity(t.slots.len());
-    for s in &t.slots {
+    for s in 0..t.slots.len() {
         slot_steps.push(ticks.len() as u32);
-        ticks.extend(
-            (0..s.len as u64)
-                .step_by(UNITS_PER_16TH as usize)
-                .map(|u| t.tick(s.pos + u)),
-        );
+        ticks.extend((0..t.steps(s)).map(|k| t.step_tick(s, k)));
     }
 
     // Step range [first tick >= from, first tick >= to): the steps whose

@@ -719,13 +719,13 @@ impl Timing {
     }
 
     /// Slot `s`'s 16th steps; an odd-length pattern's last one is short.
-    fn steps(&self, s: usize) -> u64 {
+    pub(crate) fn steps(&self, s: usize) -> u64 {
         (self.slots[s].len as u64).div_ceil(UNITS_PER_16TH)
     }
 
     /// The tick step `k` of slot `s` starts at; `k == steps(s)` is the
     /// slot's end.
-    fn step_tick(&self, s: usize, k: u64) -> i64 {
+    pub(crate) fn step_tick(&self, s: usize, k: u64) -> i64 {
         let slot = &self.slots[s];
         tick_in_slot(slot, (k * UNITS_PER_16TH).min(slot.len as u64), self.swing)
     }
