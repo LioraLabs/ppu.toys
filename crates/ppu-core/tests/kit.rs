@@ -953,213 +953,6 @@ fn song_first_step_offset_repeats_after_reset() {
 
 // ---- score{} ----------------------------------------------------------
 
-/// Run `src` for `frames` frames with `song` bound to `sram.song`, then read
-/// back whatever the last frame stored in `sram` as JSON.
-fn score_sram(e: &mut LuaEngine, song: &Value, src: &str, frames: u32) -> Value {
-    e.set_sram(&serde_json::json!({ "song": song }).to_string());
-    e.set_source(src).unwrap();
-    for f in 0..frames {
-        e.frame(f as f64 / 60.0, f).unwrap();
-    }
-    serde_json::from_str(&e.take_sram().expect("frame wrote sram")).unwrap()
-}
-
-/// The shared allocation fixture: every case's compiled events match on
-/// (row, start, end, voice), in order. The web panel's allocator is held
-/// to the same file.
-#[test]
-fn score_compiles_the_shared_allocation_fixture() {
-    let doc: Value = serde_json::from_str(include_str!("fixtures/score_alloc.json")).unwrap();
-    for case in doc["cases"].as_array().unwrap() {
-        let mut e = LuaEngine::new();
-        let got = score_sram(
-            &mut e,
-            &case["song"],
-            "h = score{ data = sram.song }\nfunction frame() sram.events = h.events; sram.length = h.length end",
-            1,
-        );
-        let pick = |evs: &Value| -> Vec<[i64; 4]> {
-            evs.as_array()
-                .unwrap()
-                .iter()
-                .map(|x| ["row", "start", "end", "voice"].map(|k| x[k].as_i64().unwrap()))
-                .collect()
-        };
-        assert_eq!(
-            pick(&got["events"]),
-            pick(&case["events"]),
-            "case {}",
-            case["name"]
-        );
-        assert_eq!(got["length"], case["length"], "case {}", case["name"]);
-    }
-}
-
-/// Velocity scales the preset volume (hat's preset vol is 110), a row's
-/// note pitches through note(), a drum with no note keeps 0x0800, and an
-/// uploaded sample gets a flat ADSR.
-#[test]
-fn score_events_carry_pitch_velocity_and_flat_adsr_for_uploads() {
-    let mut e = LuaEngine::new();
-    common::add_sample(&mut e, "mine");
-    let song = serde_json::json!({
-        "tempo": 120,
-        "rows": [{ "sound": "hat" }, { "sound": "mine", "note": "C5" }],
-        "patterns": { "A": ["1.......", ".4......"] },
-        "arrangement": ["A"],
-    });
-    let got = score_sram(
-        &mut e,
-        &song,
-        "h = score{ data = sram.song }\n\
-         function frame() sram.events = h.events; sram.adsr = voice[0].adsr end",
-        10,
-    );
-    let ev = &got["events"];
-    assert_eq!(
-        (
-            ev[0]["pitch"].as_i64(),
-            ev[0]["l"].as_i64(),
-            ev[0]["r"].as_i64()
-        ),
-        (Some(0x0800), Some(28), Some(28))
-    );
-    assert_eq!(
-        (ev[1]["pitch"].as_i64(), ev[1]["l"].as_i64()),
-        (Some(8192), Some(127))
-    );
-    // Voice reuse is decided at compile time (score()'s setup pass): the
-    // second event's start (tick 31) exactly meets the first event's end,
-    // so it compiles onto voice 0 too. Running to frame 9 (~tick 40) is
-    // only so that, by the time frame() reads voice[0].adsr below, both
-    // kons have fired and the second (flat-ADSR) one has overwritten it.
-    assert_eq!(ev[1]["voice"], 0);
-    assert_eq!(
-        got["adsr"],
-        serde_json::json!({ "a": 15, "d": 0, "s": 7, "r": 0 })
-    );
-}
-
-/// Playback: kon on each event's start tick, koff when it ends, every voice
-/// keyed off at the end, then the loop wraps to tick 0. `loop = false`
-/// stops and rewinds instead.
-#[test]
-fn score_plays_on_the_tick_grid_and_loops() {
-    // 120 BPM: a 16th is 31.25 ticks, 8 steps = 250 ticks = 1 s = 60 frames.
-    let song = serde_json::json!({
-        "tempo": 120,
-        "rows": [{ "sound": "kick" }],
-        "patterns": { "A": ["4...4-.."] },
-        "arrangement": ["A"],
-    });
-    let src = |looping: bool| {
-        format!(
-            "local real_kon, real_koff = kon, koff\n\
-             kons, koffs = {{}}, {{}}\n\
-             function kon(v) kons[#kons + 1] = h.tick real_kon(v) end\n\
-             function koff(v) if v == 0 then koffs[#koffs + 1] = h.tick end real_koff(v) end\n\
-             h = score{{ data = sram.song, loop = {looping} }}\n\
-             function frame() sram.kons = kons; sram.koffs = koffs; sram.len = h.length; sram.playing = h.playing end"
-        )
-    };
-    let mut e = LuaEngine::new();
-    let got = score_sram(&mut e, &song, &src(true), 140);
-    assert_eq!(got["len"], 250);
-    assert_eq!(got["kons"], serde_json::json!([0, 125, 0, 125, 0]));
-    assert_eq!(
-        got["koffs"],
-        serde_json::json!([31, 188, 250, 31, 188, 250, 31])
-    );
-
-    let mut e = LuaEngine::new();
-    let got = score_sram(&mut e, &song, &src(false), 140);
-    assert_eq!(got["kons"], serde_json::json!([0, 125]));
-    assert_eq!(got["playing"], false);
-}
-
-#[test]
-fn score_stop_keys_off_and_play_resumes() {
-    let song = serde_json::json!({
-        "tempo": 120, "rows": [{ "sound": "piano" }],
-        "patterns": { "A": ["1-------"] }, "arrangement": ["A"],
-    });
-    let mut e = LuaEngine::new();
-    let got = score_sram(
-        &mut e,
-        &song,
-        "local real_koff = koff\n\
-         koffs = 0\n\
-         function koff(v) koffs = koffs + 1 real_koff(v) end\n\
-         h = score{ data = sram.song }\n\
-         function frame(t, f)\n\
-           if f == 5 then h.stop() sram.at_stop = h.tick sram.koffs = koffs end\n\
-           if f == 9 then sram.still = h.tick h.play() end\n\
-           if f == 12 then sram.resumed = h.tick end\n\
-         end",
-        13,
-    );
-    assert_eq!(got["koffs"], 8, "stop() keys off every voice");
-    assert_eq!(got["still"], got["at_stop"], "stopped: the tick holds");
-    assert!(got["resumed"].as_i64() > got["still"].as_i64());
-}
-
-/// The studio's playhead readout: `score_view()` reports the playing
-/// score's tick after every frame. 250 ticks/s at 60 frames/s is ~4.17 ticks
-/// a frame; the 250-tick song wraps back past 0 after 60 frames, and the
-/// reported tick stays below the length.
-#[test]
-fn score_view_reports_the_tick_every_frame_and_wraps() {
-    let mut e = LuaEngine::new();
-    e.set_source(
-        "function seq_beat() return { tempo = 120, rows = { { sound = \"kick\" } },\n\
-           patterns = { A = { \"4...4...\" } }, arrangement = { \"A\" } } end\n\
-         function frame() end",
-    )
-    .unwrap();
-    e.frame(0.0, 0).unwrap();
-    assert_eq!(e.score_view(), None, "no score: no readout");
-
-    let mut e = LuaEngine::new();
-    e.set_sources(&[
-        (
-            "main.lua",
-            "function seq_beat() return { tempo = 120, rows = { { sound = \"kick\" } },\n\
-               patterns = { A = { \"4...4...\" } }, arrangement = { \"A\" } } end\n\
-             function frame() end",
-        ),
-        (
-            "ppuglobals.lua",
-            "function apply_setup()\n  score{ data = seq_beat() }\nend\nfunction apply_pokes() end\n",
-        ),
-    ])
-    .unwrap();
-    let mut ticks = vec![];
-    // Many loops, so a frame boundary lands between the last tick and the wrap.
-    for f in 0..1200u32 {
-        e.frame(f as f64 / 60.0, f).unwrap();
-        let v = e
-            .score_view()
-            .expect("a looping score started from apply_setup reports");
-        assert_eq!(v.length, 250);
-        assert!(
-            v.tick < v.length,
-            "frame {f}: tick {} is past the end",
-            v.tick
-        );
-        ticks.push(v.tick);
-    }
-    for f in 1..59 {
-        let step = ticks[f] - ticks[f - 1];
-        assert!((4..=5).contains(&step), "frame {f}: tick advanced {step}");
-    }
-    let wrap = ticks
-        .windows(2)
-        .position(|w| w[1] < w[0])
-        .expect("the loop wraps");
-    assert!((58..=60).contains(&wrap), "wrapped after frame {wrap}");
-    assert!(ticks[wrap + 1] < 10);
-}
-
 /// Registers `song` as a `[3, 5, <psng bytes>]` source under `name` — the
 /// `add_source` shape a `song`-kind source commits to (mirrors
 /// `tests/song.rs`'s own `add_song_source`).
@@ -1306,87 +1099,58 @@ fn score_view_reports_a_song_sources_slot_and_step() {
     );
 }
 
-/// A Lua `data =`/`seq_` score has no engine-native timing map to read a
-/// slot/step from, so the readout omits them rather than fabricating a
-/// stale or zeroed pair.
-#[test]
-fn score_view_omits_slot_step_for_a_lua_data_score() {
-    let mut e = LuaEngine::new();
-    e.set_source(
-        "function seq_beat() return { tempo = 120, rows = { { sound = \"kick\" } },\n\
-           patterns = { A = { \"4...4...\" } }, arrangement = { \"A\" } } end\n\
-         h = score{ data = seq_beat() }\n\
-         function frame() end",
-    )
-    .unwrap();
-    e.frame(0.0, 0).unwrap();
-    let v = e.score_view().expect("a playing lua score reports");
-    assert_eq!(v.slot, None);
-    assert_eq!(v.step, None);
-}
-
-/// Absent, not stale: `stop()` and a finished `loop = false` song clear the
-/// readout; `play()` brings it back; the most recently started score wins.
-#[test]
-fn score_view_is_absent_when_stopped_or_finished() {
-    let song = serde_json::json!({
-        "tempo": 120, "rows": [{ "sound": "kick" }],
-        "patterns": { "A": ["4..............."] }, "arrangement": ["A"],
-    });
-    let mut e = LuaEngine::new();
-    e.set_sram(&serde_json::json!({ "song": song }).to_string());
-    e.set_source(
-        "a = score{ data = sram.song }\n\
-         b = score{ data = sram.song, loop = false }\n\
-         function frame(t, f)\n\
-           if f == 3 then b.stop() end\n\
-           if f == 5 then b.play() end\n\
-         end",
-    )
-    .unwrap();
-    let mut seen = vec![];
-    for f in 0..130u32 {
-        e.frame(f as f64 / 60.0, f).unwrap();
-        seen.push(e.score_view());
+/// A minimal one-note song naming `sound` in its only row.
+fn one_row_song(sound: &str) -> Song {
+    Song {
+        tempo: 12000,
+        swing: 0,
+        key: 0,
+        voice_mask: 0xff,
+        rows: vec![Row {
+            sound: sound.into(),
+            note: None,
+            vol: 127,
+            pan: 0,
+        }],
+        patterns: vec![Pattern {
+            name: "A".into(),
+            length: 12,
+            tempo: None,
+            notes: vec![Note {
+                at: 0,
+                row: 0,
+                len: 12,
+                vel: 100,
+                voice: None,
+                nudge: 0,
+                end_nudge: 0,
+            }],
+        }],
+        arrangement: vec![0],
     }
-    assert!(seen[2].is_some(), "b, the latest, is playing");
-    assert_eq!(seen[3], None, "b stopped");
-    assert!(seen[5].is_some(), "b resumed");
-    assert_eq!(seen[129], None, "b finished without looping");
 }
 
-/// Scores sharing a sound place it once: a toy that plays several songs
-/// would otherwise fill sound RAM with copies of the same sample.
+/// Two song sources naming the same sound place it once: a toy playing
+/// several songs would otherwise fill sound RAM with copies of the same
+/// sample.
 #[test]
 fn scores_share_each_placed_sound() {
     let mut e = LuaEngine::new();
     common::add_sample(&mut e, "mine");
-    let song = serde_json::json!({
-        "tempo": 120, "rows": [{ "sound": "mine" }, { "sound": "kick" }],
-        "patterns": { "A": ["4.......", "..4....."] }, "arrangement": ["A"],
-    });
-    let got = score_sram(
-        &mut e,
-        &song,
+    add_song_source(&mut e, "a", &one_row_song("mine"));
+    add_song_source(&mut e, "b", &one_row_song("mine"));
+    e.set_source(
         "local real, n = dma, 0\n\
          dma = function(...) n = n + 1 return real(...) end\n\
-         score{ data = sram.song }\n\
-         score{ data = sram.song }\n\
+         score{ song = \"a\" }\n\
+         score{ song = \"b\" }\n\
          dma = real\n\
          function frame() sram.placed = n end",
-        1,
-    );
-    assert_eq!(got["placed"], 2);
-}
-
-fn score_err(song: Value) -> String {
-    let mut e = LuaEngine::new();
-    e.set_sram(&serde_json::json!({ "song": song }).to_string());
-    let err = e
-        .set_sources(&[("main.lua", "score{ data = sram.song }")])
-        .unwrap_err();
-    assert_eq!(err.file.as_deref(), Some("main.lua"), "{err:?}");
-    err.message
+    )
+    .unwrap();
+    e.frame(0.0, 0).unwrap();
+    let got: Value = serde_json::from_str(&e.take_sram().unwrap()).unwrap();
+    assert_eq!(got["placed"], 1);
 }
 
 /// A row's sound is a built-in (`bank(name)`), not an upload, but a sound-RAM
@@ -1396,21 +1160,15 @@ fn score_err(song: Value) -> String {
 /// `bank()` overflows and `score{}` must wrap that error too.
 #[test]
 fn score_built_in_sound_ram_failure_names_the_row() {
-    let song = serde_json::json!({
-        "tempo": 120,
-        "rows": [{ "sound": "bass" }],
-        "patterns": { "A": ["4......."] },
-        "arrangement": ["A"],
-    });
     let mut e = LuaEngine::new();
-    e.set_sram(&serde_json::json!({ "song": song }).to_string());
+    add_song_source(&mut e, "beat", &one_row_song("bass"));
     let err = e
         .set_sources(&[(
             "main.lua",
             "local b = dma('bass')\n\
              local sz = b.next_addr - b.addr\n\
              dma('bass', { addr = 0x10000 - sz })\n\
-             score{ data = sram.song }",
+             score{ song = \"beat\" }",
         )])
         .unwrap_err();
     assert_eq!(err.file.as_deref(), Some("main.lua"), "{err:?}");
@@ -1419,95 +1177,4 @@ fn score_built_in_sound_ram_failure_names_the_row() {
         "got: {}",
         err.message
     );
-}
-
-#[test]
-fn score_setup_errors_name_the_row_or_pattern() {
-    let rows = serde_json::json!([{ "sound": "kick" }, { "sound": "snare" }]);
-    let cases = [
-        (
-            serde_json::json!({ "tempo": 120, "rows": rows, "patterns": { "A": ["4...", "...."] }, "arrangement": ["A"] }),
-            "pattern A row 1 has 4 steps",
-        ),
-        (
-            serde_json::json!({ "tempo": 120, "rows": rows, "patterns": { "A": ["4.......", "..x....."] }, "arrangement": ["A"] }),
-            "pattern A row 2 step 3: bad 'x'",
-        ),
-        (
-            serde_json::json!({ "tempo": 120, "rows": rows, "patterns": { "A": ["4.......", "..-....."] }, "arrangement": ["A"] }),
-            "pattern A row 2 step 3: '-' holds nothing",
-        ),
-        (
-            serde_json::json!({ "tempo": 120, "rows": rows, "patterns": { "A": ["4......."] }, "arrangement": ["A"] }),
-            "pattern A needs one step string per row",
-        ),
-        (
-            serde_json::json!({ "tempo": 120, "rows": rows, "patterns": { "A": ["4.......", "........"] }, "arrangement": ["A", "B"] }),
-            "arrangement slot 2 names unknown pattern 'B'",
-        ),
-        (
-            serde_json::json!({ "tempo": 120, "rows": [{ "sound": "kick" }, { "sound": "nope" }], "patterns": { "A": ["4.......", "........"] }, "arrangement": ["A"] }),
-            "row 2 sound 'nope'",
-        ),
-        (
-            serde_json::json!({ "tempo": 120, "rows": [{ "sound": "piano", "note": "H9" }], "patterns": { "A": ["4......."] }, "arrangement": ["A"] }),
-            "row 1 bad note 'H9'",
-        ),
-        (
-            serde_json::json!({ "tempo": 120, "swing": 80, "rows": rows, "patterns": {}, "arrangement": ["A"] }),
-            "swing must be 0..75",
-        ),
-        (
-            serde_json::json!({ "tempo": 500, "rows": rows, "patterns": {}, "arrangement": ["A"] }),
-            "tempo must be 1..400",
-        ),
-        (
-            serde_json::json!({ "tempo": 0.5, "rows": rows, "patterns": {}, "arrangement": ["A"] }),
-            "tempo must be 1..400",
-        ),
-    ];
-    for (song, want) in cases {
-        let msg = score_err(song);
-        assert!(msg.contains(want), "want {want:?} in {msg:?}");
-    }
-}
-
-/// `song = "<id>"` plays the global `seq_<id>()`, the same as `data =`
-/// with its result, and names the song in the readout. Giving both, or naming
-/// a song that doesn't exist, is a setup error.
-#[test]
-fn score_song_names_a_seq_function() {
-    let seq = "function seq_beat() return { tempo = 120, rows = { { sound = \"kick\" } },\n\
-               patterns = { A = { \"4...4...\" } }, arrangement = { \"A\" } } end\n";
-    let mut e = LuaEngine::new();
-    e.set_source(&format!(
-        "{seq}a = score{{ song = \"beat\" }}\nb = score{{ data = seq_beat() }}\n\
-         function frame() sram.same = #a.events == #b.events and a.length == b.length end"
-    ))
-    .unwrap();
-    e.frame(0.0, 0).unwrap();
-    let got: Value = serde_json::from_str(&e.take_sram().unwrap()).unwrap();
-    assert_eq!(got["same"], true);
-    assert_eq!(
-        e.score_view().unwrap().song,
-        None,
-        "b, a data score, is newest"
-    );
-
-    for (src, want) in [
-        (
-            "score{ song = \"beat\", data = seq_beat() }",
-            "give data or song, not both",
-        ),
-        ("score{ song = \"nope\" }", "no song function seq_nope()"),
-    ] {
-        let err = LuaEngine::new()
-            .set_source(&format!("{seq}{src}"))
-            .unwrap_err();
-        assert!(
-            err.message.contains(want),
-            "want {want:?} in {:?}",
-            err.message
-        );
-    }
 }

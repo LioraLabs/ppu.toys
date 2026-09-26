@@ -8,7 +8,48 @@
 //! `LuaEngine`'s public API (`set_sources`/`frame`/`memory`/`audio`,
 //! `LineTable.rows[y]`) — never reaching into the VM.
 mod common;
+use ppu_core::song::{encode, Note, Pattern, Row, Song};
 use ppu_core::LuaEngine;
+
+/// Registers `song` as a `[3, 5, <psng bytes>]` source under `name` — the
+/// `add_source` shape a `song`-kind source commits to.
+fn add_song_source(e: &mut LuaEngine, name: &str, song: &Song) {
+    let mut payload = vec![3u8, 5];
+    payload.extend_from_slice(&encode(song));
+    e.add_source(name, &payload).unwrap();
+}
+
+/// A minimal one-note "bell" song, standing in for the old `tune = { ... }`
+/// data-chunk table `score{ data = tune }` used to play.
+fn bell_song() -> Song {
+    Song {
+        tempo: 12000,
+        swing: 0,
+        key: 0,
+        voice_mask: 0xff,
+        rows: vec![Row {
+            sound: "bell".into(),
+            note: Some(60),
+            vol: 127,
+            pan: 0,
+        }],
+        patterns: vec![Pattern {
+            name: "A".into(),
+            length: 96,
+            tempo: None,
+            notes: vec![Note {
+                at: 0,
+                row: 0,
+                len: 96,
+                vel: 127,
+                voice: None,
+                nudge: 0,
+                end_nudge: 0,
+            }],
+        }],
+        arrangement: vec![0],
+    }
+}
 
 /// A hand-copied fixture of the document shape `web/src/studio/pokes/controls.ts`
 /// (PPU-146) generates — NOT a cross-language contract test; the TS
@@ -1445,24 +1486,23 @@ fn controls_with_setup(setup_body: &str, pokes_body: &str) -> String {
 }
 
 /// `apply_setup()` runs after every user/data chunk AND after `init()`,
-/// still inside the init window: it can reach a data chunk's global and
-/// make setup-only calls (`score{}` registers a timer through `bank()`/
-/// `timer()`), and its own writes land on top of init()'s.
+/// still inside the init window: it can make setup-only calls (`score{}`
+/// registers a timer through `bank()`/`timer()`), and its own writes land
+/// on top of init()'s.
 #[test]
 fn controls_apply_setup_runs_after_init_inside_the_init_window() {
     let main = "function init() n = 1 end\n\
                 function frame(t, f) bg[2].scroll.x = n end\n";
-    let data = "tune = { tempo = 120, rows = { { sound = 'bell', note = 'C4' } }, patterns = { A = { '4.......' } }, arrangement = { 'A' } }\n";
     let mut e = LuaEngine::new();
+    add_song_source(&mut e, "tune", &bell_song());
     e.set_sources(&[
         ("main.lua", main),
-        ("tune.lua", data),
         (
             "ppuglobals.lua",
-            &controls_with_setup("  played = score{ data = tune }\n  n = n + 10\n", ""),
+            &controls_with_setup("  played = score{ song = \"tune\" }\n  n = n + 10\n", ""),
         ),
     ])
-    .expect("score{} and a data global must both resolve from apply_setup");
+    .expect("score{} must resolve from apply_setup");
     let lt = e.frame(0.0, 0).unwrap();
     assert_eq!(
         lt.rows[0].bg[1].scroll_x, 11,
@@ -1544,15 +1584,15 @@ fn controls_apply_setup_change_recompiles_but_poke_change_stays_hot() {
     assert_eq!(lt.rows[0].brightness, 4);
 }
 
-/// `score{}` inside apply_setup reads the data chunk through the controls
-/// tracking proxy, so `#tune.rows` and the per-step reads must see the real
-/// table (the proxy forwards `__len`/`__pairs`): the track's sample gets
-/// placed in sound RAM. Before that forwarding, `#` read as 0 and the song
-/// was silently empty.
+/// apply_setup reads a data chunk's global through the controls tracking
+/// proxy (see controls_env.lua's doc comment), so a table's own length
+/// (`#tune.rows`) must see the real table, not zero — the proxy forwards
+/// `__len`/`__pairs`. This used to be exercised through `score{ data = tune
+/// }`'s row count; that path is gone (PPU-214), so it's read directly here.
 #[test]
-fn controls_apply_setup_score_sees_the_data_chunk_through_the_proxy() {
-    let data = "tune = { tempo = 120, rows = { { sound = 'bell', note = 'C4' } }, patterns = { A = { '4.......' } }, arrangement = { 'A' } }";
-    let doc = controls_with_setup("  score{ data = tune }\n", "");
+fn controls_apply_setup_reads_a_data_chunk_table_length_through_the_proxy() {
+    let data = "tune = { rows = { 1, 2, 3 } }";
+    let doc = controls_with_setup("  bg[2].scroll.x = #tune.rows\n", "");
     let mut e = LuaEngine::new();
     e.set_sources(&[
         ("main.lua", "function frame(t, f) end"),
@@ -1560,12 +1600,9 @@ fn controls_apply_setup_score_sees_the_data_chunk_through_the_proxy() {
         ("ppuglobals.lua", &doc),
     ])
     .unwrap();
-    let placed: Vec<String> = e
-        .dsp_view()
-        .samples
-        .iter()
-        .map(|s| s.name.clone())
-        .collect();
-    assert_eq!(placed, vec!["bell"]);
-    e.frame(0.0, 0).unwrap();
+    let lt = e.frame(0.0, 0).unwrap();
+    assert_eq!(
+        lt.rows[0].bg[1].scroll_x, 3,
+        "#tune.rows must see the real table through the proxy, not 0"
+    );
 }

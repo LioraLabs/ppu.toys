@@ -1,8 +1,7 @@
 //! Live reload of a playing song source: re-adding a `song`-kind source
 //! under the same name (`add_source`) swaps the new song into every
 //! `score{ song = "<name>" }` playing it, in place, keeping its musical
-//! position (slot, 16th step within it, ticks into that step). The cases
-//! port tests/score_reload.rs (the Lua `seq_` path) to song sources.
+//! position (slot, 16th step within it, ticks into that step).
 //! Driven through `add_source`/`set_sources`/`frame`/`score_view`/
 //! `take_sram`/`audio`.
 
@@ -202,8 +201,7 @@ fn every_score_playing_the_song_reloads() {
     );
 }
 
-/// A song source added after setup recompiles, as any new source does: a
-/// `score{ song = }` that fell back to a Lua `seq_` may now find it.
+/// A song source added after setup recompiles, as any new source does.
 #[test]
 fn a_first_time_song_source_recompiles() {
     let mut e = start(&beat("4..............."), true);

@@ -287,324 +287,24 @@ function bank(name, opts)
   return instrument(inst)
 end
 
--- score{ song = "<name>" | data = seq_<id>(), loop = true? } -> plays a
--- song on the shared 8-voice pool.
---
--- `song` first tries a `song`-kind source named `<name>` (PSNG bytes,
--- decoded/compiled/validated in Rust — see __song_load): the whole song
--- plays natively on the audio tick, with no Lua timer, and the returned
--- handle reads live through __song_get (see below). Re-adding that source
--- (add_source, same name) reloads it in place in Rust, keeping its musical
--- position (LuaEngine::reload_song). When no such source
--- exists, `song` falls back to the OLDER path: it names the global
--- seq_<id> function and binds the score to it (h.song = id), so that when
--- the engine re-runs an edited song file, __score_prepare(id) recompiles
--- the score in place, keeping its step. `data` is a one-off table, never
--- reloaded and never a song source (song source lookup only runs when
--- `data` is nil). The Lua song table is { tempo, swing = 0 (0..75),
--- rows = { { sound, note = ? } }, patterns = { A = { "4...", "..3-" } },
--- arrangement = { "A", "B" } }: one step string per row, its length
--- (8/16/32) the step count, each step a 16th. `1`-`4` hit at volume
--- 32/64/96/127, `-` holds the previous hit, `.` rests. Swing delays odd
--- steps by that percentage of a step; every step time is rounded from its
--- absolute index, so a fractional step never drifts.
---
--- Setup compiles the whole arrangement into h.events, ordered by (start,
--- row): { start, ["end"], voice, row, pitch, l, r } in 4 ms ticks
--- (timer(0, 32)). Voices are chosen per note here, not at run time: the
--- lowest voice whose note has ended (end <= start), else the one whose
--- note started earliest (lowest voice on a tie) is stolen and that note's
--- end cut to the stealer's start. The web panel mirrors this allocator;
--- tests/fixtures/score_alloc.json holds both to the same answers. A song
--- source's own allocator runs in Rust (`ppu_core::song::allocate`) and has
--- no h.events — the native handle's fields all read through __song_get.
+-- score{ song = "<name>", loop = true? } -> plays a `song`-kind source
+-- named `<name>` (PSNG bytes, decoded/compiled/validated in Rust — see
+-- __song_load) on the shared 8-voice pool: the whole song plays natively on
+-- the audio tick, with no Lua timer, and the returned handle reads live
+-- through __song_get (see below). Re-adding that source (add_source, same
+-- name) reloads it in place in Rust, keeping its musical position
+-- (LuaEngine::reload_song). No source named `<name>` is a setup error.
 --
 -- A built-in sound goes through bank() (preset ADSR/pitch); any other name
--- is an uploaded sample with a flat ADSR — shared by both paths (`place`,
--- below), so a toy playing several scores places each sound once. `note`
--- pitches the row with note(row.note, base); without one a drum keeps its
--- preset pitch.
--- Returns { tick, length, playing, song, play(), stop() } (plus `events`
--- for the Lua path); stop() keys every voice off and pauses, play()
--- resumes, a finished loop = false song rewinds. Setup-only, like song{}.
-local VELOCITY = { ["1"] = 32, ["2"] = 64, ["3"] = 96, ["4"] = 127 }
-local STEP_COUNTS = { [8] = true, [16] = true, [32] = true }
+-- is an uploaded sample with a flat ADSR (`place`, below), so a toy playing
+-- several songs places each sound once. `note` pitches the row with
+-- note(row.note, base); without one a drum keeps its preset pitch.
+--
+-- Returns { tick, length, playing, song, play(), stop() }, all but `song`
+-- read live through __song_get; stop() keys every voice off and pauses,
+-- play() resumes, a finished loop = false song rewinds. Setup-only, like
+-- song{}.
 local FLAT = { a = 15, d = 0, s = 7, r = 0 }
-
--- The song's data: `data` as given, or `seq_<id>()` for `song = "<id>"`.
-local function song_data(cfg)
-  if cfg.song ~= nil then
-    if cfg.data ~= nil then
-      error("score: give data or song, not both")
-    end
-    local f = _ENV["seq_" .. tostring(cfg.song)]
-    if type(f) ~= "function" then
-      error("score: no song function seq_" .. tostring(cfg.song) .. "()")
-    end
-    return f()
-  end
-  return cfg.data
-end
-
--- Validates `d` and compiles it into (rows, events, length, at, slots),
--- `at(i)` being the tick step `i` (counted across the arrangement) starts
--- at, and slots[s] = { name, start, n } arrangement slot s's pattern
--- name, first step and step count. `place(name)` turns a row's sound
--- name into an instrument; returning nil (a reload that names a sound
--- not placed at setup) makes compile return nil.
-local function compile(d, place)
-  if type(d) ~= "table" then
-    error("score: data must be a song table, e.g. seq_beat1()")
-  end
-  -- Capped at 400: a step is then >= 9.375 ticks, so even at swing 75 two
-  -- steps never round to the same tick, keeping compile order (slot, step,
-  -- row) identical to (start, row).
-  if type(d.tempo) ~= "number" or d.tempo < 1 or d.tempo > 400 then
-    error("score: tempo must be 1..400")
-  end
-  local swing = d.swing or 0
-  if type(swing) ~= "number" or swing < 0 or swing > 75 then
-    error("score: swing must be 0..75")
-  end
-  if type(d.rows) ~= "table" or #d.rows == 0 then
-    error("score: rows must list at least one row")
-  end
-  if type(d.patterns) ~= "table" then
-    error("score: patterns must be a table")
-  end
-  if type(d.arrangement) ~= "table" or #d.arrangement == 0 then
-    error("score: arrangement must name at least one pattern")
-  end
-
-  local rows = {}
-  for i = 1, #d.rows do
-    local row = d.rows[i]
-    local name = type(row) == "table" and row.sound
-    if type(name) ~= "string" then
-      error("score: row " .. i .. " needs sound = \"name\"")
-    end
-    local inst = place(name, i)
-    if inst == nil then
-      return nil
-    end
-    local pitch = inst.pitch or 0x1000
-    if row.note ~= nil then
-      local ok, p = pcall(note, row.note, inst.base)
-      if not ok then
-        error("score: row " .. i .. " bad note '" .. tostring(row.note) .. "'")
-      end
-      pitch = p
-    end
-    local pan = math.max(-1, math.min(1, inst.pan or 0))
-    local vol = inst.vol or 127
-    rows[i] = { inst = inst, pitch = pitch, l = vol * math.min(1, 1 - pan), r = vol * math.min(1, 1 + pan) }
-  end
-
-  local steps = {}
-  for pname, pat in pairs(d.patterns) do
-    local where = "score: pattern " .. tostring(pname)
-    if type(pat) ~= "table" or #pat ~= #rows then
-      error(where .. " needs one step string per row (" .. #rows .. ")")
-    end
-    for r = 1, #rows do
-      local s = pat[r]
-      if type(s) ~= "string" then
-        error(where .. " row " .. r .. " must be a step string")
-      end
-      local n = string.len(s)
-      if not STEP_COUNTS[n] then
-        error(where .. " row " .. r .. " has " .. n .. " steps; use 8, 16 or 32")
-      end
-      if steps[pname] and n ~= steps[pname] then
-        error(where .. " row " .. r .. " has " .. n .. " steps, row 1 has " .. steps[pname])
-      end
-      steps[pname] = n
-      local prev = "."
-      for k = 1, n do
-        local c = string.sub(s, k, k)
-        if c == "-" and prev == "." then
-          error(where .. " row " .. r .. " step " .. k .. ": '-' holds nothing")
-        elseif c ~= "-" and c ~= "." and VELOCITY[c] == nil then
-          error(where .. " row " .. r .. " step " .. k .. ": bad '" .. c .. "' (use 1-4, - or .)")
-        end
-        prev = c
-      end
-    end
-  end
-  for i = 1, #d.arrangement do
-    if steps[d.arrangement[i]] == nil then
-      error("score: arrangement slot " .. i .. " names unknown pattern '" .. tostring(d.arrangement[i]) .. "'")
-    end
-  end
-
-  -- 250 ticks/s, 4 sixteenths/beat.
-  local step_ticks = 3750 / d.tempo
-  local function at(i)
-    if i % 2 == 1 then
-      i = i + swing / 100
-    end
-    return math.floor(i * step_ticks + 0.5)
-  end
-
-  local events, busy, base, slots = {}, {}, 0, {}
-  for slot = 1, #d.arrangement do
-    local pat = d.patterns[d.arrangement[slot]]
-    local n = steps[d.arrangement[slot]]
-    slots[slot] = { name = d.arrangement[slot], start = base, n = n }
-    for k = 1, n do
-      for r = 1, #rows do
-        local vel = VELOCITY[string.sub(pat[r], k, k)]
-        if vel then
-          local e = k + 1
-          while e <= n and string.sub(pat[r], e, e) == "-" do
-            e = e + 1
-          end
-          local row = rows[r]
-          local ev = {
-            start = at(base + k - 1), ["end"] = at(base + e - 1), row = r, pitch = row.pitch,
-            l = math.floor(row.l * vel / 127 + 0.5), r = math.floor(row.r * vel / 127 + 0.5),
-          }
-          local v
-          for u = 0, 7 do
-            if busy[u] == nil or busy[u]["end"] <= ev.start then
-              v = u
-              break
-            end
-          end
-          if v == nil then
-            v = 0
-            for u = 1, 7 do
-              if busy[u].start < busy[v].start then
-                v = u
-              end
-            end
-            busy[v]["end"] = ev.start
-          end
-          ev.voice = v
-          busy[v] = ev
-          events[#events + 1] = ev
-        end
-      end
-    end
-    base = base + n
-  end
-  return rows, events, at(base), at, slots
-end
-
--- Whether the names of a[ai..aj] appear in b[bi..bj], in order.
-local function in_order(a, ai, aj, b, bi, bj)
-  while ai <= aj and bi <= bj do
-    if a[ai].name == b[bi].name then
-      ai = ai + 1
-    end
-    bi = bi + 1
-  end
-  return ai > aj
-end
-
--- The slot of `new` that is occurrence `s` of `old` (arrangement slots, as
--- compile returns them), tried in this order:
--- * the same index while the two agree up to s;
--- * counted from the end while they agree from s on (a slot inserted or
---   deleted before it);
--- * s and a neighbour swapped, nothing else changed: the neighbour's index
---   (the playing slot moved);
--- * slots only removed, or only inserted, anywhere (the shorter
---   arrangement's names appear in the longer one in order), s kept: its
---   first new index that works;
--- * the same index when the arrangement is still the same length (a slot
---   replaced in place);
--- * else nil: the slot is gone.
-local function same_slot(old, new, s)
-  local p = 0
-  while p < s and p < #new and old[p + 1].name == new[p + 1].name do
-    p = p + 1
-  end
-  if p == s then
-    return s
-  end
-  if p < s then
-    local q = 0
-    while q <= #old - s and q < #new and old[#old - q].name == new[#new - q].name do
-      q = q + 1
-    end
-    if q > #old - s then
-      return #new - (#old - s)
-    end
-  end
-  if #new == #old then
-    for _, t in ipairs({ s - 1, s + 1 }) do
-      if old[t] and new[s].name == old[t].name and new[t].name == old[s].name then
-        local same = true
-        for i = 1, #old do
-          if i ~= s and i ~= t and old[i].name ~= new[i].name then
-            same = false
-            break
-          end
-        end
-        if same then
-          return t
-        end
-      end
-    end
-    return s
-  end
-  for ns = 1, #new do
-    if new[ns].name == old[s].name then
-      local kept
-      if #new < #old then
-        kept = in_order(new, 1, ns - 1, old, 1, s - 1) and in_order(new, ns + 1, #new, old, s + 1, #old)
-      else
-        kept = in_order(old, 1, s - 1, new, 1, ns - 1) and in_order(old, s + 1, #old, new, ns + 1, #new)
-      end
-      if kept then
-        return ns
-      end
-    end
-  end
-  return nil
-end
-
--- Live `song = "<id>"` scores, by id: each entry is that handle's reloader.
-__score_songs = {}
--- True once any `data = ` score is set up: its table may have come from any
--- seq_ function, so an edit to a song no score plays by name can't reload
--- in place; __score_prepare returns false for it instead.
-__score_data_live = false
-
--- Called by the engine after it re-runs a changed song file in the live VM.
--- Compiles every score bound to `id` from the new seq_<id>() and returns a
--- function that swaps them all in, keeping each one's step; nothing changes
--- until the engine calls it, after every changed song has prepared. A song
--- no score plays by name commits as a no-op: the engine's re-run already
--- replaced seq_<id>, unless a `data =` score is live, in which case it
--- returns false, touching nothing (that table may be this song's; the
--- recompile picks the edit up). A row that names a sound its score didn't
--- place at setup also returns false (placement needs the setup window). A
--- data error raises: the old events keep playing.
-function __score_prepare(id)
-  local list = __score_songs[id]
-  if list == nil then
-    if __score_data_live then
-      return false
-    end
-    return function() end
-  end
-  local d = song_data({ song = id })
-  local commits = {}
-  for i = 1, #list do
-    local commit = list[i](d)
-    if commit == nil then
-      return false
-    end
-    commits[i] = commit
-  end
-  return function()
-    for i = 1, #commits do
-      commits[i]()
-    end
-  end
-end
 
 -- Placed sounds by name, shared by every score{}: a toy that plays several
 -- songs places each sample in sound RAM once. The kit re-runs on every
@@ -612,8 +312,8 @@ end
 local score_insts = {}
 
 -- Turn a row's sound name into a placed instrument, placing it in sound RAM
--- the first time any score{} (Lua- or song-sourced) names it — see
--- score_insts above. `i` is 1-based, used only in error messages.
+-- the first time any score{} names it — see score_insts above. `i` is
+-- 1-based, used only in error messages.
 local function place(name, i)
   if score_insts[name] == nil then
     if BANK[name] ~= nil then
@@ -634,9 +334,7 @@ local function place(name, i)
 end
 
 -- A song-source row's pitch: note(row.note, inst.base) if it has a note,
--- else the instrument's own pitch (or 0x1000) — the same rule compile()
--- applies to a Lua row, just factored out so both paths raise the same
--- message.
+-- else the instrument's own pitch (or 0x1000).
 local function row_pitch(row, inst, i)
   if row.note == nil then
     return inst.pitch or 0x1000
@@ -668,150 +366,32 @@ end
 
 function score(cfg)
   cfg = cfg or {}
-
-  -- A `song`-kind source named cfg.song, if there is one, plays natively
-  -- and returns here; `data` always skips this (see the doc comment above).
-  if cfg.song ~= nil and cfg.data == nil then
-    local id, song_rows = __song_load(tostring(cfg.song))
-    if id ~= nil then
-      local insts, pitches = {}, {}
-      for i = 1, #song_rows do
-        local row = song_rows[i]
-        local inst = place(row.sound, i)
-        insts[i] = inst
-        pitches[i] = row_pitch(row, inst, i)
-      end
-      ensure_audible()
-      __song_start(id, insts, pitches, cfg.loop ~= false)
-      local h = setmetatable({ song = tostring(cfg.song), __song = id }, {
-        __index = function(_, k) return __song_get(id, k) end,
-      })
-      h.play = function()
-        __song_play(id)
-        __score = h
-      end
-      h.stop = function() __song_stop(id) end
-      __score = h
-      return h
-    end
-  end
-
-  local rows, events, length, at, slots = compile(song_data(cfg), place)
-
   if cfg.song == nil then
-    __score_data_live = true
+    error("score: give song = \"<name>\" (a song source)")
+  end
+  local id, song_rows = __song_load(tostring(cfg.song))
+  if id == nil then
+    error("score: no song source named '" .. tostring(cfg.song) .. "'")
+  end
+  local insts, pitches = {}, {}
+  for i = 1, #song_rows do
+    local row = song_rows[i]
+    local inst = place(row.sound, i)
+    insts[i] = inst
+    pitches[i] = row_pitch(row, inst, i)
   end
   ensure_audible()
-  local loop = cfg.loop ~= false
-  local h = { tick = 0, length = length, playing = true, events = events }
+  __song_start(id, insts, pitches, cfg.loop ~= false)
   -- The engine reads __score after every frame (LuaEngine::score_view) for
   -- the studio's playhead: the most recently started score is the one shown.
-  __score = h
-  local cursor, ends = 1, {}
-  local function all_off()
-    for v = 0, 7 do
-      koff(v)
-      ends[v] = nil
-    end
-  end
-
-  if cfg.song ~= nil then
-    local id = tostring(cfg.song)
-    h.song = id
-    local list = __score_songs[id] or {}
-    __score_songs[id] = list
-    list[#list + 1] = function(d)
-      local new_rows, new_events, new_length, new_at, new_slots = compile(d, function(name)
-        return score_insts[name]
-      end)
-      if new_rows == nil then
-        return nil
-      end
-      return function()
-        if h.playing then
-          all_off()
-        end
-        -- Keep the musical position, not the tick: the arrangement slot the
-        -- next tick falls in, the step within it and how far into that step,
-        -- placed on the new arrangement (see same_slot) and step times, the
-        -- offset kept inside the step. A step past the slot's new length
-        -- lands on the slot's end: the next slot's start, or the song's end.
-        -- Unchanged step times map a tick to itself.
-        local i = 0
-        while at(i + 1) <= h.tick do
-          i = i + 1
-        end
-        local s = #slots
-        while s > 1 and slots[s].start > i do
-          s = s - 1
-        end
-        local ns = same_slot(slots, new_slots, s)
-        if ns and i < slots[s].start + slots[s].n then
-          local k = i - slots[s].start
-          if k < new_slots[ns].n then
-            local j = new_slots[ns].start + k
-            h.tick = new_at(j) + math.min(h.tick - at(i), new_at(j + 1) - new_at(j) - 1)
-          else
-            h.tick = new_at(new_slots[ns].start + new_slots[ns].n)
-          end
-        else
-          h.tick = new_length
-        end
-        rows, events, at, slots = new_rows, new_events, new_at, new_slots
-        h.events, h.length = new_events, new_length
-        -- A song now shorter than its position, or whose slot is gone, ends
-        -- here, as the timer's end branch would: it wraps, or stops (loop =
-        -- false), rewound.
-        if h.tick >= h.length then
-          h.tick = 0
-          h.playing = h.playing and loop
-        end
-        -- Re-seek: the next event due at or after the next tick to play.
-        cursor = 1
-        while events[cursor] and events[cursor].start < h.tick do
-          cursor = cursor + 1
-        end
-      end
-    end
-  end
-
-  timer(0, 32, function()
-    if not h.playing then
-      return
-    end
-    local t = h.tick
-    if t >= h.length then
-      all_off()
-      cursor, t, h.tick = 1, 0, 0
-      if not loop then
-        h.playing = false
-        return
-      end
-    end
-    for v = 0, 7 do
-      if ends[v] and ends[v] <= t then
-        koff(v)
-        ends[v] = nil
-      end
-    end
-    while events[cursor] and events[cursor].start <= t do
-      local ev = events[cursor]
-      sfx(rows[ev.row].inst, ev.voice)
-      voice[ev.voice].pitch = ev.pitch
-      voice[ev.voice].vol = { l = ev.l, r = ev.r }
-      ends[ev.voice] = ev["end"]
-      cursor = cursor + 1
-    end
-    h.tick = t + 1
-  end)
-
+  local h = setmetatable({ song = tostring(cfg.song), __song = id }, {
+    __index = function(_, k) return __song_get(id, k) end,
+  })
   h.play = function()
-    h.playing = true
+    __song_play(id)
     __score = h
   end
-  h.stop = function()
-    h.playing = false
-    all_off()
-  end
+  h.stop = function() __song_stop(id) end
+  __score = h
   return h
 end
