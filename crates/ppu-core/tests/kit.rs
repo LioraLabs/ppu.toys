@@ -1170,8 +1170,8 @@ fn add_song_source(e: &mut LuaEngine, name: &str, song: &Song) {
 }
 
 /// Mixed-tempo (125/150 BPM), odd-length (44-unit) B pattern, 50% swing,
-/// arrangement A,B,A: exercises every knob the PPU-206 timing amendment's
-/// `tick_in_slot` formula has, for `score_view_reports_a_song_sources_slot_and_step`.
+/// arrangement A,B,A: exercises every knob the song timing's `tick_in_slot`
+/// formula (song.rs) has, for `score_view_reports_a_song_sources_slot_and_step`.
 fn slot_step_song() -> Song {
     let note = |at| Note {
         at,
@@ -1211,7 +1211,7 @@ fn slot_step_song() -> Song {
 }
 
 /// Each entry is (arrangement slot, tick the global 16th step starts at),
-/// hand-derived from the PPU-206 timing amendment's `tick_in_slot` formula
+/// hand-derived from the song timing's `tick_in_slot` formula (song.rs)
 /// (`3750 / bpm` ticks per 16th; a pair's odd 16th warps by `+swing`, its
 /// even one is untouched, only when the WHOLE pair fits inside the pattern):
 ///
@@ -1270,6 +1270,11 @@ fn score_view_reports_a_song_sources_slot_and_step() {
         ppu_core::song::compile(&song).unwrap().timing.length,
         SLOT_STEP_SONG_LENGTH,
         "the hand-derived song length must match the compiled one"
+    );
+    assert_eq!(
+        ppu_core::song_analyze::analyze(&song).unwrap().slot_steps,
+        vec![0, 4, 8],
+        "slot_steps must tie the readout's global step to the voice strip's own indexing"
     );
 
     // Hand-derived literal (see STEP_STARTS's doc comment): the swung 2nd
