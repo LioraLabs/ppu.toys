@@ -1,6 +1,7 @@
 //! The built-in sample bank (`crates/ppu-core/src/bank.rs`) and its kit
 //! sugar (`bank()`, and `score{}` opening the mixer), through `LuaEngine`'s public API.
-use ppu_core::song::{encode, Note, Pattern, Row, Song};
+mod common;
+use ppu_core::song::{Note, Pattern, Row, Song};
 use ppu_core::{bank, convert_sample, ConvertSampleOptions, LuaEngine, SourcePayload};
 
 const FAST_ADSR: &str = "adsr = {a = 15, d = 0, s = 7, r = 0}";
@@ -9,17 +10,8 @@ fn is_silent(audio: &[i16]) -> bool {
     audio.iter().all(|&s| s == 0)
 }
 
-/// Registers `song` as a `[3, 5, <psng bytes>]` source under `name` — the
-/// `add_source` shape a `song`-kind source commits to.
-fn add_song_source(e: &mut LuaEngine, name: &str, song: &Song) {
-    let mut payload = vec![3u8, 5];
-    payload.extend_from_slice(&encode(song));
-    e.add_source(name, &payload).unwrap();
-}
-
 /// A one-row, one-pattern song: "piano" at C4 (MIDI 60), hit on every other
-/// 16th over an 8-16th (96-unit) pattern — the PSNG equivalent of the old
-/// kit step string `'4-4-4-4-'` at 120 BPM.
+/// 16th over an 8-16th (96-unit) pattern, at 120 BPM.
 fn piano_song() -> Song {
     let note = |at| Note {
         at,
@@ -188,7 +180,7 @@ fn bank_chains_placements_and_applies_presets() {
 fn score_opens_master_volume_when_unset() {
     let tune = piano_song();
     let mut e = LuaEngine::new();
-    add_song_source(&mut e, "tune", &tune);
+    common::add_song_source(&mut e, "tune", &tune);
     e.set_source("h = score{ song = \"tune\" }\nfunction frame(t, f) end")
         .unwrap();
     let mut peak = 0i32;
@@ -209,7 +201,7 @@ fn score_opens_master_volume_when_unset() {
     assert_eq!(e.dsp_view().mvol.l, 127);
 
     let mut quiet = LuaEngine::new();
-    add_song_source(&mut quiet, "tune", &tune);
+    common::add_song_source(&mut quiet, "tune", &tune);
     quiet
         .set_source(
             "dsp.mvol = { l = 20, r = 20 }\nh = score{ song = \"tune\" }\nfunction frame(t, f) end",

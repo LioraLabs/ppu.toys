@@ -1252,16 +1252,8 @@ fn stress_ten_minute_song_decodes_and_compiles_within_budget() {
 // isolation; these exercise the NEW wiring: a `song`-kind source played by
 // `score{}` with no Lua timer involved. ------------------------------------
 
-/// Registers `song` as a `[3, 5, <psng bytes>]` source under `name` (the
-/// `add_source` shape a `song`-kind source commits to).
-fn add_song_source(e: &mut LuaEngine, name: &str, song: &Song) {
-    let mut payload = vec![3u8, 5];
-    payload.extend_from_slice(&encode(song));
-    e.add_source(name, &payload).unwrap();
-}
-
 /// `score{ song = "<name>" }` with no song source by that name is a setup
-/// error naming it — the old Lua-function fallback is gone.
+/// error naming it.
 #[test]
 fn score_with_no_such_song_source_names_it_in_the_error() {
     let err = LuaEngine::new()
@@ -1328,7 +1320,7 @@ fn song_handle_reports_length_advances_and_stop_holds_the_tick() {
     let want_length = compile(&song).expect("compiles").timing.length;
 
     let mut e = LuaEngine::new();
-    add_song_source(&mut e, "beat", &song);
+    common::add_song_source(&mut e, "beat", &song);
     e.set_source(
         "h = score{ song = \"beat\" }\n\
          function frame(t, f)\n\
@@ -1360,7 +1352,7 @@ fn song_handle_reports_length_advances_and_stop_holds_the_tick() {
 fn song_handle_with_loop_false_finishes_and_stops_playing() {
     let song = small_song(0xff); // ~125 ticks == ~0.5s
     let mut e = LuaEngine::new();
-    add_song_source(&mut e, "beat", &song);
+    common::add_song_source(&mut e, "beat", &song);
     e.set_source(
         "h = score{ song = \"beat\", loop = false }\n\
          function frame() sram.playing = h.playing end",
@@ -1374,6 +1366,25 @@ fn song_handle_with_loop_false_finishes_and_stops_playing() {
     assert_eq!(got["playing"], false, "a non-looping song must finish");
 }
 
+/// `score_view()` goes absent once a `loop = false` song finishes on its
+/// own, same as an explicit `stop()`.
+#[test]
+fn score_view_is_absent_once_a_loop_false_song_finishes() {
+    let song = small_song(0xff); // ~125 ticks == ~0.5s
+    let mut e = LuaEngine::new();
+    common::add_song_source(&mut e, "beat", &song);
+    e.set_source(
+        "h = score{ song = \"beat\", loop = false }\n\
+                  function frame() end",
+    )
+    .unwrap();
+    // 120 frames at 60fps == 2s, 4x the song's length.
+    for f in 0..120u32 {
+        e.frame(f as f64 / 60.0, f).unwrap();
+    }
+    assert_eq!(e.score_view(), None, "finished: no readout");
+}
+
 /// `score_view()` (the studio playhead readout) reports a song source's
 /// live tick/length/song name, and goes absent once it's stopped.
 #[test]
@@ -1382,7 +1393,7 @@ fn score_view_reports_a_song_sources_tick_and_is_absent_when_stopped() {
     let want_length = compile(&song).expect("compiles").timing.length;
 
     let mut e = LuaEngine::new();
-    add_song_source(&mut e, "beat", &song);
+    common::add_song_source(&mut e, "beat", &song);
     e.set_source(
         "h = score{ song = \"beat\" }\n\
          function frame(t, f) if f == 5 then h.stop() end end",
@@ -1466,7 +1477,7 @@ fn native_song_never_touches_a_voice_outside_its_mask() {
     );
 
     let mut e = LuaEngine::new();
-    add_song_source(&mut e, "beat", &song);
+    common::add_song_source(&mut e, "beat", &song);
     e.set_source(
         "h = score{ song = \"beat\" }\n\
          function frame()\n\
@@ -1530,13 +1541,13 @@ fn a_truncated_song_source_names_the_chunk_at_score_setup() {
 fn an_invalid_song_source_names_the_pattern_and_note_at_score_setup() {
     let mut song = valid_song();
     // 256, not e.g. 200: this note goes through encode()/decode() (via
-    // add_song_source), and vel's wire byte shares its bit 7 with the
+    // common::add_song_source), and vel's wire byte shares its bit 7 with the
     // end-nudged flag. 200 has bit 7 set and would misdecode as end-nudged;
     // 256 doesn't, so it round-trips intact for validate() to still reject.
     song.patterns[0].notes[0].vel = 256;
 
     let mut e = LuaEngine::new();
-    add_song_source(&mut e, "beat", &song);
+    common::add_song_source(&mut e, "beat", &song);
     let err = e.set_source("score{ song = \"beat\" }").unwrap_err();
     assert!(
         err.message.contains("pattern 'A'")
@@ -1552,7 +1563,7 @@ fn an_invalid_song_source_names_the_pattern_and_note_at_score_setup() {
 #[test]
 fn dma_refuses_a_song_source() {
     let mut e = LuaEngine::new();
-    add_song_source(&mut e, "beat", &valid_song());
+    common::add_song_source(&mut e, "beat", &valid_song());
     let err = e.set_source("dma(\"beat\")").unwrap_err();
     assert!(err.message.contains("beat"), "{}", err.message);
 }

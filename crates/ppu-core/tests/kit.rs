@@ -5,7 +5,7 @@
 //! `audio`), never reaching into `Dsp` internals.
 mod common;
 
-use ppu_core::song::{encode, Note, Pattern, Row, Song};
+use ppu_core::song::{Note, Pattern, Row, Song};
 use ppu_core::LuaEngine;
 use serde_json::Value;
 
@@ -953,15 +953,6 @@ fn song_first_step_offset_repeats_after_reset() {
 
 // ---- score{} ----------------------------------------------------------
 
-/// Registers `song` as a `[3, 5, <psng bytes>]` source under `name` — the
-/// `add_source` shape a `song`-kind source commits to (mirrors
-/// `tests/song.rs`'s own `add_song_source`).
-fn add_song_source(e: &mut LuaEngine, name: &str, song: &Song) {
-    let mut payload = vec![3u8, 5];
-    payload.extend_from_slice(&encode(song));
-    e.add_source(name, &payload).unwrap();
-}
-
 /// Mixed-tempo (125/150 BPM), odd-length (44-unit) B pattern, 50% swing,
 /// arrangement A,B,A: exercises every knob the song timing's `tick_in_slot`
 /// formula (song.rs) has, for `score_view_reports_a_song_sources_slot_and_step`.
@@ -1077,7 +1068,7 @@ fn score_view_reports_a_song_sources_slot_and_step() {
     assert_eq!(expected_slot_step(158), (1, 5));
 
     let mut e = LuaEngine::new();
-    add_song_source(&mut e, "beat", &song);
+    common::add_song_source(&mut e, "beat", &song);
     e.set_source("h = score{ song = \"beat\", loop = false }\nfunction frame() end")
         .unwrap();
 
@@ -1137,8 +1128,8 @@ fn one_row_song(sound: &str) -> Song {
 fn scores_share_each_placed_sound() {
     let mut e = LuaEngine::new();
     common::add_sample(&mut e, "mine");
-    add_song_source(&mut e, "a", &one_row_song("mine"));
-    add_song_source(&mut e, "b", &one_row_song("mine"));
+    common::add_song_source(&mut e, "a", &one_row_song("mine"));
+    common::add_song_source(&mut e, "b", &one_row_song("mine"));
     e.set_source(
         "local real, n = dma, 0\n\
          dma = function(...) n = n + 1 return real(...) end\n\
@@ -1161,7 +1152,7 @@ fn scores_share_each_placed_sound() {
 #[test]
 fn score_built_in_sound_ram_failure_names_the_row() {
     let mut e = LuaEngine::new();
-    add_song_source(&mut e, "beat", &one_row_song("bass"));
+    common::add_song_source(&mut e, "beat", &one_row_song("bass"));
     let err = e
         .set_sources(&[(
             "main.lua",

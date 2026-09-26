@@ -276,12 +276,13 @@ The handle returns `{ tick, length, playing, song, play(), stop() }`:
 `tick`/`length` are the position and total length in engine ticks (4 ms
 each), `stop()` keys every voice off and pauses, `play()` resumes from
 where it left off, and a finished `loop = false` song rewinds instead of
-holding. A row naming a sound nothing placed at setup, or a song that
-fails to decode or doesn't validate (an out-of-range field, a note past
-its pattern's end, an arrangement slot naming an unknown pattern, ...),
-stops the program with an error naming the pattern and note. `score{ song
-= "<name>" }` with no source by that name is `score: no song source named
-'<name>'`.
+holding. At setup, a row naming a sound that's neither a built-in name nor
+an uploaded sample stops the program with an error naming the row (`score:
+row 1 sound 'x': ...`); a song that fails to decode names the chunk it
+failed on; a song that doesn't validate (an out-of-range field, a note past
+its pattern's end, an arrangement slot naming an unknown pattern, ...)
+names the pattern and note. `score{ song = "<name>" }` with no source by
+that name is `score: no song source named '<name>'`.
 
 A song played by name reloads live. Re-adding a source under the same name
 (the Studio does this as you edit) swaps every playing `score{}` over to

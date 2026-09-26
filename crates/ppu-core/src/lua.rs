@@ -3173,7 +3173,7 @@ fn song_rows<'gc>(ctx: piccolo::Context<'gc>, song: &crate::song::Song) -> Table
 /// `__song_stop` — the natives kit.lua's `score{ song = }` path drives (see
 /// `kit.lua`'s own doc comment). `load`/`start` share `dma`/`timer`'s
 /// init-window gate; `get`/`play`/`stop` are callable any time (frame(),
-/// hooks), matching a Lua score handle's `play()`/`stop()`.
+/// hooks), matching the `score{}` handle's `play()`/`stop()`.
 fn install_song_natives(
     ctx: piccolo::Context<'_>,
     store: Rc<RefCell<HashMap<String, crate::source::SourcePayload>>>,

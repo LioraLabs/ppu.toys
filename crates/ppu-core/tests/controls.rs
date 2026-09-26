@@ -8,19 +8,11 @@
 //! `LuaEngine`'s public API (`set_sources`/`frame`/`memory`/`audio`,
 //! `LineTable.rows[y]`) — never reaching into the VM.
 mod common;
-use ppu_core::song::{encode, Note, Pattern, Row, Song};
+use ppu_core::song::{Note, Pattern, Row, Song};
 use ppu_core::LuaEngine;
 
-/// Registers `song` as a `[3, 5, <psng bytes>]` source under `name` — the
-/// `add_source` shape a `song`-kind source commits to.
-fn add_song_source(e: &mut LuaEngine, name: &str, song: &Song) {
-    let mut payload = vec![3u8, 5];
-    payload.extend_from_slice(&encode(song));
-    e.add_source(name, &payload).unwrap();
-}
-
-/// A minimal one-note "bell" song, standing in for the old `tune = { ... }`
-/// data-chunk table `score{ data = tune }` used to play.
+/// A minimal one-note "bell" song: a single row playing one note across
+/// the whole pattern.
 fn bell_song() -> Song {
     Song {
         tempo: 12000,
@@ -1487,14 +1479,14 @@ fn controls_with_setup(setup_body: &str, pokes_body: &str) -> String {
 
 /// `apply_setup()` runs after every user/data chunk AND after `init()`,
 /// still inside the init window: it can make setup-only calls (`score{}`
-/// registers a timer through `bank()`/`timer()`), and its own writes land
-/// on top of init()'s.
+/// resolves its song source and starts it playing natively), and its own
+/// writes land on top of init()'s.
 #[test]
 fn controls_apply_setup_runs_after_init_inside_the_init_window() {
     let main = "function init() n = 1 end\n\
                 function frame(t, f) bg[2].scroll.x = n end\n";
     let mut e = LuaEngine::new();
-    add_song_source(&mut e, "tune", &bell_song());
+    common::add_song_source(&mut e, "tune", &bell_song());
     e.set_sources(&[
         ("main.lua", main),
         (
@@ -1587,8 +1579,7 @@ fn controls_apply_setup_change_recompiles_but_poke_change_stays_hot() {
 /// apply_setup reads a data chunk's global through the controls tracking
 /// proxy (see controls_env.lua's doc comment), so a table's own length
 /// (`#tune.rows`) must see the real table, not zero — the proxy forwards
-/// `__len`/`__pairs`. This used to be exercised through `score{ data = tune
-/// }`'s row count; that path is gone (PPU-214), so it's read directly here.
+/// `__len`/`__pairs`, read directly here on a plain data-chunk table.
 #[test]
 fn controls_apply_setup_reads_a_data_chunk_table_length_through_the_proxy() {
     let data = "tune = { rows = { 1, 2, 3 } }";

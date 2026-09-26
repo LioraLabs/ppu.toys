@@ -5,15 +5,13 @@
 mod common;
 
 use ppu_core::render_frame;
-use ppu_core::song::{encode, Note, Pattern, Row, Song};
+use ppu_core::song::{Note, Pattern, Row, Song};
 use ppu_core::{DspSampleView, LuaEngine};
 use std::path::Path;
 
 /// A small two-row song (a `kick` hit, then a `mybass` note) — the
 /// `every_lua_snippet_in_the_chapter_runs` stand-in for a `beat1` song
-/// source, registered the way a `song`-kind source commits to
-/// (`[3, 5, <psng bytes>]`, mirrors `tests/song.rs`/`tests/kit.rs`'s own
-/// `add_song_source`).
+/// source, registered through `common::add_song_source`.
 fn beat1_song() -> Song {
     Song {
         tempo: 12000, // 120 BPM
@@ -61,12 +59,6 @@ fn beat1_song() -> Song {
         }],
         arrangement: vec![0],
     }
-}
-
-fn add_song_source(e: &mut LuaEngine, name: &str, song: &Song) {
-    let mut payload = vec![3u8, 5];
-    payload.extend_from_slice(&encode(song));
-    e.add_source(name, &payload).unwrap();
 }
 
 /// The toy. Byte-identical to the fenced block in docs/audio.md
@@ -308,7 +300,7 @@ fn every_lua_snippet_in_the_chapter_runs() {
             &mut |e| {
                 common::add_sample(e, "kick");
                 common::add_sample(e, "mybass");
-                add_song_source(e, "beat1", &beat1_song());
+                common::add_song_source(e, "beat1", &beat1_song());
             },
             &[("main.lua", block)],
         );

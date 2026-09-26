@@ -2,6 +2,7 @@
 //! Mirrors the private helpers in golden_demos.rs — that file predates this
 //! module and deliberately keeps its own copies (PPU-96 owns the unification).
 #![allow(dead_code)]
+use ppu_core::song::{encode, Song};
 use ppu_core::{
     convert_sample, convert_source, ConvertOptions, ConvertSampleOptions, LuaEngine, SourceKind,
     HEIGHT, WIDTH,
@@ -65,6 +66,14 @@ pub fn add_sample(e: &mut LuaEngine, name: &str) {
     )
     .unwrap();
     e.add_source(name, &payload.encode()).unwrap();
+}
+
+/// Registers `song` as a `[3, 5, <psng bytes>]` source under `name` — the
+/// `add_source` shape a `song`-kind source commits to.
+pub fn add_song_source(e: &mut LuaEngine, name: &str, song: &Song) {
+    let mut payload = vec![3u8, 5];
+    payload.extend_from_slice(&encode(song));
+    e.add_source(name, &payload).unwrap();
 }
 
 /// Build an engine over `files` (name, source), mirroring web tab order.
