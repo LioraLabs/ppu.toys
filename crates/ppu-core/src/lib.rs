@@ -69,6 +69,9 @@ pub mod bank;
 // Song format: PSNG codec, timing, compiler and voice allocator.
 pub mod song;
 
+// Per-step voice load of a compiled song (the panel's voice strip).
+pub mod song_analyze;
+
 /// Native SNES PPU output dimensions (the only resolution v1 targets).
 pub const WIDTH: usize = 256;
 pub const HEIGHT: usize = 224;

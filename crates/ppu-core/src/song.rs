@@ -24,7 +24,8 @@ const TEMPO_RANGE: std::ops::RangeInclusive<u32> = 100..=40000;
 
 /// A song: tempo/swing/key, the voices it may use, its rows, patterns and
 /// play order.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Song {
     /// Centi-BPM (12000 = 120 BPM). Valid 100..=40000.
     pub tempo: u32,
@@ -41,7 +42,7 @@ pub struct Song {
 }
 
 /// One instrument slot a pattern's notes can point at.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Row {
     pub sound: String,
     /// MIDI note, valid 0..=127.
@@ -54,7 +55,7 @@ pub struct Row {
 
 /// A block of step data: a name, a length in units, an optional tempo
 /// override, and its notes.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Pattern {
     pub name: String,
     /// Units, >= 1.
@@ -65,7 +66,7 @@ pub struct Pattern {
 }
 
 /// One note in a pattern.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Note {
     /// Units from the pattern's start; must be < the pattern's length.
     pub at: u32,

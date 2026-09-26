@@ -518,3 +518,95 @@ fn to_set_source_result(res: Result<(), crate::LuaError>) -> Result<JsValue, JsV
     };
     serde_wasm_bindgen::to_value(&view).map_err(Into::into)
 }
+
+// --- songs: static calls, no core instance --------------------------------
+//
+// Each returns `{ ok: true, value }` or `{ ok: false, error }`. Decode and
+// encode both compile the song, so a bad song fails with the same message
+// `score{}` setup would give it.
+
+fn song_result(res: Result<JsValue, crate::song::SongError>) -> Result<JsValue, JsValue> {
+    let out = Object::new();
+    match res {
+        Ok(value) => {
+            Reflect::set(&out, &"ok".into(), &true.into())?;
+            Reflect::set(&out, &"value".into(), &value)?;
+        }
+        Err(e) => {
+            Reflect::set(&out, &"ok".into(), &false.into())?;
+            Reflect::set(&out, &"error".into(), &e.0.into())?;
+        }
+    }
+    Ok(out.into())
+}
+
+fn checked_song(bytes: &[u8]) -> Result<crate::song::Song, crate::song::SongError> {
+    let song = crate::song::decode(bytes)?;
+    crate::song::compile(&song)?;
+    Ok(song)
+}
+
+/// PSNG bytes -> the song object (`SongData` in core.ts).
+#[wasm_bindgen(js_name = decodeSong)]
+pub fn decode_song(bytes: &[u8]) -> Result<JsValue, JsValue> {
+    song_result(checked_song(bytes).and_then(|s| {
+        serde_wasm_bindgen::to_value(&s).map_err(|e| crate::song::SongError(e.to_string()))
+    }))
+}
+
+/// The song object -> PSNG bytes (`Uint8Array`).
+#[wasm_bindgen(js_name = encodeSong)]
+pub fn encode_song(song: JsValue) -> Result<JsValue, JsValue> {
+    song_result(
+        serde_wasm_bindgen::from_value::<crate::song::Song>(song)
+            .map_err(|e| crate::song::SongError(e.to_string()))
+            .and_then(|s| {
+                crate::song::compile(&s)?;
+                Ok(Uint8Array::from(crate::song::encode(&s).as_slice()).into())
+            }),
+    )
+}
+
+/// PSNG bytes -> `{ events, length, slotSteps, used, wanted, over }`, with
+/// events flattened to a Float64Array of `row, start, end, voice` quads (the
+/// TS wrapper builds the objects; per-object serde is the slow path).
+#[wasm_bindgen(js_name = analyzeSong)]
+pub fn analyze_song(bytes: &[u8]) -> Result<JsValue, JsValue> {
+    let a = match crate::song::decode(bytes).and_then(|s| crate::song_analyze::analyze(&s)) {
+        Ok(a) => a,
+        Err(e) => return song_result(Err(e)),
+    };
+    let flat: Vec<f64> = a
+        .events
+        .iter()
+        .flat_map(|e| [e.row as f64, e.start as f64, e.end as f64, e.voice as f64])
+        .collect();
+    let out = Object::new();
+    Reflect::set(
+        &out,
+        &"events".into(),
+        &js_sys::Float64Array::from(flat.as_slice()).into(),
+    )?;
+    Reflect::set(&out, &"length".into(), &(a.length as f64).into())?;
+    Reflect::set(
+        &out,
+        &"slotSteps".into(),
+        &js_sys::Uint32Array::from(a.slot_steps.as_slice()).into(),
+    )?;
+    Reflect::set(
+        &out,
+        &"used".into(),
+        &Uint8Array::from(a.used.as_slice()).into(),
+    )?;
+    Reflect::set(
+        &out,
+        &"wanted".into(),
+        &js_sys::Uint32Array::from(a.wanted.as_slice()).into(),
+    )?;
+    Reflect::set(
+        &out,
+        &"over".into(),
+        &js_sys::Uint32Array::from(a.over.as_slice()).into(),
+    )?;
+    song_result(Ok(out.into()))
+}
