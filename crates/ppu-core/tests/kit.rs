@@ -1189,6 +1189,30 @@ fn score_view_is_absent_when_stopped_or_finished() {
     assert_eq!(seen[129], None, "b finished without looping");
 }
 
+/// Scores sharing a sound place it once: a toy that plays several songs
+/// would otherwise fill sound RAM with copies of the same sample.
+#[test]
+fn scores_share_each_placed_sound() {
+    let mut e = LuaEngine::new();
+    common::add_sample(&mut e, "mine");
+    let song = serde_json::json!({
+        "tempo": 120, "rows": [{ "sound": "mine" }, { "sound": "kick" }],
+        "patterns": { "A": ["4.......", "..4....."] }, "arrangement": ["A"],
+    });
+    let got = score_sram(
+        &mut e,
+        &song,
+        "local real, n = dma, 0\n\
+         dma = function(...) n = n + 1 return real(...) end\n\
+         score{ data = sram.song }\n\
+         score{ data = sram.song }\n\
+         dma = real\n\
+         function frame() sram.placed = n end",
+        1,
+    );
+    assert_eq!(got["placed"], 2);
+}
+
 fn score_err(song: Value) -> String {
     let mut e = LuaEngine::new();
     e.set_sram(&serde_json::json!({ "song": song }).to_string());

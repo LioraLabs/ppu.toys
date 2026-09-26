@@ -593,9 +593,14 @@ function __score_prepare(id)
   end
 end
 
+-- Placed sounds by name, shared by every score{}: a toy that plays several
+-- songs places each sample in sound RAM once. The kit re-runs on every
+-- set_sources, so this starts empty with the toy's placements.
+local score_insts = {}
+
 function score(cfg)
   cfg = cfg or {}
-  local insts = {}
+  local insts = score_insts
   local rows, events, length, at, slots = compile(song_data(cfg), function(name, i)
     if insts[name] == nil then
       if BANK[name] ~= nil then
