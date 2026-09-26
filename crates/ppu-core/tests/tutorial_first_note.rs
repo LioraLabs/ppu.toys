@@ -4,8 +4,70 @@
 //! counterpart, M12).
 mod common;
 
-use ppu_core::{render_frame, DspSampleView, LuaEngine};
+use ppu_core::render_frame;
+use ppu_core::song::{encode, Note, Pattern, Row, Song};
+use ppu_core::{DspSampleView, LuaEngine};
 use std::path::Path;
+
+/// A small two-row song (a `kick` hit, then a `mybass` note) — the
+/// `every_lua_snippet_in_the_chapter_runs` stand-in for a `beat1` song
+/// source, registered the way a `song`-kind source commits to
+/// (`[3, 5, <psng bytes>]`, mirrors `tests/song.rs`/`tests/kit.rs`'s own
+/// `add_song_source`).
+fn beat1_song() -> Song {
+    Song {
+        tempo: 12000, // 120 BPM
+        swing: 0,
+        key: 0,
+        voice_mask: 0xff,
+        rows: vec![
+            Row {
+                sound: "kick".into(),
+                note: None,
+                vol: 127,
+                pan: 0,
+            },
+            Row {
+                sound: "mybass".into(),
+                note: Some(36), // C2
+                vol: 100,
+                pan: 0,
+            },
+        ],
+        patterns: vec![Pattern {
+            name: "A".into(),
+            length: 48,
+            tempo: None,
+            notes: vec![
+                Note {
+                    at: 0,
+                    row: 0,
+                    len: 12,
+                    vel: 100,
+                    voice: None,
+                    nudge: 0,
+                    end_nudge: 0,
+                },
+                Note {
+                    at: 24,
+                    row: 1,
+                    len: 24,
+                    vel: 90,
+                    voice: None,
+                    nudge: 0,
+                    end_nudge: 0,
+                },
+            ],
+        }],
+        arrangement: vec![0],
+    }
+}
+
+fn add_song_source(e: &mut LuaEngine, name: &str, song: &Song) {
+    let mut payload = vec![3u8, 5];
+    payload.extend_from_slice(&encode(song));
+    e.add_source(name, &payload).unwrap();
+}
 
 /// The toy. Byte-identical to the fenced block in docs/audio.md
 /// (`chapter_carries_the_toy_verbatim` pins it) — see `tutorial_first_light.rs`
@@ -246,6 +308,7 @@ fn every_lua_snippet_in_the_chapter_runs() {
             &mut |e| {
                 common::add_sample(e, "kick");
                 common::add_sample(e, "mybass");
+                add_song_source(e, "beat1", &beat1_song());
             },
             &[("main.lua", block)],
         );

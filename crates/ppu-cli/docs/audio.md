@@ -194,9 +194,9 @@ these globals (a user chunk that defines the same name wins):
   shorter than `steps` loops on its own length, so tracks can run
   polymeters against each other. Returns `{ step, beat, playing, div, rate,
 play(), stop() }`. Like `timer()`, `song{}` is setup-only.
-- `score{ song = "<id>" | data, loop = true }` — plays a
-  [sequencer song](#sequencer-songs) on all eight voices, chosen per note.
-  Setup-only. Returns `{ tick, length, playing, events, song, play(), stop() }`.
+- `score{ song = "<name>", loop = true }` — plays a
+  [sequencer song](#sequencer-songs) source, voices chosen per note.
+  Setup-only. Returns `{ tick, length, playing, song, play(), stop() }`.
 
 ## Built-in samples
 
@@ -238,89 +238,73 @@ built-ins and your own uploads share the same auto-chaining placement.
 
 ## Sequencer songs
 
-A sequencer song is a function returning plain data: rows of sounds,
-patterns of step strings, and an arrangement that chains them. `score{}`
-plays it, either by name (`song = "beat1"` finds `seq_beat1`) or as a table
-(`data = seq_beat1()`):
+A song source is compact binary, not Lua: rows of sounds, patterns of
+notes, and an arrangement that chains patterns into play order. You make
+one in the Studio's sequencer panel (grid or staff view), or by dropping a
+`.mid` file on the Sources panel. It holds a `tempo` (1 to 400 BPM) and
+`swing` (0 to 75, delaying every odd sixteenth by that percent of a step),
+a key signature, a voice mask (which of the 8 voices the song may use), a
+list of rows (each a sound plus an optional MIDI note, `vol` 0..127, and
+pan), a list of patterns (each a length, an optional tempo override, and
+its notes — `at`, `row`, `len`, `vel` 0..127, an optional voice pin, and
+optional start/end nudges in 4 ms engine ticks), and the arrangement: the
+pattern index played at each slot, in order.
+
+`score{ song = "beat1" }` plays the source named `"beat1"` on the shared
+8-voice pool, no Lua timer involved:
 
 ```lua
-function seq_beat1() return {
-  tempo = 120, swing = 0,
-  rows = { { sound = "kick" }, { sound = "snare" }, { sound = "piano", note = "E4" }, { sound = "mybass" } },
-  patterns = {
-    A = { "4...4...4...4...", "....3.......3...", "2---....2---....", "3-..3-..3-..3-.." },
-    B = { "4.4.4.4.4.4.4.4.", "....3.......3-3-", "................", "3-..3-..3-..3-.." },
-  },
-  arrangement = { "A", "A", "B", "A" },
-} end
-
 local beat = score{ song = "beat1" }
+
+function frame(t, f)
+  cgram[0] = hsl(beat.tick % 360, 0.6, 0.3) -- the backdrop hue drifts with the song's own tick
+end
 ```
 
 Each row is a sound at a pitch: a built-in name plays through `bank()` with
 its preset envelope, anything else is an uploaded sample with a flat one.
 `note` pitches the row with `note(row.note, base)`; a drum with no `note`
-keeps its own pitch. Every pattern has one string per row, and the string's
-length is its step count (8, 16 or 32 sixteenths). In a string, `1` to `4`
-is a hit at volume 32, 64, 96 or 127 (scaled by the sound's own volume),
-`-` holds the hit before it, and `.` rests. `tempo` runs 1 to 400 BPM;
-`swing` (0 to 75) delays every odd step by that percentage of a step.
+keeps its own pitch. `score{}` compiles the whole arrangement once, at
+setup, and assigns every note a voice from the song's mask: the lowest
+masked voice whose note has already ended, or, when none has, it cuts
+short the masked voice whose current note started earliest (ties go to the
+lowest voice) to free it. A note pinned to a voice always takes it instead,
+cutting whatever was sounding there. So a chord that outgrows the mask
+doesn't go silent, it steals from an earlier note.
 
-`score{}` compiles the whole arrangement once, at setup, into
-`beat.events`: one `{ start, ["end"], voice, row, pitch, l, r }` per note,
-in 4 ms ticks, ordered by start. Voices are picked note by note: the lowest
-voice whose note has ended, or, when all eight are sounding, the note that
-started earliest is cut — or, among notes that started together, the one on
-the lowest voice. So a chord of nine held notes doesn't go silent, it steals
-a voice from an earlier note instead. A bad step string, a pattern the
-arrangement names but doesn't define, or a sound that is neither built in
-nor uploaded stops the program with an error naming the row or pattern.
+The handle returns `{ tick, length, playing, song, play(), stop() }`:
+`tick`/`length` are the position and total length in engine ticks (4 ms
+each), `stop()` keys every voice off and pauses, `play()` resumes from
+where it left off, and a finished `loop = false` song rewinds instead of
+holding. A row naming a sound nothing placed at setup, or a song that
+fails to decode or doesn't validate (an out-of-range field, a note past
+its pattern's end, an arrangement slot naming an unknown pattern, ...),
+stops the program with an error naming the pattern and note. `score{ song
+= "<name>" }` with no source by that name is `score: no song source named
+'<name>'`.
 
-The player runs on one `timer(0, 32, ...)`: it keys off notes that have
-ended, then starts the notes due. At the end it keys every voice off and,
-unless `loop = false`, starts again from tick 0. `beat.tick` and
-`beat.length` are the position and length in ticks; `beat.stop()` keys the
-voices off and pauses, `beat.play()` resumes.
-
-A song played by name reloads in place. When a file defines `seq_<id>` and
-nothing else at the top level, editing it while the song plays doesn't
-restart the toy. The engine re-runs the file, and every `score{ song = "<id>" }`
-recompiles from the new data and keeps its place in the song: the same
-arrangement slot, the same step in it, the same distance into that step,
-capped at the step's end if the step got shorter. A tempo or swing edit moves
-the step's tick, so step 8 stays step 8 when the tempo halves. Shortening an
-earlier pattern keeps playing the same slot. So does removing slots, or
-inserting them, anywhere in the arrangement, even on both sides of the
-playing slot in one edit: deleting pattern `B` from `A B C B` while `C`
-plays keeps `C` playing, now as slot 2. Moving the playing slot one place
-earlier or later follows it. An arrangement the same length as before
-otherwise keeps the slot number, so renaming the playing slot's pattern
-plays the new one. Notes sounding at the moment of the edit are keyed off,
-and the next note due plays on time. If the playing step is past the end of
-its shortened pattern, the song moves on to the next slot. If there is no
-next slot, or the playing slot is gone, the song wraps (or stops, with
-`loop = false`). If the new data
-has an error, the old song keeps playing and the error names the file.
-Editing or adding a song file that no score plays doesn't restart the toy
-either: the file is run and anything playing carries on.
-
-There are three cases where the edit restarts the toy the usual way. One
-is a row naming a sound the song didn't have at setup, because sounds are
-placed only at setup. Another is a file that runs any other top-level code.
-The third is a song file no `score{ song = ... }` plays, edited or added
-while a `score{ data = ... }` is set up: that table may have come from the
-edited song, so the edit restarts the toy. Deleting a song file also
-restarts the toy, and so does adding one whose `seq_<id>` another file
-already defines.
+A song played by name reloads live. Re-adding a source under the same name
+(the Studio does this as you edit) swaps every playing `score{}` over to
+the new song in place: it keeps its arrangement slot, its position within
+that slot, and its play/pause state, keying off whatever was sounding and
+picking up at the next note due — the song wraps or stops (`loop = false`)
+if the new arrangement ends before that point. A song that decodes
+identical to the one already playing is a no-op. Two edits fall back to a
+full recompile instead (the toy restarts, and a bad song shows as a setup
+error): a row naming a sound nothing placed at setup (placing needs the
+setup window), and a song that fails to decode or compile. Editing a song
+source no `score{}` plays touches nothing.
 
 ## Music from a MIDI file
 
-Drop a `.mid` on the Sources panel and it becomes a
-[sequencer song](#sequencer-songs) file named after it: notes snap to the
-nearest sixteenth, each distinct track sound and key becomes a row (up to
-24, the most used kept), and every two bars become a pattern, with repeats
-shared through the arrangement. The import is one-way; the song file is
-ordinary Lua from then on, played by `score{}` like any other.
+Drop a `.mid` on the Sources panel: it becomes a [song
+source](#sequencer-songs) named after the file, built at the file's own
+tempo map — every distinct sound-and-key combination becomes a row, every
+tempo change starts a fresh run of patterns, and every note's start and end
+round to the nearest 1/48-beat unit. The import reports how many notes
+landed off that grid and got rounded. From there it's an ordinary song
+source, played the same way as one built in the sequencer panel: `score{
+song = "<name>" }`.
 
 ## Your first note
 
