@@ -39,6 +39,7 @@ fn song(tempo: u32, swing: u32, patterns: &[(&str, &str)], arrangement: &[&str])
                     vel: [32, 64, 96, 127][c as usize - '1' as usize],
                     voice: None,
                     nudge: 0,
+                    end_nudge: 0,
                 }),
                 '-' => notes.last_mut().unwrap().len += 12,
                 _ => {}
@@ -500,6 +501,7 @@ fn stress_song() -> Song {
                         vel: 1 + rng.range(127),
                         voice: None,
                         nudge: 0,
+                        end_nudge: 0,
                     })
                     .collect(),
             })

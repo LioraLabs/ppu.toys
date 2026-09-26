@@ -45,6 +45,7 @@ fn sample_song() -> Song {
                         vel: 100,
                         voice: None,
                         nudge: 0,
+                        end_nudge: 0,
                     },
                     Note {
                         at: 0,
@@ -53,6 +54,7 @@ fn sample_song() -> Song {
                         vel: 64,
                         voice: Some(3),
                         nudge: -5,
+                        end_nudge: 0,
                     },
                 ],
             },
@@ -68,6 +70,7 @@ fn sample_song() -> Song {
                         vel: 127,
                         voice: Some(7),
                         nudge: 9,
+                        end_nudge: 0,
                     },
                     Note {
                         at: 50,
@@ -76,6 +79,7 @@ fn sample_song() -> Song {
                         vel: 1,
                         voice: None,
                         nudge: 0,
+                        end_nudge: 0,
                     },
                 ],
             },
@@ -109,6 +113,7 @@ fn valid_song() -> Song {
                 vel: 100,
                 voice: None,
                 nudge: 0,
+                end_nudge: 0,
             }],
         }],
         arrangement: vec![0],
@@ -437,6 +442,185 @@ fn validate_rejects_a_song_playing_over_a_million_notes() {
     assert_eq!(err.0, "the song plays over 1000000 notes");
 }
 
+// ---- 4b. end nudge ------------------------------------------------------
+
+/// A note's end can land between two unit ticks at a slow tempo: at 1 BPM
+/// (centi-tempo 100) one unit is 3750/12 = 312.5 ticks, so no unit boundary
+/// lands on a whole tick by coincidence. `end_nudge = -100` shifts the
+/// computed end back by 100 ticks from there.
+#[test]
+fn end_nudge_lands_between_two_unit_ticks_at_a_slow_tempo() {
+    let mut song = valid_song(); // pattern "A", length 12
+    song.tempo = 100; // 1 BPM
+    song.patterns[0].notes[0] = Note {
+        at: 0,
+        row: 0,
+        len: 5,
+        vel: 100,
+        voice: None,
+        nudge: 0,
+        end_nudge: -100,
+    };
+    let compiled = compile(&song).expect("compiles");
+    // tick(r) = floor(r * 3750/12 + 0.5) = floor(r * 312.5 + 0.5).
+    // start = tick(0) = floor(0 * 312.5 + 0.5) = floor(0.5) = 0.
+    // unnudged end = tick(5) = floor(5 * 312.5 + 0.5) = floor(1562.5 + 0.5)
+    //              = floor(1563.0) = 1563.
+    // end = 1563 + end_nudge(-100) = 1463.
+    let ev = &compiled.events[0];
+    assert_eq!(ev.start, 0);
+    assert_eq!(ev.end, 1463);
+    assert_eq!(ev.want_end, 1463);
+}
+
+/// A start nudge and an end nudge on the same note both apply, independently.
+#[test]
+fn start_and_end_nudge_both_apply_on_the_same_note() {
+    let mut song = valid_song(); // 120 BPM, pattern "A" length 12
+    song.patterns[0].notes[0] = Note {
+        at: 0,
+        row: 0,
+        len: 12,
+        vel: 100,
+        voice: None,
+        nudge: 5,
+        end_nudge: -7,
+    };
+    let compiled = compile(&song).expect("compiles");
+    // At 120 BPM, step_ticks = 31.25: tick(0) = floor(0.5) = 0,
+    // tick(12) = floor(1 * 31.25 + 0.5) = floor(31.75) = 31.
+    // start = tick(0) + nudge(5) = 5.
+    // end = tick(12) + end_nudge(-7) = 31 - 7 = 24.
+    let ev = &compiled.events[0];
+    assert_eq!(ev.start, 5);
+    assert_eq!(ev.end, 24);
+    assert_eq!(ev.want_end, 24);
+}
+
+/// An end nudge (or a start nudge with none) that puts a note's end at or
+/// before its own start is refused, naming the pattern and note.
+#[test]
+fn compile_rejects_an_end_at_or_before_its_start() {
+    let msg = "pattern 'A' note 1: ends at or before its start";
+    // valid_song(): 120 BPM, note at 0, len 12 -> start = 0, unnudged end =
+    // tick(12) = 31 (see start_and_end_nudge_both_apply_on_the_same_note).
+
+    let mut at_start = valid_song();
+    at_start.patterns[0].notes[0].end_nudge = -31; // end = 31 - 31 = 0 == start
+    assert_eq!(compile(&at_start).unwrap_err().0, msg);
+
+    let mut before_start = valid_song();
+    before_start.patterns[0].notes[0].end_nudge = -32; // end = -1 < start
+    assert_eq!(compile(&before_start).unwrap_err().0, msg);
+
+    let mut nudge_past_end = valid_song();
+    nudge_past_end.patterns[0].notes[0].nudge = 32; // start = 32 > unnudged end (31)
+    assert_eq!(compile(&nudge_past_end).unwrap_err().0, msg);
+}
+
+/// Every one of the 8 pinned x nudged x end-nudged flag combinations,
+/// including negative and positive end nudges and vel 127 on the
+/// all-flags-set note, round-trips through encode/decode, and re-encoding
+/// the decoded song reproduces the exact same bytes.
+#[test]
+fn round_trips_every_pin_nudge_end_nudge_flag_combination() {
+    let notes: Vec<Note> = (0u32..8)
+        .map(|i| {
+            let pinned = i & 1 != 0;
+            let nudged = i & 2 != 0;
+            let end_nudged = i & 4 != 0;
+            Note {
+                at: i * 12,
+                row: 0,
+                len: 6,
+                vel: if pinned && nudged && end_nudged {
+                    127
+                } else {
+                    40 + i
+                },
+                voice: if pinned { Some(i % 8) } else { None },
+                nudge: if nudged { -3 - i as i32 } else { 0 },
+                end_nudge: if !end_nudged {
+                    0
+                } else if i % 2 == 0 {
+                    -5 - i as i32
+                } else {
+                    5 + i as i32
+                },
+            }
+        })
+        .collect();
+    let mut song = valid_song();
+    song.patterns[0].length = 8 * 12;
+    song.patterns[0].notes = notes;
+
+    let bytes = encode(&song);
+    let decoded = decode(&bytes).expect("decode");
+    assert_eq!(decoded, song);
+    assert_eq!(encode(&decoded), bytes);
+}
+
+/// A song built with pinned and nudged notes but no end nudges (a literal
+/// `Vec<u8>` captured from `encode()` on the base commit, before end nudges
+/// existed) still encodes byte-identically, and decoding it re-encodes to
+/// the same bytes.
+fn fixture_song_without_end_nudges() -> Song {
+    Song {
+        tempo: 12000,
+        swing: 10,
+        key: 3,
+        voice_mask: 0b0000_0011,
+        rows: vec![Row {
+            sound: "kick".into(),
+            note: None,
+            vol: 100,
+            pan: 0,
+        }],
+        patterns: vec![Pattern {
+            name: "A".into(),
+            length: 24,
+            tempo: None,
+            notes: vec![
+                Note {
+                    at: 0,
+                    row: 0,
+                    len: 12,
+                    vel: 100,
+                    voice: Some(1),
+                    nudge: 0,
+                    end_nudge: 0,
+                },
+                Note {
+                    at: 12,
+                    row: 0,
+                    len: 12,
+                    vel: 50,
+                    voice: None,
+                    nudge: 5,
+                    end_nudge: 0,
+                },
+            ],
+        }],
+        arrangement: vec![0],
+    }
+}
+
+/// Captured by printing `encode()`'s output once, on commit 351344d (before
+/// this change), for the song `fixture_song_without_end_nudges` builds.
+const FIXTURE_BYTES_WITHOUT_END_NUDGES: &[u8] = &[
+    80, 83, 78, 71, 1, 72, 69, 65, 68, 6, 48, 224, 93, 10, 6, 3, 82, 79, 87, 83, 9, 1, 4, 107, 105,
+    99, 107, 0, 100, 0, 80, 65, 84, 84, 15, 1, 65, 24, 0, 2, 0, 1, 12, 100, 1, 24, 2, 12, 50, 10,
+    65, 82, 82, 71, 2, 1, 0,
+];
+
+#[test]
+fn songs_without_end_nudges_encode_byte_identically_to_before() {
+    let song = fixture_song_without_end_nudges();
+    assert_eq!(encode(&song), FIXTURE_BYTES_WITHOUT_END_NUDGES);
+    let decoded = decode(FIXTURE_BYTES_WITHOUT_END_NUDGES).expect("decode");
+    assert_eq!(encode(&decoded), FIXTURE_BYTES_WITHOUT_END_NUDGES);
+}
+
 // ---- 5. kit parity of timing --------------------------------------------
 
 /// tempo 120 / swing 30%, a 16-sixteenth pattern played twice: every
@@ -453,6 +637,7 @@ fn timing_matches_kit_lua_16th_grid_with_swing() {
             vel: 100,
             voice: None,
             nudge: 0,
+            end_nudge: 0,
         })
         .collect();
     let song = Song {
@@ -541,6 +726,7 @@ fn hand_computed_mixed_tempo_pinned_nudged_song() {
                 vel: 100,
                 voice: None,
                 nudge: 0,
+                end_nudge: 0,
             },
             // len 10000 always clamps to the song's end -> forces overlap.
             Note {
@@ -550,6 +736,7 @@ fn hand_computed_mixed_tempo_pinned_nudged_song() {
                 vel: 127,
                 voice: None,
                 nudge: 0,
+                end_nudge: 0,
             },
         ],
     };
@@ -565,6 +752,7 @@ fn hand_computed_mixed_tempo_pinned_nudged_song() {
                 vel: 64,
                 voice: Some(2),
                 nudge: 0,
+                end_nudge: 0,
             },
             Note {
                 at: 12,
@@ -573,6 +761,7 @@ fn hand_computed_mixed_tempo_pinned_nudged_song() {
                 vel: 90,
                 voice: None,
                 nudge: 3,
+                end_nudge: 0,
             },
             Note {
                 at: 24,
@@ -581,6 +770,7 @@ fn hand_computed_mixed_tempo_pinned_nudged_song() {
                 vel: 50,
                 voice: None,
                 nudge: -2,
+                end_nudge: 0,
             },
         ],
     };
@@ -652,6 +842,7 @@ fn timing_matches_kit_lua_16th_grid_with_swing_at_an_inexact_tempo() {
             vel: 100,
             voice: None,
             nudge: 0,
+            end_nudge: 0,
         })
         .collect();
     let song = Song {
@@ -725,6 +916,7 @@ fn swing_warps_an_off_16th_pair_correctly() {
                     vel: 100,
                     voice: None,
                     nudge: 0,
+                    end_nudge: 0,
                 },
                 Note {
                     at: 18,
@@ -733,6 +925,7 @@ fn swing_warps_an_off_16th_pair_correctly() {
                     vel: 100,
                     voice: None,
                     nudge: 0,
+                    end_nudge: 0,
                 },
             ],
         }],
@@ -768,6 +961,7 @@ fn swing_only_warps_a_pair_wholly_inside_an_odd_length_pattern() {
                 vel: 100,
                 voice: None,
                 nudge: 0,
+                end_nudge: 0,
             },
             Note {
                 at: 30,
@@ -776,6 +970,7 @@ fn swing_only_warps_a_pair_wholly_inside_an_odd_length_pattern() {
                 vel: 100,
                 voice: None,
                 nudge: 0,
+                end_nudge: 0,
             },
         ],
     };
@@ -860,6 +1055,7 @@ fn note_at(at: u32, len: u32, voice: Option<u32>) -> Note {
         vel: 100,
         voice,
         nudge: 0,
+        end_nudge: 0,
     }
 }
 
@@ -989,6 +1185,7 @@ fn build_stress_song() -> Song {
                     vel: 1 + rng.range(127), // 1..=127
                     voice: None,
                     nudge: 0,
+                    end_nudge: 0,
                 })
                 .collect();
             Pattern {
@@ -1111,6 +1308,7 @@ fn hit_notes(hits: &[Hit], pattern: usize, row: usize) -> Vec<Note> {
             vel: vel_amount(h.vel),
             voice: None,
             nudge: 0,
+            end_nudge: 0,
         })
         .collect()
 }
@@ -1394,6 +1592,7 @@ fn score_song_falls_back_to_seq_and_prefers_a_song_source_when_present() {
                 vel: 100,
                 voice: None,
                 nudge: 0,
+                end_nudge: 0,
             }],
         }],
         arrangement: vec![0],
@@ -1444,6 +1643,7 @@ fn song_source_and_lua_score_share_one_placement_per_sound() {
                 vel: 100,
                 voice: None,
                 nudge: 0,
+                end_nudge: 0,
             }],
         }],
         arrangement: vec![0],
@@ -1490,6 +1690,7 @@ fn small_song(voice_mask: u8) -> Song {
                 vel: 100,
                 voice: None,
                 nudge: 0,
+                end_nudge: 0,
             }],
         }],
         arrangement: vec![0],
@@ -1611,6 +1812,7 @@ fn native_song_never_touches_a_voice_outside_its_mask() {
                     vel: 100,
                     voice: None,
                     nudge: 0,
+                    end_nudge: 0,
                 },
                 Note {
                     at: 0,
@@ -1619,6 +1821,7 @@ fn native_song_never_touches_a_voice_outside_its_mask() {
                     vel: 100,
                     voice: None,
                     nudge: 0,
+                    end_nudge: 0,
                 },
                 Note {
                     at: 0,
@@ -1627,6 +1830,7 @@ fn native_song_never_touches_a_voice_outside_its_mask() {
                     vel: 100,
                     voice: None,
                     nudge: 0,
+                    end_nudge: 0,
                 },
             ],
         }],
@@ -1703,7 +1907,11 @@ fn a_truncated_song_source_names_the_chunk_at_score_setup() {
 #[test]
 fn an_invalid_song_source_names_the_pattern_and_note_at_score_setup() {
     let mut song = valid_song();
-    song.patterns[0].notes[0].vel = 200;
+    // 256, not e.g. 200: this note goes through encode()/decode() (via
+    // add_song_source), and vel's wire byte shares its bit 7 with the
+    // end-nudged flag. 200 has bit 7 set and would misdecode as end-nudged;
+    // 256 doesn't, so it round-trips intact for validate() to still reject.
+    song.patterns[0].notes[0].vel = 256;
 
     let mut e = LuaEngine::new();
     add_song_source(&mut e, "beat", &song);
@@ -1711,7 +1919,7 @@ fn an_invalid_song_source_names_the_pattern_and_note_at_score_setup() {
     assert!(
         err.message.contains("pattern 'A'")
             && err.message.contains("note 1")
-            && err.message.contains("vel 200"),
+            && err.message.contains("vel 256"),
         "{}",
         err.message
     );

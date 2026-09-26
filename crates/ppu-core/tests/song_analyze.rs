@@ -11,6 +11,7 @@ fn note(at: u32, len: u32, voice: Option<u32>) -> Note {
         vel: 100,
         voice,
         nudge: 0,
+        end_nudge: 0,
     }
 }
 
@@ -154,6 +155,29 @@ fn nudged_notes_count_in_the_step_they_start() {
     assert_eq!(counts(&s), (vec![8, 1], vec![9, 1], vec![0]));
 }
 
+/// A nudged end crossing a step tick changes `wanted` (but not `used`, since
+/// the allocator's own steal still cuts the actual playback end to the
+/// stealing note's start regardless). At 120 BPM (a 16th is 31.25 ticks) a
+/// note (at 0, len 12) unnudged ends exactly at tick 31, the next step's own
+/// tick, so its half-open span [0, 31) never reaches that step. Nudging its
+/// end by +5 (to tick 36) makes it: at step 1 (tick 31), where a second note
+/// (at 12, len 12) also starts, `wanted` becomes 2, over the 1-voice mask,
+/// versus 1 without the nudge.
+#[test]
+fn nudged_end_crossing_a_step_tick_changes_wanted_not_used() {
+    let mut nudged = note(0, 12, None);
+    nudged.end_nudge = 5;
+    let s = one(0b1, 24, vec![nudged, note(12, 12, None)]);
+    let a = analyze(&s).unwrap();
+    assert_eq!(a.wanted, vec![1, 2]);
+    assert_eq!(a.used, vec![1, 1]);
+
+    let plain = one(0b1, 24, vec![note(0, 12, None), note(12, 12, None)]);
+    let a_plain = analyze(&plain).unwrap();
+    assert_eq!(a_plain.wanted, vec![1, 1]);
+    assert_eq!(a_plain.used, vec![1, 1]);
+}
+
 /// The sweep agrees with a tick-by-tick brute force on busy songs with
 /// swing, mixed tempos, odd lengths, off-grid starts, pins and nudges, in
 /// 1-, 4- and 8-voice masks.
@@ -180,18 +204,33 @@ fn sweep_matches_brute_force() {
                     notes: (0..40)
                         .map(|_| {
                             let at = rnd(length);
+                            let len = 1 + rnd(30);
+                            let voice = if rnd(5) == 0 {
+                                Some(pins[rnd(pins.len() as u32) as usize])
+                            } else {
+                                None
+                            };
+                            // Never early at unit 0: that would start before
+                            // the song. Only nudge a note long enough (and
+                            // not up against its pattern's own end, where the
+                            // song-end clip could shrink it) to absorb an
+                            // 11-tick start nudge even at the fastest tempo
+                            // and heaviest swing compression used here --
+                            // else it could end at or before its own start.
+                            let raw_nudge = rnd(15) as i32 - if at == 0 { 0 } else { 3 };
+                            let nudge = if len >= 12 && at + len <= length {
+                                raw_nudge
+                            } else {
+                                0
+                            };
                             Note {
                                 at,
                                 row: 0,
-                                len: 1 + rnd(30),
+                                len,
                                 vel: 100,
-                                voice: if rnd(5) == 0 {
-                                    Some(pins[rnd(pins.len() as u32) as usize])
-                                } else {
-                                    None
-                                },
-                                // Never early at unit 0: that would start before the song.
-                                nudge: rnd(15) as i32 - if at == 0 { 0 } else { 3 },
+                                voice,
+                                nudge,
+                                end_nudge: 0,
                             }
                         })
                         .collect(),

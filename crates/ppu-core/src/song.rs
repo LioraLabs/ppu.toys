@@ -80,6 +80,14 @@ pub struct Note {
     pub voice: Option<u32>,
     /// 4 ms engine ticks, added to the computed start.
     pub nudge: i32,
+    /// 4 ms engine ticks, added to the computed end.
+    #[serde(rename = "endNudge", default, skip_serializing_if = "is_zero")]
+    pub end_nudge: i32,
+}
+
+/// True for 0; used to skip serializing a default `end_nudge`.
+fn is_zero(n: &i32) -> bool {
+    *n == 0
 }
 
 /// A decode/encode/validate/compile failure, with a human-readable message.
@@ -281,9 +289,12 @@ fn parse_patt(body: &[u8], ctx: &str) -> Result<Pattern, SongError> {
         let nudged = (packed >> 1) & 1 != 0;
         let row = packed >> 2;
         let len = c.varint()?;
-        let vel = c.varint()?;
+        let vel_raw = c.varint()?;
+        let end_nudged = vel_raw & 0x80 != 0;
+        let vel = vel_raw & !0x80;
         let voice = if pinned { Some(c.u8()? as u32) } else { None };
         let nudge = if nudged { c.zigzag()? } else { 0 };
+        let end_nudge = if end_nudged { c.zigzag()? } else { 0 };
         notes.push(Note {
             at,
             row,
@@ -291,6 +302,7 @@ fn parse_patt(body: &[u8], ctx: &str) -> Result<Pattern, SongError> {
             vel,
             voice,
             nudge,
+            end_nudge,
         });
     }
     c.finish()?;
@@ -452,12 +464,16 @@ pub fn encode(song: &Song) -> Vec<u8> {
             let packed = (note.row << 2) | (pinned as u32) | ((nudged as u32) << 1);
             write_varint(&mut body, packed);
             write_varint(&mut body, note.len);
-            write_varint(&mut body, note.vel);
+            let end_nudged = note.end_nudge != 0;
+            write_varint(&mut body, note.vel | ((end_nudged as u32) << 7));
             if let Some(v) = note.voice {
                 body.push(v as u8);
             }
             if nudged {
                 write_varint(&mut body, zigzag_encode(note.nudge));
+            }
+            if end_nudged {
+                write_varint(&mut body, zigzag_encode(note.end_nudge));
             }
         }
         write_chunk(&mut out, b"PATT", &body);
@@ -476,7 +492,8 @@ pub fn encode(song: &Song) -> Vec<u8> {
 impl Song {
     /// Static range checks: tempo/swing, rows, arrangement, and every
     /// pattern's length and notes. Does not check timing (a note's nudge
-    /// pushing its start negative needs [`compile`]).
+    /// pushing its start negative, or its end/start nudges putting its end
+    /// at or before its start, needs [`compile`]).
     pub fn validate(&self) -> Result<(), SongError> {
         if !TEMPO_RANGE.contains(&self.tempo) {
             return Err(SongError("tempo must be 1..400 BPM".into()));
@@ -885,7 +902,14 @@ pub fn compile(song: &Song) -> Result<Compiled, SongError> {
                 )));
             }
             let end_pos = (pos + n.len as u64).min(timing.end);
-            let end = timing.tick(end_pos).max(start);
+            let end = timing.tick(end_pos) + n.end_nudge as i64;
+            if end <= start {
+                return Err(SongError(format!(
+                    "pattern '{}' note {}: ends at or before its start",
+                    pat.name,
+                    note_idx + 1
+                )));
+            }
 
             let row = &song.rows[n.row as usize];
             let pan = row.pan as f64 / 100.0;
