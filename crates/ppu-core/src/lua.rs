@@ -140,12 +140,20 @@ pub struct DspView {
 /// Where the playing `score{}` is, in its 4 ms timer ticks — see
 /// [`LuaEngine::score_view`]. `tick` is the next tick to play, `0..length-1`;
 /// `song` is the id of a `score{ song = "<id>" }` (absent for `data =`).
+/// `slot`/`step` (a native song source only) are the arrangement slot
+/// `tick` falls in and the GLOBAL 16th step within it — the same index
+/// `song_analyze::Analysis::slot_steps` uses — from `Timing::position`;
+/// absent for a Lua `seq_`/`data =` score.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct ScoreView {
     pub tick: i64,
     pub length: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub song: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slot: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step: Option<u32>,
 }
 
 /// The controls document's reserved file name (PPU-146's generated
@@ -664,10 +672,24 @@ impl LuaEngine {
                 if !p.playing || p.length <= 0 {
                     return None;
                 }
+                let tick = p.tick % p.length;
+                // Global step = the target slot's own step (from `position`)
+                // plus every earlier slot's step count — the same prefix
+                // `song_analyze::analyze` builds into `slot_steps`.
+                let (slot, step) = p
+                    .timing
+                    .position(tick)
+                    .map(|(slot, step, _)| {
+                        let earlier: u64 = (0..slot).map(|s| p.timing.steps(s)).sum();
+                        (slot as u32, (earlier + step) as u32)
+                    })
+                    .unzip();
                 return Some(ScoreView {
-                    tick: p.tick % p.length,
+                    tick,
                     length: p.length,
                     song: Some(p.name.clone()),
+                    slot,
+                    step,
                 });
             }
             if !h.get(ctx, "playing").to_bool() {
@@ -683,6 +705,8 @@ impl LuaEngine {
                     Value::String(s) => Some(s.to_str_lossy().into_owned()),
                     _ => None,
                 },
+                slot: None,
+                step: None,
             })
         })
     }

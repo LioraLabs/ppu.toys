@@ -5,6 +5,7 @@
 //! `audio`), never reaching into `Dsp` internals.
 mod common;
 
+use ppu_core::song::{encode, Note, Pattern, Row, Song};
 use ppu_core::LuaEngine;
 use serde_json::Value;
 
@@ -1157,6 +1158,165 @@ fn score_view_reports_the_tick_every_frame_and_wraps() {
         .expect("the loop wraps");
     assert!((58..=60).contains(&wrap), "wrapped after frame {wrap}");
     assert!(ticks[wrap + 1] < 10);
+}
+
+/// Registers `song` as a `[3, 5, <psng bytes>]` source under `name` — the
+/// `add_source` shape a `song`-kind source commits to (mirrors
+/// `tests/song.rs`'s own `add_song_source`).
+fn add_song_source(e: &mut LuaEngine, name: &str, song: &Song) {
+    let mut payload = vec![3u8, 5];
+    payload.extend_from_slice(&encode(song));
+    e.add_source(name, &payload).unwrap();
+}
+
+/// Mixed-tempo (125/150 BPM), odd-length (44-unit) B pattern, 50% swing,
+/// arrangement A,B,A: exercises every knob the PPU-206 timing amendment's
+/// `tick_in_slot` formula has, for `score_view_reports_a_song_sources_slot_and_step`.
+fn slot_step_song() -> Song {
+    let note = |at| Note {
+        at,
+        row: 0,
+        len: 12,
+        vel: 100,
+        voice: None,
+        nudge: 0,
+    };
+    Song {
+        tempo: 12000,
+        swing: 50,
+        key: 0,
+        voice_mask: 0xff,
+        rows: vec![Row {
+            sound: "kick".into(),
+            note: None,
+            vol: 127,
+            pan: 0,
+        }],
+        patterns: vec![
+            Pattern {
+                name: "A".into(),
+                length: 48,
+                tempo: Some(12500), // 125 BPM
+                notes: vec![note(0)],
+            },
+            Pattern {
+                name: "B".into(),
+                length: 44, // odd: not a multiple of 12 (ceil(44/12) = 4 steps, last short)
+                tempo: Some(15000), // 150 BPM
+                notes: vec![note(0)],
+            },
+        ],
+        arrangement: vec![0, 1, 0],
+    }
+}
+
+/// Each entry is (arrangement slot, tick the global 16th step starts at),
+/// hand-derived from the PPU-206 timing amendment's `tick_in_slot` formula
+/// (`3750 / bpm` ticks per 16th; a pair's odd 16th warps by `+swing`, its
+/// even one is untouched, only when the WHOLE pair fits inside the pattern):
+///
+/// Slot 0 ("A", 125 BPM -> 30 ticks/16th, run starts at tick 0): every one
+/// of its two pairs (units 0..24, 24..48) fits inside the 48-unit pattern,
+/// so both odd steps (k=1,3) warp by +0.5 steps: k0=0,
+/// k1=floor(1.5*30+0.5)=45, k2=floor(2*30+0.5)=60,
+/// k3=floor(3.5*30+0.5)=105, end(k4)=floor(4*30+0.5)=120.
+/// Slot 1 ("B", 150 BPM -> 25 ticks/16th, run starts at tick 120, the
+/// previous slot's end): only its FIRST pair (units 0..24) fits inside the
+/// 44-unit pattern, so only k1 warps: k0=120,
+/// k1=120+floor(1.5*25+0.5)=158, k2=120+floor(2*25+0.5)=170,
+/// k3=120+floor(3*25+0.5)=195 (k=3's pair, units 24..48, no longer fits, so
+/// it is NOT warped even though it's odd), end(k4)=120+floor(44.0/12*25+0.5)=212.
+/// Slot 2 ("A" again, 125 BPM, run starts at tick 212, same shape as slot 0):
+/// k0=212, k1=212+45=257, k2=212+60=272, k3=212+105=317, end(k4)=212+120=332.
+///
+/// The slot column's run-lengths (4, 4, 4) are `ceil(length/12)` steps per
+/// slot, so the global step's prefix (`slot_steps` in `song_analyze`) is
+/// (0, 4, 8) — exactly where this table's slot column changes.
+const STEP_STARTS: [(u32, i64); 12] = [
+    (0, 0),
+    (0, 45),
+    (0, 60),
+    (0, 105),
+    (1, 120),
+    (1, 158),
+    (1, 170),
+    (1, 195),
+    (2, 212),
+    (2, 257),
+    (2, 272),
+    (2, 317),
+];
+
+/// The song's length in ticks: `end(k4)` of the last slot above.
+const SLOT_STEP_SONG_LENGTH: i64 = 332;
+
+/// The (arrangement slot, GLOBAL 16th step) a `tick` in `0..SLOT_STEP_SONG_LENGTH`
+/// falls in: the latest [`STEP_STARTS`] entry starting at or before it.
+fn expected_slot_step(tick: i64) -> (u32, u32) {
+    let global = STEP_STARTS
+        .iter()
+        .rposition(|&(_, start)| start <= tick)
+        .expect("tick 0 always matches the first entry");
+    (STEP_STARTS[global].0, global as u32)
+}
+
+/// The engine playhead reports a native song source's arrangement slot and
+/// GLOBAL 16th step — `slot_steps[slot] + step-in-slot`, the same index
+/// `analyzeSong`'s `used`/`wanted` use — computed from `Timing::position`.
+#[test]
+fn score_view_reports_a_song_sources_slot_and_step() {
+    let song = slot_step_song();
+    assert_eq!(
+        ppu_core::song::compile(&song).unwrap().timing.length,
+        SLOT_STEP_SONG_LENGTH,
+        "the hand-derived song length must match the compiled one"
+    );
+
+    // Hand-derived literal (see STEP_STARTS's doc comment): the swung 2nd
+    // 16th of the odd-length B pattern lands at tick 158, global step 5
+    // (slot 1's own step 1, after slot 0's 4 steps).
+    assert_eq!(expected_slot_step(158), (1, 5));
+
+    let mut e = LuaEngine::new();
+    add_song_source(&mut e, "beat", &song);
+    e.set_source("h = score{ song = \"beat\", loop = false }\nfunction frame() end")
+        .unwrap();
+
+    let mut seen = 0;
+    for f in 0..90u32 {
+        e.frame(f as f64 / 60.0, f).unwrap();
+        let Some(v) = e.score_view() else {
+            break;
+        };
+        assert_eq!(v.song.as_deref(), Some("beat"));
+        let (want_slot, want_step) = expected_slot_step(v.tick);
+        assert_eq!(v.slot, Some(want_slot), "frame {f} tick {}: slot", v.tick);
+        assert_eq!(v.step, Some(want_step), "frame {f} tick {}: step", v.tick);
+        seen += 1;
+    }
+    assert!(
+        seen > 60,
+        "expected most of these 90 frames to still be playing, got {seen}"
+    );
+}
+
+/// A Lua `data =`/`seq_` score has no engine-native timing map to read a
+/// slot/step from, so the readout omits them rather than fabricating a
+/// stale or zeroed pair.
+#[test]
+fn score_view_omits_slot_step_for_a_lua_data_score() {
+    let mut e = LuaEngine::new();
+    e.set_source(
+        "function seq_beat() return { tempo = 120, rows = { { sound = \"kick\" } },\n\
+           patterns = { A = { \"4...4...\" } }, arrangement = { \"A\" } } end\n\
+         h = score{ data = seq_beat() }\n\
+         function frame() end",
+    )
+    .unwrap();
+    e.frame(0.0, 0).unwrap();
+    let v = e.score_view().expect("a playing lua score reports");
+    assert_eq!(v.slot, None);
+    assert_eq!(v.step, None);
 }
 
 /// Absent, not stale: `stop()` and a finished `loop = false` song clear the
