@@ -82,8 +82,9 @@ fn peaks(spans: impl Iterator<Item = (i64, i64)>, ticks: &[i64]) -> Vec<u32> {
             cur += edges[j].1;
             j += 1;
         }
-        let mut peak = cur;
         let next = ticks.get(i + 1).copied().unwrap_or(i64::MAX);
+        // A step squeezed to no ticks (a fast tempo) holds nothing.
+        let mut peak = if next > at { cur } else { 0 };
         while j < edges.len() && edges[j].0 < next {
             cur += edges[j].1;
             j += 1;

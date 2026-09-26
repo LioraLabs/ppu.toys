@@ -178,17 +178,21 @@ fn sweep_matches_brute_force() {
                         None
                     },
                     notes: (0..40)
-                        .map(|_| Note {
-                            at: rnd(length),
-                            row: 0,
-                            len: 1 + rnd(30),
-                            vel: 100,
-                            voice: if rnd(5) == 0 {
-                                Some(pins[rnd(pins.len() as u32) as usize])
-                            } else {
-                                None
-                            },
-                            nudge: rnd(15) as i32 - 3,
+                        .map(|_| {
+                            let at = rnd(length);
+                            Note {
+                                at,
+                                row: 0,
+                                len: 1 + rnd(30),
+                                vel: 100,
+                                voice: if rnd(5) == 0 {
+                                    Some(pins[rnd(pins.len() as u32) as usize])
+                                } else {
+                                    None
+                                },
+                                // Never early at unit 0: that would start before the song.
+                                nudge: rnd(15) as i32 - if at == 0 { 0 } else { 3 },
+                            }
                         })
                         .collect(),
                 }
@@ -204,6 +208,20 @@ fn sweep_matches_brute_force() {
         );
         assert_eq!(a, brute(&s), "mask {mask:#b}");
     }
+}
+
+/// At 400 BPM a 13-unit pattern's short last step can share its tick with
+/// the next slot's first: that step spans no ticks and holds nothing.
+#[test]
+fn a_step_with_no_ticks_counts_nothing() {
+    let mut s = one(0b1, 13, vec![note(0, 13, None)]);
+    s.tempo = 40000;
+    s.arrangement = vec![0, 0, 0];
+    let a = analyze(&s).unwrap();
+    assert_eq!(a, brute(&s));
+    let ticks: Vec<i64> = a.events.iter().map(|e| e.start).collect();
+    assert_eq!(ticks, vec![0, 10, 20]);
+    assert_eq!(a.used, vec![1, 1, 1, 0, 1, 0]); // steps at ticks 0, 9, 10, 20, 20, 30
 }
 
 /// `analyze` by definition: for each step, every tick from its own up to
