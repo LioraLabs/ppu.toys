@@ -554,7 +554,9 @@ pub fn decode_song(bytes: &[u8]) -> Result<JsValue, JsValue> {
     }))
 }
 
-/// The song object -> PSNG bytes (`Uint8Array`).
+/// The panel's write gate: the song object -> PSNG bytes (`Uint8Array`),
+/// only after the full check `score{}` setup runs (validate + compile);
+/// an invalid song returns that error, never bytes.
 #[wasm_bindgen(js_name = encodeSong)]
 pub fn encode_song(song: JsValue) -> Result<JsValue, JsValue> {
     song_result(
