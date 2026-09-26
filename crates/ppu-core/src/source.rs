@@ -7,7 +7,7 @@
 //! Byte layout v1 (little-endian):
 //!
 //! ```text
-//! common:  u8 version=3 | u8 kind (0=bg 1=m7 2=obj 3=sheet 4=sample)
+//! common:  u8 version=3 | u8 kind (0=bg 1=m7 2=obj 3=sheet 4=sample 5=song)
 //! bg:      u8 bit_depth (2|4|8) | u8 tile_size (8)
 //!          u8 pal_count, per palette: u8 len + len*u16 BGR555
 //!          u16 tile_count, tile_count*(bit_depth*4)*u16 char words (bitplane-packed, tile 0 blank)
@@ -29,6 +29,10 @@
 //!          u16 block_count (1..=MAX_SAMPLE_BLOCKS), block_count*9 raw BRR
 //!          bytes (9 bytes per 16-sample block). PCM, not an image: no
 //!          palette, no tiles.
+//! song:    PSNG bytes (see `crate::song`), to the end of the payload,
+//!          UNDECODED — a bad song is a setup error at `score{}` time, not
+//!          an add_source error, so this kind's own decode never parses
+//!          them (an empty body is accepted here).
 //! ```
 //!
 //! Tilemap/map tile numbers are relative to the payload's own char block;
@@ -54,6 +58,10 @@ pub enum SourceKind {
     Obj,
     Sheet,
     Sample,
+    /// PSNG song bytes — see `crate::song`. Not a `convertSource` kind (a
+    /// song is authored data, not an image to quantize), so it has no
+    /// `FromStr` string and no `convert_source` conversion path.
+    Song,
 }
 
 /// The kind strings the JS surface names a source by (`convertSource`).
@@ -147,6 +155,9 @@ pub enum SourcePayload {
     Obj(ObjSource),
     Sheet(SheetSource),
     Sample(SampleSource),
+    /// Raw PSNG bytes (`crate::song::encode`'s output), carried undecoded —
+    /// see the module doc's `song` byte layout.
+    Song(Vec<u8>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -290,6 +301,7 @@ impl SourcePayload {
             SourcePayload::Obj(_) => SourceKind::Obj,
             SourcePayload::Sheet(_) => SourceKind::Sheet,
             SourcePayload::Sample(_) => SourceKind::Sample,
+            SourcePayload::Song(_) => SourceKind::Song,
         }
     }
 
@@ -428,6 +440,10 @@ impl SourcePayload {
                 }
                 push_u16(&mut b, blocks as u16);
                 b.extend_from_slice(&s.brr);
+            }
+            SourcePayload::Song(bytes) => {
+                b.push(5);
+                b.extend_from_slice(bytes);
             }
         }
         b
@@ -594,6 +610,14 @@ impl SourcePayload {
                 }
                 let brr = r.bytes(block_count * 9)?.to_vec();
                 SourcePayload::Sample(SampleSource { brr, loop_block })
+            }
+            // Structural-only: the PSNG bytes are carried as-is and decoded/
+            // validated by `crate::song` at `score{}` setup time, not here —
+            // see the module doc's `song` byte layout. An empty body (no
+            // bytes left) is valid at THIS layer.
+            5 => {
+                let rest = r.b.len() - r.i;
+                SourcePayload::Song(r.bytes(rest)?.to_vec())
             }
             k => return Err(PayloadError::BadKind(k)),
         };
@@ -842,6 +866,9 @@ pub fn convert_source_with_priority(
             Ok((SourcePayload::Sheet(src), meta))
         }
         SourceKind::Sample => Err("sample sources are PCM, not images: use convertSample".into()),
+        SourceKind::Song => {
+            Err("song sources are PSNG bytes, not images: add them directly".into())
+        }
     }
 }
 
@@ -1047,6 +1074,29 @@ mod tests {
         assert_eq!(SourcePayload::M7(sample_m7()).encode()[..2], [3, 1]);
         assert_eq!(SourcePayload::Obj(sample_obj()).encode()[..2], [3, 2]);
         assert_eq!(SourcePayload::Sample(sample_sample()).encode()[..2], [3, 4]);
+        assert_eq!(SourcePayload::Song(vec![1, 2, 3]).encode()[..2], [3, 5]);
+    }
+
+    // A song source's payload is the PSNG bytes verbatim after the common
+    // version+kind header — this layer never parses them (a malformed or
+    // even empty body still round-trips; `crate::song::decode` is what
+    // validates the PSNG shape, at `score{}` setup time).
+    #[test]
+    fn song_roundtrips_undecoded_psng_bytes() {
+        let psng = b"PSNG\x01not-really-a-valid-body".to_vec();
+        let p = SourcePayload::Song(psng.clone());
+        let b = p.encode();
+        assert_eq!(&b[..2], &[3, 5]);
+        assert_eq!(&b[2..], &psng[..]);
+        assert_eq!(SourcePayload::decode(&b).unwrap(), p);
+    }
+
+    #[test]
+    fn song_decode_accepts_an_empty_psng_body() {
+        let p = SourcePayload::Song(Vec::new());
+        let b = p.encode();
+        assert_eq!(b, vec![3, 5]);
+        assert_eq!(SourcePayload::decode(&b).unwrap(), p);
     }
 
     // PPU-136: a sample is a first-class source payload — encoded as
@@ -1347,6 +1397,16 @@ mod tests {
         let err = convert_source(SourceKind::Sample, &ConvertOptions::default(), &rgba, 8, 8)
             .unwrap_err();
         assert!(err.contains("convertSample"), "unexpected error: {err}");
+    }
+
+    // A song source is authored PSNG data, not an image: `convert_source`
+    // refuses the kind rather than trying to quantize it.
+    #[test]
+    fn convert_source_rejects_song_kind() {
+        let rgba = vec![0u8; 8 * 8 * 4];
+        let err =
+            convert_source(SourceKind::Song, &ConvertOptions::default(), &rgba, 8, 8).unwrap_err();
+        assert!(err.contains("PSNG"), "unexpected error: {err}");
     }
 
     // PPU-93: the pure conversion entry accepts the sheet kind and carries the

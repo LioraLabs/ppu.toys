@@ -287,18 +287,25 @@ function bank(name, opts)
   return instrument(inst)
 end
 
--- score{ song = "<id>" | data = seq_<id>(), loop = true? } -> plays a
--- sequencer song on the shared 8-voice pool. `song` names the global
--- seq_<id> function and binds the score to it (h.song = id): when the
--- engine re-runs an edited song file, __score_prepare(id) recompiles the
--- score in place, keeping its step. `data` is a one-off table, never
--- reloaded. The song is { tempo, swing = 0 (0..75), rows = {
--- { sound, note = ? } }, patterns = { A = { "4...", "..3-" } }, arrangement
--- = { "A", "B" } }: one step string per row, its length (8/16/32) the step
--- count, each step a 16th. `1`-`4` hit at volume 32/64/96/127, `-` holds
--- the previous hit, `.` rests. Swing delays odd steps by that percentage of
--- a step; every step time is rounded from its absolute index, so a
--- fractional step never drifts.
+-- score{ song = "<name>" | data = seq_<id>(), loop = true? } -> plays a
+-- song on the shared 8-voice pool.
+--
+-- `song` first tries a `song`-kind source named `<name>` (PSNG bytes,
+-- decoded/compiled/validated in Rust — see __song_load): the whole song
+-- plays natively on the audio tick, with no Lua timer, and the returned
+-- handle reads live through __song_get (see below). When no such source
+-- exists, `song` falls back to the OLDER path: it names the global
+-- seq_<id> function and binds the score to it (h.song = id), so that when
+-- the engine re-runs an edited song file, __score_prepare(id) recompiles
+-- the score in place, keeping its step. `data` is a one-off table, never
+-- reloaded and never a song source (song source lookup only runs when
+-- `data` is nil). The Lua song table is { tempo, swing = 0 (0..75),
+-- rows = { { sound, note = ? } }, patterns = { A = { "4...", "..3-" } },
+-- arrangement = { "A", "B" } }: one step string per row, its length
+-- (8/16/32) the step count, each step a 16th. `1`-`4` hit at volume
+-- 32/64/96/127, `-` holds the previous hit, `.` rests. Swing delays odd
+-- steps by that percentage of a step; every step time is rounded from its
+-- absolute index, so a fractional step never drifts.
 --
 -- Setup compiles the whole arrangement into h.events, ordered by (start,
 -- row): { start, ["end"], voice, row, pitch, l, r } in 4 ms ticks
@@ -306,14 +313,18 @@ end
 -- lowest voice whose note has ended (end <= start), else the one whose
 -- note started earliest (lowest voice on a tie) is stolen and that note's
 -- end cut to the stealer's start. The web panel mirrors this allocator;
--- tests/fixtures/score_alloc.json holds both to the same answers.
+-- tests/fixtures/score_alloc.json holds both to the same answers. A song
+-- source's own allocator runs in Rust (`ppu_core::song::allocate`) and has
+-- no h.events — the native handle's fields all read through __song_get.
 --
 -- A built-in sound goes through bank() (preset ADSR/pitch); any other name
--- is an uploaded sample with a flat ADSR. `note` pitches the row with
--- note(row.note, base); without one a drum keeps its preset pitch.
--- Returns { tick, length, playing, events, song, play(), stop() }; stop() keys
--- every voice off and pauses, play() resumes, a finished loop = false
--- song rewinds. Setup-only, like song{}.
+-- is an uploaded sample with a flat ADSR — shared by both paths (`place`,
+-- below), so a toy playing several scores places each sound once. `note`
+-- pitches the row with note(row.note, base); without one a drum keeps its
+-- preset pitch.
+-- Returns { tick, length, playing, song, play(), stop() } (plus `events`
+-- for the Lua path); stop() keys every voice off and pauses, play()
+-- resumes, a finished loop = false song rewinds. Setup-only, like song{}.
 local VELOCITY = { ["1"] = 32, ["2"] = 64, ["3"] = 96, ["4"] = 127 }
 local STEP_COUNTS = { [8] = true, [16] = true, [32] = true }
 local FLAT = { a = 15, d = 0, s = 7, r = 0 }
@@ -598,27 +609,74 @@ end
 -- set_sources, so this starts empty with the toy's placements.
 local score_insts = {}
 
+-- Turn a row's sound name into a placed instrument, placing it in sound RAM
+-- the first time any score{} (Lua- or song-sourced) names it — see
+-- score_insts above. `i` is 1-based, used only in error messages.
+local function place(name, i)
+  if score_insts[name] == nil then
+    if BANK[name] ~= nil then
+      local ok, inst = pcall(bank, name)
+      if not ok then
+        error("score: row " .. i .. " sound '" .. name .. "': " .. tostring(inst))
+      end
+      score_insts[name] = inst
+    else
+      local ok, placed = pcall(dma, name)
+      if not ok then
+        error("score: row " .. i .. " sound '" .. name .. "': " .. tostring(placed))
+      end
+      score_insts[name] = instrument{ sample = placed.id, adsr = FLAT }
+    end
+  end
+  return score_insts[name]
+end
+
+-- A song-source row's pitch: note(row.note, inst.base) if it has a note,
+-- else the instrument's own pitch (or 0x1000) — the same rule compile()
+-- applies to a Lua row, just factored out so both paths raise the same
+-- message.
+local function row_pitch(row, inst, i)
+  if row.note == nil then
+    return inst.pitch or 0x1000
+  end
+  local ok, p = pcall(note, row.note, inst.base)
+  if not ok then
+    error("score: row " .. i .. " bad note '" .. tostring(row.note) .. "'")
+  end
+  return p
+end
+
 function score(cfg)
   cfg = cfg or {}
-  local insts = score_insts
-  local rows, events, length, at, slots = compile(song_data(cfg), function(name, i)
-    if insts[name] == nil then
-      if BANK[name] ~= nil then
-        local ok, inst = pcall(bank, name)
-        if not ok then
-          error("score: row " .. i .. " sound '" .. name .. "': " .. tostring(inst))
-        end
-        insts[name] = inst
-      else
-        local ok, placed = pcall(dma, name)
-        if not ok then
-          error("score: row " .. i .. " sound '" .. name .. "': " .. tostring(placed))
-        end
-        insts[name] = instrument{ sample = placed.id, adsr = FLAT }
+
+  -- A `song`-kind source named cfg.song, if there is one, plays natively
+  -- and returns here; `data` always skips this (see the doc comment above).
+  if cfg.song ~= nil and cfg.data == nil then
+    local id, song_rows = __song_load(tostring(cfg.song))
+    if id ~= nil then
+      local insts, pitches = {}, {}
+      for i = 1, #song_rows do
+        local row = song_rows[i]
+        local inst = place(row.sound, i)
+        insts[i] = inst
+        pitches[i] = row_pitch(row, inst, i)
       end
+      ensure_audible()
+      __song_start(id, insts, pitches, cfg.loop ~= false)
+      local h = setmetatable({ song = tostring(cfg.song), __song = id }, {
+        __index = function(_, k) return __song_get(id, k) end,
+      })
+      h.play = function()
+        __song_play(id)
+        __score = h
+      end
+      h.stop = function() __song_stop(id) end
+      __score = h
+      return h
     end
-    return insts[name]
-  end)
+  end
+
+  local rows, events, length, at, slots = compile(song_data(cfg), place)
 
   if cfg.song == nil then
     __score_data_live = true
@@ -644,7 +702,7 @@ function score(cfg)
     __score_songs[id] = list
     list[#list + 1] = function(d)
       local new_rows, new_events, new_length, new_at, new_slots = compile(d, function(name)
-        return insts[name]
+        return score_insts[name]
       end)
       if new_rows == nil then
         return nil

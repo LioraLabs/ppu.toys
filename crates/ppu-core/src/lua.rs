@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 use piccolo::{
     Callback, CallbackReturn, Closure, Executor, FromMultiValue, Function, Lua, PrototypeError,
-    StashedFunction, StaticError, Table, Value,
+    StashedFunction, StashedTable, StaticError, Table, Value,
 };
 
 use crate::{
@@ -242,6 +242,18 @@ pub struct LuaEngine {
     mix_koff: u8,
 }
 
+/// What a registered timer slot fires: a Lua closure (`timer(n, div, fn)`),
+/// or a native song player (`score{ song = }`'s `__song_start`) played
+/// entirely in Rust by `render_frame_audio` — see [`LuaEngine::run_song_tick`].
+/// A song hook is registered in the SAME list as a Lua one and in call
+/// order, so it lands in the same slot a `timer(0, 32, fn)` call would.
+#[derive(Clone)]
+enum Hook {
+    Lua(StashedFunction),
+    /// Index into `DmaRecorder::songs`.
+    Song(usize),
+}
+
 /// One `timer(n, div, fn)` registration, resolved to half-sample (`h`) units
 /// at 32 kHz output (see `render_frame_audio`'s segment-walker doc comment):
 /// `period_h` is `div * 8` for timers 0/1 (8 kHz) or `div * 1` for timer 2
@@ -249,7 +261,7 @@ pub struct LuaEngine {
 struct TimerHook {
     period_h: u64,
     due_h: u64,
-    func: StashedFunction,
+    hook: Hook,
     file: Option<String>,
 }
 
@@ -281,6 +293,33 @@ struct SamplePlacement {
     addr: u16,
     end: u32,
     loop_addr: u16,
+}
+
+/// A native `score{ song = "<name>" }` player: PSNG events plus the live
+/// per-tick state one timer slot (see [`Hook::Song`]) advances every 32nd
+/// tick, exactly as kit.lua's own `score{}` timer hook advances a Lua one —
+/// see [`LuaEngine::run_song_tick`]. Pushed by `__song_load` (not playing,
+/// no timer registered yet) and filled in by `__song_start`.
+struct SongPlayer {
+    name: String,
+    events: Vec<crate::song::Event>,
+    /// Song length in ticks (`Compiled::timing.length`).
+    length: i64,
+    /// The song's voice mask — a voice outside it is never touched.
+    mask: u8,
+    looping: bool,
+    playing: bool,
+    /// The next tick to play.
+    tick: i64,
+    /// Index into `events` of the next event to apply.
+    cursor: usize,
+    /// Per-voice end tick of the note currently sounding there, if any.
+    ends: [Option<i64>; 8],
+    /// Per-row instrument table, stashed by `__song_start` (index = row).
+    insts: Vec<StashedTable>,
+    /// Per-row pitch, computed by kit.lua's `score{}` before `__song_start`
+    /// (index = row).
+    pitches: Vec<i64>,
 }
 
 /// Fixed ARAM home of the 256-entry sample directory (DIR pinned to page
@@ -318,11 +357,19 @@ struct DmaRecorder {
     /// no-op: samples are written once by `LuaEngine::set_sources` after
     /// `init()`, not per frame.
     samples: RefCell<Vec<SamplePlacement>>,
-    /// `timer(n, div, fn)` registrations recorded during the init window:
-    /// (timer index 0..=2, div 1..=255, stashed hook, defining chunk). Moved
-    /// into `LuaEngine::timers` (with computed period_h/due_h) once
-    /// `set_sources` confirms `init()` succeeded.
-    timers: RefCell<Vec<(u8, u8, StashedFunction, Option<String>)>>,
+    /// `timer(n, div, fn)` (and `__song_start`'s native equivalent)
+    /// registrations recorded during the init window: (timer index 0..=2,
+    /// div 1..=255, hook, defining chunk — `None` for a song hook, which
+    /// can't error). Moved into `LuaEngine::timers` (with computed
+    /// period_h/due_h) once `set_sources` confirms `init()` succeeded.
+    timers: RefCell<Vec<(u8, u8, Hook, Option<String>)>>,
+    /// Native `score{ song = }` players, indexed by [`Hook::Song`] and by
+    /// the id `__song_load`/`__song_start`/`__song_get`/`__song_play`/
+    /// `__song_stop` pass across the Lua boundary. Survives across the init
+    /// window (unlike `timers`, `__song_get`/`play`/`stop` are callable any
+    /// time — frame(), hooks) but is dropped wholesale on the next
+    /// `set_sources` along with the rest of this recorder.
+    songs: RefCell<Vec<SongPlayer>>,
 }
 
 impl Default for LuaEngine {
@@ -503,6 +550,22 @@ impl LuaEngine {
             let Value::Table(h) = ctx.get_global("__score") else {
                 return None;
             };
+            // A native song-sourced handle carries a raw `__song` id
+            // instead of live `tick`/`length`/`playing` table fields (those
+            // only resolve through its `__index` metamethod, which `Table::
+            // get` — a raw get — doesn't invoke): read the player directly.
+            if let Some(id) = h.get(ctx, "__song").to_int() {
+                let songs = self.dma.songs.borrow();
+                let p = songs.get(id as usize)?;
+                if !p.playing || p.length <= 0 {
+                    return None;
+                }
+                return Some(ScoreView {
+                    tick: p.tick % p.length,
+                    length: p.length,
+                    song: Some(p.name.clone()),
+                });
+            }
             if !h.get(ctx, "playing").to_bool() {
                 return None;
             }
@@ -962,12 +1025,12 @@ impl LuaEngine {
             .timers
             .borrow_mut()
             .drain(..)
-            .map(|(n, div, func, file)| {
+            .map(|(n, div, hook, file)| {
                 let period_h = div as u64 * if n == 2 { 1 } else { 8 };
                 TimerHook {
                     period_h,
                     due_h: period_h,
-                    func,
+                    hook,
                     file,
                 }
             })
@@ -1571,19 +1634,24 @@ impl LuaEngine {
                     .render(&mut self.aram, &mut self.audio[2 * cursor..2 * off]);
             }
 
-            let func = self.timers[i].func.clone();
-            let res = {
-                let mut l = self.lua.borrow_mut();
-                let ex = l.enter(|ctx| {
-                    let f = ctx.fetch(&func);
-                    ctx.stash(Executor::start(ctx, f, (off as i64,)))
-                });
-                l.execute::<()>(&ex)
-            };
-            if let Err(e) = res {
-                let mut e = static_error_to_lua(e);
-                e.file = self.timers[i].file.clone();
-                err = Some(e);
+            match self.timers[i].hook.clone() {
+                Hook::Lua(func) => {
+                    let res = {
+                        let mut l = self.lua.borrow_mut();
+                        let ex = l.enter(|ctx| {
+                            let f = ctx.fetch(&func);
+                            ctx.stash(Executor::start(ctx, f, (off as i64,)))
+                        });
+                        l.execute::<()>(&ex)
+                    };
+                    if let Err(e) = res {
+                        let mut e = static_error_to_lua(e);
+                        e.file = self.timers[i].file.clone();
+                        err = Some(e);
+                    }
+                }
+                // A song hook can't error — see `run_song_tick`.
+                Hook::Song(id) => self.run_song_tick(id),
             }
 
             self.flush_dsp_writes();
@@ -1629,6 +1697,121 @@ impl LuaEngine {
         l.enter(|ctx| publish_voice_readbacks(ctx, &view));
         Ok(())
     }
+
+    /// Plays one tick of the native song player `id` (in `self.dma.songs`) —
+    /// exactly what kit.lua's own `score{}` `timer(0, 32, ...)` hook does for
+    /// a Lua-sourced score, but reading/writing `voice[]` and the
+    /// `__dsp_kon`/`__dsp_koff` globals directly instead of calling `sfx`/
+    /// `kon`/`koff`. A song's shape was already validated at `__song_load`
+    /// time, so this never errors and never touches a voice outside the
+    /// song's mask.
+    fn run_song_tick(&mut self, id: usize) {
+        let dma = self.dma.clone();
+        let mut l = self.lua.borrow_mut();
+        l.enter(|ctx| {
+            let mut songs = dma.songs.borrow_mut();
+            let Some(player) = songs.get_mut(id) else {
+                return;
+            };
+            if !player.playing {
+                return;
+            }
+            let mut t = player.tick;
+            if t >= player.length {
+                for v in 0..8u8 {
+                    if player.mask & (1 << v) != 0 {
+                        song_key(ctx, "__dsp_koff", v);
+                    }
+                }
+                player.ends = [None; 8];
+                player.cursor = 0;
+                player.tick = 0;
+                if !player.looping {
+                    player.playing = false;
+                    return;
+                }
+                t = 0;
+            }
+            for v in 0..8u8 {
+                if player.mask & (1 << v) == 0 {
+                    continue;
+                }
+                if let Some(end) = player.ends[v as usize] {
+                    if end <= t {
+                        song_key(ctx, "__dsp_koff", v);
+                        player.ends[v as usize] = None;
+                    }
+                }
+            }
+            while player.cursor < player.events.len() && player.events[player.cursor].start <= t {
+                let ev = player.events[player.cursor].clone();
+                if let Some(inst) = player.insts.get(ev.row as usize) {
+                    let inst = ctx.fetch(inst);
+                    let pitch = player
+                        .pitches
+                        .get(ev.row as usize)
+                        .copied()
+                        .unwrap_or(0x1000);
+                    apply_song_event(ctx, inst, pitch, &ev);
+                }
+                player.ends[ev.voice as usize] = Some(ev.end);
+                player.cursor += 1;
+            }
+            player.tick = t + 1;
+        });
+    }
+}
+
+/// OR `1 << v` into the hidden KON/KOFF accumulator global — the same thing
+/// the `kon`/`koff` Lua callbacks do (see `install_bindings`), but called
+/// directly from a native song hook with no Lua function to invoke.
+fn song_key(ctx: piccolo::Context<'_>, global: &'static str, v: u8) {
+    let cur = ctx.get_global(global).to_int().unwrap_or(0);
+    ctx.set_global(global, cur | (1i64 << v)).unwrap();
+}
+
+/// Apply one song event's row instrument to `voice[ev.voice]`, exactly the
+/// fields kit.lua's `sfx(inst, v)` applies (sample/adsr/gain/noise/pmod/
+/// echo), then the row's precomputed pitch and the event's precomputed l/r
+/// (PSNG volume, NOT `sfx`'s own pan/vol formula — the PSNG compiler already
+/// folded vel/vol/pan into `ev.l`/`ev.r`), and keys the voice on.
+fn apply_song_event<'gc>(
+    ctx: piccolo::Context<'gc>,
+    inst: Table<'gc>,
+    pitch: i64,
+    ev: &crate::song::Event,
+) {
+    let Value::Table(voices) = ctx.get_global("voice") else {
+        return;
+    };
+    let Value::Table(vo) = voices.get(ctx, ev.voice as i64) else {
+        return;
+    };
+    vo.set(ctx, "sample", inst.get(ctx, "sample")).unwrap();
+    let adsr = inst.get(ctx, "adsr");
+    if let Value::Table(a) = adsr {
+        let new_adsr = Table::new(&ctx);
+        for k in ["a", "d", "s", "r"] {
+            new_adsr.set(ctx, k, a.get(ctx, k)).unwrap();
+        }
+        vo.set(ctx, "adsr", new_adsr).unwrap();
+    }
+    let gain = inst.get(ctx, "gain");
+    if !matches!(adsr, Value::Nil) || !matches!(gain, Value::Nil) {
+        vo.set(ctx, "gain", gain).unwrap();
+    }
+    for k in ["noise", "pmod", "echo"] {
+        let v = inst.get(ctx, k);
+        if !matches!(v, Value::Nil) {
+            vo.set(ctx, k, v).unwrap();
+        }
+    }
+    vo.set(ctx, "pitch", pitch).unwrap();
+    let vol = Table::new(&ctx);
+    vol.set(ctx, "l", ev.l as i64).unwrap();
+    vol.set(ctx, "r", ev.r as i64).unwrap();
+    vo.set(ctx, "vol", vol).unwrap();
+    song_key(ctx, "__dsp_kon", ev.voice);
 }
 
 /// The `__ppu_controls_env` table controls_env.lua installs, looked up
@@ -2092,7 +2275,14 @@ fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
         let x = finite(ctx, stack.get(2), "x")?;
         let z = finite(ctx, stack.get(3), "z")?;
         let (c, s, cx, cy) = pose(angle, x, z);
-        let t = view(ctx, [c / zoom, -s / zoom, s / zoom, c / zoom], cx, cy, cy - 112, true);
+        let t = view(
+            ctx,
+            [c / zoom, -s / zoom, s / zoom, c / zoom],
+            cx,
+            cy,
+            cy - 112,
+            true,
+        );
         stack.replace(ctx, t);
         Ok(CallbackReturn::Return)
     });
@@ -2115,7 +2305,14 @@ fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
         let depth = 128.0 * scale;
         let wrap = |v: f64| ((v + 0.5).floor() as i64).rem_euclid(1024);
         let (cx, cy) = (wrap(x - s * depth), wrap(z + c * depth));
-        let t = view(ctx, [c * scale, 0.0, s * scale, 0.0], cx, cy, 0, y > horizon);
+        let t = view(
+            ctx,
+            [c * scale, 0.0, s * scale, 0.0],
+            cx,
+            cy,
+            0,
+            y > horizon,
+        );
         stack.replace(ctx, t);
         Ok(CallbackReturn::Return)
     });
@@ -2566,6 +2763,8 @@ fn install_dma(
 ) {
     use crate::source::SourceKind;
     let timer_rec = rec.clone();
+    let song_store = store.clone();
+    let song_rec = rec.clone();
     let dma = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
         if !rec.active.get() {
             return Err(lua_err(
@@ -2858,6 +3057,17 @@ fn install_dma(
                 stack.replace(ctx, ret);
                 return Ok(CallbackReturn::Return);
             }
+            // A song is authored data played natively by `score{ song = }`
+            // (see `install_dma`'s `__song_load`), never `dma()`'s — same
+            // refusal shape as the sample-specific opts check above.
+            crate::source::SourcePayload::Song(_) => {
+                return Err(lua_err(
+                    ctx,
+                    &format!(
+                        "dma: '{name}' is a song source — score{{ song = \"{name}\" }} plays it, not dma()"
+                    ),
+                ))
+            }
         }
         if vram.iter().any(|&(s, e)| e > 0x8000 || s >= e) || cgram_end > 256 {
             return Err(lua_err(
@@ -2938,10 +3148,196 @@ fn install_dma(
         timer_rec
             .timers
             .borrow_mut()
-            .push((n, div, ctx.stash(f), file));
+            .push((n, div, Hook::Lua(ctx.stash(f)), file));
         Ok(CallbackReturn::Return)
     });
     ctx.set_global("timer", timer).unwrap();
+
+    install_song_natives(ctx, song_store, song_rec);
+}
+
+/// Install `__song_load`/`__song_start`/`__song_get`/`__song_play`/
+/// `__song_stop` — the natives kit.lua's `score{ song = }` path drives (see
+/// `kit.lua`'s own doc comment). `load`/`start` share `dma`/`timer`'s
+/// init-window gate; `get`/`play`/`stop` are callable any time (frame(),
+/// hooks), matching a Lua score handle's `play()`/`stop()`.
+fn install_song_natives(
+    ctx: piccolo::Context<'_>,
+    store: Rc<RefCell<HashMap<String, crate::source::SourcePayload>>>,
+    rec: Rc<DmaRecorder>,
+) {
+    let load_rec = rec.clone();
+    let song_load = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
+        if !load_rec.active.get() {
+            return Err(lua_err(
+                ctx,
+                "__song_load runs during setup — call it from top-level code, not frame() or hooks",
+            ));
+        }
+        let name = match stack.get(0) {
+            Value::String(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+            _ => {
+                return Err(lua_err(
+                    ctx,
+                    "__song_load: first argument must be a source name (string)",
+                ))
+            }
+        };
+        let bytes = match store.borrow().get(&name) {
+            Some(crate::source::SourcePayload::Song(bytes)) => bytes.clone(),
+            _ => {
+                stack.clear();
+                stack.replace(ctx, Value::Nil);
+                return Ok(CallbackReturn::Return);
+            }
+        };
+        let song = crate::song::decode(&bytes)
+            .map_err(|e| lua_err(ctx, &format!("score: song '{name}': {e}")))?;
+        let compiled = crate::song::compile(&song)
+            .map_err(|e| lua_err(ctx, &format!("score: song '{name}': {e}")))?;
+        let id = load_rec.songs.borrow().len();
+        load_rec.songs.borrow_mut().push(SongPlayer {
+            name: name.clone(),
+            events: compiled.events,
+            length: compiled.timing.length,
+            mask: song.voice_mask,
+            looping: false,
+            playing: false,
+            tick: 0,
+            cursor: 0,
+            ends: [None; 8],
+            insts: Vec::new(),
+            pitches: Vec::new(),
+        });
+        let rows = Table::new(&ctx);
+        for (i, row) in song.rows.iter().enumerate() {
+            let t = Table::new(&ctx);
+            t.set(ctx, "sound", ctx.intern(row.sound.as_bytes()))
+                .unwrap();
+            t.set(
+                ctx,
+                "note",
+                match row.note {
+                    Some(n) => Value::Integer(n as i64),
+                    None => Value::Nil,
+                },
+            )
+            .unwrap();
+            rows.set(ctx, i as i64 + 1, t).unwrap();
+        }
+        stack.clear();
+        stack.replace(ctx, (id as i64, rows));
+        Ok(CallbackReturn::Return)
+    });
+    ctx.set_global("__song_load", song_load).unwrap();
+
+    let start_rec = rec.clone();
+    let song_start = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
+        if !start_rec.active.get() {
+            return Err(lua_err(
+                ctx,
+                "__song_start runs during setup — call it from top-level code, not frame() or hooks",
+            ));
+        }
+        let id = match stack.get(0).to_int() {
+            Some(n) if n >= 0 => n as usize,
+            _ => {
+                return Err(lua_err(
+                    ctx,
+                    "__song_start: id must be a non-negative integer",
+                ))
+            }
+        };
+        let insts_t = match stack.get(1) {
+            Value::Table(t) => t,
+            _ => return Err(lua_err(ctx, "__song_start: insts must be a table")),
+        };
+        let pitches_t = match stack.get(2) {
+            Value::Table(t) => t,
+            _ => return Err(lua_err(ctx, "__song_start: pitches must be a table")),
+        };
+        let looping = stack.get(3).to_bool();
+        let n = insts_t.length();
+        let mut insts = Vec::with_capacity(n.max(0) as usize);
+        let mut pitches = Vec::with_capacity(n.max(0) as usize);
+        for i in 1..=n {
+            let inst = match insts_t.get(ctx, i) {
+                Value::Table(t) => t,
+                _ => return Err(lua_err(ctx, "__song_start: insts must hold tables")),
+            };
+            insts.push(ctx.stash(inst));
+            pitches.push(pitches_t.get(ctx, i).to_int().unwrap_or(0x1000));
+        }
+        if let Some(p) = start_rec.songs.borrow_mut().get_mut(id) {
+            p.insts = insts;
+            p.pitches = pitches;
+            p.looping = looping;
+            p.playing = true;
+            p.tick = 0;
+            p.cursor = 0;
+            p.ends = [None; 8];
+        }
+        start_rec
+            .timers
+            .borrow_mut()
+            .push((0u8, 32u8, Hook::Song(id), None));
+        stack.clear();
+        Ok(CallbackReturn::Return)
+    });
+    ctx.set_global("__song_start", song_start).unwrap();
+
+    let get_rec = rec.clone();
+    let song_get = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
+        let id = stack.get(0).to_int().unwrap_or(-1);
+        let key = match stack.get(1) {
+            Value::String(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+            _ => String::new(),
+        };
+        let songs = get_rec.songs.borrow();
+        let val = match id.try_into().ok().and_then(|id: usize| songs.get(id)) {
+            Some(p) => match key.as_str() {
+                "tick" => Value::Integer(p.tick),
+                "length" => Value::Integer(p.length),
+                "playing" => Value::Boolean(p.playing),
+                "loop" => Value::Boolean(p.looping),
+                _ => Value::Nil,
+            },
+            None => Value::Nil,
+        };
+        stack.clear();
+        stack.replace(ctx, val);
+        Ok(CallbackReturn::Return)
+    });
+    ctx.set_global("__song_get", song_get).unwrap();
+
+    let play_rec = rec.clone();
+    let song_play = Callback::from_fn(&ctx, move |_ctx, _, mut stack| {
+        if let Some(id) = stack.get(0).to_int().and_then(|n| usize::try_from(n).ok()) {
+            if let Some(p) = play_rec.songs.borrow_mut().get_mut(id) {
+                p.playing = true;
+            }
+        }
+        stack.clear();
+        Ok(CallbackReturn::Return)
+    });
+    ctx.set_global("__song_play", song_play).unwrap();
+
+    let song_stop = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
+        if let Some(id) = stack.get(0).to_int().and_then(|n| usize::try_from(n).ok()) {
+            if let Some(p) = rec.songs.borrow_mut().get_mut(id) {
+                p.playing = false;
+                for v in 0..8u8 {
+                    if p.mask & (1 << v) != 0 {
+                        song_key(ctx, "__dsp_koff", v);
+                    }
+                }
+                p.ends = [None; 8];
+            }
+        }
+        stack.clear();
+        Ok(CallbackReturn::Return)
+    });
+    ctx.set_global("__song_stop", song_stop).unwrap();
 }
 
 /// Re-run the init-recorded `dma()` placements in call order into the frame's
@@ -2974,6 +3370,10 @@ fn replay_dma(
             // `init()`, never replayed per frame — a `dma()` placement
             // naming one is a no-op here.
             Some(SourcePayload::Sample(_)) => {}
+            // Songs are never `dma()`'d (the `dma` callback refuses the
+            // kind), so a placement can't name one — kept only so this
+            // match stays exhaustive over `SourcePayload`.
+            Some(SourcePayload::Song(_)) => {}
             None => reports.push(ImportBudget::Mismatch {
                 layer: None,
                 slot: p.name.clone(),

@@ -1,7 +1,10 @@
 //! `ppu_core::song`: the PSNG codec, timing map, compiler and voice
 //! allocator, exercised entirely through the public API.
 
+mod common;
+
 use ppu_core::song::*;
+use ppu_core::LuaEngine;
 use std::time::{Duration, Instant};
 
 /// A song touching every field: notes with and without a pitch, negative
@@ -703,4 +706,684 @@ fn stress_ten_minute_song_decodes_and_compiles_within_budget() {
             "best {best:?} exceeded the 10ms budget"
         );
     }
+}
+
+// ---- 9. native `score{ song = }` playback, through the public LuaEngine
+// API (`add_source`, `set_source`, `frame`, `audio`, `dsp_view`,
+// `score_view`) — the codec/timing/allocator above are already proven in
+// isolation; these exercise the NEW wiring: a `song`-kind source played by
+// `score{}` with no Lua timer involved. ------------------------------------
+
+/// Registers `song` as a `[3, 5, <psng bytes>]` source under `name` (the
+/// `add_source` shape a `song`-kind source commits to).
+fn add_song_source(e: &mut LuaEngine, name: &str, song: &Song) {
+    let mut payload = vec![3u8, 5];
+    payload.extend_from_slice(&encode(song));
+    e.add_source(name, &payload).unwrap();
+}
+
+/// One step-sequencer hit, in both representations at once: `step` is the
+/// 0-based 16th-note position in a 16-step pattern, `vel` a kit.lua
+/// velocity digit (1-4), `hold` how many consecutive 16ths it occupies (1 =
+/// no hold). `pattern`/`row` select which pattern (0 = "A", 1 = "B") and
+/// row (0 = kick, 1 = hat, 2 = mine) it belongs to.
+struct Hit {
+    pattern: usize,
+    row: usize,
+    step: u32,
+    vel: u8,
+    hold: u32,
+}
+
+const HIT_STEPS: u32 = 16;
+
+fn vel_amount(v: u8) -> u32 {
+    match v {
+        1 => 32,
+        2 => 64,
+        3 => 96,
+        4 => 127,
+        _ => panic!("bad velocity digit {v}"),
+    }
+}
+
+/// The kit.lua step string kit.lua's own `score{ data = }` parses for one
+/// (pattern, row): `.` rests, a digit hits, `-` holds the previous hit.
+fn step_string(hits: &[Hit], pattern: usize, row: usize) -> String {
+    let mut chars = vec!['.'; HIT_STEPS as usize];
+    for h in hits.iter().filter(|h| h.pattern == pattern && h.row == row) {
+        chars[h.step as usize] = (b'0' + h.vel) as char;
+        for k in 1..h.hold {
+            chars[(h.step + k) as usize] = '-';
+        }
+    }
+    chars.into_iter().collect()
+}
+
+/// The equivalent PSNG notes for one (pattern, row) — a 16th is 12 units
+/// (`song::TICKS_PER_BEAT` / 4).
+fn hit_notes(hits: &[Hit], pattern: usize, row: usize) -> Vec<Note> {
+    hits.iter()
+        .filter(|h| h.pattern == pattern && h.row == row)
+        .map(|h| Note {
+            at: h.step * 12,
+            row: row as u32,
+            len: h.hold * 12,
+            vel: vel_amount(h.vel),
+            voice: None,
+            nudge: 0,
+        })
+        .collect()
+}
+
+/// Every velocity digit 1-4 and both plain hits and holds, spread across
+/// kick/hat/mine and both patterns, with no two rows ever hitting the same
+/// step (so tie-break order can never matter here).
+fn score_parity_hits() -> Vec<Hit> {
+    vec![
+        // Pattern A
+        Hit {
+            pattern: 0,
+            row: 0,
+            step: 0,
+            vel: 1,
+            hold: 1,
+        },
+        Hit {
+            pattern: 0,
+            row: 0,
+            step: 4,
+            vel: 2,
+            hold: 1,
+        },
+        Hit {
+            pattern: 0,
+            row: 0,
+            step: 8,
+            vel: 3,
+            hold: 1,
+        },
+        Hit {
+            pattern: 0,
+            row: 0,
+            step: 12,
+            vel: 4,
+            hold: 2,
+        },
+        Hit {
+            pattern: 0,
+            row: 1,
+            step: 2,
+            vel: 2,
+            hold: 1,
+        },
+        Hit {
+            pattern: 0,
+            row: 1,
+            step: 6,
+            vel: 3,
+            hold: 1,
+        },
+        Hit {
+            pattern: 0,
+            row: 1,
+            step: 10,
+            vel: 4,
+            hold: 1,
+        },
+        Hit {
+            pattern: 0,
+            row: 1,
+            step: 14,
+            vel: 1,
+            hold: 1,
+        },
+        Hit {
+            pattern: 0,
+            row: 2,
+            step: 3,
+            vel: 2,
+            hold: 3,
+        },
+        Hit {
+            pattern: 0,
+            row: 2,
+            step: 11,
+            vel: 4,
+            hold: 1,
+        },
+        // Pattern B
+        Hit {
+            pattern: 1,
+            row: 0,
+            step: 0,
+            vel: 4,
+            hold: 4,
+        },
+        Hit {
+            pattern: 1,
+            row: 0,
+            step: 8,
+            vel: 1,
+            hold: 1,
+        },
+        Hit {
+            pattern: 1,
+            row: 1,
+            step: 1,
+            vel: 3,
+            hold: 1,
+        },
+        Hit {
+            pattern: 1,
+            row: 1,
+            step: 5,
+            vel: 3,
+            hold: 1,
+        },
+        Hit {
+            pattern: 1,
+            row: 1,
+            step: 9,
+            vel: 3,
+            hold: 1,
+        },
+        Hit {
+            pattern: 1,
+            row: 1,
+            step: 13,
+            vel: 3,
+            hold: 1,
+        },
+        Hit {
+            pattern: 1,
+            row: 2,
+            step: 6,
+            vel: 1,
+            hold: 2,
+        },
+        Hit {
+            pattern: 1,
+            row: 2,
+            step: 14,
+            vel: 3,
+            hold: 1,
+        },
+    ]
+}
+
+fn parity_lua_pattern(hits: &[Hit], pattern: usize) -> String {
+    format!(
+        "{{ \"{}\", \"{}\", \"{}\" }}",
+        step_string(hits, pattern, 0),
+        step_string(hits, pattern, 1),
+        step_string(hits, pattern, 2),
+    )
+}
+
+fn parity_lua_source(hits: &[Hit]) -> String {
+    format!(
+        "h = score{{ data = {{\n\
+           tempo = 120, swing = 30,\n\
+           rows = {{ {{ sound = \"kick\" }}, {{ sound = \"hat\" }}, {{ sound = \"mine\", note = \"C5\" }} }},\n\
+           patterns = {{ A = {}, B = {} }},\n\
+           arrangement = {{ \"A\", \"B\", \"A\" }},\n\
+         }} }}\n\
+         function frame() end\n",
+        parity_lua_pattern(hits, 0),
+        parity_lua_pattern(hits, 1),
+    )
+}
+
+fn parity_psng_song(hits: &[Hit]) -> Song {
+    let pattern = |idx: usize, name: &str| {
+        let mut notes: Vec<Note> = (0..3).flat_map(|row| hit_notes(hits, idx, row)).collect();
+        notes.sort_by_key(|n| (n.at, n.row));
+        Pattern {
+            name: name.into(),
+            length: HIT_STEPS * 12,
+            tempo: None,
+            notes,
+        }
+    };
+    Song {
+        tempo: 12000,
+        swing: 30,
+        key: 0,
+        voice_mask: 0xff,
+        rows: vec![
+            Row {
+                sound: "kick".into(),
+                note: None,
+                vol: 127,
+                pan: 0,
+            },
+            Row {
+                sound: "hat".into(),
+                note: None,
+                vol: 110,
+                pan: 0,
+            },
+            Row {
+                sound: "mine".into(),
+                note: Some(72),
+                vol: 127,
+                pan: 0,
+            },
+        ],
+        patterns: vec![pattern(0, "A"), pattern(1, "B")],
+        arrangement: vec![0, 1, 0],
+    }
+}
+
+/// The key proof: a `song`-kind source played by native `score{ song = }`
+/// must render byte-identical audio, frame for frame, to the equivalent Lua
+/// `score{ data = }` — same tempo/swing, same rows (a built-in preset and
+/// an uploaded sample with a note), same two 16-step patterns played
+/// [A, B, A], covering velocities 1-4 and held notes. 450 frames at 60 fps
+/// (7.5s) comfortably wraps the ~6s song at least once.
+#[test]
+fn native_song_source_matches_the_lua_path_byte_for_byte() {
+    let hits = score_parity_hits();
+
+    let mut lua_engine = LuaEngine::new();
+    common::add_sample(&mut lua_engine, "mine");
+    lua_engine.set_source(&parity_lua_source(&hits)).unwrap();
+
+    let mut song_engine = LuaEngine::new();
+    common::add_sample(&mut song_engine, "mine");
+    add_song_source(&mut song_engine, "beat", &parity_psng_song(&hits));
+    song_engine
+        .set_source("h = score{ song = \"beat\" }\nfunction frame() end\n")
+        .unwrap();
+
+    let mut any_nonzero = false;
+    for f in 0..450u32 {
+        lua_engine.frame(f as f64 / 60.0, f).unwrap();
+        song_engine.frame(f as f64 / 60.0, f).unwrap();
+        assert_eq!(
+            lua_engine.audio(),
+            song_engine.audio(),
+            "frame {f}: native song audio diverges from the Lua path"
+        );
+        any_nonzero |= song_engine.audio().iter().any(|&s| s != 0);
+    }
+    assert!(any_nonzero, "the song never produced any audio");
+}
+
+/// With no `song`-kind source named "beat", `score{ song = "beat" }` falls
+/// back to the older `seq_beat()` path (its `h.events` table exists);
+/// registering a song source under that name afterward makes the SAME call
+/// prefer it instead (a native handle has no `h.events`, and its compiled
+/// length differs from seq_beat's).
+#[test]
+fn score_song_falls_back_to_seq_and_prefers_a_song_source_when_present() {
+    let src = "function seq_beat() return { tempo = 120, rows = { { sound = \"kick\" } },\n\
+        patterns = { A = { \"4...4...\" } }, arrangement = { \"A\" } } end\n\
+        h = score{ song = \"beat\" }\n\
+        function frame() sram.has_events = h.events ~= nil; sram.length = h.length end\n";
+
+    let mut e = LuaEngine::new();
+    e.set_source(src).unwrap();
+    e.frame(0.0, 0).unwrap();
+    let got: serde_json::Value = serde_json::from_str(&e.take_sram().unwrap()).unwrap();
+    assert_eq!(
+        got["has_events"], true,
+        "no song source named 'beat': falls back to seq_beat()"
+    );
+    let seq_length = got["length"].as_i64().unwrap();
+
+    let song = Song {
+        tempo: 12000,
+        swing: 0,
+        key: 0,
+        voice_mask: 0b1,
+        rows: vec![Row {
+            sound: "kick".into(),
+            note: None,
+            vol: 100,
+            pan: 0,
+        }],
+        patterns: vec![Pattern {
+            name: "A".into(),
+            length: 48,
+            tempo: None,
+            notes: vec![Note {
+                at: 0,
+                row: 0,
+                len: 12,
+                vel: 100,
+                voice: None,
+                nudge: 0,
+            }],
+        }],
+        arrangement: vec![0],
+    };
+    let mut e2 = LuaEngine::new();
+    add_song_source(&mut e2, "beat", &song);
+    e2.set_source(src).unwrap();
+    e2.frame(0.0, 0).unwrap();
+    let got2: serde_json::Value = serde_json::from_str(&e2.take_sram().unwrap()).unwrap();
+    assert_eq!(
+        got2["has_events"], false,
+        "a song source named 'beat' shadows seq_beat() (a native handle has no h.events)"
+    );
+    assert_ne!(
+        got2["length"].as_i64().unwrap(),
+        seq_length,
+        "the song source's own length must win, not seq_beat's"
+    );
+}
+
+/// A toy playing the same sound from both a Lua `score{ data = }` and a
+/// song-sourced `score{ song = }` places it in sound RAM once — the shared
+/// `place()` both paths now go through.
+#[test]
+fn song_source_and_lua_score_share_one_placement_per_sound() {
+    let mut e = LuaEngine::new();
+    common::add_sample(&mut e, "mine");
+
+    let song = Song {
+        tempo: 12000,
+        swing: 0,
+        key: 0,
+        voice_mask: 0b1,
+        rows: vec![Row {
+            sound: "mine".into(),
+            note: None,
+            vol: 100,
+            pan: 0,
+        }],
+        patterns: vec![Pattern {
+            name: "A".into(),
+            length: 12,
+            tempo: None,
+            notes: vec![Note {
+                at: 0,
+                row: 0,
+                len: 12,
+                vel: 100,
+                voice: None,
+                nudge: 0,
+            }],
+        }],
+        arrangement: vec![0],
+    };
+    add_song_source(&mut e, "beat", &song);
+
+    e.set_source(
+        "score{ song = \"beat\" }\n\
+         score{ data = { tempo = 120, rows = { { sound = \"mine\" } },\n\
+           patterns = { A = { \"4.......\" } }, arrangement = { \"A\" } } }\n\
+         function frame() end",
+    )
+    .unwrap();
+    e.frame(0.0, 0).unwrap();
+    assert_eq!(
+        e.dsp_view().samples.len(),
+        1,
+        "both scores must share the one placement for 'mine'"
+    );
+}
+
+/// A small (~125-tick, ~0.5s) one-note looping song, used by the handle/
+/// score_view tests below.
+fn small_song(voice_mask: u8) -> Song {
+    Song {
+        tempo: 12000,
+        swing: 0,
+        key: 0,
+        voice_mask,
+        rows: vec![Row {
+            sound: "kick".into(),
+            note: None,
+            vol: 100,
+            pan: 0,
+        }],
+        patterns: vec![Pattern {
+            name: "A".into(),
+            length: 48,
+            tempo: None,
+            notes: vec![Note {
+                at: 0,
+                row: 0,
+                len: 48,
+                vel: 100,
+                voice: None,
+                nudge: 0,
+            }],
+        }],
+        arrangement: vec![0],
+    }
+}
+
+/// The handle a song-sourced `score{}` returns reports its compiled length,
+/// its tick advances, `loop` is true by default, `stop()` keys off and
+/// holds the tick in place, and `play()` resumes it from there.
+#[test]
+fn song_handle_reports_length_advances_and_stop_holds_the_tick() {
+    let song = small_song(0xff);
+    let want_length = compile(&song).expect("compiles").timing.length;
+
+    let mut e = LuaEngine::new();
+    add_song_source(&mut e, "beat", &song);
+    e.set_source(
+        "h = score{ song = \"beat\" }\n\
+         function frame(t, f)\n\
+           sram.length = h.length\n\
+           sram.loop = h.loop\n\
+           if f == 3 then sram.tick3 = h.tick end\n\
+           if f == 4 then h.stop(); sram.at_stop = h.tick end\n\
+           if f == 8 then sram.still = h.tick; h.play() end\n\
+           if f == 12 then sram.resumed = h.tick end\n\
+         end",
+    )
+    .unwrap();
+    for f in 0..13u32 {
+        e.frame(f as f64 / 60.0, f).unwrap();
+    }
+    let got: serde_json::Value = serde_json::from_str(&e.take_sram().unwrap()).unwrap();
+    assert_eq!(got["length"], want_length);
+    assert_eq!(got["loop"], true);
+    assert!(got["tick3"].as_i64().unwrap() > 0, "tick advances: {got}");
+    assert_eq!(got["still"], got["at_stop"], "stop() holds the tick: {got}");
+    assert!(
+        got["resumed"].as_i64().unwrap() > got["still"].as_i64().unwrap(),
+        "play() resumes ticking: {got}"
+    );
+}
+
+/// `loop = false` on a song source finishes and stops, same as the Lua path.
+#[test]
+fn song_handle_with_loop_false_finishes_and_stops_playing() {
+    let song = small_song(0xff); // ~125 ticks == ~0.5s
+    let mut e = LuaEngine::new();
+    add_song_source(&mut e, "beat", &song);
+    e.set_source(
+        "h = score{ song = \"beat\", loop = false }\n\
+         function frame() sram.playing = h.playing end",
+    )
+    .unwrap();
+    // 120 frames at 60fps == 2s, 4x the song's length.
+    for f in 0..120u32 {
+        e.frame(f as f64 / 60.0, f).unwrap();
+    }
+    let got: serde_json::Value = serde_json::from_str(&e.take_sram().unwrap()).unwrap();
+    assert_eq!(got["playing"], false, "a non-looping song must finish");
+}
+
+/// `score_view()` (the studio playhead readout) reports a song source's
+/// live tick/length/song name, and goes absent once it's stopped.
+#[test]
+fn score_view_reports_a_song_sources_tick_and_is_absent_when_stopped() {
+    let song = small_song(0xff);
+    let want_length = compile(&song).expect("compiles").timing.length;
+
+    let mut e = LuaEngine::new();
+    add_song_source(&mut e, "beat", &song);
+    e.set_source(
+        "h = score{ song = \"beat\" }\n\
+         function frame(t, f) if f == 5 then h.stop() end end",
+    )
+    .unwrap();
+    for f in 0..5u32 {
+        e.frame(f as f64 / 60.0, f).unwrap();
+        let v = e.score_view().expect("a playing song source reports");
+        assert_eq!(v.song.as_deref(), Some("beat"));
+        assert_eq!(v.length, want_length);
+        assert!(v.tick < v.length);
+    }
+    e.frame(5.0 / 60.0, 5).unwrap(); // frame() calls h.stop() this frame
+    assert_eq!(e.score_view(), None, "stopped: no readout");
+}
+
+/// A song with a 2-voice mask and three notes overlapping at the same start
+/// only ever plays on voices 0-1 (the allocator's own contract, checked
+/// directly on the compiled events), and the native playback hook never
+/// touches a voice outside that mask. Observable: `frame()` stamps voice 5
+/// with a fixed sentinel every frame; because an hdma/frame() voice[]
+/// write only reaches the real DSP registers at the NEXT frame's offset-0
+/// flush (see `flush_dsp_writes`'s doc comment), `dsp_view()` right after
+/// `frame()` returns reflects whatever the LAST flush during THIS frame's
+/// audio pass left there — the sentinel, unless the song hook itself wrote
+/// voice 5 in between.
+#[test]
+fn native_song_never_touches_a_voice_outside_its_mask() {
+    let song = Song {
+        tempo: 12000,
+        swing: 0,
+        key: 0,
+        voice_mask: 0b0000_0011,
+        rows: vec![Row {
+            sound: "kick".into(),
+            note: None,
+            vol: 100,
+            pan: 0,
+        }],
+        patterns: vec![Pattern {
+            name: "A".into(),
+            length: 36,
+            tempo: None,
+            notes: vec![
+                Note {
+                    at: 0,
+                    row: 0,
+                    len: 36,
+                    vel: 100,
+                    voice: None,
+                    nudge: 0,
+                },
+                Note {
+                    at: 0,
+                    row: 0,
+                    len: 36,
+                    vel: 100,
+                    voice: None,
+                    nudge: 0,
+                },
+                Note {
+                    at: 0,
+                    row: 0,
+                    len: 36,
+                    vel: 100,
+                    voice: None,
+                    nudge: 0,
+                },
+            ],
+        }],
+        arrangement: vec![0],
+    };
+    let compiled = compile(&song).expect("compiles");
+    assert!(
+        compiled.events.iter().all(|e| e.voice < 2),
+        "the allocator must keep every event inside the song's mask: {:?}",
+        compiled.events
+    );
+
+    let mut e = LuaEngine::new();
+    add_song_source(&mut e, "beat", &song);
+    e.set_source(
+        "h = score{ song = \"beat\" }\n\
+         function frame()\n\
+           voice[5].sample = 42\n\
+           voice[5].vol = { l = 77, r = 66 }\n\
+         end",
+    )
+    .unwrap();
+
+    for f in 0..30u32 {
+        e.frame(f as f64 / 60.0, f).unwrap();
+        if f >= 1 {
+            let view = e.dsp_view();
+            let v5 = &view.voices[5];
+            assert_eq!(v5.sample, 42, "frame {f}: voice 5's sample was touched");
+            assert_eq!(
+                (v5.vol.l, v5.vol.r),
+                (77, 66),
+                "frame {f}: voice 5's vol was touched"
+            );
+        }
+    }
+}
+
+/// A truncated `song`-kind source is a setup error at `score{}` time, and
+/// the message names the chunk — the same shape `song::decode`'s own tests
+/// exercise directly, proven here through the Lua boundary.
+#[test]
+fn a_truncated_song_source_names_the_chunk_at_score_setup() {
+    let full = encode(&valid_song());
+    let rows_pos = full
+        .windows(4)
+        .position(|w| w == b"ROWS")
+        .expect("ROWS chunk present");
+    let cut = rows_pos + 4 + 1 + 1; // tag + length byte + one body byte
+    assert!(
+        cut < full.len(),
+        "ROWS chunk must have more than one body byte"
+    );
+
+    let mut e = LuaEngine::new();
+    let mut payload = vec![3u8, 5];
+    payload.extend_from_slice(&full[..cut]);
+    e.add_source("beat", &payload).unwrap();
+    let err = e.set_source("score{ song = \"beat\" }").unwrap_err();
+    assert!(
+        err.message.contains("ROWS chunk truncated"),
+        "{}",
+        err.message
+    );
+    assert!(
+        err.message.contains("score: song 'beat':"),
+        "{}",
+        err.message
+    );
+}
+
+/// An invalid song (a note's velocity over 127) is also a `score{}` setup
+/// error, and the message names the pattern and the note.
+#[test]
+fn an_invalid_song_source_names_the_pattern_and_note_at_score_setup() {
+    let mut song = valid_song();
+    song.patterns[0].notes[0].vel = 200;
+
+    let mut e = LuaEngine::new();
+    add_song_source(&mut e, "beat", &song);
+    let err = e.set_source("score{ song = \"beat\" }").unwrap_err();
+    assert!(
+        err.message.contains("pattern 'A'")
+            && err.message.contains("note 1")
+            && err.message.contains("vel 200"),
+        "{}",
+        err.message
+    );
+}
+
+/// `dma()` refuses a song source outright — a song plays through
+/// `score{ song = }`, never through `dma()`'s VRAM/CGRAM/ARAM placement.
+#[test]
+fn dma_refuses_a_song_source() {
+    let mut e = LuaEngine::new();
+    add_song_source(&mut e, "beat", &valid_song());
+    let err = e.set_source("dma(\"beat\")").unwrap_err();
+    assert!(err.message.contains("beat"), "{}", err.message);
 }
