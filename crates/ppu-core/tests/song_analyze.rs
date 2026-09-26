@@ -183,69 +183,101 @@ fn nudged_end_crossing_a_step_tick_changes_wanted_not_used() {
 /// 1-, 4- and 8-voice masks.
 #[test]
 fn sweep_matches_brute_force() {
-    let mut seed = 7u32;
-    let mut rnd = |n: u32| {
-        seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
-        (seed >> 8) % n
-    };
-    for mask in [0b1u8, 0b0101_0101, 0xff] {
-        let pins: Vec<u32> = (0..8).filter(|v| mask & (1 << v) != 0).collect();
-        let patterns: Vec<Pattern> = (0..4)
-            .map(|p| {
-                let length = 30 + rnd(90);
-                Pattern {
-                    name: format!("p{p}"),
-                    length,
-                    tempo: if p % 2 == 1 {
-                        Some(9000 + rnd(9000))
-                    } else {
-                        None
-                    },
-                    notes: (0..40)
-                        .map(|_| {
-                            let at = rnd(length);
-                            let len = 1 + rnd(30);
-                            let voice = if rnd(5) == 0 {
-                                Some(pins[rnd(pins.len() as u32) as usize])
-                            } else {
-                                None
-                            };
-                            // Never early at unit 0: that would start before
-                            // the song. Only nudge a note long enough (and
-                            // not up against its pattern's own end, where the
-                            // song-end clip could shrink it) to absorb an
-                            // 11-tick start nudge even at the fastest tempo
-                            // and heaviest swing compression used here --
-                            // else it could end at or before its own start.
-                            let raw_nudge = rnd(15) as i32 - if at == 0 { 0 } else { 3 };
-                            let nudge = if len >= 12 && at + len <= length {
-                                raw_nudge
-                            } else {
-                                0
-                            };
-                            Note {
-                                at,
-                                row: 0,
-                                len,
-                                vel: 100,
-                                voice,
-                                nudge,
-                                end_nudge: 0,
-                            }
-                        })
-                        .collect(),
-                }
-            })
-            .collect();
-        let mut s = song(mask, patterns, vec![0, 1, 1, 2, 3, 0, 2]);
-        s.swing = 40;
-        let a = analyze(&s).unwrap();
-        assert_eq!(a.events, compile(&s).unwrap().events);
-        assert!(
-            !a.over.is_empty(),
-            "mask {mask:#b} should overflow somewhere"
-        );
-        assert_eq!(a, brute(&s), "mask {mask:#b}");
+    // Run with several seeds (not just one) so the nudge bounds derived
+    // below are checked against many random draws, not one lucky roll.
+    for seed0 in [7u32, 1_000_003, 2_654_435_761, 99_991, 424_242] {
+        let mut seed = seed0;
+        let mut rnd = |n: u32| {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+            (seed >> 8) % n
+        };
+        for mask in [0b1u8, 0b0101_0101, 0xff] {
+            let pins: Vec<u32> = (0..8).filter(|v| mask & (1 << v) != 0).collect();
+            let patterns: Vec<Pattern> = (0..4)
+                .map(|p| {
+                    let length = 30 + rnd(90);
+                    Pattern {
+                        name: format!("p{p}"),
+                        length,
+                        tempo: if p % 2 == 1 {
+                            Some(9000 + rnd(9000))
+                        } else {
+                            None
+                        },
+                        notes: (0..40)
+                            .map(|_| {
+                                let at = rnd(length);
+                                let len = 1 + rnd(30);
+                                let voice = if rnd(5) == 0 {
+                                    Some(pins[rnd(pins.len() as u32) as usize])
+                                } else {
+                                    None
+                                };
+                                // Only nudge a note long enough (and not up
+                                // against its pattern's own end, where the
+                                // song-end clip could shrink it further) to
+                                // guarantee its end stays after its start.
+                                //
+                                // Derivation: tempo here ranges up to
+                                // 9000 + rnd(9000) - 1 = 17999 centi-BPM
+                                // (179.99 BPM), and swing is fixed at 40
+                                // (w = 0.4) below. A 16th note (one
+                                // UNITS_PER_16TH-unit run) spans
+                                // 3750 / 179.99 ~= 20.83 ticks unswung; the
+                                // short half of a swung pair is compressed
+                                // by (1 - w) = 0.6, so a minimal (len == 12)
+                                // note that lands entirely on a short half
+                                // (its 12 units align with a pair's second
+                                // half) spans as little as 20.83 * 0.6 ~=
+                                // 12.5 ticks -- tick rounding can only take
+                                // under a tick off that, so 11 ticks is a
+                                // safe floor for such a note's span. Bound
+                                // the start nudge to -3..=6 and the end
+                                // nudge to -4..=8: the worst case (+6 start,
+                                // -4 end) eats 10 of those 11 ticks, leaving
+                                // the end after the start.
+                                let fits = len >= 12 && at + len <= length;
+                                let nudge = if fits {
+                                    let raw = rnd(10) as i32 - 3; // -3..=6
+                                                                  // Never early at unit 0: that
+                                                                  // would start before the song.
+                                    if at > 0 || raw >= 0 {
+                                        raw
+                                    } else {
+                                        0
+                                    }
+                                } else {
+                                    0
+                                };
+                                let end_nudge = if fits {
+                                    rnd(13) as i32 - 4 // -4..=8
+                                } else {
+                                    0
+                                };
+                                Note {
+                                    at,
+                                    row: 0,
+                                    len,
+                                    vel: 100,
+                                    voice,
+                                    nudge,
+                                    end_nudge,
+                                }
+                            })
+                            .collect(),
+                    }
+                })
+                .collect();
+            let mut s = song(mask, patterns, vec![0, 1, 1, 2, 3, 0, 2]);
+            s.swing = 40;
+            let a = analyze(&s).unwrap();
+            assert_eq!(a.events, compile(&s).unwrap().events);
+            assert!(
+                !a.over.is_empty(),
+                "seed {seed0} mask {mask:#b} should overflow somewhere"
+            );
+            assert_eq!(a, brute(&s), "seed {seed0} mask {mask:#b}");
+        }
     }
 }
 

@@ -444,10 +444,12 @@ fn validate_rejects_a_song_playing_over_a_million_notes() {
 
 // ---- 4b. end nudge ------------------------------------------------------
 
-/// A note's end can land between two unit ticks at a slow tempo: at 1 BPM
-/// (centi-tempo 100) one unit is 3750/12 = 312.5 ticks, so no unit boundary
-/// lands on a whole tick by coincidence. `end_nudge = -100` shifts the
-/// computed end back by 100 ticks from there.
+/// A nudged end can land at a tick between two unit ticks, not on either: at
+/// 1 BPM (centi-tempo 100) one unit is 3750/12 = 312.5 ticks, so a unit
+/// boundary can still land on a whole tick (e.g. tick(4) = 1250), but
+/// `end_nudge` shifts the end by a plain tick count, free of that grid. Here
+/// `end_nudge = -100` puts the end at 1463, strictly between tick(4) = 1250
+/// and tick(5) = 1563.
 #[test]
 fn end_nudge_lands_between_two_unit_ticks_at_a_slow_tempo() {
     let mut song = valid_song(); // pattern "A", length 12
@@ -560,10 +562,6 @@ fn round_trips_every_pin_nudge_end_nudge_flag_combination() {
     assert_eq!(encode(&decoded), bytes);
 }
 
-/// A song built with pinned and nudged notes but no end nudges (a literal
-/// `Vec<u8>` captured from `encode()` on the base commit, before end nudges
-/// existed) still encodes byte-identically, and decoding it re-encodes to
-/// the same bytes.
 fn fixture_song_without_end_nudges() -> Song {
     Song {
         tempo: 12000,
@@ -605,14 +603,18 @@ fn fixture_song_without_end_nudges() -> Song {
     }
 }
 
-/// Captured by printing `encode()`'s output once, on commit 351344d (before
-/// this change), for the song `fixture_song_without_end_nudges` builds.
+/// PSNG bytes of a song without end nudges, for `fixture_song_without_end_nudges`;
+/// the format must not change for such songs.
 const FIXTURE_BYTES_WITHOUT_END_NUDGES: &[u8] = &[
     80, 83, 78, 71, 1, 72, 69, 65, 68, 6, 48, 224, 93, 10, 6, 3, 82, 79, 87, 83, 9, 1, 4, 107, 105,
     99, 107, 0, 100, 0, 80, 65, 84, 84, 15, 1, 65, 24, 0, 2, 0, 1, 12, 100, 1, 24, 2, 12, 50, 10,
     65, 82, 82, 71, 2, 1, 0,
 ];
 
+/// A song built with pinned and nudged notes but no end nudges (a literal
+/// `Vec<u8>` captured from `encode()` on the base commit, before end nudges
+/// existed) still encodes byte-identically, and decoding it re-encodes to
+/// the same bytes.
 #[test]
 fn songs_without_end_nudges_encode_byte_identically_to_before() {
     let song = fixture_song_without_end_nudges();

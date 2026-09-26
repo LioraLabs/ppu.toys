@@ -22,6 +22,10 @@ const MAX_EVENTS: u64 = 1_000_000;
 /// Valid song/pattern tempo, in centi-BPM (1..400 BPM).
 const TEMPO_RANGE: std::ops::RangeInclusive<u32> = 100..=40000;
 
+/// Bit 7 of a note's vel varint: an end nudge (zigzag-encoded) follows the
+/// start nudge in the stream.
+const END_NUDGED: u32 = 0x80;
+
 /// A song: tempo/swing/key, the voices it may use, its rows, patterns and
 /// play order.
 #[derive(Clone, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -81,13 +85,28 @@ pub struct Note {
     /// 4 ms engine ticks, added to the computed start.
     pub nudge: i32,
     /// 4 ms engine ticks, added to the computed end.
-    #[serde(rename = "endNudge", default, skip_serializing_if = "is_zero")]
+    #[serde(
+        rename = "endNudge",
+        default,
+        skip_serializing_if = "is_zero",
+        deserialize_with = "deserialize_end_nudge"
+    )]
     pub end_nudge: i32,
 }
 
 /// True for 0; used to skip serializing a default `end_nudge`.
 fn is_zero(n: &i32) -> bool {
     *n == 0
+}
+
+/// Reads `endNudge` as an optional i32, so `null` or an explicit `undefined`
+/// (which serializes to JSON `null` across the wasm boundary) decodes the
+/// same as the key being absent.
+fn deserialize_end_nudge<'de, D>(d: D) -> Result<i32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(<Option<i32> as serde::Deserialize>::deserialize(d)?.unwrap_or(0))
 }
 
 /// A decode/encode/validate/compile failure, with a human-readable message.
@@ -290,8 +309,8 @@ fn parse_patt(body: &[u8], ctx: &str) -> Result<Pattern, SongError> {
         let row = packed >> 2;
         let len = c.varint()?;
         let vel_raw = c.varint()?;
-        let end_nudged = vel_raw & 0x80 != 0;
-        let vel = vel_raw & !0x80;
+        let end_nudged = vel_raw & END_NUDGED != 0;
+        let vel = vel_raw & !END_NUDGED;
         let voice = if pinned { Some(c.u8()? as u32) } else { None };
         let nudge = if nudged { c.zigzag()? } else { 0 };
         let end_nudge = if end_nudged { c.zigzag()? } else { 0 };
@@ -424,7 +443,10 @@ fn write_string(out: &mut Vec<u8>, s: &str) {
 ///
 /// Precondition: `song` passes [`Song::validate`]. This is infallible and
 /// does not check that; out-of-range fields (e.g. a `vol` over 127) are
-/// written as given and are not preserved as errors.
+/// written as given and are not preserved as errors. A `vel` of 128..=255 is
+/// a sharper case: it collides with [`END_NUDGED`] (bit 7), so it sets that
+/// flag and corrupts the stream instead of just round-tripping a bad value.
+/// Only validated songs may be encoded.
 pub fn encode(song: &Song) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(b"PSNG");
@@ -465,7 +487,10 @@ pub fn encode(song: &Song) -> Vec<u8> {
             write_varint(&mut body, packed);
             write_varint(&mut body, note.len);
             let end_nudged = note.end_nudge != 0;
-            write_varint(&mut body, note.vel | ((end_nudged as u32) << 7));
+            write_varint(
+                &mut body,
+                note.vel | (if end_nudged { END_NUDGED } else { 0 }),
+            );
             if let Some(v) = note.voice {
                 body.push(v as u8);
             }
