@@ -839,7 +839,10 @@ pub fn remap(old: (&Song, &Timing), new: (&Song, &Timing), tick: i64) -> i64 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Event {
     pub start: i64,
+    /// After any steal or pin cut; may equal `start`.
     pub end: i64,
+    /// The note's own end before [`allocate`] cut it (`>= end`).
+    pub want_end: i64,
     /// Index into the song's rows.
     pub row: u32,
     /// The voice [`allocate`] assigned.
@@ -894,6 +897,7 @@ pub fn compile(song: &Song) -> Result<Compiled, SongError> {
             events.push(Event {
                 start,
                 end,
+                want_end: end,
                 row: n.row,
                 voice: 0,
                 pin: n.voice.map(|v| v as u8),

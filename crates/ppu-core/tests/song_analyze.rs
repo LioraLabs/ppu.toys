@@ -1,7 +1,7 @@
 //! `ppu_core::song_analyze`: per-step voice counts, through the public API.
 
 use ppu_core::song::*;
-use ppu_core::song_analyze::analyze;
+use ppu_core::song_analyze::{analyze, Analysis};
 
 fn note(at: u32, len: u32, voice: Option<u32>) -> Note {
     Note {
@@ -79,8 +79,84 @@ fn counts_used_wanted_and_over_by_hand() {
     assert_eq!(a.over, vec![1, 2]);
 }
 
-/// The sweep agrees with a steps x events brute force on a busy song with
-/// swing, mixed tempos, odd lengths, pins and nudges.
+/// One pattern of `length` units, arranged once.
+fn one(voice_mask: u8, length: u32, notes: Vec<Note>) -> Song {
+    song(
+        voice_mask,
+        vec![Pattern {
+            name: "A".into(),
+            length,
+            tempo: None,
+            notes,
+        }],
+        vec![0],
+    )
+}
+
+/// (used, wanted, over) as vectors.
+fn counts(s: &Song) -> (Vec<u8>, Vec<u32>, Vec<u32>) {
+    let a = analyze(s).unwrap();
+    assert_eq!(a, brute(s), "sweep disagrees with the tick brute force");
+    (a.used, a.wanted, a.over)
+}
+
+/// `n` copies of `note` (a chord on one start).
+fn chord(n: usize, note: Note) -> Vec<Note> {
+    vec![note; n]
+}
+
+/// Three stacked 32nds inside one 16th on one voice: two are cut to nothing.
+#[test]
+fn stacked_32nds_between_steps_count() {
+    let s = one(0b1, 24, chord(3, note(6, 6, None)));
+    assert_eq!(counts(&s), (vec![1, 0], vec![3, 0], vec![0]));
+    let s = one(0xff, 24, chord(9, note(3, 6, None)));
+    assert_eq!(counts(&s), (vec![8, 0], vec![9, 0], vec![0]));
+}
+
+/// 32nds played one after another are one voice, not two per step.
+#[test]
+fn consecutive_32nds_are_not_double_counted() {
+    let s = one(0b1, 24, (0..4).map(|i| note(i * 6, 6, None)).collect());
+    assert_eq!(counts(&s), (vec![1, 1], vec![1, 1], vec![]));
+}
+
+/// 16th triplets (8 units) and 8th triplets (16 units).
+#[test]
+fn triplets_count() {
+    // Two-note 16th-triplet chords on one voice: every step wants 2.
+    let notes = (0..3)
+        .flat_map(|i| chord(2, note(i * 8, 8, None)))
+        .collect();
+    let s = one(0b1, 24, notes);
+    assert_eq!(counts(&s), (vec![1, 1], vec![2, 2], vec![0, 1]));
+
+    // 8th triplets on 8 voices; nine notes on the second triplet (unit 16,
+    // mid-step 1) spill past the mask in steps 1 and 2 only.
+    let mut notes = vec![note(0, 16, None), note(32, 16, None)];
+    notes.extend(chord(9, note(16, 16, None)));
+    let s = one(0xff, 48, notes);
+    assert_eq!(counts(&s), (vec![1, 8, 8, 1], vec![1, 9, 9, 1], vec![1, 2]));
+}
+
+/// A note nudged early into the previous step counts there.
+#[test]
+fn nudged_notes_count_in_the_step_they_start() {
+    // At 120 BPM step 1 starts at tick 31; nudge -10 starts it at 21.
+    let mut late = note(12, 12, None);
+    late.nudge = -10;
+    let s = one(0b1, 24, vec![note(0, 12, None), late.clone()]);
+    assert_eq!(counts(&s), (vec![1, 1], vec![2, 1], vec![0]));
+
+    let mut notes = chord(8, note(0, 12, None));
+    notes.push(late);
+    let s = one(0xff, 24, notes);
+    assert_eq!(counts(&s), (vec![8, 1], vec![9, 1], vec![0]));
+}
+
+/// The sweep agrees with a tick-by-tick brute force on busy songs with
+/// swing, mixed tempos, odd lengths, off-grid starts, pins and nudges, in
+/// 1-, 4- and 8-voice masks.
 #[test]
 fn sweep_matches_brute_force() {
     let mut seed = 7u32;
@@ -88,84 +164,95 @@ fn sweep_matches_brute_force() {
         seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
         (seed >> 8) % n
     };
-    let patterns: Vec<Pattern> = (0..4)
-        .map(|p| {
-            let length = 30 + rnd(90);
-            Pattern {
-                name: format!("p{p}"),
-                length,
-                tempo: if p % 2 == 1 {
-                    Some(9000 + rnd(9000))
-                } else {
-                    None
-                },
-                notes: (0..40)
-                    .map(|_| Note {
-                        at: rnd(length),
-                        row: 0,
-                        len: 1 + rnd(60),
-                        vel: 100,
-                        voice: if rnd(5) == 0 { Some(rnd(3) * 2) } else { None },
-                        nudge: rnd(7) as i32,
-                    })
-                    .collect(),
-            }
-        })
-        .collect();
-    let mut s = song(0b0101_0101, patterns, vec![0, 1, 1, 2, 3, 0, 2]);
-    s.swing = 40;
-    let a = analyze(&s).unwrap();
-    let c = compile(&s).unwrap();
-    assert_eq!(a.events, c.events);
+    for mask in [0b1u8, 0b0101_0101, 0xff] {
+        let pins: Vec<u32> = (0..8).filter(|v| mask & (1 << v) != 0).collect();
+        let patterns: Vec<Pattern> = (0..4)
+            .map(|p| {
+                let length = 30 + rnd(90);
+                Pattern {
+                    name: format!("p{p}"),
+                    length,
+                    tempo: if p % 2 == 1 {
+                        Some(9000 + rnd(9000))
+                    } else {
+                        None
+                    },
+                    notes: (0..40)
+                        .map(|_| Note {
+                            at: rnd(length),
+                            row: 0,
+                            len: 1 + rnd(30),
+                            vel: 100,
+                            voice: if rnd(5) == 0 {
+                                Some(pins[rnd(pins.len() as u32) as usize])
+                            } else {
+                                None
+                            },
+                            nudge: rnd(15) as i32 - 3,
+                        })
+                        .collect(),
+                }
+            })
+            .collect();
+        let mut s = song(mask, patterns, vec![0, 1, 1, 2, 3, 0, 2]);
+        s.swing = 40;
+        let a = analyze(&s).unwrap();
+        assert_eq!(a.events, compile(&s).unwrap().events);
+        assert!(
+            !a.over.is_empty(),
+            "mask {mask:#b} should overflow somewhere"
+        );
+        assert_eq!(a, brute(&s), "mask {mask:#b}");
+    }
+}
 
+/// `analyze` by definition: for each step, every tick from its own up to
+/// the next step's (the last runs to the latest note end), counting the
+/// events, and the uncut notes, sounding there.
+fn brute(s: &Song) -> Analysis {
+    let c = compile(s).unwrap();
     let t = &c.timing;
     let mut ticks = Vec::new();
+    let mut slot_steps = Vec::new();
     for sl in &t.slots {
+        slot_steps.push(ticks.len() as u32);
         let mut u = 0u64;
         while u < sl.len as u64 {
             ticks.push(t.tick(sl.pos + u));
             u += 12;
         }
     }
-    let uncut: Vec<i64> = c
-        .events
-        .iter()
-        .map(|e| {
-            let sl = &t.slots[e.slot as usize];
-            let n = &s.patterns[sl.pattern as usize].notes[e.note as usize];
-            t.tick((sl.pos + (n.at + n.len) as u64).min(t.end))
-                .max(e.start)
-        })
+    let last = c.events.iter().map(|e| e.want_end).max().unwrap_or(0);
+    let peak = |i: usize, end: &dyn Fn(&Event) -> i64| {
+        let to = ticks.get(i + 1).copied().unwrap_or(last.max(ticks[i] + 1));
+        (ticks[i]..to)
+            .map(|x| {
+                c.events
+                    .iter()
+                    .filter(|e| e.start <= x && x < end(e))
+                    .count()
+            })
+            .max()
+            .unwrap_or(0)
+    };
+    let used: Vec<u8> = (0..ticks.len())
+        .map(|i| peak(i, &|e| e.end) as u8)
         .collect();
-    let used: Vec<u8> = ticks
-        .iter()
-        .map(|&x| {
-            c.events
-                .iter()
-                .filter(|e| e.start <= x && x < e.end)
-                .count() as u8
-        })
+    let wanted: Vec<u32> = (0..ticks.len())
+        .map(|i| peak(i, &|e| e.want_end) as u32)
         .collect();
-    let wanted: Vec<u32> = ticks
-        .iter()
-        .map(|&x| {
-            c.events
-                .iter()
-                .zip(&uncut)
-                .filter(|(e, &end)| e.start <= x && x < end)
-                .count() as u32
-        })
+    let voices = s.voice_mask.count_ones();
+    let over = (0..wanted.len() as u32)
+        .filter(|&i| wanted[i as usize] > voices)
         .collect();
-    assert!(
-        wanted.iter().any(|&w| w > 4),
-        "the song should overflow somewhere"
-    );
-    assert_eq!(a.used, used);
-    assert_eq!(a.wanted, wanted);
-    let over: Vec<u32> = (0..wanted.len() as u32)
-        .filter(|&i| wanted[i as usize] > 4)
-        .collect();
-    assert_eq!(a.over, over);
+    Analysis {
+        length: t.length,
+        events: c.events,
+        slot_steps,
+        used,
+        wanted,
+        over,
+    }
 }
 
 #[test]

@@ -12,8 +12,10 @@ use crate::song::{compile, Event, Song, SongError};
 /// 400 BPM).
 const MAX_STEPS: u64 = 1_000_000;
 
-/// A song's compiled events plus its per-step voice counts.
-#[derive(Debug)]
+/// A song's compiled events plus its per-step voice counts. Step `i` spans
+/// the ticks from its own tick up to the next step's (the last step runs on
+/// past the song's end, keeping any note nudged late).
+#[derive(Debug, PartialEq)]
 pub struct Analysis {
     /// Start-ordered, voice-assigned (the same events `score{}` plays).
     pub events: Vec<Event>,
@@ -21,18 +23,17 @@ pub struct Analysis {
     pub length: i64,
     /// Index of each arrangement slot's first step.
     pub slot_steps: Vec<u32>,
-    /// Per step: voices sounding at its tick, after steals and pin cuts.
+    /// Per step: the most voices sounding at once in it, after steals and
+    /// pin cuts.
     pub used: Vec<u8>,
-    /// Per step: notes whose uncut span covers its tick.
+    /// Per step: the most notes sounding at once in it, uncut.
     pub wanted: Vec<u32>,
     /// Steps where `wanted` exceeds the voices in the song's mask.
     pub over: Vec<u32>,
 }
 
 /// Compiles `song` (same errors as `score{}` setup) and counts voices per
-/// step in one pass over the events: each event adds +1/-1 at the steps its
-/// span starts and ends (binary search into the step ticks), then a prefix
-/// sum. No steps x events scan.
+/// step with one sweep over the sorted note edges. No steps x events scan.
 pub fn analyze(song: &Song) -> Result<Analysis, SongError> {
     let c = compile(song)?;
     let t = &c.timing;
@@ -50,45 +51,45 @@ pub fn analyze(song: &Song) -> Result<Analysis, SongError> {
         ticks.extend((0..t.steps(s)).map(|k| t.step_tick(s, k)));
     }
 
-    // Step range [first tick >= from, first tick >= to): the steps whose
-    // tick lies in [from, to).
-    let at = |tick: i64| ticks.partition_point(|&x| x < tick);
-    let n = ticks.len();
-    let mut used_d = vec![0i64; n + 1];
-    let mut wanted_d = vec![0i64; n + 1];
-    for e in &c.events {
-        let first = at(e.start);
-        used_d[first] += 1;
-        used_d[at(e.end)] -= 1;
-        // The note's uncut end, as compile computes it before allocation.
-        let slot = &t.slots[e.slot as usize];
-        let note = &song.patterns[slot.pattern as usize].notes[e.note as usize];
-        let end_pos = (slot.pos + note.at as u64 + note.len as u64).min(t.end);
-        wanted_d[first] += 1;
-        wanted_d[at(t.tick(end_pos).max(e.start))] -= 1;
-    }
-
+    let used = peaks(c.events.iter().map(|e| (e.start, e.end)), &ticks);
+    let wanted = peaks(c.events.iter().map(|e| (e.start, e.want_end)), &ticks);
     let voices = song.voice_mask.count_ones();
-    let (mut u, mut w) = (0i64, 0i64);
-    let mut used = Vec::with_capacity(n);
-    let mut wanted = Vec::with_capacity(n);
-    let mut over = Vec::new();
-    for i in 0..n {
-        u += used_d[i];
-        w += wanted_d[i];
-        used.push(u as u8);
-        wanted.push(w as u32);
-        if w as u32 > voices {
-            over.push(i as u32);
-        }
-    }
+    let over = (0..wanted.len() as u32)
+        .filter(|&i| wanted[i as usize] > voices)
+        .collect();
 
     Ok(Analysis {
         length: t.length,
         events: c.events,
         slot_steps,
-        used,
+        used: used.into_iter().map(|u| u as u8).collect(),
         wanted,
         over,
     })
+}
+
+/// Per step (starting at each of `ticks`, ascending), the most `[start,
+/// end)` spans sounding at once at any tick in it. Ends sort before starts
+/// at the same tick, so back-to-back notes never overlap and a zero-length
+/// (fully cut) span never counts.
+fn peaks(spans: impl Iterator<Item = (i64, i64)>, ticks: &[i64]) -> Vec<u32> {
+    let mut edges: Vec<(i64, i32)> = spans.flat_map(|(s, e)| [(s, 1), (e, -1)]).collect();
+    edges.sort_unstable();
+    let (mut cur, mut j) = (0i32, 0);
+    let mut out = Vec::with_capacity(ticks.len());
+    for (i, &at) in ticks.iter().enumerate() {
+        while j < edges.len() && edges[j].0 <= at {
+            cur += edges[j].1;
+            j += 1;
+        }
+        let mut peak = cur;
+        let next = ticks.get(i + 1).copied().unwrap_or(i64::MAX);
+        while j < edges.len() && edges[j].0 < next {
+            cur += edges[j].1;
+            j += 1;
+            peak = peak.max(cur);
+        }
+        out.push(peak as u32);
+    }
+    out
 }

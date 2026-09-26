@@ -606,6 +606,7 @@ fn hand_computed_mixed_tempo_pinned_nudged_song() {
     let ev = |start, end, voice, pin, l, r, slot, note| Event {
         start,
         end,
+        want_end: end,
         row: 0,
         voice,
         pin,
@@ -614,7 +615,7 @@ fn hand_computed_mixed_tempo_pinned_nudged_song() {
         slot,
         note,
     };
-    let expected = vec![
+    let mut expected = vec![
         // slot0 (A @ pos0, run0)
         ev(0, 31, 0, None, 100, 50, 0, 0), // start floor(0*31.25+0.5)=0; end tick(12)=floor(1*31.25+0.5)=31
         ev(63, 311, 0, None, 127, 64, 0, 1), // start tick(24)=floor(2*31.25+0.5)=63; end clamps to song end(532), then CUT to 311 by the steal below
@@ -630,6 +631,7 @@ fn hand_computed_mixed_tempo_pinned_nudged_song() {
         ev(438, 469, 0, None, 100, 50, 3, 0), // start=tick(120)=438; end=tick(132)=438+floor(1*31.25+0.5)=469
         ev(501, 532, 0, None, 127, 64, 3, 1), // start=tick(144)=438+floor(2*31.25+0.5)=501; end clamps to song end=532
     ];
+    expected[1].want_end = 532; // the stolen note still wanted the song's end
     assert_eq!(compiled.events, expected);
 }
 
