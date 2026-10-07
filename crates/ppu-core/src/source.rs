@@ -648,8 +648,18 @@ pub fn place_bg(
         &src.palettes,
         &src.char_words,
     );
+    // The tilemap's palette bits count from the source's own first palette;
+    // shift them to where the palettes were actually placed. A mode-0 band
+    // (32 entries = 8 2bpp palettes) wraps the 3-bit field back to itself,
+    // since there the hardware adds the band.
+    let shift = match src.bit_depth {
+        2 => cgram_base / 4,
+        4 => cgram_base / 16,
+        _ => 0,
+    } as u16;
     for (o, &w) in src.tilemap_words.iter().enumerate() {
-        mem.vram[(map_base as usize + o) & 0x7fff] = w;
+        let pal = ((w >> 10) + shift) & 7;
+        mem.vram[(map_base as usize + o) & 0x7fff] = (w & !0x1c00) | (pal << 10);
     }
 }
 
@@ -1313,6 +1323,25 @@ mod tests {
         let mut mem2 = Memory::new();
         place_bg(&s, &mut mem2, 0x0000, 0x1000, 32);
         assert_eq!(mem2.cgram[33], 0x001f);
+    }
+
+    #[test]
+    fn place_bg_shifts_map_palette_bits_to_the_placed_palettes() {
+        // A 4bpp source placed at CGRAM 32 starts at palette 2, so its map's
+        // palette 1 must become palette 3. Tile, flip and priority bits stay.
+        let mut s = sample_bg();
+        s.bit_depth = 4;
+        s.tilemap_words[0] = 0xe000 | (1 << 10) | 5;
+        let mut mem = Memory::new();
+        place_bg(&s, &mut mem, 0x0000, 0x1000, 32);
+        assert_eq!(mem.vram[0], 0xe000 | (3 << 10) | 5);
+        // 2bpp in a mode-0 band (CGRAM 32 = 8 palettes) wraps back to itself:
+        // the hardware adds the band, so the map must not.
+        let mut s2 = sample_bg();
+        s2.tilemap_words[0] = (1 << 10) | 5;
+        let mut mem2 = Memory::new();
+        place_bg(&s2, &mut mem2, 0x0000, 0x1000, 32);
+        assert_eq!(mem2.vram[0], (1 << 10) | 5);
     }
 
     #[test]
