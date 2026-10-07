@@ -39,6 +39,13 @@ Then open `my-demo.ppu.json` at [ppu.toys](https://ppu.toys). `ppu docs` prints
 the same guides that live in [crates/ppu-cli/docs/](crates/ppu-cli/docs/). Start with
 [the authoring loop](crates/ppu-cli/docs/cli.md) and [the PPU pipeline](crates/ppu-cli/docs/registers.md).
 
+To have Claude Code author toys with you, install the `creating-demos` skill:
+
+```sh
+claude plugin marketplace add LioraLabs/claude-plugins
+claude plugin install ppu-toys@lioralabs
+```
+
 ## Layout
 
 - `crates/ppu-core` is the emulator: tile modes 0 to 4, Mode 7, sprites,
@@ -48,6 +55,8 @@ the same guides that live in [crates/ppu-cli/docs/](crates/ppu-cli/docs/). Start
 - `vendor/piccolo` is the Lua VM, crates.io 0.3.3 plus one backported fix. Its
   README says when to drop it.
 - `crates/ppu-cli/docs/` holds the authoring guides, embedded into both the CLI and the site.
+- `plugin/` is the Claude Code plugin: the `creating-demos` skill and its
+  effect recipes. The LioraLabs marketplace installs it from here.
 
 ## Develop
 
