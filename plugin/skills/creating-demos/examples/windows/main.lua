@@ -72,8 +72,6 @@ for y = 0, 223 do
   for i = 1, 7 do FOGPAL[y][i] = lerp_color(0, FOGBASE[i], k) end
 end
 
-FLICKER_BLEND = true   -- false: steady beams, crossing no brighter than one beam
-
 function frame(t, f)
   t = t % LOOP
   local lf = f % (LOOP * 60)
@@ -122,11 +120,6 @@ function frame(t, f)
     cgram[w.i] = on and w.c or NIGHT
   end
   if BEACON then cgram[BEACON] = (lf % 90) < 12 and rgb(255, 48, 32) or rgb(72, 16, 24) end
-
-  -- Flicker blend: the colour window alternates OR and AND each frame, so a
-  -- single beam adds light every other frame and the crossing every frame.
-  -- At 60 Hz the eye averages it: the crossing glows twice as bright.
-  if FLICKER_BLEND then win.color.combine = (lf % 2 == 0) and "OR" or "AND" end
 
   local sa, sb = aim(A, t, 0.6, 0.55), aim(B, t, 2.9, 0.6)
   -- below the lamps there is no beam: one frame-wide glow colour, empty windows
