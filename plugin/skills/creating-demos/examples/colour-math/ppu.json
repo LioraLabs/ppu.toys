@@ -1,0 +1,11 @@
+{
+  "title": "Undersea",
+  "description": "Colour math showcase: light shafts, caustics, depth haze and a translucent surface, all added by the PPU's colour math onto a sunken temple. 12-second loop.",
+  "files": ["light.lua", "main.lua"],
+  "sources": [
+    { "name": "reef", "kind": "bg", "options": { "bit_depth": 4 }, "file": "assets/reef.png" },
+    { "name": "ruins", "kind": "bg", "options": { "bit_depth": 4 }, "file": "assets/ruins.png" },
+    { "name": "fish", "kind": "obj", "options": { "cell_size": 16 }, "file": "assets/fish.png" },
+    { "name": "bubbles", "kind": "obj", "options": { "cell_size": 8 }, "file": "assets/bubbles.png" }
+  ]
+}

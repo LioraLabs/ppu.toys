@@ -64,6 +64,17 @@ scrolling for reflections/refraction; and selective color math with palette
 cycling for lighting. Follow the user's subject and style; there is no
 required story, scene count, palette, or duration.
 
+This skill's directory also has:
+
+- `examples/`: five finished toys (Mode 7, HDMA, colour math, windows, a
+  sprite + music finale), each with its art generator. Read the one closest
+  to the user's idea before starting; copy its structure, not its scene.
+- `scripts/contact.py <toy> <out.png> <t> <t> ...` renders a labelled
+  contact sheet through `ppu render` (needs Pillow).
+- `scripts/film.py <toy> <out.mp4> <seconds>` renders every frame through
+  `ppu render` into a nearest-neighbour MP4 (needs ffmpeg). It is silent:
+  the CLI does not export audio.
+
 [recipes.md](recipes.md) has worked recipes for the effects that make a
 demo look impossible (per-line mode split, scroll-mirror reflections,
 window-shaped shadows and light, additive sprites, line-budgeted sprite
@@ -166,7 +177,7 @@ ppu check my-demo.ppu.json --duration 32 --seek 8,16,24 --loop 32
 Inspect the actual PNGs. Fix clipping, unreadable text, empty scenes, and
 incorrect motion direction; a successful check is not visual review.
 Review like an art director, not a test runner: render a contact sheet
-across the whole piece, name what is weak (banding, sparse or illegible
+across the whole piece (`scripts/contact.py`), name what is weak (banding, sparse or illegible
 shapes, cramped composition, jitter, dead air, flashes that run long), fix
 it, and render again. Plan on at least three passes; that loop, not the
 first draft, is what makes a demo look authored.
@@ -180,7 +191,8 @@ Use `--allow-overflow` only for an intentional effect. Seek/loop checks
 compare actual pixels and are optional for stateful games. Times are sampled
 at 60 fps. `pack` alone does not execute Lua.
 
-Return the editable directory, packed upload file, rendered samples, and
+Return the editable directory, packed upload file, rendered samples (a
+contact sheet, and an MP4 from `scripts/film.py` when motion matters), and
 check results. Open the packed file in Studio when available for a final
 compatibility check. Publishing needs user authorization.
 

@@ -1,0 +1,11 @@
+{
+  "title": "Skyward",
+  "description": "Mode 7 at golden hour: a low, fast run over an archipelago. The sea is one 1024x1024 Mode 7 plane re-aimed every scanline; above the horizon each line switches to Mode 1 for a perspective cloud ceiling and a far cloud bank. Backdrop gradient, distance haze and the craft's shadow are all per-line register writes: HDMA, colour math and a window. Loops every 12 seconds.",
+  "files": ["art.lua", "main.lua"],
+  "sources": [
+    { "name": "world", "kind": "m7", "options": {}, "file": "assets/world.png" },
+    { "name": "ceiling", "kind": "bg", "options": { "bit_depth": 4 }, "file": "assets/ceiling.png" },
+    { "name": "bank", "kind": "bg", "options": { "bit_depth": 4 }, "file": "assets/bank.png" },
+    { "name": "craft", "kind": "obj", "options": { "cell_size": 32 }, "file": "assets/craft.png" }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "title": "Mirror",
+  "description": "A lake at dusk where the reflection isn't drawn: HDMA rereads the scene's rows upside down, one scanline at a time, and ripples them.",
+  "files": ["main.lua"],
+  "sources": [
+    { "name": "far", "kind": "bg", "options": { "bit_depth": 2 }, "file": "assets/far.png" },
+    { "name": "mid", "kind": "bg", "options": { "bit_depth": 4 }, "file": "assets/mid.png" },
+    { "name": "near", "kind": "bg", "options": { "bit_depth": 4 }, "file": "assets/near.png" },
+    { "name": "lantern", "kind": "obj", "options": { "cell_size": 8 }, "file": "assets/lantern.png" }
+  ]
+}

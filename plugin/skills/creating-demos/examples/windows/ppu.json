@@ -1,0 +1,11 @@
+{
+  "title": "Searchlights",
+  "description": "Windows: two searchlight beams are per-scanline window spans. The fog, the rain and the airship only exist inside them, and the sub-screen fog is added to whatever the light crosses.",
+  "files": ["main.lua"],
+  "sources": [
+    { "name": "city", "kind": "bg", "options": { "bit_depth": 4 }, "file": "assets/city.png" },
+    { "name": "fog", "kind": "bg", "options": { "bit_depth": 4 }, "file": "assets/fog.png" },
+    { "name": "rain", "kind": "bg", "options": { "bit_depth": 2 }, "file": "assets/rain.png" },
+    { "name": "blimp", "kind": "obj", "options": { "cell_size": 64 }, "file": "assets/blimp.png" }
+  ]
+}
