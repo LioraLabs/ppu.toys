@@ -78,6 +78,12 @@ craft's silhouette.
   spans per pose in the art script) and colour-math *subtract* inside it.
 - Window logic is per layer, and each layer has only two windows: plan which
   effect gets which window before writing the scene.
+- Brighter overlap by flicker: two windows can't add twice, but time can.
+  Alternate the colour window's combine between `"OR"` and `"AND"` on even
+  and odd frames (key it on the frame number so seeks stay exact). A single
+  beam is lit every other frame and the crossing every frame, so at 60 Hz the
+  eye sees the crossing twice as bright. It only survives 60 fps capture:
+  a 30 fps encode keeps one phase and the effect vanishes or strobes.
 
 ## Sprite formations within the line budget
 
