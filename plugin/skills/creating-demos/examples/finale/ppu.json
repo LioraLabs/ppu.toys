@@ -1,9 +1,10 @@
 {
   "title": "ppu.toys · finale",
-  "description": "128 sprites and the S-DSP build the logo: one firefly per note, a turning swarm, then every OAM entry finds its pixel and the logo lands on the downbeat. OAM, additive colour math (OBJ palettes 4-7 + sub screen), per-line backdrop/COLDATA gradient, mosaic resolve, and a song{} score with echo.",
-  "files": ["targets.lua", "song.lua", "main.lua"],
+  "description": "128 sprites and the S-DSP build the logo: one firefly per note, a turning swarm, then every OAM entry finds its pixel and the logo lands on the downbeat. OAM, additive colour math (OBJ palettes 4-7 + sub screen), per-line backdrop/COLDATA gradient, mosaic resolve, and a score{} song source with echo.",
+  "files": ["targets.lua", "main.lua"],
   "sources": [
     { "name": "logo", "kind": "bg", "options": { "bit_depth": 4 }, "file": "assets/logo.png" },
-    { "name": "sparks", "kind": "obj", "options": { "cell_size": 8 }, "file": "assets/sparks.png" }
+    { "name": "sparks", "kind": "obj", "options": { "cell_size": 8 }, "file": "assets/sparks.png" },
+    { "name": "finale", "kind": "song", "options": {}, "meta": {}, "payload": "finale.bin" }
   ]
 }

@@ -98,13 +98,16 @@ forms a picture will drop sprites where many targets share rows.
 
 ## Music-synced finale
 
-Generate `song{}` pattern strings in the art script (one track per voice:
-pad voicing, arpeggio, bass, drums) for a through-composed piece, for
-example 8 bars × 16 steps at 96 BPM = 20 s with the landing on step 96
-(15.0 s). In `frame()`, derive the landing time from the step, spawn or
-brighten sprites per note, flash on the downbeat with a short fixed-colour
-add (≈0.3 s, not full white), and `stop()` the song after the last bar so it
-does not loop.
+Write the score as pattern strings in the art script (one track per voice:
+pad voicing, arpeggio, bass, drums) and keep it as `song.json` plus the
+committed song source built from it (`finale.bin`, editable in the Studio
+sequencer), for a through-composed piece, for example 8 bars × 16 steps at
+96 BPM = 20 s with the landing on step 96 (15.0 s). Set `BANK` adsr/echo
+presets, then `score{ song = "finale", loop = false }`. In `frame()`, derive
+the landing time from the step (the song is anchored at `t = 0`, 250 ticks
+per second), spawn or brighten sprites per note, and flash on the downbeat
+with a short fixed-colour add (≈0.3 s, not full white). `loop = false`
+plays the piece once; no `stop()` needed.
 
 ## Gradients without banding
 

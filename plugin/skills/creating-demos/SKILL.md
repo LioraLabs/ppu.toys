@@ -199,16 +199,20 @@ compatibility check. Publishing needs user authorization.
 ## Sound
 
 The S-DSP is emulated too. Read `ppu docs audio` before adding sound.
-`bank("piano")` and friends place built-in instruments and drums with no
-uploads; `song{ tempo, steps, tracks }` sequences them on the audio timer,
-one voice per track; `dsp.echo` adds the chip's echo. Pattern strings are
-easy to generate from your art script, so a through-composed score can live
-next to the art (see the finale recipe in [recipes.md](recipes.md)). Keep
-`dsp.mvol` below full when many voices stack, and set `dsp.echo` in
-`init()` so sample placement sees the echo budget.
+Music is a song source: make it in the Studio sequencer or drop in a `.mid`
+(in a project directory, a `"kind": "song"` source with
+`"payload": "<name>.bin"` in `ppu.json`), and play it with
+`score{ song = "<name>" }`. Its rows name built-in instruments and drums, so
+no uploads. A song row cannot carry `adsr` or echo: set those on the `BANK`
+presets before `score{}` (for example `BANK.strings = { adsr = ..., echo =
+true }`). Keep `dsp.mvol` below full when many voices stack, and set
+`dsp.echo` in `init()` so sample placement sees the echo budget. A
+through-composed score can be generated next to the art as pattern strings
+(see the finale recipe in [recipes.md](recipes.md)).
 
-Read the song handle (`step`, `beat`) in `frame()` to sync visuals to the
-music: spawn sprites on notes, land a reveal on a downbeat. A `song{}`
-loops; call `stop()` from `frame()` for a one-pass piece. `ppu check` runs
+Sync visuals to the music from the handle's `tick` (250 per second) in
+`frame()`, or from `t`: the song is anchored at `t = 0` and `at =` moves it.
+Spawn sprites on notes, land a reveal on a downbeat. A score loops; pass
+`loop = false` for a one-pass piece (no `stop()` needed). `ppu check` runs
 the audio but the CLI does not encode it: listen in Studio, and tell the
 user you have not heard it if you cannot.

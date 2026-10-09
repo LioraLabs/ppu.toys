@@ -2,7 +2,7 @@
 -- One firefly per note at first, then a swarm, then every sprite finds its
 -- pixel and the logo lands on the downbeat (step 96, 15 s at 96 BPM).
 local PI = 3.141592653589793
-local LAND = SONG_LAND * 60 / (SONG_TEMPO * 4)   -- 15 s
+local LAND = 15                                  -- s: step 96 of finale.bin, a sixteenth every 0.15625 s at 96 BPM
 local LOGO_Y = 62                                -- logo.png row 0 on screen
 local N = 128
 
@@ -12,24 +12,18 @@ local sparks = dma("sparks", { char = 0x6000, pal = 4 })
 local function hash(n) local x = sin(n * 12.9898) * 43758.5453; return x - floor(x) end
 local function smooth(v) v = clamp(v, 0, 1); return v * v * (3 - 2 * v) end
 
-local tune
+-- The score: finale.bin (song.json, written by build_art.py), one pass. Its
+-- rows name bank sounds; these presets are what they play with.
+BANK.strings = { adsr = { a = 7, d = 7, s = 6, r = 9 }, echo = true }
+BANK.pluck.echo = true
+BANK.bell.echo = true
+BANK.crash.echo = true
+score{ song = "finale", loop = false }
+
 function init()
   dsp.echo = { delay = 6, feedback = 70, fir = { 96, 24, 8, 0, 0, 0, 0, 0 } }
   dsp.evol = { l = 52, r = -52 }
   dsp.mvol = { l = 90, r = 90 }
-  local pad = bank("strings", { adsr = { a = 7, d = 7, s = 6, r = 9 }, vol = 34, echo = true })
-  local tracks = {
-    { voice = 0, inst = pad, pattern = PATTERNS.pad1 },
-    { voice = 1, inst = bank("strings", { adsr = { a = 7, d = 7, s = 6, r = 9 }, vol = 30, pan = -0.4, echo = true }), pattern = PATTERNS.pad2 },
-    { voice = 2, inst = bank("strings", { adsr = { a = 7, d = 7, s = 6, r = 9 }, vol = 30, pan = 0.4, echo = true }), pattern = PATTERNS.pad3 },
-    { voice = 3, inst = bank("pluck", { vol = 46, pan = 0.25, echo = true }), pattern = PATTERNS.arp },
-    { voice = 4, inst = bank("bell", { vol = 58, pan = -0.2, echo = true }), pattern = PATTERNS.bell },
-    { voice = 5, inst = bank("bass", { vol = 80 }), pattern = PATTERNS.bass },
-    { voice = 6, inst = bank("kick", { vol = 96 }), pattern = PATTERNS.kick },
-    { voice = 7, inst = bank("snare", { vol = 50 }), pattern = PATTERNS.snare },
-    { voice = 7, inst = bank("crash", { vol = 90, echo = true }), pattern = PATTERNS.crash },
-  }
-  tune = song{ tempo = SONG_TEMPO, steps = SONG_STEPS, tracks = tracks }
 
   mode = 1
   bg[1].char_base = logo.char
@@ -86,7 +80,6 @@ local function gradient(y, lift)
 end
 
 function frame(t, f)
-  if t >= LAND + 5 and tune.playing then tune.stop() end   -- one pass, no loop
   brightness = 15
   screen.main.obj = true
   local landed = t >= LAND

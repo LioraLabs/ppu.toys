@@ -12,7 +12,7 @@ README says what is on screen and which registers do the work;
 | `hdma` | a lake whose reflection is per-line scroll, not art | 12 s loop |
 | `colour-math` | light shafts and caustics added through the sub screen | 12 s loop |
 | `windows` | searchlight beams as per-line windows; fog and an airship exist only in the light | 12 s loop |
-| `finale` | 128 sprites form a logo on a `song{}` downbeat | 22 s, one pass, with music |
+| `finale` | 128 sprites form a logo on a `score{}` downbeat | 22 s, one pass, with music |
 
 Rebuild, check, preview and pack any of them (run from this folder; needs
 Python with numpy and Pillow, and ffmpeg for the MP4):
