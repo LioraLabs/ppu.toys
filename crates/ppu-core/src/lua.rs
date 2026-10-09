@@ -337,6 +337,10 @@ struct SongPlayer {
     playing: bool,
     /// Where the song sits on the timeline — see [`Anchor`].
     anchor: Anchor,
+    /// Stopped because setup declared `at = false`, untouched since (any
+    /// `play()`/`stop()` clears it): only such a player takes over a song
+    /// the old program had sounding (see [`LuaEngine::carry_songs`]).
+    at_false: bool,
     /// The next tick to play, wrapped into `0..=length` (it equals `length`
     /// right before a wrap or the finish).
     tick: i64,
@@ -1280,6 +1284,10 @@ impl LuaEngine {
         self.audio.clear();
         self.last_f = None;
         self.dma.samples.borrow_mut().clear();
+        // No song survives a power cycle: with no old players, the
+        // recompile has nothing to carry (`carry_songs`), and the voices
+        // are already silent in the fresh DSP.
+        self.dma.songs.borrow_mut().clear();
         self.recompile()
     }
 
@@ -1722,35 +1730,54 @@ impl LuaEngine {
     }
 
     /// After a successful recompile: hand each song the OLD program had
-    /// sounding to the new player at the same index playing the same song.
-    /// One the new program set up with `at = false` (so a `play()`-started
-    /// song) takes over the old anchor and resumes at t; a declared-anchor
-    /// one just continues. Any other old song still sounding was dropped:
-    /// its voices key off through the new VM's `__dsp_koff` (KOF before
-    /// KON in the next flush, so a kon from `init()` still wins). If the
-    /// staff followed a carried song (`prev_score`), it still does.
+    /// sounding to the new player at the same index playing the same song,
+    /// when the new program declared that one `at = false` (and its setup
+    /// left it so — a `stop()` in `init()` means stopped): it takes over
+    /// the old anchor and resumes at t. That is what keeps a `play()`-started
+    /// song (game music) going across edits — including the edit that turns
+    /// `at = 0` into `at = false`. Any other old song still sounding keys
+    /// off through the new VM's `__dsp_koff` (KOF before KON in the next
+    /// flush, so a kon from `init()` still wins) — unless some anchored new
+    /// player plays the same song, which continues on those voices. If the
+    /// staff followed a carried song (`prev_score`), it still does. Not
+    /// used by `reset()`, which drops every old player first.
     fn carry_songs(&mut self, prev: &DmaRecorder, prev_score: Option<i64>) {
         let old_songs = prev.songs.borrow();
         let mut songs = self.dma.songs.borrow_mut();
+        let mut dropped = Vec::new();
+        let mut staff = false;
+        for (i, old) in old_songs.iter().enumerate() {
+            if old.anchor == Anchor::Stopped || !old.playing {
+                continue;
+            }
+            match songs
+                .get_mut(i)
+                .filter(|p| p.name == old.name && p.at_false)
+            {
+                Some(p) => {
+                    p.anchor = old.anchor;
+                    p.playing = true;
+                    p.at_false = false;
+                    staff |= prev_score == Some(i as i64);
+                }
+                None => dropped.push(old),
+            }
+        }
         let mut l = self.lua.borrow_mut();
         l.enter(|ctx| {
-            for (i, old) in old_songs.iter().enumerate() {
-                if old.anchor == Anchor::Stopped || !old.playing {
-                    continue;
-                }
-                match songs.get_mut(i).filter(|p| p.name == old.name) {
-                    Some(p) if p.anchor == Anchor::Stopped => {
-                        p.anchor = old.anchor;
-                        p.playing = true;
-                        if prev_score == Some(i as i64) {
-                            let Value::Table(hs) = ctx.get_global("__scores") else {
-                                panic!("kit.lua must define __scores");
-                            };
-                            ctx.set_global("__score", hs.get(ctx, i as i64)).unwrap();
-                        }
-                    }
-                    Some(_) => {}
-                    None => song_koff(ctx, old.mask),
+            // `__scores` is a plain global user code can clobber: no table,
+            // no republish.
+            if let (true, Some(i), Value::Table(hs)) =
+                (staff, prev_score, ctx.get_global("__scores"))
+            {
+                ctx.set_global("__score", hs.get(ctx, i)).unwrap();
+            }
+            for old in dropped {
+                let continues = songs
+                    .iter()
+                    .any(|p| p.name == old.name && p.anchor != Anchor::Stopped);
+                if !continues {
+                    song_koff(ctx, old.mask);
                 }
             }
         });
@@ -3459,6 +3486,7 @@ fn install_song_natives(
             looping: false,
             playing: false,
             anchor: Anchor::Stopped,
+            at_false: false,
             tick: 0,
             next: 0,
             cursor: 0,
@@ -3522,6 +3550,7 @@ fn install_song_natives(
             p.looping = looping;
             p.playing = anchor != Anchor::Stopped;
             p.anchor = anchor;
+            p.at_false = anchor == Anchor::Stopped;
             p.rewind();
         }
         start_rec
@@ -3569,6 +3598,7 @@ fn install_song_natives(
                 }
                 p.anchor = Anchor::Pending;
                 p.playing = true;
+                p.at_false = false;
             }
         }
         stack.clear();
@@ -3581,6 +3611,7 @@ fn install_song_natives(
             if let Some(p) = rec.songs.borrow_mut().get_mut(id) {
                 p.anchor = Anchor::Stopped;
                 p.playing = false;
+                p.at_false = false;
                 song_koff(ctx, p.mask);
                 p.ends = [None; 8];
             }

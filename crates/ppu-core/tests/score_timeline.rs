@@ -473,3 +473,91 @@ fn a_recompile_does_not_cut_a_continuing_song() {
     }
     assert!(sounding(&e), "still sounding mid-note");
 }
+
+/// Run is a power cycle: a `play()`-started song does not survive it (the
+/// `sram` guard keeps the replayed program from calling `play()` again),
+/// and a declared anchor is restored from the top.
+#[test]
+fn reset_drops_a_played_song_and_restores_a_declared_anchor() {
+    let mut e = engine(
+        "h = score{ song = \"steps\", at = false }\n\
+         function body(f) if f == 10 and not sram.played then h.play() sram.played = true end end",
+    );
+    assert!(log_len(&run(&mut e, 0..40)) > 0, "played before the reset");
+    e.reset().unwrap();
+    let sram = run(&mut e, 0..60);
+    assert_eq!(heard(&sram, 0, 0), vec![], "{sram}");
+    assert_eq!(e.score_view(), None);
+
+    let mut e = engine("h = score{ song = \"steps\", at = 0 }");
+    run(&mut e, 0..90);
+    e.reset().unwrap();
+    let sram = run(&mut e, 0..10);
+    assert_eq!(heard(&sram, 0, 0).first(), Some(&(1, 0)), "{sram}");
+    assert_eq!(e.score_view().unwrap().anchor, Some(0.0));
+}
+
+/// Removing an earlier `score{}` shifts the indices: the song that moved
+/// keeps sounding because an anchored new player still plays it.
+#[test]
+fn a_recompile_that_shifts_a_continuing_song_does_not_cut_it() {
+    let mut e = held_engine(
+        "x = score{ song = \"held\", at = false }\n\
+         h = score{ song = \"held\" }",
+    );
+    for f in 0..30 {
+        e.frame(f as f64 / 60.0, f).unwrap();
+    }
+    assert!(sounding(&e), "the note sounds");
+    e.set_sources(&[("main.lua", "h = score{ song = \"held\" }")])
+        .unwrap();
+    for f in 30..35 {
+        e.frame(f as f64 / 60.0, f).unwrap();
+    }
+    assert!(sounding(&e), "still sounding mid-note");
+}
+
+/// Only a declared `at = false` takes a played song over: `stop()` in
+/// `init()` means stopped.
+#[test]
+fn a_recompile_that_stops_the_song_in_init_does_not_carry_it() {
+    let played = "h = score{ song = \"steps\", at = false }\n\
+                  function body(f) if f == 10 then h.play() end end";
+    let mut e = engine(played);
+    assert!(
+        log_len(&run(&mut e, 0..40)) > 0,
+        "played before the recompile"
+    );
+    let stopped = format!("{played}\nfunction init() h.stop() end");
+    e.set_sources(&[("main.lua", &program(&stopped))]).unwrap();
+    assert_eq!(e.score_view(), None);
+    let sram = run(&mut e, 40..60);
+    assert_eq!(heard(&sram, 0, 0), vec![], "{sram}");
+}
+
+/// Editing `at = 0` into `at = false` is a declared `at = false`: the song
+/// that was sounding keeps its anchor (game music resumes across edits).
+#[test]
+fn a_recompile_from_at_0_to_at_false_keeps_the_song() {
+    let mut e = engine("h = score{ song = \"steps\", at = 0 }");
+    run(&mut e, 0..90);
+    let edited = program("h = score{ song = \"steps\", at = false }");
+    e.set_sources(&[("main.lua", &edited)]).unwrap();
+    let sram = run(&mut e, 90..100);
+    // Frame 90: t = 1.5 s, tick 374; step 12 starts at 375.
+    assert_eq!(heard(&sram, 0, 0).first(), Some(&(91, 12)), "{sram}");
+}
+
+/// `__scores` is a plain global: a program that clobbers it still
+/// recompiles, and the played song still carries.
+#[test]
+fn a_recompile_survives_a_clobbered_scores_table() {
+    let src = "h = score{ song = \"steps\", at = false }\n\
+               __scores = nil\n\
+               function body(f) if f == 10 then h.play() end end";
+    let mut e = engine(src);
+    run(&mut e, 0..40);
+    e.set_sources(&[("main.lua", &program(src))]).unwrap();
+    let sram = run(&mut e, 40..50);
+    assert_eq!(heard(&sram, 0, 0).first(), Some(&(41, 4)), "{sram}");
+}
