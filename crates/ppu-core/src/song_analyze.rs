@@ -25,6 +25,8 @@ pub struct Analysis {
     pub loop_tick: i64,
     /// Index of each arrangement slot's first step.
     pub slot_steps: Vec<u32>,
+    /// Per step: the tick it starts at (ascending, non-negative).
+    pub step_ticks: Vec<u32>,
     /// Per step: the most voices sounding at once in it, after steals and
     /// pin cuts.
     pub used: Vec<u8>,
@@ -65,6 +67,7 @@ pub fn analyze(song: &Song) -> Result<Analysis, SongError> {
         loop_tick: t.loop_tick,
         events: c.events,
         slot_steps,
+        step_ticks: ticks.iter().map(|&t| t as u32).collect(),
         used: used.into_iter().map(|u| u as u8).collect(),
         wanted,
         over,

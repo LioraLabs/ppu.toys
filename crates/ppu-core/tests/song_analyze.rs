@@ -340,10 +340,36 @@ fn brute(s: &Song) -> Analysis {
         loop_tick: t.loop_tick,
         events: c.events,
         slot_steps,
+        step_ticks: ticks.iter().map(|&t| t as u32).collect(),
         used,
         wanted,
         over,
     }
+}
+
+/// `step_ticks` is one ascending tick per step; each slot's first step sits at
+/// the slot's start tick and the loop tick is the loop-start slot's first one.
+#[test]
+fn step_ticks_index_steps_and_slots() {
+    let pat = |name: &str, length| Pattern {
+        name: name.into(),
+        length,
+        tempo: None,
+        notes: vec![note(0, 12, None)],
+    };
+    let mut s = song(0b1, vec![pat("A", 48), pat("B", 18)], vec![0, 1, 0]);
+    s.loop_start = 1;
+    let a = analyze(&s).unwrap();
+    let t = compile(&s).unwrap().timing;
+    let total: u64 = t.slots.iter().map(|sl| (sl.len as u64).div_ceil(12)).sum();
+    assert_eq!(a.step_ticks.len() as u64, total);
+    assert_eq!(a.step_ticks[0], 0);
+    assert!(a.step_ticks.windows(2).all(|w| w[0] <= w[1]));
+    for (i, &first) in a.slot_steps.iter().enumerate() {
+        assert_eq!(a.step_ticks[first as usize] as i64, t.tick(t.slots[i].pos));
+    }
+    assert!(a.loop_tick > 0);
+    assert_eq!(a.loop_tick, a.step_ticks[a.slot_steps[1] as usize] as i64);
 }
 
 #[test]
