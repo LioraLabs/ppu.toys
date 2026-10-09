@@ -1,10 +1,9 @@
 -- Sequencer sugar, run as the "kit" chunk before every user chunk (see
--- LuaEngine::set_sources). Defines note/instrument/sfx/bank/song/score
--- as globals; a user chunk defining the same name wins (chunks share one
--- global env and run in order). Never shadow `voice`/`kon`/`koff`/`timer`
+-- LuaEngine::set_sources). Defines note/instrument/sfx/bank/score (and a
+-- `song` stub that only errors) as globals; a user chunk defining the same
+-- name wins (chunks share one global env and run in order). Never shadow `voice`/`kon`/`koff`/`timer`
 -- with locals here — they must resolve as globals at call time so a later
--- chunk can replace them too (and so a user's `song{}` sees a shadowed
--- `timer`/`kon`/`koff`).
+-- chunk can replace them too.
 --
 -- Note-name parsing has no stdlib help (no tonumber/string.byte/find in
 -- this VM), so it's done with string.sub + table lookups, one char at a
@@ -83,25 +82,6 @@ local function midi_of(x)
   error("note: bad note '" .. tostring(x) .. "'")
 end
 
-local function split_tokens(s)
-  local out, len, start = {}, string.len(s), nil
-  for i = 1, len do
-    local c = string.sub(s, i, i)
-    if c == " " or c == "\t" or c == "\n" then
-      if start then
-        out[#out + 1] = string.sub(s, start, i - 1)
-        start = nil
-      end
-    elseif not start then
-      start = i
-    end
-  end
-  if start then
-    out[#out + 1] = string.sub(s, start, len)
-  end
-  return out
-end
-
 -- note(n [, base]) -> 14-bit pitch for a sample recorded at `base`
 -- (default "C4" / MIDI 60). n/base are a note name or a MIDI integer.
 function note(n, base)
@@ -155,15 +135,8 @@ function sfx(inst, v, n)
   kon(v)
 end
 
--- song{ tempo=, steps=16?, tracks={ {voice=,inst=,pattern=}, ... } } ->
--- registers ONE timer(0, div, hook) stepping every track's pattern on the
--- 16th-note grid, auto-playing. `div` is the closest achievable timer-0
--- divider (1..255, ticks of 4 samples) to the tempo's 16th rate; `k` (>=1)
--- is how many hook fires make one step when a single tick can't reach it.
--- Tokens (parsed once here): a note name, "." rest, "-" hold, "^" key off.
--- `timer` is setup-only, so `song{}` is too (engine's own error, unwrapped).
 -- A song is meant to be heard: power-on master volume is silence, so a
--- song{}/score{} started while nothing has set `dsp.mvol` opens it fully. A
+-- score{} started while nothing has set `dsp.mvol` opens it fully. A
 -- program that sets its own level (before or after) keeps it.
 local function ensure_audible()
   local mv = dsp.mvol
@@ -172,77 +145,10 @@ local function ensure_audible()
   end
 end
 
-function song(cfg)
-  if cfg == nil or cfg.tempo == nil or cfg.tempo <= 0 then
-    error("song: tempo must be > 0")
-  end
-  ensure_audible()
-  if type(cfg.tracks) ~= "table" then
-    error("song: tracks must be a table")
-  end
-  local steps = cfg.steps or 16
-  local tracks = {}
-  for i = 1, #cfg.tracks do
-    local tr = cfg.tracks[i]
-    if type(tr.voice) ~= "number" or tr.voice ~= math.floor(tr.voice) or tr.voice < 0 or tr.voice > 7 then
-      error("song: track " .. i .. " voice must be 0..7")
-    end
-    if type(tr.inst) ~= "table" or tr.inst.sample == nil then
-      error("song: track " .. i .. " needs voice and inst")
-    end
-    if type(tr.pattern) ~= "string" then
-      error("song: track " .. i .. " pattern must have at least one token")
-    end
-    local tokens = split_tokens(tr.pattern)
-    if #tokens == 0 then
-      error("song: track " .. i .. " pattern must have at least one token")
-    end
-    for j = 1, #tokens do
-      local tok = tokens[j]
-      if tok ~= "." and tok ~= "-" and tok ~= "^" and parse_note_name(tok) == nil then
-        error("song: bad token '" .. tok .. "' in track " .. i)
-      end
-    end
-    tracks[#tracks + 1] = { voice = tr.voice, inst = tr.inst, tokens = tokens }
-  end
-
-  -- 8000 timer-0 ticks/sec, 4 sixteenths/beat -> step_ticks ticks/16th.
-  local step_ticks = 8000 * 60 / (cfg.tempo * 4)
-  local k = math.ceil(step_ticks / 255)
-  local div = math.max(1, math.min(255, math.floor(step_ticks / k + 0.5)))
-
-  local h = {
-    step = 0, beat = 0, playing = true,
-    div = div, rate = 8000 / (div * k),
-  }
-  local pos, tick = 0, 0
-
-  timer(0, div, function(off)
-    if h.playing and tick % k == 0 then
-      h.step = pos % steps
-      h.beat = pos
-      for i = 1, #tracks do
-        local tr = tracks[i]
-        local tok = tr.tokens[(pos % #tr.tokens) + 1]
-        if tok == "^" then
-          koff(tr.voice)
-        elseif tok ~= "." and tok ~= "-" then
-          sfx(tr.inst, tr.voice, tok)
-        end
-      end
-      pos = pos + 1
-    end
-    tick = tick + 1
-  end)
-
-  h.play = function() h.playing = true end
-  h.stop = function()
-    h.playing = false
-    for i = 1, #tracks do
-      koff(tracks[i].voice)
-    end
-  end
-  return h
+-- song{} was retired in favor of song sources played with score{}. Level 2
+-- attributes the error to the user's chunk, like the old validation errors.
+function song()
+  error('song{} is gone: make a song source (the Studio sequencer, or a .mid) and play it with score{ song = "<name>" }', 2)
 end
 
 -- Built-in sample presets (see crates/ppu-core/src/bank.rs for the sounds).
@@ -311,7 +217,7 @@ end
 -- (its mask) off and silences,
 -- play() restarts from the top, anchored at the start of the frame being
 -- rendered (from frame(): that frame's t; from a timer hook: the next
--- frame's). Setup-only, like song{}.
+-- frame's). Setup-only.
 local FLAT = { a = 15, d = 0, s = 7, r = 0 }
 
 -- Placed sounds by name, shared by every score{}: a toy that plays several
