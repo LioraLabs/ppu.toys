@@ -21,7 +21,7 @@ pub struct Analysis {
     pub events: Vec<Event>,
     /// Song length, in engine ticks.
     pub length: i64,
-    /// The tick the song loops back to (the loop-start slot's first step).
+    /// The tick the song loops back to (the loop-start slot's first tick).
     pub loop_tick: i64,
     /// Index of each arrangement slot's first step.
     pub slot_steps: Vec<u32>,

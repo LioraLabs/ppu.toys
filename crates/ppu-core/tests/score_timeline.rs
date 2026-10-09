@@ -64,10 +64,7 @@ const LOG: &str = "heard, last = {}, {}\n\
      end";
 
 fn engine(score: &str) -> LuaEngine {
-    let mut e = LuaEngine::new();
-    common::add_song_source(&mut e, "steps", &steps());
-    e.set_sources(&[("main.lua", &program(score))]).unwrap();
-    e
+    engine_of(&steps(), score)
 }
 
 fn program(score: &str) -> String {
@@ -320,10 +317,10 @@ fn first_steps(n: usize) -> Song {
 }
 
 /// A live reload in the second pass of a looping song anchored at 0.5 s
-/// keeps its musical position: a timing edit moves the anchor by whole
-/// ticks so the next note due is the remapped one.
+/// keeps its musical position: a timing edit plays against an anchor shifted
+/// by whole ticks so the next note due is the remapped one.
 #[test]
-fn a_timing_reload_in_a_later_pass_keeps_the_position_and_rebases_the_anchor() {
+fn a_timing_reload_in_a_later_pass_keeps_the_position() {
     let mut e = engine("h = score{ song = \"steps\", at = 0.5 }");
     // Frame 240 starts at t = 4 s: tick 874 = 500 + 374, inside step 11.
     let seen = log_len(&run(&mut e, 0..240));
@@ -332,9 +329,8 @@ fn a_timing_reload_in_a_later_pass_keeps_the_position_and_rebases_the_anchor() {
     // Half the tempo: the rest of step 11 is twice as long, then step 12,
     // then step 13 a 16th (62.5 ticks = 15 frames) later.
     assert_eq!(heard(&sram, seen, 0)[..2], [(248, 12), (263, 13)], "{sram}");
-    let anchor = e.score_view().unwrap().anchor.unwrap();
-    let moved = (anchor - 0.5) * 250.0;
-    assert!(moved != 0.0 && moved.fract() == 0.0, "whole ticks: {moved}");
+    // The position moved by a whole-tick anchor shift the view doesn't show.
+    assert_eq!(e.score_view().unwrap().anchor, Some(0.5));
 }
 
 #[test]
@@ -792,6 +788,47 @@ fn a_finished_loop_false_song_keeps_its_anchor_and_a_jump_back_unfinishes_it() {
     run(&mut e, 60..70);
     let v = e.score_view().unwrap();
     assert!(!v.finished && v.anchor == Some(0.25), "{v:?}");
+}
+
+/// Jumping a finished song back to before its anchor makes it look like a
+/// fresh pre-anchor song again: not finished, at the top.
+#[test]
+fn a_jump_back_to_before_the_anchor_unfinishes_a_finished_song() {
+    let mut e = engine("h = score{ song = \"steps\", loop = false, at = 0.25 }");
+    run(&mut e, 0..200);
+    assert!(e.score_view().unwrap().finished);
+    run(&mut e, 5..6);
+    let v = e.score_view().unwrap();
+    assert!(!v.finished && v.anchor == Some(0.25), "{v:?}");
+    assert_eq!((v.tick, v.slot), (0, Some(0)), "{v:?}");
+    // Past the end again: the first fire re-finishes it.
+    run(&mut e, 190..200);
+    assert!(e.score_view().unwrap().finished);
+}
+
+/// The view's anchor is the one a seek resolves against: a live reload's
+/// whole-tick shift never shows, before or after a jump.
+#[test]
+fn a_live_reload_does_not_move_the_reported_anchor() {
+    let mut longer = steps();
+    longer.arrangement = vec![0; 4];
+    let mut e = engine("h = score{ song = \"steps\", loop = false }");
+    run(&mut e, 0..150);
+    common::add_song_source(&mut e, "steps", &longer);
+    assert_eq!(e.score_view().unwrap().anchor, Some(0.0));
+    run(&mut e, 150..160);
+    assert_eq!(e.score_view().unwrap().anchor, Some(0.0));
+    run(&mut e, 10..20);
+    assert_eq!(e.score_view().unwrap().anchor, Some(0.0));
+
+    let mut e = engine("h = score{ song = \"steps\" }");
+    run(&mut e, 0..100);
+    common::add_song_source(&mut e, "steps", &steps_at(60));
+    assert_eq!(e.score_view().unwrap().anchor, Some(0.0));
+    run(&mut e, 100..110);
+    assert_eq!(e.score_view().unwrap().anchor, Some(0.0));
+    run(&mut e, 0..10);
+    assert_eq!(e.score_view().unwrap().anchor, Some(0.0));
 }
 
 /// Plays `steps()` (2 s) from f = 0 as far as `edit_f`, applies `edit`, runs

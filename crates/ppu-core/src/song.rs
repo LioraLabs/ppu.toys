@@ -773,7 +773,7 @@ impl Timing {
     }
 
     /// Ticks in one looped pass (`length - loop_tick`).
-    fn body(&self) -> i64 {
+    pub(crate) fn body(&self) -> i64 {
         self.length - self.loop_tick
     }
 

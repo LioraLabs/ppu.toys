@@ -1629,6 +1629,10 @@ fn loop_start_zero_encodes_as_unchanged_version_1() {
     arrg.extend(song.arrangement.iter().map(|&p| p as u8));
     assert!(v1.ends_with(&arrg));
     // A nonzero loop start only adds the version bump and the trailing varint.
+    // Layout, from the end: v1 ends `ARRG len count idx*n` (n + 6 bytes with
+    // the 4-byte tag); v2 appends the loop varint, so its ARRG chunk starts
+    // one byte earlier (n + 7). Everything before it (past the 5 byte header)
+    // is identical.
     let mut looped = song.clone();
     looped.loop_start = 1;
     let v2 = encode(&looped);
@@ -1639,8 +1643,7 @@ fn loop_start_zero_encodes_as_unchanged_version_1() {
 
 #[test]
 fn version_1_bytes_decode_with_loop_start_zero() {
-    let mut song = sample_song();
-    song.loop_start = 0;
+    let song = sample_song();
     let mut bytes = encode(&song);
     // Hand-check the version byte, then confirm decode reads it as v1.
     assert_eq!(bytes[4], 1);
@@ -1656,6 +1659,8 @@ fn version_2_with_trailing_bytes_is_rejected() {
     song.loop_start = 1;
     let mut bytes = encode(&song);
     // Append a stray byte to the ARRG body (the last chunk): bump its length.
+    // From the end the v2 body is `count idx*n loop`, so the length byte
+    // sits just before it: n + 2 body bytes after count, plus count itself.
     let n = song.arrangement.len();
     let len_at = bytes.len() - (n + 2) - 1;
     bytes[len_at] += 1;
@@ -1665,12 +1670,11 @@ fn version_2_with_trailing_bytes_is_rejected() {
 
 #[test]
 fn loop_start_json_omits_zero_and_defaults_absent() {
-    let mut song = valid_song();
+    let song = valid_song();
     let json = serde_json::to_value(&song).unwrap();
     assert!(json.get("loopStart").is_none());
     let back: Song = serde_json::from_value(json).unwrap();
     assert_eq!(back.loop_start, 0);
-    song.loop_start = 0;
     let mut looped = valid_song();
     looped.arrangement = vec![0, 0];
     looped.loop_start = 1;

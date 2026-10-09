@@ -583,7 +583,7 @@ fn changing_the_loop_start_keeps_the_position() {
     push(&mut e, &looped(1));
     let now = e.score_view().unwrap();
     assert_eq!((now.tick, now.slot), (old.tick, Some(0)));
-    assert_ne!(now.anchor, old.anchor, "rebased onto pass 0");
+    assert_eq!(now.anchor, old.anchor, "the view keeps the declared anchor");
     // Plays through the intro rest of slot 0, the body, and loops to slot 1.
     run(&mut e, 110, 190); // ~tick 416 -> wrapped to 166
     let v = e.score_view().unwrap();
@@ -601,4 +601,25 @@ fn a_reload_past_the_new_end_wraps_to_the_loop_start() {
     push(&mut e, &short); // slot 2 gone, length 250
     let v = e.score_view().unwrap();
     assert_eq!((v.tick, v.length), (125, 250));
+}
+
+/// In a later pass, a loop-start change that leaves the playing slot inside
+/// the body keeps the position.
+#[test]
+fn a_loop_start_change_keeps_the_position_when_the_slot_stays_in_the_body() {
+    // Frame 110: pass 1, slot 1 (tick ~208 of 375, body = slots 1..3).
+    let mut e = start(&looped(1), true);
+    run(&mut e, 0, 110);
+    let old = e.score_view().unwrap();
+    assert_eq!(old.slot, Some(1), "{old:?}");
+    push(&mut e, &looped(0)); // slot 1 is still in the (now larger) body
+    let now = e.score_view().unwrap();
+    assert_eq!(
+        (now.tick, now.slot, now.loop_tick),
+        (old.tick, Some(1), Some(0))
+    );
+    run(&mut e, 110, 120); // ~42 more ticks, still slot 1
+    let v = e.score_view().unwrap();
+    assert_eq!(v.slot, Some(1), "{v:?}");
+    assert!((old.tick..old.tick + 60).contains(&v.tick), "{v:?}");
 }

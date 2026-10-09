@@ -143,8 +143,9 @@ pub struct DspView {
 /// `song` is the name of the song source `score{ song = "<name>" }` plays.
 /// `slot`/`step` are the arrangement slot `tick` falls in and the GLOBAL
 /// 16th step within it — the same index `song_analyze::Analysis::slot_steps`
-/// uses — from `Timing::position` (`None` only for its own out-of-range
-/// case, which a live `tick` never hits).
+/// uses — from `Timing::position` (`None` when `tick == length`: a finished
+/// song, or a `loop = false` one in the window before its finishing fire —
+/// see `finished`).
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct ScoreView {
     pub tick: i64,
@@ -155,19 +156,26 @@ pub struct ScoreView {
     pub slot: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step: Option<u32>,
-    /// The timeline time (seconds) the song's tick 0 is anchored to: tick
-    /// `k` of loop pass `p` plays at `anchor + (unwrap(p, k) + 1) / 250` s
-    /// ([`crate::song::Timing::unwrap`]; pass 0 is `k` itself). `None`
-    /// until a `play()` is anchored at the next rendered frame.
+    /// The timeline time (seconds) the song's tick 0 is anchored to: the
+    /// anchor every jump (seek, scrub, loop wrap) resolves position against.
+    /// Tick `k` of loop pass `p` plays at `anchor + (unwrap(p, k) + 1) / 250`
+    /// s ([`crate::song::Timing::unwrap`]; pass 0 is `k` itself). A live
+    /// reload keeps musical position by playing against a whole-tick-shifted
+    /// anchor until the next jump; the view does not expose that shift
+    /// (the staff position comes from `tick`/`slot`/`step`). `None` until a
+    /// `play()` is anchored at the next rendered frame.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anchor: Option<f64>,
     /// The tick the looped body restarts at (the loop-start slot's first
     /// tick), when the song loops; `tick` wraps to here, not to 0.
     #[serde(rename = "loopTick", skip_serializing_if = "Option::is_none")]
     pub loop_tick: Option<i64>,
-    /// A `loop = false` song that played to its end. It is not playing, but
-    /// keeps its `anchor` so the studio can map steps to time and seek back
-    /// into it; `tick` is `length` and `slot`/`step` are `None`.
+    /// A `loop = false` song that played to its end (anchored, neither
+    /// looping nor playing). It keeps its `anchor` so the studio can map
+    /// steps to time and seek back into it; `tick` is `length` and
+    /// `slot`/`step` are `None`. A playing `loop = false` song can also
+    /// report `tick == length` with no `slot`/`step` (and `finished` false)
+    /// for the one 4 ms window right before its finishing fire.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub finished: bool,
 }
@@ -405,6 +413,14 @@ enum Anchor {
 const SONG_PERIOD_H: i64 = 256;
 
 impl SongPlayer {
+    /// Set the anchor: the declared (or `play()`) one, so any live-reload
+    /// shift ends. Reload adds to `shift_h` and `carry_songs` copies both,
+    /// so those write the fields directly.
+    fn set_anchor(&mut self, a: Anchor) {
+        self.anchor = a;
+        self.shift_h = 0;
+    }
+
     /// Point the cursor at the first event starting at or after `tick`, and
     /// `ends` at the notes still sounding there (later events win).
     fn seek(&mut self, tick: i64) {
@@ -573,13 +589,14 @@ impl LuaEngine {
     /// [`crate::song::remap`]). A song past its new end wraps, or stops
     /// rewound (loop = false). The voices of a playing one key off and it
     /// re-seeks to the next event due. An anchored song's position comes
-    /// from time, so keeping it moves the anchor by whole ticks (the loop
-    /// pass is kept): an edit that changes timing rebases the anchor
-    /// (`ScoreView::anchor` moves); a note-only edit leaves it exactly
-    /// as it was. A recompile (Run) restores the declared `at`, and so does
-    /// the next jump (seek, scrub, loop rewind): the shift lives in
-    /// `shift_h` until then, so only the live edit keeps musical position.
-    /// A finished
+    /// from time, so keeping it plays against an anchor shifted by whole
+    /// ticks: an edit that changes timing shifts it, a note-only edit leaves
+    /// it exactly as it was. The shift lives in `shift_h` (which
+    /// `ScoreView::anchor` does not show) until the next jump (seek, scrub,
+    /// loop rewind) or recompile (Run) goes back to the declared `at`. The
+    /// loop pass is kept while the playing slot stays inside the body; a
+    /// song past its new end wraps to the loop start, and a playing slot
+    /// that became intro drops to the first pass. A finished
     /// loop = false song stays finished. A player whose song decodes equal is
     /// left untouched, and an update to a song source no player plays
     /// touches nothing. Returns false, leaving everything as it was, when
@@ -640,10 +657,11 @@ impl LuaEngine {
         };
 
         l.enter(|ctx| {
-            let new_len = compiled.timing.length;
+            let new_t = &compiled.timing;
+            let new_len = new_t.length;
             for p in dma.songs.borrow_mut().iter_mut().filter(|p| changed(p)) {
                 let old = (&p.song, &p.timing);
-                let remapped = crate::song::remap(old, (&song, &compiled.timing), p.tick);
+                let remapped = crate::song::remap(old, (&song, new_t), p.tick);
                 if p.playing {
                     song_koff(ctx, p.mask);
                 }
@@ -652,7 +670,6 @@ impl LuaEngine {
                 let anchored = matches!(p.anchor, Anchor::At(_)) && p.next >= 0;
                 // After fire `n` the player holds `next = n + 1`: the pass is
                 // the one fire `n` played in.
-                let nt = &compiled.timing;
                 let pass = if p.looping && p.next > 0 {
                     p.timing.pass(p.next - 1)
                 } else {
@@ -664,12 +681,16 @@ impl LuaEngine {
                     // stays past the end, silent.
                     _ if anchored && !p.playing && !p.looping => (p.next.max(new_len), 0, false),
                     // The playing slot is now in the intro: it plays on once.
-                    _ if remapped < new_len && pass >= 1 && remapped < nt.loop_tick => {
+                    _ if remapped < new_len && pass >= 1 && remapped < new_t.loop_tick => {
                         (remapped, remapped, p.playing)
                     }
-                    _ if remapped < new_len => (nt.unwrap(pass, remapped), remapped, p.playing),
+                    _ if remapped < new_len => (new_t.unwrap(pass, remapped), remapped, p.playing),
                     // Past the new end: a loop wraps to the next pass's loop start…
-                    _ if p.looping => (nt.unwrap(pass + 1, nt.loop_tick), nt.loop_tick, p.playing),
+                    _ if p.looping => (
+                        new_t.unwrap(pass + 1, new_t.loop_tick),
+                        new_t.loop_tick,
+                        p.playing,
+                    ),
                     // …a loop = false song finishes, as `run_song_tick` leaves one.
                     _ => (remapped, 0, false),
                 };
@@ -683,12 +704,12 @@ impl LuaEngine {
                 p.tick = tick;
                 p.events = compiled.events.clone();
                 p.seek(tick);
-                p.length = compiled.timing.length;
+                p.length = new_len;
                 p.mask = song.voice_mask;
                 p.insts = insts.clone();
                 p.pitches = pitches.clone();
                 p.song = song.clone();
-                p.timing = compiled.timing.clone();
+                p.timing = new_t.clone();
             }
         });
         true
@@ -788,7 +809,10 @@ impl LuaEngine {
     }
 
     /// The most recently started `score{}` (kit.lua publishes its handle as
-    /// `__score`), or None when there is none or it is stopped/finished.
+    /// `__score`), or None when there is none or it is stopped. A `loop =
+    /// false` song that played out is not gone: it reports `finished` (an
+    /// anchored player that is neither looping nor playing), keeping its
+    /// anchor.
     pub fn score_view(&self) -> Option<ScoreView> {
         self.lua.borrow_mut().enter(|ctx| {
             let id = score_id(ctx)?;
@@ -800,13 +824,11 @@ impl LuaEngine {
             }
             // An anchored player that isn't playing is a finished
             // loop = false song: it reports `length` and keeps its anchor.
-            let finished = !p.playing;
-            let tick = if finished || p.tick >= p.length {
-                if p.looping {
-                    p.timing.loop_tick
-                } else {
-                    p.length
-                }
+            let finished = !p.looping && !p.playing;
+            let tick = if finished {
+                p.length
+            } else if p.looping {
+                p.timing.wrap(p.tick)
             } else {
                 p.tick
             };
@@ -828,7 +850,7 @@ impl LuaEngine {
                 slot,
                 step,
                 anchor: match p.anchor {
-                    Anchor::At(a) => Some(a as f64 / 64000.0),
+                    Anchor::At(a) => Some((a - p.shift_h) as f64 / 64000.0),
                     _ => None,
                 },
                 loop_tick: p.looping.then_some(p.timing.loop_tick),
@@ -1860,8 +1882,7 @@ impl LuaEngine {
                 continue;
             };
             if p.anchor == Anchor::Pending {
-                p.anchor = Anchor::At(pos_h as i64);
-                p.shift_h = 0;
+                p.set_anchor(Anchor::At(pos_h as i64));
                 p.playing = true;
                 p.rewind();
             }
@@ -1886,7 +1907,10 @@ impl LuaEngine {
     /// re-phases the timers after a jump and picks up a `play()`/`stop()`).
     /// If `f` isn't `last_f + 1` after an earlier frame, nor a replay of
     /// `last_f` right after a recompile (see `recompiled`), that is a jump: the
-    /// anchored songs' voices key off and re-seek on their next fire, and
+    /// anchored songs' voices key off and re-seek on their next fire (a
+    /// finished `loop = false` song plays again until its first fire past
+    /// the end), a live reload's anchor shift is dropped (back to the
+    /// declared anchor, before `realign`), and
     /// the echo buffer is zeroed (after the offset-0 flush, so the live
     /// EDL decides the region). Flushes `voice[]`/`dsp`/`aram[]`/KON/KOFF
     /// at offset 0, then walks expiry to expiry: render the DSP up to the
@@ -1913,11 +1937,14 @@ impl LuaEngine {
         if jump {
             // A live reload's anchor shift ends at the next jump: back to
             // the declared anchor BEFORE `realign` phases the song timers.
+            // An anchored player is playing again: one that had finished
+            // (`loop = false`) re-finishes on its first fire past the end,
+            // and starts over if the jump landed inside or before the song.
             for p in self.dma.songs.borrow_mut().iter_mut() {
                 if let Anchor::At(a) = p.anchor {
-                    p.anchor = Anchor::At(a - p.shift_h);
+                    p.set_anchor(Anchor::At(a - p.shift_h));
+                    p.playing = true;
                 }
-                p.shift_h = 0;
             }
         }
         self.realign(start_h);
@@ -2050,7 +2077,7 @@ impl LuaEngine {
             let Anchor::At(a) = player.anchor else {
                 return;
             };
-            if player.looping && player.length <= player.timing.loop_tick {
+            if player.looping && player.timing.body() <= 0 {
                 return;
             }
             let n = (due_h as i64 - a) / SONG_PERIOD_H - 1;
@@ -2060,7 +2087,7 @@ impl LuaEngine {
             } else {
                 n
             };
-            if !player.looping && n >= player.length {
+            if !player.looping && n >= player.timing.length {
                 if continuous && player.playing {
                     song_koff(ctx, player.mask);
                     player.ends = [None; 8];
@@ -2071,10 +2098,15 @@ impl LuaEngine {
                 return;
             }
             player.playing = true;
-            if continuous && player.looping && n >= player.length && tick == player.timing.loop_tick
+            if continuous
+                && player.looping
+                && n >= player.timing.length
+                && tick == player.timing.loop_tick
             {
                 song_koff(ctx, player.mask);
                 player.ends = [None; 8];
+                // Not `seek(loop_tick)`: that would put intro notes still
+                // sounding back into `ends` right after the key-off.
                 let lt = player.timing.loop_tick;
                 player.cursor = player.events.partition_point(|e| e.start < lt);
             } else if !continuous {
@@ -3621,8 +3653,7 @@ fn install_song_natives(
             p.pitches = pitches;
             p.looping = looping;
             p.playing = anchor != Anchor::Stopped;
-            p.anchor = anchor;
-            p.shift_h = 0;
+            p.set_anchor(anchor);
             p.at_false = anchor == Anchor::Stopped;
             p.rewind();
         }
@@ -3669,8 +3700,7 @@ fn install_song_natives(
                 if p.anchor != Anchor::Stopped {
                     song_koff(ctx, p.mask);
                 }
-                p.anchor = Anchor::Pending;
-                p.shift_h = 0;
+                p.set_anchor(Anchor::Pending);
                 p.playing = true;
                 p.at_false = false;
             }
@@ -3683,8 +3713,7 @@ fn install_song_natives(
     let song_stop = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
         if let Some(id) = stack.get(0).to_int().and_then(|n| usize::try_from(n).ok()) {
             if let Some(p) = rec.songs.borrow_mut().get_mut(id) {
-                p.anchor = Anchor::Stopped;
-                p.shift_h = 0;
+                p.set_anchor(Anchor::Stopped);
                 p.playing = false;
                 p.at_false = false;
                 song_koff(ctx, p.mask);

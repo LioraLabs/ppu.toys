@@ -271,6 +271,8 @@ pattern index played at each slot, in order. The arrangement also has a
 loop start: a slot (0 by default, the whole song). A looping song plays
 the slots before it once, as an intro, then loops from that slot; with
 `loop = false` the loop start is ignored and the song plays once through.
+A note in the loop-start slot that is nudged earlier than the slot's start
+plays on the first pass only: every wrap skips it.
 
 `score{ song = "beat1" }` plays the source named `"beat1"` on the shared
 8-voice pool, no Lua timer involved:
@@ -340,18 +342,21 @@ error): a row naming a sound nothing placed at setup (placing needs the
 setup window), and a song that fails to decode or compile. Editing a song
 source no `score{}` plays touches nothing.
 
-A live edit keeps the musical position by shifting the song's anchor by
-whole ticks, so the anchor the view reports can differ from the declared
-one. The shift lasts only until the next jump: a seek, scrub, or timeline
-loop goes back to the declared anchor (or, for a song started with
-`play()`, the frame it started on) and re-derives the position from it. A
+A live edit keeps the musical position by playing the song against an
+anchor shifted by whole ticks. The view's `anchor` does not show that shift:
+it is always the declared one (or, for a song started with `play()`, the
+frame it started on), the anchor every jump resolves against. The shift
+lasts only until the next jump: a seek, scrub, or timeline loop goes back to
+that anchor and re-derives the position from it. A
 loop start edit is kept the same way: a song inside the loop stays where it
-is, and one now in the intro plays on through it once.
+is, and one now in the intro plays on through it once. A finished
+`loop = false` song jumped back to before its anchor is a fresh song again.
 
 A code edit (a recompile) keeps songs at t. A song with a declared anchor
 resumes at t instead of restarting. A song started with `play()` resumes
 at t too, as long as the new program still sets it up with `at = false`,
-in the same `score{}` position and with the same song. A `score{}` the
+in the same `score{}` position and with the same song; a song that has
+already finished is not carried, and its view goes away. A `score{}` the
 edit removes stops its voices. Run restores the declared anchors only: a
 song `play()` started does not survive it.
 
