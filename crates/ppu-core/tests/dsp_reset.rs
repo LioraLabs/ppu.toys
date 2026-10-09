@@ -187,8 +187,9 @@ fn reset_replays_dma_sample_placement() {
 /// assertion passing by coincidence).
 #[test]
 fn reset_restarts_timer_phase() {
-    // timer(0, 96, ..): period_h = 96*8 = 768 h = 384 samples. Each frame is
-    // ~532.5 samples, so consecutive frames drift against the 384-sample
+    // timer(0, 96, ..): period_h = 96*8 = 768 h = 384 samples. Frame f is
+    // samples [S(f), S(f+1)) with S(f) = round(32000·f/60): 533 or 534
+    // (533⅓ on average), so consecutive frames drift against the 384-sample
     // period — phase carry is visible within a handful of frames.
     let program = || {
         "ticks = {}\n\
