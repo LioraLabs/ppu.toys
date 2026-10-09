@@ -178,7 +178,7 @@ fn a_length_shrinking_below_the_tick_wraps_or_stops() {
         push(&mut e, &beat("4......."));
         match e.score_view() {
             Some(v) if looping => assert_eq!((v.tick, v.length), (0, 250), "wrapped"),
-            None if !looping => {}
+            Some(v) if !looping => assert!(v.finished && v.tick == v.length, "{v:?}"),
             other => panic!("loop = {looping}: {other:?}"),
         }
         let after = run(&mut e, 90, 91);
@@ -384,7 +384,7 @@ fn deleting_the_playing_slot_wraps_or_stops() {
         push(&mut e, &arranged(16, &["A", "B"]));
         match e.score_view() {
             Some(v) if looping => assert_eq!((v.tick, v.length), (0, 1000), "wrapped"),
-            None if !looping => {}
+            Some(v) if !looping => assert!(v.finished && v.tick == v.length, "{v:?}"),
             other => panic!("loop = {looping}: {other:?}"),
         }
         let after = run(&mut e, 170, 171);
@@ -547,4 +547,58 @@ fn stress_ten_minute_song_reloads_within_budget() {
             "best {best:?} exceeded 10ms"
         );
     }
+}
+
+/// Three 4-step slots (125 ticks each) looping from slot `loop_start`.
+fn looped(loop_start: u32) -> Song {
+    let mut s = song(
+        120,
+        0,
+        &[("A", "4..."), ("B", "4..."), ("C", "4...")],
+        &["A", "B", "C"],
+    );
+    s.loop_start = loop_start;
+    s
+}
+
+/// A loop-start edit in the first pass keeps the tick, and the intro that
+/// the edit makes of the playing slot plays on from where it was.
+#[test]
+fn changing_the_loop_start_keeps_the_position() {
+    let mut e = start(&looped(0), true);
+    run(&mut e, 0, 80); // tick ~333: slot 2, first pass
+    let old = e.score_view().unwrap();
+    push(&mut e, &looped(1));
+    let now = e.score_view().unwrap();
+    assert_eq!(
+        (now.tick, now.anchor, now.loop_tick),
+        (old.tick, old.anchor, Some(125))
+    );
+
+    // Later pass: tick ~83 (slot 0), which is now an intro slot.
+    let mut e = start(&looped(0), true);
+    run(&mut e, 0, 110);
+    let old = e.score_view().unwrap();
+    assert_eq!(old.slot, Some(0));
+    push(&mut e, &looped(1));
+    let now = e.score_view().unwrap();
+    assert_eq!((now.tick, now.slot), (old.tick, Some(0)));
+    assert_ne!(now.anchor, old.anchor, "rebased onto pass 0");
+    // Plays through the intro rest of slot 0, the body, and loops to slot 1.
+    run(&mut e, 110, 190); // ~tick 416 -> wrapped to 166
+    let v = e.score_view().unwrap();
+    assert_eq!(v.slot, Some(1), "{v:?}");
+    assert!((125..250).contains(&v.tick), "{v:?}");
+}
+
+/// A past-the-end tick of a pass wraps to the loop start, not the top.
+#[test]
+fn a_reload_past_the_new_end_wraps_to_the_loop_start() {
+    let mut e = start(&looped(1), true);
+    run(&mut e, 0, 80);
+    let mut short = looped(1);
+    short.arrangement.pop();
+    push(&mut e, &short); // slot 2 gone, length 250
+    let v = e.score_view().unwrap();
+    assert_eq!((v.tick, v.length), (125, 250));
 }

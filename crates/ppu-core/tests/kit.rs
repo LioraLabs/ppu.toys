@@ -1076,7 +1076,7 @@ fn score_view_reports_a_song_sources_slot_and_step() {
     let mut seen = 0;
     for f in 0..90u32 {
         e.frame(f as f64 / 60.0, f).unwrap();
-        let Some(v) = e.score_view() else {
+        let Some(v) = e.score_view().filter(|v| !v.finished) else {
             break;
         };
         assert_eq!(v.song.as_deref(), Some("beat"));

@@ -1379,10 +1379,10 @@ fn song_handle_with_loop_false_finishes_and_stops_playing() {
     assert_eq!(got["playing"], false, "a non-looping song must finish");
 }
 
-/// `score_view()` goes absent once a `loop = false` song finishes on its
-/// own, same as an explicit `stop()`.
+/// `score_view()` keeps a `loop = false` song's anchor once it finishes on
+/// its own, flagged finished (an explicit `stop()` still goes absent).
 #[test]
-fn score_view_is_absent_once_a_loop_false_song_finishes() {
+fn score_view_is_finished_once_a_loop_false_song_finishes() {
     let song = small_song(0xff); // ~125 ticks == ~0.5s
     let mut e = LuaEngine::new();
     common::add_song_source(&mut e, "beat", &song);
@@ -1395,7 +1395,11 @@ fn score_view_is_absent_once_a_loop_false_song_finishes() {
     for f in 0..120u32 {
         e.frame(f as f64 / 60.0, f).unwrap();
     }
-    assert_eq!(e.score_view(), None, "finished: no readout");
+    let v = e.score_view().expect("finished: still anchored");
+    assert!(
+        v.finished && v.anchor == Some(0.0) && v.tick == v.length,
+        "{v:?}"
+    );
 }
 
 /// `score_view()` (the studio playhead readout) reports a song source's

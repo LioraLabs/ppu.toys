@@ -138,7 +138,8 @@ pub struct DspView {
 }
 
 /// Where the playing `score{}` is, in its 4 ms timer ticks — see
-/// [`LuaEngine::score_view`]. `tick` is the next tick to play, `0..length-1`;
+/// [`LuaEngine::score_view`]. `tick` is the next tick to play, `0..length-1`
+/// (`length` for a finished `loop = false` song; a loop wraps to `loop_tick`);
 /// `song` is the name of the song source `score{ song = "<name>" }` plays.
 /// `slot`/`step` are the arrangement slot `tick` falls in and the GLOBAL
 /// 16th step within it — the same index `song_analyze::Analysis::slot_steps`
@@ -155,10 +156,20 @@ pub struct ScoreView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step: Option<u32>,
     /// The timeline time (seconds) the song's tick 0 is anchored to: tick
-    /// `k` plays at `anchor + (k + 1) / 250` s on its first pass. `None`
+    /// `k` of loop pass `p` plays at `anchor + (unwrap(p, k) + 1) / 250` s
+    /// ([`crate::song::Timing::unwrap`]; pass 0 is `k` itself). `None`
     /// until a `play()` is anchored at the next rendered frame.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anchor: Option<f64>,
+    /// The tick the looped body restarts at (the loop-start slot's first
+    /// tick), when the song loops; `tick` wraps to here, not to 0.
+    #[serde(rename = "loopTick", skip_serializing_if = "Option::is_none")]
+    pub loop_tick: Option<i64>,
+    /// A `loop = false` song that played to its end. It is not playing, but
+    /// keeps its `anchor` so the studio can map steps to time and seek back
+    /// into it; `tick` is `length` and `slot`/`step` are `None`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub finished: bool,
 }
 
 /// The controls document's reserved file name (PPU-146's generated
@@ -345,6 +356,10 @@ struct SongPlayer {
     playing: bool,
     /// Where the song sits on the timeline — see [`Anchor`].
     anchor: Anchor,
+    /// Whole-tick anchor shift (half-samples) live reloads applied since the
+    /// anchor was last set: `anchor - shift_h` is the declared (or
+    /// `play()`) one a jump goes back to.
+    shift_h: i64,
     /// Stopped because setup declared `at = false`, untouched since (any
     /// `play()`/`stop()` clears it): only such a player takes over a song
     /// the old program had sounding (see [`LuaEngine::carry_songs`]).
@@ -561,7 +576,10 @@ impl LuaEngine {
     /// from time, so keeping it moves the anchor by whole ticks (the loop
     /// pass is kept): an edit that changes timing rebases the anchor
     /// (`ScoreView::anchor` moves); a note-only edit leaves it exactly
-    /// as it was. A recompile (Run) restores the declared `at`. A finished
+    /// as it was. A recompile (Run) restores the declared `at`, and so does
+    /// the next jump (seek, scrub, loop rewind): the shift lives in
+    /// `shift_h` until then, so only the live edit keeps musical position.
+    /// A finished
     /// loop = false song stays finished. A player whose song decodes equal is
     /// left untouched, and an update to a song source no player plays
     /// touches nothing. Returns false, leaving everything as it was, when
@@ -632,9 +650,11 @@ impl LuaEngine {
                 // `next < 0`: no fire since a jump; the next one re-seeks
                 // by time, so there is no position to keep.
                 let anchored = matches!(p.anchor, Anchor::At(_)) && p.next >= 0;
-                // `tick ≡ next (mod length)`, so this is the loop pass `next` is in.
-                let pass = if p.looping && p.length > 0 {
-                    (p.next - p.tick) / p.length
+                // After fire `n` the player holds `next = n + 1`: the pass is
+                // the one fire `n` played in.
+                let nt = &compiled.timing;
+                let pass = if p.looping && p.next > 0 {
+                    p.timing.pass(p.next - 1)
                 } else {
                     0
                 };
@@ -643,14 +663,20 @@ impl LuaEngine {
                     // Finished (an anchored loop = false song not playing):
                     // stays past the end, silent.
                     _ if anchored && !p.playing && !p.looping => (p.next.max(new_len), 0, false),
-                    _ if remapped < new_len => (pass * new_len + remapped, remapped, p.playing),
-                    // Past the new end: a loop wraps to the next pass's top…
-                    _ if p.looping => ((pass + 1) * new_len, 0, p.playing),
+                    // The playing slot is now in the intro: it plays on once.
+                    _ if remapped < new_len && pass >= 1 && remapped < nt.loop_tick => {
+                        (remapped, remapped, p.playing)
+                    }
+                    _ if remapped < new_len => (nt.unwrap(pass, remapped), remapped, p.playing),
+                    // Past the new end: a loop wraps to the next pass's loop start…
+                    _ if p.looping => (nt.unwrap(pass + 1, nt.loop_tick), nt.loop_tick, p.playing),
                     // …a loop = false song finishes, as `run_song_tick` leaves one.
                     _ => (remapped, 0, false),
                 };
                 if let (true, Anchor::At(a)) = (anchored, p.anchor) {
-                    p.anchor = Anchor::At(a + (p.next - n_new) * SONG_PERIOD_H);
+                    let delta = (p.next - n_new) * SONG_PERIOD_H;
+                    p.anchor = Anchor::At(a + delta);
+                    p.shift_h += delta;
                     p.next = n_new;
                 }
                 p.playing = playing;
@@ -768,10 +794,22 @@ impl LuaEngine {
             let id = score_id(ctx)?;
             let songs = self.dma.songs.borrow();
             let p = songs.get(id as usize)?;
-            if !p.playing || p.length <= 0 {
+            let anchored = matches!(p.anchor, Anchor::At(_));
+            if p.length <= 0 || p.anchor == Anchor::Stopped || (!p.playing && !anchored) {
                 return None;
             }
-            let tick = p.tick % p.length;
+            // An anchored player that isn't playing is a finished
+            // loop = false song: it reports `length` and keeps its anchor.
+            let finished = !p.playing;
+            let tick = if finished || p.tick >= p.length {
+                if p.looping {
+                    p.timing.loop_tick
+                } else {
+                    p.length
+                }
+            } else {
+                p.tick
+            };
             // Global step = the target slot's own step (from `position`)
             // plus every earlier slot's step count — the same prefix
             // `song_analyze::analyze` builds into `slot_steps`.
@@ -793,6 +831,8 @@ impl LuaEngine {
                     Anchor::At(a) => Some(a as f64 / 64000.0),
                     _ => None,
                 },
+                loop_tick: p.looping.then_some(p.timing.loop_tick),
+                finished,
             })
         })
     }
@@ -1770,6 +1810,7 @@ impl LuaEngine {
             {
                 Some(p) => {
                     p.anchor = old.anchor;
+                    p.shift_h = old.shift_h;
                     p.playing = true;
                     p.at_false = false;
                     staff |= prev_score == Some(i as i64);
@@ -1820,6 +1861,7 @@ impl LuaEngine {
             };
             if p.anchor == Anchor::Pending {
                 p.anchor = Anchor::At(pos_h as i64);
+                p.shift_h = 0;
                 p.playing = true;
                 p.rewind();
             }
@@ -1868,6 +1910,16 @@ impl LuaEngine {
         self.recompiled = false;
         let start_h = 2 * audio_start_s(f as u64);
         let end_h = 2 * audio_start_s(f as u64 + 1);
+        if jump {
+            // A live reload's anchor shift ends at the next jump: back to
+            // the declared anchor BEFORE `realign` phases the song timers.
+            for p in self.dma.songs.borrow_mut().iter_mut() {
+                if let Anchor::At(a) = p.anchor {
+                    p.anchor = Anchor::At(a - p.shift_h);
+                }
+                p.shift_h = 0;
+            }
+        }
         self.realign(start_h);
         if jump {
             // Before the flush, so a kon pending from the frame body (also
@@ -1998,13 +2050,13 @@ impl LuaEngine {
             let Anchor::At(a) = player.anchor else {
                 return;
             };
-            if player.looping && player.length <= 0 {
+            if player.looping && player.length <= player.timing.loop_tick {
                 return;
             }
             let n = (due_h as i64 - a) / SONG_PERIOD_H - 1;
             let continuous = player.next == n;
             let tick = if player.looping {
-                n.rem_euclid(player.length)
+                player.timing.wrap(n)
             } else {
                 n
             };
@@ -2019,10 +2071,12 @@ impl LuaEngine {
                 return;
             }
             player.playing = true;
-            if continuous && player.looping && tick == 0 && n > 0 {
+            if continuous && player.looping && n >= player.length && tick == player.timing.loop_tick
+            {
                 song_koff(ctx, player.mask);
                 player.ends = [None; 8];
-                player.cursor = 0;
+                let lt = player.timing.loop_tick;
+                player.cursor = player.events.partition_point(|e| e.start < lt);
             } else if !continuous {
                 player.seek(tick);
             }
@@ -3503,6 +3557,7 @@ fn install_song_natives(
             looping: false,
             playing: false,
             anchor: Anchor::Stopped,
+            shift_h: 0,
             at_false: false,
             tick: 0,
             next: 0,
@@ -3567,6 +3622,7 @@ fn install_song_natives(
             p.looping = looping;
             p.playing = anchor != Anchor::Stopped;
             p.anchor = anchor;
+            p.shift_h = 0;
             p.at_false = anchor == Anchor::Stopped;
             p.rewind();
         }
@@ -3614,6 +3670,7 @@ fn install_song_natives(
                     song_koff(ctx, p.mask);
                 }
                 p.anchor = Anchor::Pending;
+                p.shift_h = 0;
                 p.playing = true;
                 p.at_false = false;
             }
@@ -3627,6 +3684,7 @@ fn install_song_natives(
         if let Some(id) = stack.get(0).to_int().and_then(|n| usize::try_from(n).ok()) {
             if let Some(p) = rec.songs.borrow_mut().get_mut(id) {
                 p.anchor = Anchor::Stopped;
+                p.shift_h = 0;
                 p.playing = false;
                 p.at_false = false;
                 song_koff(ctx, p.mask);

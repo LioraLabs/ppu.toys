@@ -207,8 +207,9 @@ impl PpuCore {
     }
 
     /// The playing `score{}`'s [`crate::lua::ScoreView`] (`tick`, `length`,
-    /// `song`, `slot`, `step`, `anchor`), or undefined when none is playing —
-    /// the Sequencer playhead's per-frame readout.
+    /// `song`, `slot`, `step`, `anchor`, `loopTick`, and `finished` for a
+    /// `loop = false` song that played out, which keeps its anchor), or
+    /// undefined when none is playing — the Sequencer playhead's readout.
     #[wasm_bindgen(js_name = scoreState)]
     pub fn score_state(&self) -> Result<JsValue, JsValue> {
         serde_wasm_bindgen::to_value(&self.engine.score_view()).map_err(Into::into)

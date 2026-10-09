@@ -158,7 +158,8 @@ fn a_seek_past_the_end_of_a_loop_false_song_is_silent() {
     let sram = run(&mut e, 150..170);
     assert_eq!(heard(&sram, 0, 150), vec![], "{sram}");
     assert_eq!(sram["playing"], false);
-    assert_eq!(e.score_view(), None);
+    let v = e.score_view().expect("a finished song keeps its anchor");
+    assert!(v.finished && v.anchor == Some(0.0) && v.tick == v.length);
 }
 
 #[test]
@@ -375,7 +376,7 @@ fn a_reload_of_a_finished_loop_false_song_keeps_it_silent() {
     let sram = run(&mut e, 150..300);
     assert_eq!(heard(&sram, seen, 0), vec![], "{sram}");
     assert_eq!(sram["playing"], false);
-    assert_eq!(e.score_view(), None);
+    assert!(e.score_view().unwrap().finished);
 }
 
 /// A reload that cuts the song short of where it is: a loop wraps to the
@@ -392,7 +393,10 @@ fn a_reload_past_the_new_end_wraps_or_finishes() {
     let mut e = engine("h = score{ song = \"steps\", loop = false }");
     let seen = log_len(&run(&mut e, 0..100));
     common::add_song_source(&mut e, "steps", &first_steps(8));
-    assert_eq!(e.score_view(), None, "finished by the reload itself");
+    assert!(
+        e.score_view().unwrap().finished,
+        "finished by the reload itself"
+    );
     let sram = run(&mut e, 100..200);
     assert_eq!(heard(&sram, seen, 0), vec![], "{sram}");
     assert_eq!(sram["playing"], false);
@@ -687,4 +691,143 @@ fn a_paused_recompile_that_keeps_the_score_is_not_a_jump() {
     let marked = e.aram()[0x8800..].iter().filter(|&&b| b == 0x55).count();
     assert!(sounding(&e), "the held note is still sounding");
     assert!(marked > 20000, "echo region kept: {marked}");
+}
+
+/// Three 4-step slots (A, B, C; 125 ticks each, 375 in all), step `i` of the
+/// song its own row so a pitch names the step; the loop restarts at slot
+/// `loop_start`.
+fn arranged_steps(loop_start: u32) -> Song {
+    let mut s = steps();
+    s.rows.truncate(12);
+    s.patterns = (0..3)
+        .map(|k| Pattern {
+            name: ["A", "B", "C"][k as usize].into(),
+            length: 4 * 12,
+            tempo: None,
+            notes: (0..4)
+                .map(|j| Note {
+                    at: j * 12,
+                    row: 4 * k + j,
+                    len: 12,
+                    vel: 100,
+                    voice: None,
+                    nudge: 0,
+                    end_nudge: 0,
+                })
+                .collect(),
+        })
+        .collect();
+    s.arrangement = vec![0, 1, 2];
+    s.loop_start = loop_start;
+    s
+}
+
+fn engine_of(song: &Song, score: &str) -> LuaEngine {
+    let mut e = LuaEngine::new();
+    common::add_song_source(&mut e, "steps", song);
+    e.set_sources(&[("main.lua", &program(score))]).unwrap();
+    e
+}
+
+fn played(sram: &Value) -> Vec<usize> {
+    heard(sram, 0, 0).into_iter().map(|(_, s)| s).collect()
+}
+
+#[test]
+fn the_intro_plays_once_then_the_loop_restarts_at_the_loop_start_slot() {
+    let mut e = engine_of(&arranged_steps(1), "h = score{ song = \"steps\" }");
+    let sram = run(&mut e, 0..125);
+    let want: Vec<usize> = (0..12).chain(4..8).collect();
+    assert_eq!(played(&sram)[..16], want[..], "{sram}");
+}
+
+#[test]
+fn a_seek_into_a_later_pass_lands_in_the_loop_body() {
+    let mut e = engine_of(&arranged_steps(1), "h = score{ song = \"steps\" }");
+    run(&mut e, 0..10);
+    // Frame 200: tick 833 = 375 + 250 + 208, so 333 in the body: step 10.
+    let seen = log_len(&run(&mut e, 200..201));
+    let v = e.score_view().unwrap();
+    assert_eq!(
+        (v.slot, v.step, v.loop_tick),
+        (Some(2), Some(10), Some(125))
+    );
+    assert!((313..344).contains(&v.tick), "{v:?}");
+    let sram = run(&mut e, 201..210);
+    assert_eq!(heard(&sram, seen, 200).first().map(|k| k.1), Some(11));
+}
+
+#[test]
+fn the_view_wraps_to_the_loop_tick_not_zero() {
+    let mut e = engine_of(&arranged_steps(1), "h = score{ song = \"steps\" }");
+    // The first fire of the second pass is tick 125 (slot 1, step 4).
+    run(&mut e, 0..91);
+    let v = e.score_view().unwrap();
+    assert!((125..140).contains(&v.tick), "{v:?}");
+    assert_eq!(v.slot, Some(1));
+}
+
+#[test]
+fn loop_false_ignores_the_loop_start() {
+    let mut e = engine_of(
+        &arranged_steps(1),
+        "h = score{ song = \"steps\", loop = false }",
+    );
+    let sram = run(&mut e, 0..150);
+    assert_eq!(played(&sram), (0..12).collect::<Vec<_>>(), "{sram}");
+    assert_eq!(sram["playing"], false);
+    assert_eq!(e.score_view().unwrap().loop_tick, None);
+}
+
+#[test]
+fn a_finished_loop_false_song_keeps_its_anchor_and_a_jump_back_unfinishes_it() {
+    let mut e = engine("h = score{ song = \"steps\", loop = false, at = 0.25 }");
+    run(&mut e, 0..200);
+    let v = e.score_view().expect("finished, not gone");
+    assert!(
+        v.finished && v.anchor == Some(0.25) && v.tick == v.length,
+        "{v:?}"
+    );
+    assert_eq!((v.slot, v.step), (None, None));
+    run(&mut e, 60..70);
+    let v = e.score_view().unwrap();
+    assert!(!v.finished && v.anchor == Some(0.25), "{v:?}");
+}
+
+/// Plays `steps()` (2 s) from f = 0 as far as `edit_f`, applies `edit`, runs
+/// on a little, then jumps back to f = 0: the frame (and step) the song's
+/// first key-on lands in.
+fn first_on_after_rewind(score: &str, edit_f: u32, edit: &Song) -> (u32, usize) {
+    let mut e = engine(score);
+    run(&mut e, 0..edit_f);
+    common::add_song_source(&mut e, "steps", edit);
+    run(&mut e, edit_f..edit_f + 10);
+    let seen = log_len(&run(&mut e, edit_f + 10..edit_f + 11));
+    let sram = run(&mut e, 0..30);
+    heard(&sram, seen, 0)[0]
+}
+
+/// A live edit keeps musical position by shifting the anchor; the next jump
+/// must go back to the declared one.
+#[test]
+fn rewinding_a_finished_song_after_extending_it_plays_from_the_top() {
+    let mut longer = steps();
+    longer.arrangement = vec![0; 4];
+    // t = 2.5 s, the 2 s song long finished.
+    let got = first_on_after_rewind("h = score{ song = \"steps\", loop = false }", 150, &longer);
+    assert_eq!(got, (1, 0));
+}
+
+#[test]
+fn rewinding_a_looping_song_after_a_double_tempo_edit_has_no_silence() {
+    let got = first_on_after_rewind("h = score{ song = \"steps\" }", 240, &steps_at(240));
+    assert_eq!(got, (1, 0));
+}
+
+#[test]
+fn rewinding_a_looping_song_after_a_half_tempo_edit_keeps_bar_one_on_time() {
+    let unedited = first_on_after_rewind("h = score{ song = \"steps\" }", 100, &steps());
+    let got = first_on_after_rewind("h = score{ song = \"steps\" }", 100, &steps_at(60));
+    assert_eq!(got, unedited);
+    assert_eq!(got, (1, 0));
 }
