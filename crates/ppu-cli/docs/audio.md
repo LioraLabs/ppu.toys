@@ -119,7 +119,7 @@ reusing its voice.
 - `mute`.
 
 Power-on `mvol` is `{ l = 0, r = 0 }` — nothing is audible until you set it,
-except that starting a `song{}` or `score{}` while it is still zero opens it
+except that starting a `score{}` while it is still zero opens it
 to full, so a song is heard without a mixer line.
 
 ```lua
@@ -205,17 +205,19 @@ these globals (a user chunk that defines the same name wins):
 - `bank(name [, opts])` — places a [built-in sample](#built-in-samples) with
   `dma()` and returns its `instrument{}` preset; `opts` override any preset
   field (`vol`, `pan`, `adsr`, `addr`, ...). Setup-only.
-- `song{ tempo, steps = 16, tracks = { { voice, inst, pattern = "C2 . - ^" }
-} }` — runs on one `timer(0, ...)` and auto-plays. Pattern tokens: a note
-  name keys the voice on, `^` keys it off, `.` and `-` do nothing. A pattern
-  shorter than `steps` loops on its own length, so tracks can run
-  polymeters against each other. Returns `{ step, beat, playing, div, rate,
-play(), stop() }`. Like `timer()`, `song{}` is setup-only.
 - `score{ song = "<name>", loop = true, at = 0 }` — plays a
   [sequencer song](#sequencer-songs) source on the timeline, voices chosen
   per note. `at` anchors tick 0: seconds, a marker name, or `false` (set
   up, not playing). Setup-only. Returns `{ tick, length, playing, loop,
   song, play(), stop() }`.
+
+`song{}` is gone (calling it is an error that names `score{}`). Its patterns
+become a [song source](#sequencer-songs), built in the sequencer grid or
+dropped in as a `.mid`, played with `score{ song = "<name>" }`. Instrument
+fields a row can't carry (`adsr`, `echo`) are set on the `BANK` presets
+before `score{}`. Read position from the handle's `tick` (250 a second)
+instead of `step` or `beat`, for example `floor(tune.tick / 31.25) % 16` for
+the sixteenth at 120 BPM.
 
 ## Built-in samples
 
@@ -236,8 +238,8 @@ the name over.
 | `pluck`                                          | very bright attack, quick to mellow       | 1035     |
 | `kick` `snare` `hat` `ohat` `tom` `clap` `crash` | a drum kit, one-shots                     | 630–4500 |
 
-Melodic samples loop and are recorded at C4, so `note()` and `song{}`
-pitch them correctly with the default `base`. Drums are recorded at 16 kHz
+Melodic samples loop and are recorded at C4, so `note()` and `score{}`
+rows pitch them correctly with the default `base`. Drums are recorded at 16 kHz
 like period games: play them at pitch `0x0800`, which `bank()` does for you.
 
 ```lua
@@ -245,11 +247,11 @@ local piano = bank("piano")
 local kick = bank("kick")
 local hat = bank("hat", { vol = 70, pan = 0.4 })
 
-local tune = song{ tempo = 110, tracks = {
-  { voice = 0, inst = piano, pattern = "C4 . E4 . G4 . E4 ." },
-  { voice = 1, inst = kick, pattern = "C4 . . . C4 . . ." },
-  { voice = 2, inst = hat, pattern = ". . C4 . . . C4 ." },
-} }
+function frame(t, f)
+  if f % 30 == 0 then sfx(kick, 0, "C4") end
+  if f % 30 == 15 then sfx(hat, 1, "C4") end
+  if pad.a then sfx(piano, 2, "C4") end
+end
 ```
 
 Raw `dma("kick")` works too and returns the usual `{ id, addr, next_addr }`;
@@ -377,21 +379,27 @@ This toy plays a bass line automatically, fires a hit when you press A, and
 drives brightness from the bass voice's envelope. `kick` is a built-in
 sample, so it runs as-is; upload your own `kick` to replace it.
 
+The bass line is a song source named `bassline`. To build it, open the
+sequencer at 120 BPM, make one row (`kick`) with the notes C2, G2 and C3,
+and fill one bar of sixteenths with `C2 . . G2 . . C3 .` twice. Name the
+song `bassline` and the toy finds it.
+
 ```lua
 -- ppu.toys tutorial :: first-note — a sample, a song, an sfx on A, and a light that follows the envelope
 -- The sound chip (S-DSP) is a second machine bolted onto the console: its
 -- own 64 KB of sound RAM (ARAM), its own clock, its own eight voices. dma()
 -- on a sample source copies BRR-encoded bytes into that RAM and hands back
--- a directory entry (kick.id is the SRCN a voice points at). song{} steps a
--- pattern on a hardware timer, same idea as hdma but for sound. sfx() keys
+-- a directory entry (kick.id is the SRCN a voice points at). score{} plays a
+-- song source (bassline, made in the sequencer) on the timeline: its
+-- position is t itself, so seeking the timeline seeks the song. sfx() keys
 -- a voice on demand; voice[n].envx is that voice's live envelope — the same
 -- number you can wire straight into the picture.
 local kick = dma("kick")                          -- BRR bytes land in sound RAM at 0x0500 + a directory entry; kick.id is the SRCN
-local bass = instrument{ sample = kick.id, adsr = { a = 15, d = 4, s = 4, r = 8 } }
 local hit  = instrument{ sample = kick.id, adsr = { a = 15, d = 0, s = 7, r = 0 }, pan = 0.5, base = "C3" }
-local tune = song{ tempo = 120, tracks = {
-  { voice = 0, inst = bass, pattern = "C2 . . G2 . . C3 ." },
-} }
+-- score{} places its own copy of "kick" through bank() (this upload takes the built-in's name over),
+-- so voice 0's SRCN is that copy, not kick.id; its "kick" row plays with a bass envelope, not the drum preset's
+BANK.kick.adsr = { a = 15, d = 4, s = 4, r = 8 }
+local tune = score{ song = "bassline" }           -- C2 . . G2 . . C3 . on voice 0, 120 BPM, looping
 
 function init()
   dsp.mvol = { l = 127, r = 127 }                 -- power-on MVOL is 0 (silent) — turn the speakers on
@@ -403,7 +411,8 @@ function frame(t, f)
   was_a = pad.a
   if pressed then sfx(hit, 1, "C4") end
   brightness = floor(voice[0].envx / 8)           -- ENVX is 0..127; brightness is 0..15
-  cgram[0] = hsl(200 + tune.step * 12, 0.6, 0.3)  -- the backdrop hue drifts with the song's own step counter
+  local step = floor(tune.tick / 31.25) % 16      -- 250 ticks a second, a sixteenth every 31.25 at 120 BPM: 0..15
+  cgram[0] = hsl(200 + step * 12, 0.6, 0.3)       -- the backdrop hue drifts with the song's own step
 end
 -- Try: swap "C4" for a different sfx pitch, hold A twice fast to hear the retrigger, or drive brightness from voice[1].envx instead
 ```
