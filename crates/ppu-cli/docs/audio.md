@@ -119,8 +119,8 @@ reusing its voice.
 - `mute`.
 
 Power-on `mvol` is `{ l = 0, r = 0 }` — nothing is audible until you set it,
-except that starting a `score{}` while it is still zero opens it
-to full, so a song is heard without a mixer line.
+except that starting a `score{}` while it is still zero opens it to full,
+so a song is heard without a mixer line.
 
 ```lua
 function init()
@@ -250,7 +250,7 @@ local hat = bank("hat", { vol = 70, pan = 0.4 })
 function frame(t, f)
   if f % 30 == 0 then sfx(kick, 0, "C4") end
   if f % 30 == 15 then sfx(hat, 1, "C4") end
-  if pad.a then sfx(piano, 2, "C4") end
+  if f % 60 == 0 then sfx(piano, 2, "E4") end
 end
 ```
 
@@ -377,11 +377,12 @@ song = "<name>" }`.
 
 This toy plays a bass line automatically, fires a hit when you press A, and
 drives brightness from the bass voice's envelope. `kick` is a built-in
-sample, so it runs as-is; upload your own `kick` to replace it.
+sample; upload your own `kick` to replace it.
 
-The bass line is a song source named `bassline`. To build it, open the
-sequencer at 120 BPM, make one row (`kick`) with the notes C2, G2 and C3,
-and fill one bar of sixteenths with `C2 . . G2 . . C3 .` twice. Name the
+The bass line is a song source named `bassline`, so make it first. In the
+sequencer, at 120 BPM, add three rows that all play `kick`, at the notes
+C2, G2 and C3. In a one-bar pattern, put C2 on sixteenths 1 and 9, G2 on 4
+and 12, and C3 on 7 and 15, each note lasting until the next one. Name the
 song `bassline` and the toy finds it.
 
 ```lua

@@ -1,9 +1,9 @@
 -- Sequencer sugar, run as the "kit" chunk before every user chunk (see
 -- LuaEngine::set_sources). Defines note/instrument/sfx/bank/score (and a
 -- `song` stub that only errors) as globals; a user chunk defining the same
--- name wins (chunks share one global env and run in order). Never shadow `voice`/`kon`/`koff`/`timer`
--- with locals here — they must resolve as globals at call time so a later
--- chunk can replace them too.
+-- name wins (chunks share one global env and run in order). Never shadow
+-- `voice`/`kon`/`koff`/`timer` with locals here — they must resolve as
+-- globals at call time so a later chunk can replace them too.
 --
 -- Note-name parsing has no stdlib help (no tonumber/string.byte/find in
 -- this VM), so it's done with string.sub + table lookups, one char at a
