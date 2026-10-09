@@ -308,8 +308,9 @@ end
 --
 -- Returns { tick, length, playing, song, play(), stop() }, all but `song`
 -- read live through __song_get; stop() keys every voice off and silences,
--- play() restarts from the top, anchored at the current t. Setup-only,
--- like song{}.
+-- play() restarts from the top, anchored at the start of the frame being
+-- rendered (from frame(): that frame's t; from a timer hook: the next
+-- frame's). Setup-only, like song{}.
 local FLAT = { a = 15, d = 0, s = 7, r = 0 }
 
 -- Placed sounds by name, shared by every score{}: a toy that plays several
@@ -370,6 +371,10 @@ function __song_insts(rows)
   return insts, pitches
 end
 
+-- Every score{} handle by song id: a recompile that carries a play()-started
+-- song over republishes its handle as __score (LuaEngine::carry_songs).
+__scores = {}
+
 function score(cfg)
   cfg = cfg or {}
   if cfg.song == nil then
@@ -410,6 +415,7 @@ function score(cfg)
     __score = h
   end
   h.stop = function() __song_stop(id) end
+  __scores[id] = h
   if at ~= false then
     __score = h
   end

@@ -59,7 +59,7 @@ const LOG: &str = "heard, last = {}, {}\n\
          end\n\
        end\n\
        if body then body(f) end\n\
-       sram.heard = heard sram.playing = h.playing\n\
+       sram.heard = heard sram.playing = h.playing sram.f = f\n\
      end";
 
 fn engine(score: &str) -> LuaEngine {
@@ -83,8 +83,9 @@ fn run(e: &mut LuaEngine, frames: std::ops::Range<u32>) -> Value {
 /// `(frame that saw it, step)` for every key-on logged after the first
 /// `skip` and seen in a frame after `after`.
 fn heard(sram: &Value, skip: usize, after: u32) -> Vec<(u32, usize)> {
-    let pitches = step_pitches();
-    sram["heard"].as_array().unwrap()[skip..]
+    static PITCHES: std::sync::OnceLock<Vec<i64>> = std::sync::OnceLock::new();
+    let pitches = PITCHES.get_or_init(step_pitches);
+    keys(sram)[skip..]
         .iter()
         .map(|k| (k["f"].as_u64().unwrap() as u32, k["p"].as_i64().unwrap()))
         .filter(|(f, _)| *f > after)
@@ -93,7 +94,12 @@ fn heard(sram: &Value, skip: usize, after: u32) -> Vec<(u32, usize)> {
 }
 
 fn log_len(sram: &Value) -> usize {
-    sram["heard"].as_array().unwrap().len()
+    keys(sram).len()
+}
+
+/// The key-on log (an empty Lua table serializes as `{}`).
+fn keys(sram: &Value) -> &[Value] {
+    sram["heard"].as_array().map_or(&[], |a| a)
 }
 
 /// Each step's pitch, from one continuous pass.
@@ -293,4 +299,177 @@ fn a_jump_keys_off_the_notes_sounding() {
         e.frame(f as f64 / 60.0, f).unwrap();
     }
     assert!(!sounding(&e), "keyed off until the next note due");
+}
+
+/// `steps()` at another tempo: the same notes on a different timing.
+fn steps_at(bpm: u32) -> Song {
+    Song {
+        tempo: bpm * 100,
+        ..steps()
+    }
+}
+
+/// `steps()` cut to its first `n` steps.
+fn first_steps(n: usize) -> Song {
+    let mut s = steps();
+    s.patterns[0].length = n as u32 * 12;
+    s.patterns[0].notes.truncate(n);
+    s
+}
+
+/// A live reload in the second pass of a looping song anchored at 0.5 s
+/// keeps its musical position: a timing edit moves the anchor by whole
+/// ticks so the next note due is the remapped one.
+#[test]
+fn a_timing_reload_in_a_later_pass_keeps_the_position_and_rebases_the_anchor() {
+    let mut e = engine("h = score{ song = \"steps\", at = 0.5 }");
+    // Frame 240 starts at t = 4 s: tick 874 = 500 + 374, inside step 11.
+    let seen = log_len(&run(&mut e, 0..240));
+    common::add_song_source(&mut e, "steps", &steps_at(60));
+    let sram = run(&mut e, 240..280);
+    // Half the tempo: the rest of step 11 is twice as long, then step 12,
+    // then step 13 a 16th (62.5 ticks = 15 frames) later.
+    assert_eq!(heard(&sram, seen, 0)[..2], [(248, 12), (263, 13)], "{sram}");
+    let anchor = e.score_view().unwrap().anchor.unwrap();
+    let moved = (anchor - 0.5) * 250.0;
+    assert!(moved != 0.0 && moved.fract() == 0.0, "whole ticks: {moved}");
+}
+
+#[test]
+fn a_note_only_reload_keeps_the_anchor_exactly() {
+    let mut e = engine("h = score{ song = \"steps\", at = 0.5 }");
+    let seen = log_len(&run(&mut e, 0..240));
+    let mut quieter = steps();
+    for n in &mut quieter.patterns[0].notes {
+        n.vel = 50;
+    }
+    common::add_song_source(&mut e, "steps", &quieter);
+    let sram = run(&mut e, 240..250);
+    assert_eq!(e.score_view().unwrap().anchor, Some(0.5));
+    // Step 12 starts at tick 375 of the pass, due at 4 s + 4 ms.
+    assert_eq!(heard(&sram, seen, 0).first(), Some(&(241, 12)), "{sram}");
+}
+
+/// After a jump and before the song's next fire, there is no position to
+/// keep: the reload leaves the anchor, and time decides where it resumes.
+#[test]
+fn a_reload_right_after_a_jump_resumes_by_time() {
+    let mut e = engine("h = score{ song = \"steps\", at = 2 }");
+    run(&mut e, 0..10);
+    // Jump to frame 30 (still before the anchor: no fire yet).
+    let seen = log_len(&run(&mut e, 30..31));
+    common::add_song_source(&mut e, "steps", &steps_at(60));
+    assert_eq!(e.score_view().unwrap().anchor, Some(2.0));
+    let sram = run(&mut e, 31..140);
+    assert_eq!(heard(&sram, seen, 0)[..2], [(121, 0), (136, 1)], "{sram}");
+}
+
+#[test]
+fn a_reload_of_a_finished_loop_false_song_keeps_it_silent() {
+    let mut e = engine("h = score{ song = \"steps\", loop = false }");
+    // Over at 2 s (frame 120).
+    let seen = log_len(&run(&mut e, 0..150));
+    // Twice as long: the old end is now mid-song, but it stays finished.
+    common::add_song_source(&mut e, "steps", &steps_at(60));
+    let sram = run(&mut e, 150..300);
+    assert_eq!(heard(&sram, seen, 0), vec![], "{sram}");
+    assert_eq!(sram["playing"], false);
+    assert_eq!(e.score_view(), None);
+}
+
+/// A reload that cuts the song short of where it is: a loop wraps to the
+/// top of its next pass, a loop = false song finishes.
+#[test]
+fn a_reload_past_the_new_end_wraps_or_finishes() {
+    let mut e = engine("h = score{ song = \"steps\" }");
+    // Frame 100: tick 416, step 13 — past an 8-step song's end.
+    let seen = log_len(&run(&mut e, 0..100));
+    common::add_song_source(&mut e, "steps", &first_steps(8));
+    let sram = run(&mut e, 100..110);
+    assert_eq!(heard(&sram, seen, 0)[..2], [(101, 0), (108, 1)], "{sram}");
+
+    let mut e = engine("h = score{ song = \"steps\", loop = false }");
+    let seen = log_len(&run(&mut e, 0..100));
+    common::add_song_source(&mut e, "steps", &first_steps(8));
+    assert_eq!(e.score_view(), None, "finished by the reload itself");
+    let sram = run(&mut e, 100..200);
+    assert_eq!(heard(&sram, seen, 0), vec![], "{sram}");
+    assert_eq!(sram["playing"], false);
+}
+
+/// A song a `play()` started (the program declares `at = false`) is not
+/// restarted or dropped by a recompile: it keeps playing at t.
+#[test]
+fn a_recompile_keeps_a_played_song_playing_at_t() {
+    let src = "h = score{ song = \"steps\", at = false }\n\
+               function body(f) if f == 10 then h.play() end end";
+    let mut e = engine(src);
+    run(&mut e, 0..40);
+    let anchor = e.score_view().unwrap().anchor;
+    e.set_sources(&[("main.lua", &program(src))]).unwrap();
+    assert_eq!(e.score_view().map(|v| v.anchor), Some(anchor));
+    // Frame 10 starts at sample 5333 (0.1667 s); frame 40 at 0.6667 s:
+    // tick 125 into the song, where step 4 starts.
+    let sram = run(&mut e, 40..50);
+    assert_eq!(heard(&sram, 0, 0).first(), Some(&(41, 4)), "{sram}");
+}
+
+/// One looping sine note held for 15 of 16 steps (ticks 0..469 of 500).
+fn held_engine(main: &str) -> LuaEngine {
+    let mut held = steps();
+    held.rows = vec![Row {
+        sound: "sine".into(),
+        note: None,
+        vol: 100,
+        pan: 0,
+    }];
+    held.patterns[0].notes = vec![Note {
+        at: 0,
+        row: 0,
+        len: 15 * 12,
+        vel: 100,
+        voice: None,
+        nudge: 0,
+        end_nudge: 0,
+    }];
+    let mut e = LuaEngine::new();
+    common::add_sample(&mut e, "sine");
+    common::add_song_source(&mut e, "held", &held);
+    e.set_sources(&[("main.lua", main)]).unwrap();
+    e
+}
+
+fn sounding(e: &LuaEngine) -> bool {
+    e.dsp_view().voices.iter().any(|v| v.envx > 0)
+}
+
+#[test]
+fn a_recompile_that_drops_the_score_keys_its_voices_off() {
+    let mut e = held_engine("h = score{ song = \"held\" }");
+    for f in 0..30 {
+        e.frame(f as f64 / 60.0, f).unwrap();
+    }
+    assert!(sounding(&e), "the note sounds");
+    e.set_sources(&[("main.lua", "function frame() end")])
+        .unwrap();
+    for f in 30..35 {
+        e.frame(f as f64 / 60.0, f).unwrap();
+    }
+    assert!(!sounding(&e), "keyed off");
+    assert_eq!(e.score_view(), None);
+}
+
+#[test]
+fn a_recompile_does_not_cut_a_continuing_song() {
+    let main = "h = score{ song = \"held\" }";
+    let mut e = held_engine(main);
+    for f in 0..30 {
+        e.frame(f as f64 / 60.0, f).unwrap();
+    }
+    e.set_sources(&[("main.lua", &format!("{main} -- edited"))])
+        .unwrap();
+    for f in 30..35 {
+        e.frame(f as f64 / 60.0, f).unwrap();
+    }
+    assert!(sounding(&e), "still sounding mid-note");
 }
