@@ -118,7 +118,7 @@ const MAIN_SRC: &str = r#"-- ppu.toys tutorial :: first-note — a sample, a son
 -- number you can wire straight into the picture.
 local kick = dma("kick")                          -- BRR bytes land in sound RAM at 0x0500 + a directory entry; kick.id is the SRCN
 local hit  = instrument{ sample = kick.id, adsr = { a = 15, d = 0, s = 7, r = 0 }, pan = 0.5, base = "C3" }
--- score{} places its own copy of "kick" through bank() (this upload takes the built-in's name over),
+-- score{} places its own copy of "kick" through bank(), separate from the dma("kick") above,
 -- so voice 0's SRCN is that copy, not kick.id; its "kick" row plays with a bass envelope, not the drum preset's
 BANK.kick.adsr = { a = 15, d = 4, s = 4, r = 8 }
 local tune = score{ song = "bassline" }           -- C2 . . G2 . . C3 . on voice 0, 120 BPM, looping
