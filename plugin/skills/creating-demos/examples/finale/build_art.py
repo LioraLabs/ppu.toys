@@ -4,8 +4,11 @@
   assets/sparks.png  obj sheet, 8x8 cells: glow frames, dim -> bright
   targets.lua  128 sprite landing spots spread over the logo's pixels
   song.json    the score: one 128-sixteenth pass at 96 BPM as pattern strings,
-               finale.bin is the committed song source built from it (open
-               it in the Studio's sequencer to edit the music)
+               a record only. The music plays from finale.bin, the committed
+               song source, converted from song.json outside this skill.
+               Editing the music here does NOT update finale.bin: edit the
+               song in the Studio sequencer (or rebuild it there from a .mid)
+               and save the project's song payload over finale.bin.
 """
 import json, pathlib, re
 import numpy as np
@@ -129,5 +132,5 @@ TRACKS = [(0, "strings", 34, 0, pad[0]), (1, "strings", 30, -40, pad[1]), (2, "s
 song = {"name": "finale", "tempo": 96, "steps": steps,
         "tracks": [{"voice": v, "sound": snd, "vol": vol, "pan": pan, "pattern": " ".join(tr)}
                    for v, snd, vol, pan, tr in TRACKS]}
-(here / "song.json").write_text(json.dumps(song, indent=2) + "\n")   # finale.bin is built from this
+(here / "song.json").write_text(json.dumps(song, indent=2) + "\n")   # record only; finale.bin is not regenerated
 print("targets rows max", rows.max())

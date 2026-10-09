@@ -103,8 +103,10 @@ Compose a through-composed piece, for example 8 bars × 16 steps at 96 BPM =
 author one: build it in the Studio sequencer, or write a `.mid` from the art
 script (one track per voice: pad voicing, arpeggio, bass, drums) and ask the
 user to drop it on the Studio's Sources panel; the saved project then
-carries it as a `"kind": "song"` payload (the finale keeps `song.json`, its
-pattern strings, beside the committed `finale.bin`). Set `BANK` adsr/echo
+carries it as a `"kind": "song"` payload (the finale keeps `song.json`, a record of its
+pattern strings, beside the committed `finale.bin`; the music plays from
+`finale.bin`, so edit the song in the Studio sequencer and save the payload
+over it, not the script). Set `BANK` adsr/echo
 presets, then `score{ song = "finale", loop = false }`. In `frame()`, derive
 the landing time from the step (the song is anchored at `t = 0`, 250 ticks
 per second), spawn or brighten sprites per note, and flash on the downbeat

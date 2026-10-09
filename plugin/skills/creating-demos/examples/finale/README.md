@@ -15,7 +15,8 @@ PPU: 128 sprites at 8×8 (OBSEL size 0), never more than 28 on a line
 colour math; `color.addend = "sub"` with BG1 on the sub screen and a per-line
 COLDATA equal to the backdrop, so sparks ADD onto whatever is behind them;
 per-line dithered backdrop gradient; mosaic. Audio: `score{}` playing
-`finale.bin` (a song source built from `song.json`) with built-in
+`finale.bin` (the committed song source; `song.json` is only a record of the
+score, and editing it does not change the music) with built-in
 `strings`/`pluck`/`bell`/`bass`/drums, echo delay 6.
 
 Logo: the site's chip mark (`assets/chipmark.svg`) and a 7×10 pixel wordmark at 3×. Leaves the

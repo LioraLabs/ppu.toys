@@ -1,8 +1,9 @@
 # Examples
 
 Five finished toys, one hardware idea each, made for the ppu.toys intro video.
-Each folder is a complete project: `build_art.py` generates every PNG (and any
-generated Lua) deterministically, so the art can be changed as code. Each
+Each folder is a complete project: `build_art.py` generates every PNG, `targets.lua`
+and the finale's `song.json` record deterministically, so the art can be
+changed as code (the finale's `finale.bin` is not regenerated). Each
 README says what is on screen and which registers do the work;
 [../recipes.md](../recipes.md) explains the techniques.
 

@@ -203,8 +203,7 @@ fn song_keys_the_bass_voice() {
     let mut e = build_engine();
     // score{} anchors the song at t = 0 and its first note is due at tick 0,
     // i.e. (0 + 1) / 250 s — inside frame 0 — so the bass keys on in frame 0
-    // itself (the old timer-0 stepper only reached its first step at sample
-    // 1000, past frame 0's length).
+    // itself.
     e.frame(0.0, 0).unwrap();
     assert!(
         !is_silent(e.audio()),
