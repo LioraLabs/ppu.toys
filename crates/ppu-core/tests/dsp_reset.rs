@@ -203,11 +203,14 @@ fn reset_restarts_timer_phase() {
     // Walk `e` for `frames` frames (from a fresh frame counter of 0),
     // collecting the per-frame tick-offset lists (as read by the FOLLOWING
     // frame's probe, per dsp_timers.rs test 3's doc comment).
-    fn collect(e: &mut LuaEngine, frames: u32) -> Vec<Vec<u16>> {
+    // Re-pinned: `start` lets the un-reset continuation carry on at f=WARMUP
+    // (timers are phased by absolute position now, so replaying f=0 would be
+    // a seek back to the start).
+    fn collect(e: &mut LuaEngine, start: u32, frames: u32) -> Vec<Vec<u16>> {
         let mut out = Vec::new();
-        for f in 0..=frames {
+        for f in start..=start + frames {
             e.frame(0.0, f).unwrap();
-            if f > 0 {
+            if f > start {
                 let count = e.memory().vram[0] as usize;
                 out.push((1..=count).map(|i| e.memory().vram[i]).collect());
             }
@@ -233,14 +236,14 @@ fn reset_restarts_timer_phase() {
     for f in 0..WARMUP {
         a_continued.frame(0.0, f).unwrap();
     }
-    let continued = collect(&mut a_continued, N);
+    let continued = collect(&mut a_continued, WARMUP, N);
 
     a.reset().unwrap();
-    let after_reset = collect(&mut a, N);
+    let after_reset = collect(&mut a, 0, N);
 
     let mut b = LuaEngine::new();
     b.set_source(program()).unwrap();
-    let fresh = collect(&mut b, N);
+    let fresh = collect(&mut b, 0, N);
 
     assert_eq!(
         after_reset, fresh,

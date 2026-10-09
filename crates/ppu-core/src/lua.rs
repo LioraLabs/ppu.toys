@@ -230,13 +230,14 @@ pub struct LuaEngine {
     /// The most recently rendered frame's interleaved stereo audio (L,R per
     /// sample). Empty before the first `frame()`.
     audio: Vec<i16>,
-    /// Fractional-sample accumulator for the 32000/60.0988 span length (see
-    /// `render_frame_audio`): exact over time, no drift.
-    audio_acc: u32,
+    /// The last `f` whose audio span was rendered (`None` after `new()`/
+    /// `reset()`). A repeat of it renders no audio; anything but `last + 1`
+    /// is a jump that re-phases the timers (see `realign`).
+    last_f: Option<u32>,
     /// `timer(n, div, fn)` hooks registered by the current program's init
     /// window (top-level chunks + `init()`). Dropped and re-registered
-    /// wholesale on every `set_sources` (recompile resets timer phase — see
-    /// `DmaRecorder::timers`).
+    /// wholesale on every `set_sources`, then re-phased onto the timeline at
+    /// the current position (see `realign`).
     timers: Vec<TimerHook>,
     /// Battery-backed save data: the `sram` global mirrored as normalized JSON.
     /// The host sets it before the program loads (`set_sram`); `frame()`
@@ -265,12 +266,19 @@ enum Hook {
 /// One `timer(n, div, fn)` registration, resolved to half-sample (`h`) units
 /// at 32 kHz output (see `render_frame_audio`'s segment-walker doc comment):
 /// `period_h` is `div * 8` for timers 0/1 (8 kHz) or `div * 1` for timer 2
-/// (64 kHz); `due_h` is the next expiry and carries across frames.
+/// (64 kHz); `due_h` is the next expiry as an ABSOLUTE timeline position in
+/// half-samples from t = 0 (a timer fires at every `k * period_h`, k >= 1).
 struct TimerHook {
     period_h: u64,
     due_h: u64,
     hook: Hook,
     file: Option<String>,
+}
+
+/// First sample of frame `f`'s audio span: `round(32000 * f / 60)` on the
+/// 60 Hz frame grid, in exact integer math.
+fn audio_start_s(f: u64) -> u64 {
+    (1600 * f + 1) / 3
 }
 
 /// Size cap of the serialized `sram` blob — a real cartridge's battery RAM.
@@ -436,7 +444,7 @@ impl LuaEngine {
             dsp,
             aram: Box::new([0u8; 0x10000]),
             audio: Vec::new(),
-            audio_acc: 0,
+            last_f: None,
             timers: Vec::new(),
             sram_json: "{}".to_string(),
             sram_dirty: false,
@@ -1049,9 +1057,8 @@ impl LuaEngine {
                 self.aram[dir + 3] = (sp.loop_addr >> 8) as u8;
             }
         }
-        // Recompile == drop + re-register: a fresh registration always
-        // starts one period from firing (`due_h = period_h`), so phase never
-        // survives a recompile.
+        // Recompile == drop + re-register, then re-phase onto the timeline
+        // at the current position (not at compile time).
         self.timers = rec
             .timers
             .borrow_mut()
@@ -1066,6 +1073,7 @@ impl LuaEngine {
                 }
             })
             .collect();
+        self.realign(self.last_f.map_or(0, |f| 2 * audio_start_s(f as u64 + 1)));
         self.program_sources = files
             .iter()
             .map(|(name, source)| ((*name).to_string(), (*source).to_string()))
@@ -1174,12 +1182,13 @@ impl LuaEngine {
     /// ARAM (echo RAM included, since it's just the top of ARAM), then the
     /// same recompile path `frame()` uses for a dirty source list — so
     /// `dma()` placements are re-written into the freshly-zeroed ARAM and
-    /// `timer()` hooks re-register at phase zero, exactly like a fresh
-    /// engine loaded with the same program. Clearing `dma.samples` first
+    /// `timer()` hooks re-register at t = 0 (`last_f` is cleared before the
+    /// recompile), exactly like a fresh engine loaded with the same program.
+    /// Clearing `dma.samples` first
     /// keeps `dsp_view()` truthful if that recompile itself fails (same
     /// contract as `set_sources`'s own failure path). Contrast `set_sources`
-    /// (recompile): that keeps the DSP/ARAM/timer phase running — it never
-    /// resets anything.
+    /// (recompile): that keeps the DSP/ARAM running and re-phases timers to
+    /// the current timeline position — it never resets anything.
     pub fn reset(&mut self) -> Result<(), LuaError> {
         self.unmixed_dsp = None;
         self.mix_kon = 0;
@@ -1187,7 +1196,7 @@ impl LuaEngine {
         self.dsp = power_on_dsp();
         self.aram.fill(0);
         self.audio.clear();
-        self.audio_acc = 0;
+        self.last_f = None;
         self.dma.samples.borrow_mut().clear();
         self.recompile()
     }
@@ -1313,8 +1322,21 @@ impl LuaEngine {
         // `voice[]`/`dsp` writes are flushed to the DSP only at the NEXT
         // frame's offset-0 flush, one frame later than a `frame()`-body or
         // timer-hook write — see the `kon`/`koff` callback comment below.
-        self.render_frame_audio()
-            .inspect_err(|_| self.restore_controls())?;
+        if self.last_f == Some(f) {
+            // Repeat of the last rendered frame (paused refresh): its span
+            // is already rendered, so no audio, no hooks, no DSP writes —
+            // and key events issued by this repeat's body belong to the
+            // frame already rendered, so they are discarded.
+            self.audio.clear();
+            let mut l = self.lua.borrow_mut();
+            l.enter(|ctx| {
+                ctx.set_global("__dsp_kon", 0).unwrap();
+                ctx.set_global("__dsp_koff", 0).unwrap();
+            });
+        } else {
+            self.render_frame_audio(f)
+                .inspect_err(|_| self.restore_controls())?;
+        }
 
         // Controls Phase A (PPU-147): run `apply_pokes()` frame-wide, once,
         // right after the program's own frame()/audio and BEFORE hooks are
@@ -1617,35 +1639,49 @@ impl LuaEngine {
         });
     }
 
-    /// Render this frame's audio span sample-accurately against the
-    /// registered `timer(n, div, fn)` hooks: flush `voice[]`/`dsp`/`aram[]`/
-    /// KON/KOFF at offset 0, then walk expiry to expiry — render the DSP up
-    /// to the next due hook (across all three timers, earliest `due_h`
-    /// first, ties in registration order), call it as `fn(off)` where `off`
-    /// is the sample offset within this span, flush again so its writes take
-    /// effect from that offset on, and repeat until no hook is due within
-    /// this span, then render the tail. Timer phase (`due_h`, tracked in
-    /// half-samples at 32 kHz — see `TimerHook`) carries across frames
-    /// unconditionally, including on the error path. Runs once per
-    /// `frame()`, right after `defaults`/`read_state` and before the hdma
-    /// hooks are collected from `__ppu_hooks` — timers always run before
-    /// hdma within the same frame. Republishes `voice[n].envx/.outx/.ended`
-    /// for the next `frame()`/hook to read only once the whole span rendered
-    /// cleanly; a timer hook error aborts the walk early and leaves this
-    /// frame's rendered prefix plus a stale (previous-frame) tail in
-    /// `self.audio` — see [`Self::audio`].
-    fn render_frame_audio(&mut self) -> Result<(), LuaError> {
+    /// Re-phase every timer onto the timeline at position `pos_h`
+    /// (half-samples from t = 0): each `due_h` becomes the first
+    /// `k * period_h >= pos_h` with k >= 1. This is the single
+    /// discontinuity entry point — called for a jump (seek, first frame
+    /// after new/reset, frame after an errored body) and after a recompile.
+    fn realign(&mut self, pos_h: u64) {
+        for h in self.timers.iter_mut() {
+            h.due_h = pos_h.div_ceil(h.period_h).max(1) * h.period_h;
+        }
+    }
+
+    /// Render frame `f`'s audio span sample-accurately against the
+    /// registered `timer(n, div, fn)` hooks. The span is exactly
+    /// `[S(f), S(f+1))` samples of the 32 kHz timeline, where
+    /// `S(f) = round(32000 * f / 60)` (see `audio_start_s`): 533/533/534
+    /// samples, gap-free, no drift. If `f` isn't `last_f + 1` the timers are
+    /// re-phased first (`realign`). Flushes `voice[]`/`dsp`/`aram[]`/KON/KOFF
+    /// at offset 0, then walks expiry to expiry: render the DSP up to the
+    /// next due hook (across all timers, earliest `due_h` first, ties in
+    /// registration order), call it as `fn(off, t)` where `off` is the
+    /// sample offset within this span and `t` the fire's absolute timeline
+    /// time in seconds, flush again so its writes take effect from that
+    /// offset on, and repeat until no hook is due within this span, then
+    /// render the tail. Runs once per rendered frame, right after
+    /// `defaults`/`read_state` and before the hdma hooks are collected —
+    /// timers always run before hdma within the same frame. Republishes
+    /// `voice[n].envx/.outx/.ended` for the next `frame()`/hook to read only
+    /// once the whole span rendered cleanly; a timer hook error aborts the
+    /// walk early and leaves this frame's rendered prefix plus a stale tail
+    /// in `self.audio` — see [`Self::audio`].
+    fn render_frame_audio(&mut self, f: u32) -> Result<(), LuaError> {
+        let continuous = self.last_f.map(|l| l as u64 + 1) == Some(f as u64);
+        self.last_f = Some(f);
+        let start_h = 2 * audio_start_s(f as u64);
+        let end_h = 2 * audio_start_s(f as u64 + 1);
+        if !continuous {
+            self.realign(start_h);
+        }
         self.flush_dsp_writes();
 
-        // Exact 32000/60.0988 accumulator: 320_000_000 / 600_988 ==
-        // 32000 / 60.0988, so `n` alternates 532/533 and drifts by less
-        // than one sample over any run length.
-        self.audio_acc += 320_000_000;
-        let n = (self.audio_acc / 600_988) as usize;
-        self.audio_acc %= 600_988;
+        let n = ((end_h - start_h) / 2) as usize;
         self.audio.resize(n * 2, 0);
 
-        let span_h = 2 * n as u64;
         let mut cursor = 0usize;
         let mut err: Option<LuaError> = None;
 
@@ -1654,12 +1690,13 @@ impl LuaEngine {
                 .timers
                 .iter()
                 .enumerate()
-                .filter(|(_, h)| h.due_h < span_h)
+                .filter(|(_, h)| h.due_h < end_h)
                 .min_by_key(|(i, h)| (h.due_h, *i))
                 .map(|(i, _)| i);
             let Some(i) = pick else { break };
 
-            let off = (self.timers[i].due_h / 2) as usize;
+            let due_h = self.timers[i].due_h;
+            let off = ((due_h - start_h) / 2) as usize;
             if off > cursor {
                 self.dsp
                     .render(&mut self.aram, &mut self.audio[2 * cursor..2 * off]);
@@ -1671,7 +1708,11 @@ impl LuaEngine {
                         let mut l = self.lua.borrow_mut();
                         let ex = l.enter(|ctx| {
                             let f = ctx.fetch(&func);
-                            ctx.stash(Executor::start(ctx, f, (off as i64,)))
+                            ctx.stash(Executor::start(
+                                ctx,
+                                f,
+                                (off as i64, due_h as f64 / 64000.0),
+                            ))
                         });
                         l.execute::<()>(&ex)
                     };
@@ -1701,20 +1742,14 @@ impl LuaEngine {
         // An error stops the walker from calling any MORE hooks (matching
         // the hdma sink's short-circuit), but time keeps passing: fast-
         // forward every timer's phase past this span without invoking them,
-        // so the unconditional carry below never underflows and next
-        // frame's due_h is exactly where it would be had the hooks run.
+        // so next frame's due_h is exactly where it would be had the hooks
+        // run.
         if err.is_some() {
             for h in self.timers.iter_mut() {
-                while h.due_h < span_h {
+                while h.due_h < end_h {
                     h.due_h += h.period_h;
                 }
             }
-        }
-
-        // Phase carries across frames — unconditionally, even when a hook
-        // above errored.
-        for h in self.timers.iter_mut() {
-            h.due_h -= span_h;
         }
 
         if let Some(e) = err {

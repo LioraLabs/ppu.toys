@@ -5,9 +5,9 @@ use std::path::Path;
 
 const GOLDEN: &str = "tests/fixtures/dsp_voice.bin";
 const ECHO_GOLDEN: &str = "tests/fixtures/dsp_echo.bin";
-// One 60 Hz video frame at 32 kHz: 32000/60 truncates to 533, but the engine
-// actually alternates 532/533 samples per frame to stay on average; this
-// fixture just renders a fixed 533 samples per "frame" for a stable byte count.
+// One 60 Hz video frame at 32 kHz: 32000/60 truncates to 533 (the engine's
+// spans are 533/533/534); this fixture just renders a fixed 533 samples per
+// "frame" for a stable byte count.
 const FRAME_LEN: usize = 533;
 
 /// Writes `blocks` BRR blocks starting at `base` (9 bytes each): filter 0,

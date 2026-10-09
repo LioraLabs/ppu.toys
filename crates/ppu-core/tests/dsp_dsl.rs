@@ -167,8 +167,9 @@ fn fresh_engine_first_frame_is_silent_with_expected_span_length() {
     );
     let len = e.audio().len();
     assert!(
-        len == 532 * 2 || len == 533 * 2,
-        "frame span should be 532 or 533 stereo samples, got {}",
+        // Re-pinned: spans follow the 60 Hz timeline grid (533/534), not 60.0988 Hz (532/533).
+        len == 533 * 2 || len == 534 * 2,
+        "frame span should be 533 or 534 stereo samples, got {}",
         len / 2
     );
 }
@@ -182,16 +183,16 @@ fn sample_count_exact_over_600_frames() {
     for f in 0..600 {
         e.frame(0.0, f).unwrap();
         let n = e.audio().len() / 2;
+        // Re-pinned: spans follow the 60 Hz timeline grid (533/534), not 60.0988 Hz (532/533).
         if f == 0 {
-            assert_eq!(n, 532, "first frame span is deterministic");
+            assert_eq!(n, 533, "first frame span is deterministic");
         } else {
-            assert!(n == 532 || n == 533, "frame {f} span was {n}");
+            assert!(n == 533 || n == 534, "frame {f} span was {n}");
         }
         total += n;
     }
-    // 600 * 32000/60.0988 == 319473.9...; the accumulator floors each frame,
-    // and the spec's "round +/- 1" admits 319473.
-    assert_eq!(total, 319_473);
+    // Re-pinned: 600 frames at 60 Hz is exactly 10 s == 320_000 samples.
+    assert_eq!(total, 320_000);
 }
 
 #[test]

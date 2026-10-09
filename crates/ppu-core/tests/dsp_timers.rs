@@ -129,11 +129,12 @@ fn timer0_fires_every_384_samples_across_frames() {
             w[1]
         );
     }
-    // 600 frames = 319_473 samples = 638_946 h; floor(638_946 / 768) == 831.
+    // Re-pinned (60 Hz timeline, was 60.0988 Hz): 600 frames = 320_000 samples
+    // = 640_000 h; floor(640_000 / 768) == 833.
     assert_eq!(
         positions.len(),
-        831,
-        "expected 831 ticks over the first 600 frames (638_946 h / 768 h period), got {}",
+        833,
+        "expected 833 ticks over the first 600 frames (640_000 h / 768 h period), got {}",
         positions.len()
     );
 }
@@ -200,9 +201,9 @@ fn timer_hook_kon_matches_frame_zero_kon_shifted_by_its_offset() {
 #[test]
 fn timers_share_globals_and_run_before_hdma_in_the_same_frame() {
     // timer(2, 64, ..): period_h = 64*1 = 64, due_h starts at 64.
-    // Frame 0 is deterministic: n=532 samples -> span_h=1064.
+    // Re-pinned (60 Hz timeline, was 532): frame 0 is deterministic: n=533 samples -> span_h=1066.
     let period_h = 64u64;
-    let span_h0 = 1064u64;
+    let span_h0 = 1066u64;
     let expected_ticks_frame0 = expected_offsets(period_h, span_h0).len() as u64;
 
     let mut e = LuaEngine::new();
@@ -219,7 +220,7 @@ fn timers_share_globals_and_run_before_hdma_in_the_same_frame() {
         lt0.rows[0].wh0, 0,
         "frame 0's frame() runs before frame 0's own timer walk, so beat is still nil"
     );
-    assert_eq!(e.audio().len() / 2, 532, "frame 0's span is deterministic");
+    assert_eq!(e.audio().len() / 2, 533, "frame 0's span is deterministic");
 
     let lt1 = e.frame(0.0, 1).unwrap();
     assert_eq!(
@@ -410,16 +411,13 @@ fn timer_validates_arguments_at_registration() {
     );
 }
 
-/// 6a. Phase resets on recompile: program A's `timer(0, 96, ..)` runs for 3
-/// frames (1597 samples = 3194 h — see `timer0_fires_every_384_samples_across_frames`),
-/// leaving its `due_h` partway through a 768h period (a carried phase would
-/// make the next fire land well short of a fresh period). Recompiling to
-/// program B, which registers the SAME `timer(0, 96, ..)`, must start that
-/// registration over: `due_h = period_h` (768), so it fires once at exactly
-/// `period_h / 2` = 384 in the first post-recompile span, not at the
-/// leftover carried offset.
+/// 6a. Recompile re-phases timers to the CURRENT timeline position, not to
+/// compile time (re-pinned: this used to assert a fire one period after the
+/// compile). After 3 frames, recompiling the SAME `timer(0, 96, ..)` program
+/// must fire on the absolute grid, exactly as an engine that never
+/// recompiled does for the same frames.
 #[test]
-fn recompile_resets_timer_phase() {
+fn recompile_rephases_timers_to_the_current_position() {
     let program = || {
         "ticks = {}\n\
          timer(0, 96, function(off) ticks[#ticks + 1] = off end)\n\
@@ -430,29 +428,37 @@ fn recompile_resets_timer_phase() {
          end\n"
     };
 
+    // The `frame()` body reads the PREVIOUS frame's ticks, so span k's fires
+    // show up on frame k+1's probe read.
+    let probe = |e: &LuaEngine| -> Vec<u16> {
+        let count = e.memory().vram[0] as usize;
+        (1..=count).map(|i| e.memory().vram[i]).collect()
+    };
+
     let mut e = LuaEngine::new();
     e.set_source(program()).unwrap();
+    let mut cont = LuaEngine::new();
+    cont.set_source(program()).unwrap();
     for f in 0..3u32 {
         e.frame(0.0, f).unwrap();
+        cont.frame(0.0, f).unwrap();
     }
 
-    // Recompile with the identical registration + probe. The `frame()` body
-    // reads the PREVIOUS frame's ticks (see test 3's doc comment), so the
-    // first post-recompile span's fire only shows up on the SECOND
-    // post-recompile frame's probe read.
     e.set_source(program()).unwrap();
-    e.frame(0.0, 0).unwrap();
-    e.frame(0.0, 1).unwrap();
-
-    let count = e.memory().vram[0] as usize;
-    let offsets: Vec<u16> = (1..=count).map(|i| e.memory().vram[i]).collect();
-    assert_eq!(
-        offsets,
-        vec![384],
-        "a fresh registration's due_h starts at period_h (768), so the only fire in the \
-         first post-recompile span lands at exactly period_h/2 = 384 — a carried due_h from \
-         the pre-recompile program would land somewhere else entirely, got {offsets:?}"
-    );
+    for f in 3..8u32 {
+        e.frame(f as f64 / 60.0, f).unwrap();
+        cont.frame(f as f64 / 60.0, f).unwrap();
+        // The recompile drops the VM, so frame 3's probe (span 2's fires,
+        // logged in the old VM) is legitimately empty; compare from 4 on.
+        if f == 3 {
+            continue;
+        }
+        assert_eq!(
+            probe(&e),
+            probe(&cont),
+            "frame {f}: a recompile must keep fires on the absolute grid, not restart them"
+        );
+    }
 }
 
 /// 6b. Recompile drops the OLD program's timer hooks outright, not just their
@@ -480,23 +486,24 @@ fn recompile_drops_old_timer_hooks() {
         "program A's timer hook should have keyed voice 0 on during its first frame"
     );
 
+    // Re-pinned: B continues at f=1 (a repeated f=0 would render no audio).
     e.set_source(&format!(
         "{init}\
          function frame(t, f)\n\
          {setup}\
-           if f == 0 then koff(0) end\n\
+           if f == 1 then koff(0) end\n\
          end\n",
         init = voice0_init(),
         setup = VOICE0_SETUP,
     ))
     .unwrap();
 
-    e.frame(0.0, 0).unwrap();
+    e.frame(1.0 / 60.0, 1).unwrap();
     assert!(
         !is_silent(e.audio()),
         "koff(0)'s release ramp should still be sounding on B's first frame"
     );
-    for f in 1..4u32 {
+    for f in 2..5u32 {
         e.frame(0.0, f).unwrap();
     }
     assert!(
@@ -504,4 +511,189 @@ fn recompile_drops_old_timer_hooks() {
         "the release ramp should have finished silent by B's 4th frame — if A's kon(0) \
          timer hook survived the recompile it would still be keying the voice on every tick"
     );
+}
+
+// ---- timeline model: spans follow f, repeats are inert, jumps re-phase ----
+
+/// Program whose timer hook logs `(off, t)` and whose frame body drains the
+/// log into a Lua-side string the test reads back through `vram`. Simpler:
+/// the hook appends to `log`; `frame` publishes the count and entries of the
+/// PREVIOUS span's fires (offsets in vram[1..], t in microseconds in
+/// vram[100..]) and clears the log.
+const LOG_PROGRAM: &str = "\
+log = {}\n\
+timer(0, 96, function(off, t) log[#log + 1] = {off, t} end)\n\
+function frame(t, f)\n\
+  vram[0] = #log\n\
+  for i = 1, #log do\n\
+    vram[i] = log[i][1]\n\
+    vram[100 + i] = math.floor(log[i][2] * 1000000 + 0.5) % 65536\n\
+    vram[200 + i] = math.floor(log[i][2] * 1000000 + 0.5) // 65536\n\
+  end\n\
+  log = {}\n\
+end\n";
+
+/// Fires `(off, t_us)` of the span rendered by the PREVIOUS `frame()` call.
+fn fires(e: &LuaEngine) -> Vec<(u16, u32)> {
+    let v = &e.memory().vram;
+    (1..=v[0] as usize)
+        .map(|i| (v[i], v[100 + i] as u32 + 65536 * v[200 + i] as u32))
+        .collect()
+}
+
+/// Run `e` through frames `range`, returning each frame's audio and the
+/// fires its probe saw (the previous span's).
+fn run(e: &mut LuaEngine, range: std::ops::Range<u32>) -> Vec<(Vec<i16>, Vec<(u16, u32)>)> {
+    range
+        .map(|f| {
+            e.frame(f as f64 / 60.0, f).unwrap();
+            (e.audio().to_vec(), fires(e))
+        })
+        .collect()
+}
+
+#[test]
+fn total_samples_follow_the_timeline_without_drift() {
+    for n in [1u32, 2, 3, 60, 3600] {
+        let mut e = LuaEngine::new();
+        e.set_source("function frame(t, f) end").unwrap();
+        let mut total = 0usize;
+        for f in 0..n {
+            e.frame(f as f64 / 60.0, f).unwrap();
+            total += e.audio().len() / 2;
+        }
+        let want = (32000.0 * n as f64 / 60.0).round() as usize;
+        assert_eq!(total, want, "{n} frames");
+    }
+}
+
+#[test]
+fn repeated_frame_renders_nothing_and_changes_nothing() {
+    // kon is issued conditionally on f so a repeat's kon must not leak.
+    let program = format!(
+        "{init}{timer}\
+         function frame(t, f)\n\
+         {setup}\
+           if f == 3 then kon(0) end\n\
+           vram[0] = #log\n\
+           for i = 1, #log do vram[i] = log[i] end\n\
+         end\n",
+        init = voice0_init(),
+        timer = "log = {}\ntimer(0, 8, function(off, t) log[#log + 1] = off end)\n",
+        setup = VOICE0_SETUP,
+    );
+    let mut a = LuaEngine::new();
+    a.set_source(&program).unwrap();
+    let mut b = LuaEngine::new();
+    b.set_source(&program).unwrap();
+
+    let mut out_a = Vec::new();
+    let mut out_b = Vec::new();
+    let step = |e: &mut LuaEngine, f: u32, out: &mut Vec<(Vec<i16>, Vec<u16>)>| {
+        e.frame(f as f64 / 60.0, f).unwrap();
+        let v = &e.memory().vram;
+        out.push((e.audio().to_vec(), v[1..1 + v[0] as usize].to_vec()));
+    };
+    for f in 0..3 {
+        step(&mut a, f, &mut out_a);
+        step(&mut b, f, &mut out_b);
+    }
+    // Repeats of f=2, and of f=3 (whose body issues kon).
+    for rep in 0..3 {
+        step(&mut a, 2, &mut out_a);
+        assert!(a.audio().is_empty(), "a repeat renders no audio");
+        // The first repeat's body sees span 2's own fires; later ones must add none.
+        assert!(rep == 0 || out_a.last().unwrap().1.len() == out_a[out_a.len() - 2].1.len());
+    }
+    step(&mut a, 3, &mut out_a);
+    step(&mut b, 3, &mut out_b);
+    for _ in 0..3 {
+        step(&mut a, 3, &mut out_a);
+        assert!(a.audio().is_empty());
+    }
+    // Drop the repeats from A's log, then compare everything after.
+    let a_clean: Vec<_> = out_a
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !matches!(i, 3..=5 | 7..=9))
+        .map(|(_, x)| x.clone())
+        .collect();
+    let mut a_all = a_clean;
+    let mut b_all = out_b;
+    for f in 4..12 {
+        step(&mut a, f, &mut a_all);
+        step(&mut b, f, &mut b_all);
+    }
+    assert_eq!(
+        a_all, b_all,
+        "repeats must leave audio, hooks and DSP identical"
+    );
+    assert!(
+        a_all.iter().skip(4).any(|(au, _)| !is_silent(au)),
+        "the kon at f=3 should sound, or this test proves nothing"
+    );
+}
+
+#[test]
+fn seek_forward_and_backward_land_fires_where_continuous_playback_would() {
+    let mut cont = LuaEngine::new();
+    cont.set_source(LOG_PROGRAM).unwrap();
+    let reference = run(&mut cont, 0..120);
+
+    // The probe in frame f+1 reports span f's fires; so after jumping to f,
+    // the NEXT frame (f+1, continuous) reports the jump span's fires.
+    for (from, to) in [(5u32, 90u32), (100, 7), (30, 30 + 2)] {
+        let mut e = LuaEngine::new();
+        e.set_source(LOG_PROGRAM).unwrap();
+        run(&mut e, 0..from);
+        e.frame(to as f64 / 60.0, to).unwrap();
+        e.frame((to + 1) as f64 / 60.0, to + 1).unwrap();
+        assert_eq!(
+            fires(&e),
+            reference[to as usize + 1].1,
+            "jump {from} -> {to}: span {to} must fire as continuous playback does"
+        );
+        e.frame((to + 2) as f64 / 60.0, to + 2).unwrap();
+        assert_eq!(
+            fires(&e),
+            reference[to as usize + 2].1,
+            "span {} after the jump",
+            to + 1
+        );
+    }
+}
+
+#[test]
+fn hook_receives_absolute_fire_time_and_off_only_hooks_still_work() {
+    let mut e = LuaEngine::new();
+    e.set_source(LOG_PROGRAM).unwrap();
+    let out = run(&mut e, 0..4);
+    // timer(0, 96): fires every 384 samples = 0.012 s, from t = 0.012.
+    let mut k = 0u32;
+    for (f, (_, fs)) in out.iter().enumerate().skip(1) {
+        for &(off, t_us) in fs {
+            k += 1;
+            assert_eq!(t_us, k * 12_000, "fire {k} (span {}, off {off})", f - 1);
+        }
+    }
+    assert!(k >= 3);
+
+    // An `(off)`-only hook keeps working: covered by every other test here.
+}
+
+#[test]
+fn recompile_mid_run_keeps_fires_on_the_absolute_grid() {
+    let mut cont = LuaEngine::new();
+    cont.set_source(LOG_PROGRAM).unwrap();
+    let reference = run(&mut cont, 0..40);
+    let mut e = LuaEngine::new();
+    e.set_source(LOG_PROGRAM).unwrap();
+    run(&mut e, 0..20);
+    e.set_source(LOG_PROGRAM).unwrap();
+    let after = run(&mut e, 20..40);
+    // Fires only (audio is silent); includes the t values.
+    // (index 0 skipped: the recompile dropped the VM holding span 19's fires)
+    for (i, (_, fs)) in after.iter().enumerate().skip(1) {
+        assert_eq!(fs, &reference[20 + i].1, "frame {}", 20 + i);
+    }
 }
