@@ -98,11 +98,13 @@ forms a picture will drop sprites where many targets share rows.
 
 ## Music-synced finale
 
-Write the score as pattern strings in the art script (one track per voice:
-pad voicing, arpeggio, bass, drums) and keep it as `song.json` plus the
-committed song source built from it (`finale.bin`, editable in the Studio
-sequencer), for a through-composed piece, for example 8 bars × 16 steps at
-96 BPM = 20 s with the landing on step 96 (15.0 s). Set `BANK` adsr/echo
+Compose a through-composed piece, for example 8 bars × 16 steps at 96 BPM =
+20 s with the landing on step 96 (15.0 s), as a song source. The CLI cannot
+author one: build it in the Studio sequencer, or write a `.mid` from the art
+script (one track per voice: pad voicing, arpeggio, bass, drums) and ask the
+user to drop it on the Studio's Sources panel; the saved project then
+carries it as a `"kind": "song"` payload (the finale keeps `song.json`, its
+pattern strings, beside the committed `finale.bin`). Set `BANK` adsr/echo
 presets, then `score{ song = "finale", loop = false }`. In `frame()`, derive
 the landing time from the step (the song is anchored at `t = 0`, 250 ticks
 per second), spawn or brighten sprites per note, and flash on the downbeat

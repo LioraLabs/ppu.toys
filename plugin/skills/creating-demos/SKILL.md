@@ -206,8 +206,8 @@ Music is a song source: make it in the Studio sequencer or drop in a `.mid`
 no uploads. A song row cannot carry `adsr` or echo: set those on the `BANK`
 presets before `score{}` (for example `BANK.strings = { adsr = ..., echo =
 true }`). Keep `dsp.mvol` below full when many voices stack, and set
-`dsp.echo` in `init()` so sample placement sees the echo budget. A
-through-composed score can be generated next to the art as pattern strings
+`dsp.echo` in `init()` so sample placement sees the echo budget. The CLI
+cannot author a song source, so a generated score goes through the Studio
 (see the finale recipe in [recipes.md](recipes.md)).
 
 Sync visuals to the music from the handle's `tick` (250 per second) in
