@@ -14,9 +14,19 @@ tick at 8 kHz; `n = 2` ticks at 64 kHz. `div` (1–255) is how many ticks make
 one fire. `timer()` is setup-only — call it at the top level or in `init()`,
 like `dma()`.
 
-Each frame renders 532 or 533 samples of audio at 32 kHz. A timer hook is
-called as `fn(off)`, where `off` is the sample offset inside that frame's
-span — the audio equivalent of `hdma()`'s scanline `y`.
+Audio follows the timeline. Frame `f` renders exactly the samples
+`[round(32000·f/60), round(32000·(f+1)/60))` at 32 kHz: 533 or 534 samples,
+533⅓ on average, with no drift. A timer hook is called as `fn(off, t)`.
+`off` is the sample offset inside that frame's span — the audio equivalent
+of `hdma()`'s scanline `y` — and `t` is the fire's own time on the
+timeline, in seconds. `fn(off)` works too.
+
+Timers count their period from `t = 0`: the first fire is one period after
+`t = 0`, then one every period. Seeking, scrubbing, or looping jumps the
+timeline, and the timers re-phase to the new position. Rendering the same
+frame twice (a paused refresh) renders no audio, fires no hooks, and leaves
+the chip alone; a `kon()` or `koff()` that `frame()` issues during that
+repeat is dropped.
 
 Within one frame the order is: `frame()` runs first, and its `voice[]`,
 `dsp`, `kon`, and `koff` writes land at sample offset 0; then timer hooks
@@ -31,13 +41,10 @@ fire in time order, each hook's writes landing at its own offset; then
   the hook, then read it and poke registers in `frame()`.
 - Both hooks and `frame()` read the **previous** frame's `envx`, `outx`, and
   `ended` — audio read-backs lag one frame behind the writes.
-- The first fire is one period after compile. Phase carries across frames
-  once a timer is running; a fresh registration on recompile restarts it
-  from zero.
 
 ```lua
 beat = 0
-timer(0, 250, function(off)
+timer(0, 250, function(off, t)
   beat = beat + 1
 end)
 
@@ -353,11 +360,11 @@ color, or scroll. The toy above already does this with `voice[0].envx`.
 
 Editing a toy recompiles it, and a recompile hot-reloads: globals are
 rebuilt, but the chip keeps running — a sounding voice keeps sounding,
-samples stay where they were placed in sound RAM, and timers re-register at
-phase zero.
+samples stay where they were placed in sound RAM, and timers stay on their
+grid from `t = 0`, re-phased to the current position.
 
 Pressing Run (`t = 0`) power-cycles instead: a fresh chip, sound RAM
-zeroed, samples re-placed, timers restarted. Run always produces the same
+zeroed, samples re-placed, timers restarted from `t = 0`. Run always produces the same
 bytes.
 
 The speaker button on the output — and on wall cards and players — mutes
