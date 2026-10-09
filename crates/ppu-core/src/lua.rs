@@ -238,12 +238,20 @@ pub struct LuaEngine {
     /// sample). Empty before the first `frame()`.
     audio: Vec<i16>,
     /// The last `f` whose audio span was rendered (`None` after `new()`/
-    /// `reset()`). A repeat of it renders no audio. Every rendered span
+    /// `reset()`). A repeat of it renders no audio, unless it is the first
+    /// frame after a recompile (`recompiled`). Every rendered span
     /// starts with `realign`; when `last_f` is `Some` and `f` isn't
     /// `last + 1`, that is a jump, which also keys off the anchored songs
     /// and clears the echo buffer. The first frame after `new()`/`reset()`
     /// is not a key-off jump (nothing is sounding yet).
     last_f: Option<u32>,
+    /// Set by a successful full `set_sources` (not the controls-only fast
+    /// path, which runs no `init()`), cleared by every rendered span. While
+    /// set, `frame(t, last_f)` is a replay, not an inert repeat: span
+    /// `last_f` renders again so `init()`'s and the new `frame()`'s keys
+    /// (and a recompile's song key-offs) reach the chip — not a jump, so no
+    /// song key-off and no echo clear.
+    recompiled: bool,
     /// `timer(n, div, fn)` hooks registered by the current program's init
     /// window (top-level chunks + `init()`). Dropped and re-registered
     /// wholesale on every `set_sources`, then re-phased onto the timeline at
@@ -505,6 +513,7 @@ impl LuaEngine {
             aram: Box::new([0u8; 0x10000]),
             audio: Vec::new(),
             last_f: None,
+            recompiled: false,
             timers: Vec::new(),
             sram_json: "{}".to_string(),
             sram_dirty: false,
@@ -1165,6 +1174,7 @@ impl LuaEngine {
             .map(|(name, source)| ((*name).to_string(), (*source).to_string()))
             .collect();
         self.source_dirty = false;
+        self.recompiled = true;
         Ok(())
     }
 
@@ -1412,11 +1422,13 @@ impl LuaEngine {
         // `voice[]`/`dsp` writes are flushed to the DSP only at the NEXT
         // frame's offset-0 flush, one frame later than a `frame()`-body or
         // timer-hook write — see the `kon`/`koff` callback comment below.
-        if self.last_f == Some(f) {
+        if self.last_f == Some(f) && !self.recompiled {
             // Repeat of the last rendered frame (paused refresh): its span
             // is already rendered, so no audio, no hooks, no DSP writes —
             // and key events issued by this repeat's body belong to the
-            // frame already rendered, so they are discarded.
+            // frame already rendered, so they are discarded. The first
+            // frame after a recompile is a replay instead (see
+            // `recompiled`): it re-renders the span.
             self.audio.clear();
             let mut l = self.lua.borrow_mut();
             l.enter(|ctx| {
@@ -1737,8 +1749,10 @@ impl LuaEngine {
     /// song (game music) going across edits — including the edit that turns
     /// `at = 0` into `at = false`. Any other old song still sounding keys
     /// off through the new VM's `__dsp_koff` (KOF before KON in the next
-    /// flush, so a kon from `init()` still wins) — unless some anchored new
-    /// player plays the same song, which continues on those voices. If the
+    /// flush — the replay of a paused frame included — so a kon from
+    /// `init()` still wins) — unless a new player plays the same song at the
+    /// same anchor, which continues on those voices (a re-anchored or
+    /// `Pending` one restarts, so it keys off like `play()`). If the
     /// staff followed a carried song (`prev_score`), it still does. Not
     /// used by `reset()`, which drops every old player first.
     fn carry_songs(&mut self, prev: &DmaRecorder, prev_score: Option<i64>) {
@@ -1775,7 +1789,7 @@ impl LuaEngine {
             for old in dropped {
                 let continues = songs
                     .iter()
-                    .any(|p| p.name == old.name && p.anchor != Anchor::Stopped);
+                    .any(|p| p.name == old.name && p.anchor == old.anchor);
                 if !continues {
                     song_koff(ctx, old.mask);
                 }
@@ -1828,7 +1842,8 @@ impl LuaEngine {
     /// `S(f) = round(32000 * f / 60)` (see `audio_start_s`): 533/533/534
     /// samples, gap-free, no drift. Every span starts with `realign` (which
     /// re-phases the timers after a jump and picks up a `play()`/`stop()`).
-    /// If `f` isn't `last_f + 1` after an earlier frame, that is a jump: the
+    /// If `f` isn't `last_f + 1` after an earlier frame, nor a replay of
+    /// `last_f` right after a recompile (see `recompiled`), that is a jump: the
     /// anchored songs' voices key off and re-seek on their next fire, and
     /// the echo buffer is zeroed (after the offset-0 flush, so the live
     /// EDL decides the region). Flushes `voice[]`/`dsp`/`aram[]`/KON/KOFF
@@ -1847,8 +1862,10 @@ impl LuaEngine {
     /// in `self.audio` — see [`Self::audio`].
     fn render_frame_audio(&mut self, f: u32) -> Result<(), LuaError> {
         let continuous = self.last_f.map(|l| l as u64 + 1) == Some(f as u64);
-        let jump = self.last_f.is_some() && !continuous;
+        let replay = self.recompiled && self.last_f == Some(f);
+        let jump = self.last_f.is_some() && !continuous && !replay;
         self.last_f = Some(f);
+        self.recompiled = false;
         let start_h = 2 * audio_start_s(f as u64);
         let end_h = 2 * audio_start_s(f as u64 + 1);
         self.realign(start_h);

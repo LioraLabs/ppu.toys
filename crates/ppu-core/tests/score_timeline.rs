@@ -561,3 +561,98 @@ fn a_recompile_survives_a_clobbered_scores_table() {
     let sram = run(&mut e, 40..50);
     assert_eq!(heard(&sram, 0, 0).first(), Some(&(41, 4)), "{sram}");
 }
+
+/// A re-anchored player of the same song is a restart, not a continuation:
+/// the old song's voices key off (the new one resumes at its next note due).
+#[test]
+fn a_recompile_that_re_anchors_the_song_keys_it_off() {
+    let mut e = held_engine("h = score{ song = \"held\" }");
+    for f in 0..30 {
+        e.frame(f as f64 / 60.0, f).unwrap();
+    }
+    assert!(sounding(&e), "the note sounds");
+    e.set_sources(&[("main.lua", "h = score{ song = \"held\", at = 0.25 }")])
+        .unwrap();
+    for f in 30..35 {
+        e.frame(f as f64 / 60.0, f).unwrap();
+    }
+    assert!(!sounding(&e), "keyed off until the next note due");
+}
+
+// ---- a recompile while paused: the next frame(t, last_f) is a replay ----
+
+/// Paused at f = 5 (frames 0..=5 rendered, then a repeat of 5), the edit
+/// adds an `init()` that keys voice 0 on. The studio's paused refresh
+/// renders f = 5 again: that replay delivers the key-on.
+#[test]
+fn a_paused_recompile_delivers_inits_key_on() {
+    let mut e = LuaEngine::new();
+    e.set_sources(&[("main.lua", "function frame() end")])
+        .unwrap();
+    for f in 0..6 {
+        e.frame(f as f64 / 60.0, f).unwrap();
+    }
+    e.frame(5.0 / 60.0, 5).unwrap();
+    assert!(e.audio().is_empty(), "paused: a repeat is inert");
+    e.set_sources(&[(
+        "main.lua",
+        "piano = bank('piano')\n\
+         function init()\n\
+           voice[0].sample = piano.sample\n\
+           voice[0].pitch = 0x1000\n\
+           voice[0].vol = { l = 127, r = 127 }\n\
+           voice[0].adsr = { a = 15, d = 0, s = 7, r = 0 }\n\
+           dsp.mvol = { l = 127, r = 127 }\n\
+           kon(0)\n\
+         end\n\
+         function frame() end",
+    )])
+    .unwrap();
+    e.frame(5.0 / 60.0, 5).unwrap();
+    assert!(!e.audio().is_empty(), "the replay renders span 5");
+    e.frame(5.0 / 60.0, 5).unwrap();
+    assert!(
+        e.audio().is_empty(),
+        "only the first frame after it replays"
+    );
+    let mut energy = 0i64;
+    for f in 6..12 {
+        e.frame(f as f64 / 60.0, f).unwrap();
+        energy += e.audio().iter().map(|&s| (s as i64).abs()).sum::<i64>();
+    }
+    assert!(e.dsp_view().voices[0].envx > 0, "voice 0 sounds");
+    assert!(energy > 0, "and is heard");
+}
+
+/// A `score{}` anchored at 0 added while paused at f = 0 plays its
+/// downbeat: the replay of span 0 holds ticks 0..=3.
+#[test]
+fn a_score_added_while_paused_at_0_plays_tick_0() {
+    let mut e = engine("h = {}");
+    run(&mut e, 0..1);
+    e.set_sources(&[(
+        "main.lua",
+        &program("h = score{ song = \"steps\", at = 0 }"),
+    )])
+    .unwrap();
+    let sram = run(&mut e, 0..5);
+    assert_eq!(heard(&sram, 0, 0).first(), Some(&(1, 0)), "{sram}");
+}
+
+/// A paused edit that removes the `score{}`: the replay delivers the
+/// recompile's key-off, so the dropped song's voices stop.
+#[test]
+fn a_paused_recompile_that_drops_the_score_keys_its_voices_off() {
+    let mut e = held_engine("h = score{ song = \"held\" }");
+    for f in 0..30 {
+        e.frame(f as f64 / 60.0, f).unwrap();
+    }
+    e.frame(29.0 / 60.0, 29).unwrap();
+    assert!(sounding(&e), "the note sounds");
+    e.set_sources(&[("main.lua", "function frame() end")])
+        .unwrap();
+    for f in 29..35 {
+        e.frame(f as f64 / 60.0, f).unwrap();
+    }
+    assert!(!sounding(&e), "keyed off");
+}

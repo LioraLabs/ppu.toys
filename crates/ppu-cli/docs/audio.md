@@ -23,10 +23,13 @@ timeline, in seconds. `fn(off)` works too.
 
 Timers count their period from `t = 0`: the first fire is one period after
 `t = 0`, then one every period. Seeking, scrubbing, or looping jumps the
-timeline, and the timers re-phase to the new position. Rendering the same
-frame twice (a paused refresh) renders no audio, fires no hooks, and leaves
-the chip alone; a `kon()` or `koff()` that `frame()` issues during that
-repeat is dropped.
+timeline, and the timers re-phase to the new position. Rendering the last
+rendered frame again (a paused refresh) is a repeat: it renders no audio,
+fires no hooks, and leaves the chip alone, and a `kon()` or `koff()` that
+`frame()` issues during it is dropped. The one exception is the first frame
+after a recompile. It re-renders that frame's span, so the keys from
+`init()` and from the new `frame()` reach the chip. It is not a jump: no
+voice is keyed off.
 
 Within one frame the order is: `frame()` runs first, and its `voice[]`,
 `dsp`, `kon`, and `koff` writes land at sample offset 0; then timer hooks
@@ -201,9 +204,11 @@ these globals (a user chunk that defines the same name wins):
   shorter than `steps` loops on its own length, so tracks can run
   polymeters against each other. Returns `{ step, beat, playing, div, rate,
 play(), stop() }`. Like `timer()`, `song{}` is setup-only.
-- `score{ song = "<name>", loop = true }` — plays a
-  [sequencer song](#sequencer-songs) source, voices chosen per note.
-  Setup-only. Returns `{ tick, length, playing, song, play(), stop() }`.
+- `score{ song = "<name>", loop = true, at = 0 }` — plays a
+  [sequencer song](#sequencer-songs) source on the timeline, voices chosen
+  per note. `at` anchors tick 0: seconds, a marker name, or `false` (set
+  up, not playing). Setup-only. Returns `{ tick, length, playing, loop,
+  song, play(), stop() }`.
 
 ## Built-in samples
 
@@ -279,11 +284,23 @@ lowest voice) to free it. A note pinned to a voice always takes it instead,
 cutting whatever was sounding there. So a chord that outgrows the mask
 doesn't go silent, it steals from an earlier note.
 
-The handle returns `{ tick, length, playing, song, play(), stop() }`:
+A score sits on the timeline. `at` places its anchor, the time of tick 0:
+seconds (default `0`), the name of a marker from the timeline's `markers`,
+or `false`, which sets the song up without playing it. The position is
+(t − anchor) × 250 ticks, wrapped when the song loops. Before the anchor
+the song is silent; past the end a `loop = false` song is finished and
+silent. Seeking, scrubbing, or looping the timeline is a jump: it keys off
+the songs' voices, clears the echo buffer, and each song resumes at the
+next note due for the new t. A note already sounding at the new t is not
+struck again.
+
+The handle returns `{ tick, length, playing, loop, song, play(), stop() }`:
 `tick`/`length` are the position and total length in engine ticks (4 ms
-each), `stop()` keys every voice off and pauses, `play()` resumes from
-where it left off, and a finished `loop = false` song rewinds instead of
-holding. At setup, a row naming a sound that's neither a built-in name nor
+each). `play()` restarts the song from the top, anchored at the current
+frame's t. `stop()` keys its voices off and silences it until the next
+`play()`. The Studio's staff and playhead follow the most recently started
+score: the last one set up with an anchor, or the last one `play()`
+started. At setup, a row naming a sound that's neither a built-in name nor
 an uploaded sample stops the program with an error naming the row (`score:
 row 1 sound 'x': ...`); a song that fails to decode names the chunk it
 failed on; a song that doesn't validate (an out-of-range field, a note past
@@ -302,6 +319,13 @@ full recompile instead (the toy restarts, and a bad song shows as a setup
 error): a row naming a sound nothing placed at setup (placing needs the
 setup window), and a song that fails to decode or compile. Editing a song
 source no `score{}` plays touches nothing.
+
+A code edit (a recompile) keeps songs at t. A song with a declared anchor
+resumes at t instead of restarting. A song started with `play()` resumes
+at t too, as long as the new program still sets it up with `at = false`,
+in the same `score{}` position and with the same song. A `score{}` the
+edit removes stops its voices. Run restores the declared anchors only: a
+song `play()` started does not survive it.
 
 ## Music from a MIDI file
 
@@ -360,8 +384,9 @@ color, or scroll. The toy above already does this with `voice[0].envx`.
 
 Editing a toy recompiles it, and a recompile hot-reloads: globals are
 rebuilt, but the chip keeps running — a sounding voice keeps sounding,
-samples stay where they were placed in sound RAM, and timers stay on their
-grid from `t = 0`, re-phased to the current position.
+samples stay where they were placed in sound RAM, timers stay on their
+grid from `t = 0`, re-phased to the current position, and songs keep
+playing at t (see [Sequencer songs](#sequencer-songs)).
 
 Pressing Run (`t = 0`) power-cycles instead: a fresh chip, sound RAM
 zeroed, samples re-placed, timers restarted from `t = 0`. Run always produces the same
