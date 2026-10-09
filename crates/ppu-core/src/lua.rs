@@ -154,6 +154,11 @@ pub struct ScoreView {
     pub slot: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step: Option<u32>,
+    /// The timeline time (seconds) the song's tick 0 is anchored to: tick
+    /// `k` plays at `anchor + (k + 1) / 250` s on its first pass. `None`
+    /// until a `play()` is anchored at the next rendered frame.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<f64>,
 }
 
 /// The controls document's reserved file name (PPU-146's generated
@@ -325,8 +330,16 @@ struct SongPlayer {
     mask: u8,
     looping: bool,
     playing: bool,
-    /// The next tick to play.
+    /// Where the song sits on the timeline — see [`Anchor`].
+    anchor: Anchor,
+    /// The next tick to play, wrapped into `0..=length` (it equals `length`
+    /// right before a wrap or the finish).
     tick: i64,
+    /// The UNWRAPPED next tick: `n` of the next fire, counted from the
+    /// anchor across loop passes. A fire whose `n` differs is a
+    /// discontinuity (a jump, a recompile) and re-seeks the cursor; -1
+    /// forces that.
+    next: i64,
     /// Index into `events` of the next event to apply.
     cursor: usize,
     /// Per-voice end tick of the note currently sounding there, if any.
@@ -340,6 +353,37 @@ struct SongPlayer {
     /// player is in it (see [`LuaEngine::reload_song`]).
     song: crate::song::Song,
     timing: crate::song::Timing,
+}
+
+/// A native song's place on the timeline. Its fire `n` (n >= 0) plays tick
+/// `n` (wrapped when looping) at `anchor + (n + 1) * SONG_PERIOD_H`: the
+/// song's position is `(t - anchor) * 250` ticks, silent before the anchor.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Anchor {
+    /// Set up with `at = false`, or `stop()`ped: never fires.
+    Stopped,
+    /// `play()`ed: anchors at the start of the next rendered span (see
+    /// [`LuaEngine::realign`]).
+    Pending,
+    /// Anchored this many half-samples from t = 0 (may be negative).
+    At(i64),
+}
+
+/// A song timer's period: timer 0, div 32 = 256 half-samples = 4 ms.
+const SONG_PERIOD_H: i64 = 256;
+
+impl SongPlayer {
+    /// Point the cursor at the first event starting at or after `tick`, and
+    /// `ends` at the notes still sounding there (later events win).
+    fn seek(&mut self, tick: i64) {
+        self.cursor = self.events.partition_point(|e| e.start < tick);
+        self.ends = [None; 8];
+        for e in &self.events[..self.cursor] {
+            if e.end > tick {
+                self.ends[e.voice as usize] = Some(e.end);
+            }
+        }
+    }
 }
 
 /// Fixed ARAM home of the 256-entry sample directory (DIR pinned to page
@@ -548,22 +592,44 @@ impl LuaEngine {
         };
 
         l.enter(|ctx| {
+            let new_len = compiled.timing.length;
             for p in dma.songs.borrow_mut().iter_mut().filter(|p| changed(p)) {
                 let old = (&p.song, &p.timing);
                 let mut tick = crate::song::remap(old, (&song, &compiled.timing), p.tick);
                 if p.playing {
-                    for v in (0..8u8).filter(|v| p.mask & (1 << v) != 0) {
-                        song_key(ctx, "__dsp_koff", v);
-                    }
+                    song_koff(ctx, p.mask);
                 }
-                if tick >= compiled.timing.length {
+                // An anchored song's position comes from time: shift the
+                // anchor by whole ticks so now maps to the remapped tick
+                // (`next < 0`: no fire since a jump, the next one re-seeks).
+                let mut n_new = None;
+                if let (Anchor::At(_), true) = (p.anchor, p.next >= 0) {
+                    let pass = if p.looping && p.length > 0 {
+                        (p.next - p.tick) / p.length
+                    } else {
+                        0
+                    };
+                    n_new = Some(if !p.playing && !p.looping {
+                        p.next.max(new_len) // finished: stays past the end
+                    } else if tick < new_len {
+                        pass * new_len + tick
+                    } else if p.looping {
+                        (pass + 1) * new_len
+                    } else {
+                        tick
+                    });
+                }
+                if tick >= new_len {
                     tick = 0;
                     p.playing &= p.looping;
                 }
+                if let (Some(n), Anchor::At(a)) = (n_new, p.anchor) {
+                    p.anchor = Anchor::At(a + (p.next - n) * SONG_PERIOD_H);
+                    p.next = n;
+                }
                 p.tick = tick;
-                p.cursor = compiled.events.partition_point(|e| e.start < tick);
-                p.ends = [None; 8];
                 p.events = compiled.events.clone();
+                p.seek(tick);
                 p.length = compiled.timing.length;
                 p.mask = song.voice_mask;
                 p.insts = insts.clone();
@@ -637,6 +703,11 @@ impl LuaEngine {
         &self.audio
     }
 
+    /// The 64 KB sound RAM — read-only; writes go through `aram[]`.
+    pub fn aram(&self) -> &[u8] {
+        &self.aram[..]
+    }
+
     /// The live S-DSP core — read-only; all writes go through the `dsp`/
     /// `voice[]` DSL tables, flushed by `render_frame_audio`.
     pub fn dsp(&self) -> &Dsp {
@@ -700,6 +771,10 @@ impl LuaEngine {
                 song: Some(p.name.clone()),
                 slot,
                 step,
+                anchor: match p.anchor {
+                    Anchor::At(a) => Some(a as f64 / 64000.0),
+                    _ => None,
+                },
             })
         })
     }
@@ -1640,13 +1715,42 @@ impl LuaEngine {
     }
 
     /// Re-phase every timer onto the timeline at position `pos_h`
-    /// (half-samples from t = 0): each `due_h` becomes the first
-    /// `k * period_h >= pos_h` with k >= 1. This is the single
-    /// discontinuity entry point — called for a jump (seek, first frame
-    /// after new/reset, frame after an errored body) and after a recompile.
+    /// (half-samples from t = 0): each Lua timer's `due_h` becomes the first
+    /// `k * period_h >= pos_h` with k >= 1. A song timer is phased from its
+    /// own [`Anchor`] instead: the first `anchor + k * period_h >= pos_h`,
+    /// k >= 1 (a `Pending` one anchors at `pos_h` first and restarts from
+    /// the top; a `Stopped` one never comes due). The single re-phase
+    /// point: called at the start of every rendered span (a no-op for
+    /// continuous play, where the walker already left every due there —
+    /// it is what lets a `play()`/`stop()` from the frame body take effect
+    /// this span) and after a recompile.
     fn realign(&mut self, pos_h: u64) {
+        let mut songs = self.dma.songs.borrow_mut();
         for h in self.timers.iter_mut() {
-            h.due_h = pos_h.div_ceil(h.period_h).max(1) * h.period_h;
+            let Hook::Song(id) = h.hook else {
+                h.due_h = pos_h.div_ceil(h.period_h).max(1) * h.period_h;
+                continue;
+            };
+            let Some(p) = songs.get_mut(id) else {
+                h.due_h = u64::MAX;
+                continue;
+            };
+            if p.anchor == Anchor::Pending {
+                p.anchor = Anchor::At(pos_h as i64);
+                p.playing = true;
+                p.tick = 0;
+                p.next = 0;
+                p.cursor = 0;
+                p.ends = [None; 8];
+            }
+            h.due_h = match p.anchor {
+                Anchor::At(a) => {
+                    let ahead = pos_h as i64 - a;
+                    let k = (-(-ahead).div_euclid(SONG_PERIOD_H)).max(1);
+                    (a + k * SONG_PERIOD_H) as u64
+                }
+                _ => u64::MAX,
+            };
         }
     }
 
@@ -1654,8 +1758,12 @@ impl LuaEngine {
     /// registered `timer(n, div, fn)` hooks. The span is exactly
     /// `[S(f), S(f+1))` samples of the 32 kHz timeline, where
     /// `S(f) = round(32000 * f / 60)` (see `audio_start_s`): 533/533/534
-    /// samples, gap-free, no drift. If `f` isn't `last_f + 1` the timers are
-    /// re-phased first (`realign`). Flushes `voice[]`/`dsp`/`aram[]`/KON/KOFF
+    /// samples, gap-free, no drift. Every span starts with `realign` (which
+    /// re-phases the timers after a jump and picks up a `play()`/`stop()`).
+    /// If `f` isn't `last_f + 1` after an earlier frame, that is a jump: the
+    /// anchored songs' voices key off and re-seek on their next fire, and
+    /// the echo buffer is zeroed (after the offset-0 flush, so the live
+    /// EDL decides the region). Flushes `voice[]`/`dsp`/`aram[]`/KON/KOFF
     /// at offset 0, then walks expiry to expiry: render the DSP up to the
     /// next due hook (across all timers, earliest `due_h` first, ties in
     /// registration order), call it as `fn(off, t)` where `off` is the
@@ -1671,13 +1779,30 @@ impl LuaEngine {
     /// in `self.audio` — see [`Self::audio`].
     fn render_frame_audio(&mut self, f: u32) -> Result<(), LuaError> {
         let continuous = self.last_f.map(|l| l as u64 + 1) == Some(f as u64);
+        let jump = self.last_f.is_some() && !continuous;
         self.last_f = Some(f);
         let start_h = 2 * audio_start_s(f as u64);
         let end_h = 2 * audio_start_s(f as u64 + 1);
-        if !continuous {
-            self.realign(start_h);
+        self.realign(start_h);
+        if jump {
+            // Before the flush, so a kon pending from the frame body (also
+            // in `__dsp_kon`) still wins: the flush writes KOF then KON.
+            let dma = self.dma.clone();
+            let mut l = self.lua.borrow_mut();
+            l.enter(|ctx| {
+                for p in dma.songs.borrow_mut().iter_mut() {
+                    if p.anchor != Anchor::Stopped {
+                        song_koff(ctx, p.mask);
+                        p.next = -1;
+                    }
+                }
+            });
         }
         self.flush_dsp_writes();
+        if jump {
+            let (lo, hi) = echo_region((self.dsp.read(0x7d) & 0x0f) as i64);
+            self.aram[lo as usize..hi as usize].fill(0);
+        }
 
         let n = ((end_h - start_h) / 2) as usize;
         self.audio.resize(n * 2, 0);
@@ -1723,7 +1848,7 @@ impl LuaEngine {
                     }
                 }
                 // A song hook can't error — see `run_song_tick`.
-                Hook::Song(id) => self.run_song_tick(id),
+                Hook::Song(id) => self.run_song_tick(id, due_h),
             }
 
             self.flush_dsp_writes();
@@ -1764,14 +1889,19 @@ impl LuaEngine {
         Ok(())
     }
 
-    /// Plays one tick of the native song player `id` (in `self.dma.songs`) —
-    /// exactly what kit.lua's own `score{}` `timer(0, 32, ...)` hook does for
-    /// a Lua-sourced score, but reading/writing `voice[]` and the
-    /// `__dsp_kon`/`__dsp_koff` globals directly instead of calling `sfx`/
-    /// `kon`/`koff`. A song's shape was already validated at `__song_load`
-    /// time, so this never errors and never touches a voice outside the
-    /// song's mask.
-    fn run_song_tick(&mut self, id: usize) {
+    /// Plays the fire at `due_h` of the native song player `id` (in
+    /// `self.dma.songs`) — exactly what kit.lua's own `score{}`
+    /// `timer(0, 32, ...)` hook does for a Lua-sourced score, but reading/
+    /// writing `voice[]` and the `__dsp_kon`/`__dsp_koff` globals directly
+    /// instead of calling `sfx`/`kon`/`koff`. The fire's tick comes from
+    /// time: fire `n = (due_h - anchor) / period - 1` plays tick `n`
+    /// (wrapped when looping; past the end a `loop = false` song is
+    /// finished and silent). A fire that doesn't follow the previous one
+    /// (a jump, a recompile) re-seeks the cursor to that tick, so play
+    /// resumes from the next note due. A song's shape was already validated
+    /// at `__song_load` time, so this never errors and never touches a voice
+    /// outside the song's mask.
+    fn run_song_tick(&mut self, id: usize, due_h: u64) {
         let dma = self.dma.clone();
         let mut l = self.lua.borrow_mut();
         l.enter(|ctx| {
@@ -1779,24 +1909,37 @@ impl LuaEngine {
             let Some(player) = songs.get_mut(id) else {
                 return;
             };
-            if !player.playing {
+            // `stop()`/`play()` from a hook mid-span: not due until realign.
+            let Anchor::At(a) = player.anchor else {
+                return;
+            };
+            if player.looping && player.length <= 0 {
                 return;
             }
-            let mut t = player.tick;
-            if t >= player.length {
-                for v in 0..8u8 {
-                    if player.mask & (1 << v) != 0 {
-                        song_key(ctx, "__dsp_koff", v);
-                    }
+            let n = (due_h as i64 - a) / SONG_PERIOD_H - 1;
+            let continuous = player.next == n;
+            let t = if player.looping {
+                n.rem_euclid(player.length)
+            } else {
+                n
+            };
+            if !player.looping && n >= player.length {
+                if continuous && player.playing {
+                    song_koff(ctx, player.mask);
+                    player.ends = [None; 8];
                 }
+                player.playing = false;
+                player.tick = 0;
+                player.next = n + 1;
+                return;
+            }
+            player.playing = true;
+            if continuous && player.looping && t == 0 && n > 0 {
+                song_koff(ctx, player.mask);
                 player.ends = [None; 8];
                 player.cursor = 0;
-                player.tick = 0;
-                if !player.looping {
-                    player.playing = false;
-                    return;
-                }
-                t = 0;
+            } else if !continuous {
+                player.seek(t);
             }
             for v in 0..8u8 {
                 if player.mask & (1 << v) == 0 {
@@ -1824,6 +1967,7 @@ impl LuaEngine {
                 player.cursor += 1;
             }
             player.tick = t + 1;
+            player.next = n + 1;
         });
     }
 }
@@ -1834,6 +1978,13 @@ impl LuaEngine {
 fn song_key(ctx: piccolo::Context<'_>, global: &'static str, v: u8) {
     let cur = ctx.get_global(global).to_int().unwrap_or(0);
     ctx.set_global(global, cur | (1i64 << v)).unwrap();
+}
+
+/// Key off every voice in a song's `mask` (see [`song_key`]).
+fn song_koff(ctx: piccolo::Context<'_>, mask: u8) {
+    for v in (0..8u8).filter(|v| mask & (1 << v) != 0) {
+        song_key(ctx, "__dsp_koff", v);
+    }
 }
 
 /// Apply one song event's row instrument to `voice[ev.voice]`, exactly the
@@ -3252,7 +3403,9 @@ fn install_song_natives(
             mask: song.voice_mask,
             looping: false,
             playing: false,
+            anchor: Anchor::Stopped,
             tick: 0,
+            next: 0,
             cursor: 0,
             ends: [None; 8],
             insts: Vec::new(),
@@ -3292,6 +3445,11 @@ fn install_song_natives(
             _ => return Err(lua_err(ctx, "__song_start: pitches must be a table")),
         };
         let looping = stack.get(3).to_bool();
+        // Seconds from t = 0, or false/nil: set up, not playing.
+        let anchor = match stack.get(4).to_number() {
+            Some(at) => Anchor::At((at * 64000.0).round() as i64),
+            None => Anchor::Stopped,
+        };
         let n = insts_t.length();
         let mut insts = Vec::with_capacity(n.max(0) as usize);
         let mut pitches = Vec::with_capacity(n.max(0) as usize);
@@ -3307,8 +3465,10 @@ fn install_song_natives(
             p.insts = insts;
             p.pitches = pitches;
             p.looping = looping;
-            p.playing = true;
+            p.playing = anchor != Anchor::Stopped;
+            p.anchor = anchor;
             p.tick = 0;
+            p.next = 0;
             p.cursor = 0;
             p.ends = [None; 8];
         }
@@ -3346,9 +3506,16 @@ fn install_song_natives(
     ctx.set_global("__song_get", song_get).unwrap();
 
     let play_rec = rec.clone();
-    let song_play = Callback::from_fn(&ctx, move |_ctx, _, mut stack| {
+    // Restart from the top, anchored at the start of the span being
+    // rendered next (see `LuaEngine::realign`). A restart keys off what
+    // the song had sounding, as `stop()` does.
+    let song_play = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
         if let Some(id) = stack.get(0).to_int().and_then(|n| usize::try_from(n).ok()) {
             if let Some(p) = play_rec.songs.borrow_mut().get_mut(id) {
+                if p.anchor != Anchor::Stopped {
+                    song_koff(ctx, p.mask);
+                }
+                p.anchor = Anchor::Pending;
                 p.playing = true;
             }
         }
@@ -3360,12 +3527,9 @@ fn install_song_natives(
     let song_stop = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
         if let Some(id) = stack.get(0).to_int().and_then(|n| usize::try_from(n).ok()) {
             if let Some(p) = rec.songs.borrow_mut().get_mut(id) {
+                p.anchor = Anchor::Stopped;
                 p.playing = false;
-                for v in 0..8u8 {
-                    if p.mask & (1 << v) != 0 {
-                        song_key(ctx, "__dsp_koff", v);
-                    }
-                }
+                song_koff(ctx, p.mask);
                 p.ends = [None; 8];
             }
         }

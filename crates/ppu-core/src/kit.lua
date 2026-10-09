@@ -287,7 +287,7 @@ function bank(name, opts)
   return instrument(inst)
 end
 
--- score{ song = "<name>", loop = true? } -> plays a `song`-kind source
+-- score{ song = "<name>", loop = true?, at = 0? } -> plays a `song`-kind source
 -- named `<name>` (PSNG bytes, decoded/compiled/validated in Rust — see
 -- __song_load) on the shared 8-voice pool: the whole song plays natively on
 -- the audio tick, with no Lua timer, and the returned handle reads live
@@ -300,10 +300,16 @@ end
 -- several songs places each sound once. `note` pitches the row with
 -- note(row.note, base); without one a drum keeps its preset pitch.
 --
+-- The song is anchored to the timeline: its position is (t - anchor) * 250
+-- ticks, so seeking t seeks the song (silent before the anchor; a finished
+-- loop = false song stays silent). `at` is the anchor in seconds (default
+-- 0), a marker name looked up in the toy's `markers` table, or false: set
+-- up but not playing until play().
+--
 -- Returns { tick, length, playing, song, play(), stop() }, all but `song`
--- read live through __song_get; stop() keys every voice off and pauses,
--- play() resumes, a finished loop = false song rewinds. Setup-only, like
--- song{}.
+-- read live through __song_get; stop() keys every voice off and silences,
+-- play() restarts from the top, anchored at the current t. Setup-only,
+-- like song{}.
 local FLAT = { a = 15, d = 0, s = 7, r = 0 }
 
 -- Placed sounds by name, shared by every score{}: a toy that plays several
@@ -380,8 +386,20 @@ function score(cfg)
     insts[i] = inst
     pitches[i] = row_pitch(row, inst, i)
   end
+  local at = cfg.at
+  if at == nil then
+    at = 0
+  elseif type(at) == "string" then
+    local m = type(markers) == "table" and markers[at] or nil
+    if type(m) ~= "number" then
+      error("score: no marker named '" .. at .. "'")
+    end
+    at = m
+  elseif at ~= false and type(at) ~= "number" then
+    error("score: at must be seconds, a marker name, or false")
+  end
   ensure_audible()
-  __song_start(id, insts, pitches, cfg.loop ~= false)
+  __song_start(id, insts, pitches, cfg.loop ~= false, at)
   -- The engine reads __score after every frame (LuaEngine::score_view) for
   -- the studio's playhead: the most recently started score is the one shown.
   local h = setmetatable({ song = tostring(cfg.song), __song = id }, {
@@ -392,6 +410,8 @@ function score(cfg)
     __score = h
   end
   h.stop = function() __song_stop(id) end
-  __score = h
+  if at ~= false then
+    __score = h
+  end
   return h
 end

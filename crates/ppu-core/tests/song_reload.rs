@@ -149,7 +149,10 @@ fn a_sound_not_placed_at_setup_falls_back_to_a_recompile() {
     push(&mut e, &s);
     let after = run(&mut e, 30, 31);
     assert_eq!(after["frames"], 1, "a fresh VM");
-    assert!(e.score_view().unwrap().tick < 10, "a fresh score");
+    // The recompiled score is anchored at t = 0 like the old one, so it
+    // resumes where time says (frame 30 ends at tick ~129), not at tick 0.
+    let tick = e.score_view().unwrap().tick;
+    assert!((125..=130).contains(&tick), "resumes at t: {tick}");
 }
 
 /// A song that doesn't compile falls back to the recompile, which reports

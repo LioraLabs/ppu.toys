@@ -206,8 +206,9 @@ impl PpuCore {
         serde_wasm_bindgen::to_value(&self.engine.dsp_view()).map_err(Into::into)
     }
 
-    /// The playing `score{}`'s `{ tick, length }`, or undefined when none is
-    /// playing — the Sequencer playhead's per-frame readout.
+    /// The playing `score{}`'s [`crate::lua::ScoreView`] (`tick`, `length`,
+    /// `song`, `slot`, `step`, `anchor`), or undefined when none is playing —
+    /// the Sequencer playhead's per-frame readout.
     #[wasm_bindgen(js_name = scoreState)]
     pub fn score_state(&self) -> Result<JsValue, JsValue> {
         serde_wasm_bindgen::to_value(&self.engine.score_view()).map_err(Into::into)

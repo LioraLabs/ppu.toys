@@ -1313,7 +1313,7 @@ fn small_song(voice_mask: u8) -> Song {
 
 /// The handle a song-sourced `score{}` returns reports its compiled length,
 /// its tick advances, `loop` is true by default, `stop()` keys off and
-/// holds the tick in place, and `play()` resumes it from there.
+/// holds the tick in place, and `play()` restarts it from the top.
 #[test]
 fn song_handle_reports_length_advances_and_stop_holds_the_tick() {
     let song = small_song(0xff);
@@ -1329,7 +1329,7 @@ fn song_handle_reports_length_advances_and_stop_holds_the_tick() {
            if f == 3 then sram.tick3 = h.tick end\n\
            if f == 4 then h.stop(); sram.at_stop = h.tick end\n\
            if f == 8 then sram.still = h.tick; h.play() end\n\
-           if f == 12 then sram.resumed = h.tick end\n\
+           if f == 9 then sram.restarted = h.tick end\n\
          end",
     )
     .unwrap();
@@ -1341,9 +1341,10 @@ fn song_handle_reports_length_advances_and_stop_holds_the_tick() {
     assert_eq!(got["loop"], true);
     assert!(got["tick3"].as_i64().unwrap() > 0, "tick advances: {got}");
     assert_eq!(got["still"], got["at_stop"], "stop() holds the tick: {got}");
+    let restarted = got["restarted"].as_i64().unwrap();
     assert!(
-        got["resumed"].as_i64().unwrap() > got["still"].as_i64().unwrap(),
-        "play() resumes ticking: {got}"
+        restarted > 0 && restarted < got["still"].as_i64().unwrap(),
+        "play() restarts from the top and ticks: {got}"
     );
 }
 
