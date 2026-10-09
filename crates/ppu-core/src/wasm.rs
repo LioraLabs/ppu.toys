@@ -570,7 +570,7 @@ pub fn encode_song(song: JsValue) -> Result<JsValue, JsValue> {
     )
 }
 
-/// PSNG bytes -> `{ events, length, slotSteps, used, wanted, over }`, with
+/// PSNG bytes -> `{ events, length, loopTick, slotSteps, used, wanted, over }`, with
 /// events flattened to a Float64Array of `row, start, end, voice` quads (the
 /// TS wrapper builds the objects; per-object serde is the slow path).
 #[wasm_bindgen(js_name = analyzeSong)]
@@ -591,6 +591,7 @@ pub fn analyze_song(bytes: &[u8]) -> Result<JsValue, JsValue> {
         &js_sys::Float64Array::from(flat.as_slice()).into(),
     )?;
     Reflect::set(&out, &"length".into(), &(a.length as f64).into())?;
+    Reflect::set(&out, &"loopTick".into(), &(a.loop_tick as f64).into())?;
     Reflect::set(
         &out,
         &"slotSteps".into(),

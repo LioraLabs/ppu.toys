@@ -65,6 +65,7 @@ fn song(tempo: u32, swing: u32, patterns: &[(&str, &str)], arrangement: &[&str])
         }],
         patterns: patterns.iter().map(pattern).collect(),
         arrangement: arrangement.iter().map(index).collect(),
+        loop_start: 0,
     }
 }
 
@@ -508,6 +509,7 @@ fn stress_song() -> Song {
             })
             .collect(),
         arrangement: (0..500).map(|i| i % 16).collect(),
+        loop_start: 0,
     }
 }
 

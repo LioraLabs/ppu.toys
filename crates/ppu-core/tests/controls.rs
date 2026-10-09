@@ -40,6 +40,7 @@ fn bell_song() -> Song {
             }],
         }],
         arrangement: vec![0],
+        loop_start: 0,
     }
 }
 

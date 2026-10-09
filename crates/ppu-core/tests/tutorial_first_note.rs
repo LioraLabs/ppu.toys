@@ -58,6 +58,7 @@ fn beat1_song() -> Song {
             ],
         }],
         arrangement: vec![0],
+        loop_start: 0,
     }
 }
 

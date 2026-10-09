@@ -43,6 +43,10 @@ pub struct Song {
     pub patterns: Vec<Pattern>,
     /// Pattern index per arrangement slot, in play order.
     pub arrangement: Vec<u32>,
+    /// Arrangement slot the song loops back to: slots before it (the intro)
+    /// play once. 0 (the default, omitted from JSON) loops the whole song.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub loop_start: u32,
 }
 
 /// One instrument slot a pattern's notes can point at.
@@ -96,6 +100,11 @@ pub struct Note {
 
 /// True for 0; used to skip serializing a default `end_nudge`.
 fn is_zero(n: &i32) -> bool {
+    *n == 0
+}
+
+/// True for 0; used to skip serializing a default `loop_start`.
+fn is_zero_u32(n: &u32) -> bool {
     *n == 0
 }
 
@@ -333,7 +342,7 @@ fn parse_patt(body: &[u8], ctx: &str) -> Result<Pattern, SongError> {
     })
 }
 
-fn parse_arrg(body: &[u8], ctx: &str) -> Result<Vec<u32>, SongError> {
+fn parse_arrg(body: &[u8], ctx: &str, version: u8) -> Result<(Vec<u32>, u32), SongError> {
     let mut c = Cursor::new(body, ctx);
     let count = c.varint()?;
     // See parse_rows: cap the raw wire count by the bytes left.
@@ -341,8 +350,10 @@ fn parse_arrg(body: &[u8], ctx: &str) -> Result<Vec<u32>, SongError> {
     for _ in 0..count {
         arr.push(c.varint()?);
     }
+    // Version 2 appends the loop-start slot; version 1 has none (slot 0).
+    let loop_start = if version >= 2 { c.varint()? } else { 0 };
     c.finish()?;
-    Ok(arr)
+    Ok((arr, loop_start))
 }
 
 /// Decodes PSNG bytes into a [`Song`]. Structural only: no range checks
@@ -352,14 +363,14 @@ pub fn decode(bytes: &[u8]) -> Result<Song, SongError> {
         return Err(SongError("not a PSNG song".into()));
     }
     let version = bytes[4];
-    if version != 1 {
+    if !(1..=2).contains(&version) {
         return Err(SongError(format!("unsupported PSNG version {version}")));
     }
 
     let mut pos = 5usize;
     let mut head: Option<(u32, u32, i32, u8)> = None;
     let mut rows: Option<Vec<Row>> = None;
-    let mut arrangement: Option<Vec<u32>> = None;
+    let mut arrangement: Option<(Vec<u32>, u32)> = None;
     let mut patterns: Vec<Pattern> = Vec::new();
 
     while pos < bytes.len() {
@@ -402,7 +413,7 @@ pub fn decode(bytes: &[u8]) -> Result<Song, SongError> {
                 if arrangement.is_some() {
                     return Err(SongError("duplicate ARRG chunk".into()));
                 }
-                arrangement = Some(parse_arrg(body, &label)?);
+                arrangement = Some(parse_arrg(body, &label, version)?);
             }
             b"PATT" => {
                 patterns.push(parse_patt(body, &label)?);
@@ -414,7 +425,8 @@ pub fn decode(bytes: &[u8]) -> Result<Song, SongError> {
     let (tempo, swing, key, voice_mask) =
         head.ok_or_else(|| SongError("missing HEAD chunk".into()))?;
     let rows = rows.ok_or_else(|| SongError("missing ROWS chunk".into()))?;
-    let arrangement = arrangement.ok_or_else(|| SongError("missing ARRG chunk".into()))?;
+    let (arrangement, loop_start) =
+        arrangement.ok_or_else(|| SongError("missing ARRG chunk".into()))?;
 
     Ok(Song {
         tempo,
@@ -424,6 +436,7 @@ pub fn decode(bytes: &[u8]) -> Result<Song, SongError> {
         rows,
         patterns,
         arrangement,
+        loop_start,
     })
 }
 
@@ -447,10 +460,14 @@ fn write_string(out: &mut Vec<u8>, s: &str) {
 /// a sharper case: it collides with [`END_NUDGED`] (bit 7), so it sets that
 /// flag and corrupts the stream instead of just round-tripping a bad value.
 /// Only validated songs may be encoded.
+///
+/// A song with `loop_start == 0` is written as version 1, byte-identical to
+/// what older builds wrote; a nonzero loop start writes version 2, whose
+/// ARRG body ends with the loop start as one more varint.
 pub fn encode(song: &Song) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(b"PSNG");
-    out.push(1u8);
+    out.push(if song.loop_start == 0 { 1u8 } else { 2u8 });
 
     let mut head_body = Vec::new();
     write_varint(&mut head_body, UNITS_PER_BEAT);
@@ -509,6 +526,9 @@ pub fn encode(song: &Song) -> Vec<u8> {
     for &idx in &song.arrangement {
         write_varint(&mut arrg_body, idx);
     }
+    if song.loop_start != 0 {
+        write_varint(&mut arrg_body, song.loop_start);
+    }
     write_chunk(&mut out, b"ARRG", &arrg_body);
 
     out
@@ -553,6 +573,13 @@ impl Song {
                     i + 1
                 )));
             }
+        }
+        if self.loop_start as usize >= self.arrangement.len() {
+            return Err(SongError(format!(
+                "loop start slot {} is past the arrangement ({} slots)",
+                self.loop_start + 1,
+                self.arrangement.len()
+            )));
         }
         // Every arrangement slot names a valid pattern (checked above): sum
         // the notes it plays with saturating u64 math, before compile ever
@@ -662,6 +689,9 @@ pub struct Timing {
     pub end: u64,
     /// Ticks; equal to `tick(end)`.
     pub length: i64,
+    /// The tick slot `loop_start` starts at: where each pass after the first
+    /// begins. 0 when the song loops whole.
+    pub loop_tick: i64,
     swing: u32,
 }
 
@@ -733,10 +763,57 @@ impl Timing {
             slots,
             end,
             length: 0,
+            loop_tick: 0,
             swing: song.swing,
         };
         timing.length = timing.tick(end);
+        let ls = &timing.slots[song.loop_start as usize];
+        timing.loop_tick = tick_in_slot(ls, 0, song.swing);
         timing
+    }
+
+    /// Ticks in one looped pass (`length - loop_tick`).
+    fn body(&self) -> i64 {
+        self.length - self.loop_tick
+    }
+
+    /// Wraps an unwrapped tick `n >= 0` (counted from the song's first tick
+    /// across loop passes) to the tick actually playing: `n` itself on the
+    /// first pass, then `loop_tick` + the offset into the looped body. An
+    /// empty body (`length <= loop_tick`) can't advance, so it returns
+    /// `loop_tick`.
+    pub fn wrap(&self, n: i64) -> i64 {
+        let body = self.body();
+        if n < self.length {
+            n
+        } else if body <= 0 {
+            self.loop_tick
+        } else {
+            self.loop_tick + (n - self.length).rem_euclid(body)
+        }
+    }
+
+    /// Which pass unwrapped tick `n >= 0` is in: 0 for the first play-through,
+    /// 1 for the first loop, and so on. Always 0 for an empty body.
+    pub fn pass(&self, n: i64) -> i64 {
+        let body = self.body();
+        if n < self.length || body <= 0 {
+            0
+        } else {
+            1 + (n - self.length).div_euclid(body)
+        }
+    }
+
+    /// The inverse of ([`Self::pass`], [`Self::wrap`]): the unwrapped tick of
+    /// wrapped `tick` in `pass`. Pass 0 is `tick`; an empty body has no later
+    /// passes, so any pass maps to `tick`.
+    pub fn unwrap(&self, pass: i64, tick: i64) -> i64 {
+        let body = self.body();
+        if pass <= 0 || body <= 0 {
+            tick
+        } else {
+            self.length + (pass - 1) * body + (tick - self.loop_tick)
+        }
     }
 
     /// The slot containing `pos` (a boundary position belongs to the slot

@@ -40,6 +40,7 @@ fn piano_song() -> Song {
             notes: vec![note(0), note(24), note(48), note(72)],
         }],
         arrangement: vec![0],
+        loop_start: 0,
     }
 }
 

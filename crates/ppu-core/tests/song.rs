@@ -85,6 +85,7 @@ fn sample_song() -> Song {
             },
         ],
         arrangement: vec![0, 1, 0],
+        loop_start: 0,
     }
 }
 
@@ -117,6 +118,7 @@ fn valid_song() -> Song {
             }],
         }],
         arrangement: vec![0],
+        loop_start: 0,
     }
 }
 
@@ -206,13 +208,13 @@ fn bad_magic_is_rejected() {
     assert_eq!(err.0, "not a PSNG song");
 }
 
-/// A version other than 1 is rejected by number.
+/// A version other than 1 or 2 is rejected by number.
 #[test]
 fn unsupported_version_is_rejected() {
     let mut bytes = encode(&sample_song());
-    bytes[4] = 2;
+    bytes[4] = 3;
     let err = decode(&bytes).unwrap_err();
-    assert_eq!(err.0, "unsupported PSNG version 2");
+    assert_eq!(err.0, "unsupported PSNG version 3");
 }
 
 /// Dropping the ARRG chunk entirely is a distinct error from truncation.
@@ -600,6 +602,7 @@ fn fixture_song_without_end_nudges() -> Song {
             ],
         }],
         arrangement: vec![0],
+        loop_start: 0,
     }
 }
 
@@ -660,6 +663,7 @@ fn timing_matches_kit_lua_16th_grid_with_swing() {
             notes,
         }],
         arrangement: vec![0, 0],
+        loop_start: 0,
     };
     let compiled = compile(&song).expect("compiles");
 
@@ -784,6 +788,7 @@ fn hand_computed_mixed_tempo_pinned_nudged_song() {
         rows: vec![row],
         patterns: vec![pattern_a, pattern_b],
         arrangement: vec![0, 0, 1, 0],
+        loop_start: 0,
     };
 
     let compiled = compile(&song).expect("compiles");
@@ -865,6 +870,7 @@ fn timing_matches_kit_lua_16th_grid_with_swing_at_an_inexact_tempo() {
             notes,
         }],
         arrangement: vec![0],
+        loop_start: 0,
     };
     let compiled = compile(&song).expect("compiles");
 
@@ -932,6 +938,7 @@ fn swing_warps_an_off_16th_pair_correctly() {
             ],
         }],
         arrangement: vec![0],
+        loop_start: 0,
     };
     let compiled = compile(&song).expect("compiles");
     assert_eq!(compiled.events[0].start, 23);
@@ -991,6 +998,7 @@ fn swing_only_warps_a_pair_wholly_inside_an_odd_length_pattern() {
         rows: vec![row],
         patterns: vec![pattern],
         arrangement: vec![0],
+        loop_start: 0,
     };
     let compiled = compile(&single).expect("compiles");
     assert_eq!(
@@ -1004,6 +1012,7 @@ fn swing_only_warps_a_pair_wholly_inside_an_odd_length_pattern() {
 
     let doubled = Song {
         arrangement: vec![0, 0],
+        loop_start: 0,
         ..single
     };
     let compiled2 = compile(&doubled).expect("compiles");
@@ -1046,6 +1055,7 @@ fn tick_song(mask: u8, pattern_len: u32, notes: Vec<Note>) -> Song {
             notes,
         }],
         arrangement: vec![0],
+        loop_start: 0,
     }
 }
 
@@ -1208,6 +1218,7 @@ fn build_stress_song() -> Song {
         rows,
         patterns,
         arrangement,
+        loop_start: 0,
     }
 }
 
@@ -1308,6 +1319,7 @@ fn small_song(voice_mask: u8) -> Song {
             }],
         }],
         arrangement: vec![0],
+        loop_start: 0,
     }
 }
 
@@ -1469,6 +1481,7 @@ fn native_song_never_touches_a_voice_outside_its_mask() {
             ],
         }],
         arrangement: vec![0],
+        loop_start: 0,
     };
     let compiled = compile(&song).expect("compiles");
     assert!(
@@ -1567,4 +1580,180 @@ fn dma_refuses_a_song_source() {
     common::add_song_source(&mut e, "beat", &valid_song());
     let err = e.set_source("dma(\"beat\")").unwrap_err();
     assert!(err.message.contains("beat"), "{}", err.message);
+}
+
+// ---- loop start -------------------------------------------------------
+
+/// A 3-slot song (patterns of 48, 36 and 24 units at 120 BPM, no swing).
+fn looped_song(loop_start: u32) -> Song {
+    let mut song = valid_song();
+    song.patterns = [48u32, 36, 24]
+        .iter()
+        .map(|&length| Pattern {
+            name: format!("P{length}"),
+            length,
+            tempo: None,
+            notes: vec![],
+        })
+        .collect();
+    song.arrangement = vec![0, 1, 2];
+    song.loop_start = loop_start;
+    song
+}
+
+#[test]
+fn loop_start_round_trips_as_version_2() {
+    let mut song = sample_song();
+    song.loop_start = 2;
+    assert!(song.validate().is_ok());
+    let bytes = encode(&song);
+    assert_eq!(bytes[4], 2);
+    assert_eq!(decode(&bytes).unwrap(), song);
+    assert_eq!(encode(&decode(&bytes).unwrap()), bytes);
+}
+
+#[test]
+fn loop_start_zero_encodes_as_unchanged_version_1() {
+    let song = sample_song();
+    let v1 = encode(&song);
+    assert_eq!(v1[4], 1);
+    // The ARRG chunk is last: tag, length, count, then one index per slot.
+    let n = song.arrangement.len();
+    let mut arrg = b"ARRG".to_vec();
+    arrg.push((n + 1) as u8);
+    arrg.push(n as u8);
+    arrg.extend(song.arrangement.iter().map(|&p| p as u8));
+    assert!(v1.ends_with(&arrg));
+    // A nonzero loop start only adds the version bump and the trailing varint.
+    let mut looped = song.clone();
+    looped.loop_start = 1;
+    let v2 = encode(&looped);
+    assert_eq!(v2.len(), v1.len() + 1);
+    assert_eq!(&v2[5..v2.len() - n - 7], &v1[5..v1.len() - n - 6]);
+    assert_eq!(v2[v2.len() - 1], 1);
+}
+
+#[test]
+fn version_1_bytes_decode_with_loop_start_zero() {
+    let mut song = sample_song();
+    song.loop_start = 0;
+    let mut bytes = encode(&song);
+    // Hand-check the version byte, then confirm decode reads it as v1.
+    assert_eq!(bytes[4], 1);
+    assert_eq!(decode(&bytes).unwrap().loop_start, 0);
+    // The same body under a v2 header lacks the trailing varint: truncated.
+    bytes[4] = 2;
+    assert!(decode(&bytes).is_err());
+}
+
+#[test]
+fn version_2_with_trailing_bytes_is_rejected() {
+    let mut song = sample_song();
+    song.loop_start = 1;
+    let mut bytes = encode(&song);
+    // Append a stray byte to the ARRG body (the last chunk): bump its length.
+    let n = song.arrangement.len();
+    let len_at = bytes.len() - (n + 2) - 1;
+    bytes[len_at] += 1;
+    bytes.push(0);
+    assert!(decode(&bytes).is_err());
+}
+
+#[test]
+fn loop_start_json_omits_zero_and_defaults_absent() {
+    let mut song = valid_song();
+    let json = serde_json::to_value(&song).unwrap();
+    assert!(json.get("loopStart").is_none());
+    let back: Song = serde_json::from_value(json).unwrap();
+    assert_eq!(back.loop_start, 0);
+    song.loop_start = 0;
+    let mut looped = valid_song();
+    looped.arrangement = vec![0, 0];
+    looped.loop_start = 1;
+    let json = serde_json::to_value(&looped).unwrap();
+    assert_eq!(json["loopStart"], 1);
+}
+
+#[test]
+fn out_of_range_loop_start_is_rejected() {
+    let mut song = looped_song(2);
+    assert!(song.validate().is_ok());
+    song.loop_start = 3;
+    let err = song.validate().unwrap_err();
+    assert!(
+        err.0
+            .contains("loop start slot 4 is past the arrangement (3 slots)"),
+        "{}",
+        err.0
+    );
+}
+
+#[test]
+fn wrap_pass_unwrap_over_a_looped_song() {
+    let song = looped_song(1);
+    let t = compile(&song).unwrap().timing;
+    assert_eq!(t.loop_tick, t.tick(t.slots[1].pos));
+    assert!(t.loop_tick > 0 && t.loop_tick < t.length);
+    let body = t.length - t.loop_tick;
+
+    // First pass: untouched, right up to the end.
+    assert_eq!((t.wrap(0), t.pass(0)), (0, 0));
+    assert_eq!(
+        (t.wrap(t.length - 1), t.pass(t.length - 1)),
+        (t.length - 1, 0)
+    );
+    // Exactly at the length: the loop point, pass 1.
+    assert_eq!((t.wrap(t.length), t.pass(t.length)), (t.loop_tick, 1));
+    assert_eq!(t.wrap(t.length + 5), t.loop_tick + 5);
+    // The Nth pass.
+    let n = t.length + 3 * body + 7;
+    assert_eq!((t.wrap(n), t.pass(n)), (t.loop_tick + 7, 4));
+    // unwrap inverts (pass, wrap).
+    for n in 0..t.length + 5 * body {
+        assert_eq!(t.unwrap(t.pass(n), t.wrap(n)), n, "n = {n}");
+    }
+    assert_eq!(t.unwrap(0, 10), 10);
+    assert_eq!(t.unwrap(1, t.loop_tick), t.length);
+}
+
+#[test]
+fn loop_start_zero_wraps_the_whole_song() {
+    let t = compile(&looped_song(0)).unwrap().timing;
+    assert_eq!(t.loop_tick, 0);
+    assert_eq!(t.wrap(t.length), 0);
+    assert_eq!((t.wrap(t.length * 2 + 3), t.pass(t.length * 2 + 3)), (3, 2));
+}
+
+/// With tempo-changing slots the loop tick comes off a later run's map.
+#[test]
+fn loop_tick_follows_the_run_map_across_tempo_changes() {
+    let mut song = looped_song(2);
+    song.patterns[1].tempo = Some(24000);
+    song.patterns[2].tempo = Some(6000);
+    let t = compile(&song).unwrap().timing;
+    // Slot 2 is its own run: its start is its run_tick.
+    assert_eq!(t.slots[2].run_pos, t.slots[2].pos);
+    assert_eq!(t.loop_tick, t.slots[2].run_tick);
+    assert_eq!(t.loop_tick, t.tick(t.slots[2].pos));
+    let body = t.length - t.loop_tick;
+    assert!(body > 0);
+    for n in 0..t.length + 3 * body {
+        assert_eq!(t.unwrap(t.pass(n), t.wrap(n)), n);
+        assert!(t.wrap(n) < t.length);
+    }
+}
+
+#[test]
+fn analysis_reports_the_loop_tick() {
+    let song = looped_song(2);
+    let a = ppu_core::song_analyze::analyze(&song).unwrap();
+    let t = compile(&song).unwrap().timing;
+    assert_eq!(a.loop_tick, t.tick(t.slots[2].pos));
+    assert_eq!(a.loop_tick, t.loop_tick);
+    assert_eq!(
+        ppu_core::song_analyze::analyze(&looped_song(0))
+            .unwrap()
+            .loop_tick,
+        0
+    );
 }

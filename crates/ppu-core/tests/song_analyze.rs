@@ -29,6 +29,7 @@ fn song(voice_mask: u8, patterns: Vec<Pattern>, arrangement: Vec<u32>) -> Song {
         }],
         patterns,
         arrangement,
+        loop_start: 0,
     }
 }
 
@@ -336,6 +337,7 @@ fn brute(s: &Song) -> Analysis {
         .collect();
     Analysis {
         length: t.length,
+        loop_tick: t.loop_tick,
         events: c.events,
         slot_steps,
         used,

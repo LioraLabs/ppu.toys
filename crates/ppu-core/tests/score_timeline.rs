@@ -43,6 +43,7 @@ fn steps() -> Song {
                 .collect(),
         }],
         arrangement: vec![0],
+        loop_start: 0,
     }
 }
 

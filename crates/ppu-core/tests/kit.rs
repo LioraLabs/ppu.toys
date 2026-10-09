@@ -992,6 +992,7 @@ fn slot_step_song() -> Song {
             },
         ],
         arrangement: vec![0, 1, 0],
+        loop_start: 0,
     }
 }
 
@@ -1118,6 +1119,7 @@ fn one_row_song(sound: &str) -> Song {
             }],
         }],
         arrangement: vec![0],
+        loop_start: 0,
     }
 }
 
