@@ -24,12 +24,19 @@ timeline, in seconds. `fn(off)` works too.
 Timers count their period from `t = 0`: the first fire is one period after
 `t = 0`, then one every period. Seeking, scrubbing, or looping jumps the
 timeline, and the timers re-phase to the new position. Rendering the last
-rendered frame again (a paused refresh) is a repeat: it renders no audio,
-fires no hooks, and leaves the chip alone, and a `kon()` or `koff()` that
-`frame()` issues during it is dropped. The one exception is the first frame
-after a recompile. It re-renders that frame's span, so the keys from
-`init()` and from the new `frame()` reach the chip. It is not a jump: no
-voice is keyed off.
+rendered frame again (a paused refresh) is a repeat. It renders no audio,
+fires no hooks, and leaves the chip alone. It also drops every key event
+pending for the chip: a `kon()` or `koff()` from that `frame()`, the
+key-off of a handle's `stop()` or `play()` called in it, and any key an
+`hdma()` hook left for the next frame.
+
+The first frame after a recompile is the exception, if it repeats the last
+frame. It re-renders that frame's span: `init()`'s keys and the new
+`frame()`'s keys reach the chip, its `timer()` hooks fire again, and a
+song's notes that start inside that span are struck again. It is not a
+jump: songs are not keyed off for it and the echo buffer is kept. (A song
+the edit removed or re-anchored is still keyed off. That is the recompile,
+not the jump.)
 
 Within one frame the order is: `frame()` runs first, and its `voice[]`,
 `dsp`, `kon`, and `koff` writes land at sample offset 0; then timer hooks
@@ -296,8 +303,9 @@ struck again.
 
 The handle returns `{ tick, length, playing, loop, song, play(), stop() }`:
 `tick`/`length` are the position and total length in engine ticks (4 ms
-each). `play()` restarts the song from the top, anchored at the current
-frame's t. `stop()` keys its voices off and silences it until the next
+each). `play()` restarts the song from the top, anchored at the start of the
+frame being rendered: from `frame()`, that frame's t; from a timer hook, or
+from `init()` during a recompile, the next frame's. `stop()` keys its voices off and silences it until the next
 `play()`. The Studio's staff and playhead follow the most recently started
 score: the last one set up with an anchor, or the last one `play()`
 started. At setup, a row naming a sound that's neither a built-in name nor

@@ -649,10 +649,41 @@ fn a_paused_recompile_that_drops_the_score_keys_its_voices_off() {
     }
     e.frame(29.0 / 60.0, 29).unwrap();
     assert!(sounding(&e), "the note sounds");
+    let before = e.dsp_view().voices[0].envx;
     e.set_sources(&[("main.lua", "function frame() end")])
         .unwrap();
-    for f in 29..35 {
+    // The replayed frame itself delivers the key-off: the envelope is
+    // already releasing when it returns, before frame 30 is rendered.
+    e.frame(29.0 / 60.0, 29).unwrap();
+    let after = e.dsp_view().voices[0].envx;
+    assert!(
+        after < before,
+        "released by the replay: {before} -> {after}"
+    );
+    for f in 30..35 {
         e.frame(f as f64 / 60.0, f).unwrap();
     }
     assert!(!sounding(&e), "keyed off");
+}
+
+/// The paused twin of `a_recompile_does_not_cut_a_continuing_song`: the
+/// replay is not a jump, so an edited program that keeps the score leaves
+/// the held note sounding and the echo region alone.
+#[test]
+fn a_paused_recompile_that_keeps_the_score_is_not_a_jump() {
+    let main = "dsp.echo = { delay = 15 }\nh = score{ song = \"held\" }";
+    // A recompile resets ARAM, so the replayed frame's own body marks the
+    // echo region; a jump would zero it again after the offset-0 flush.
+    let edited =
+        format!("{main}\nfunction frame(t, f) for a = 0x8800, 0xffff do aram[a] = 0x55 end end");
+    let mut e = held_engine(main);
+    for f in 0..30 {
+        e.frame(f as f64 / 60.0, f).unwrap();
+    }
+    e.frame(29.0 / 60.0, 29).unwrap();
+    e.set_sources(&[("main.lua", &edited)]).unwrap();
+    e.frame(29.0 / 60.0, 29).unwrap();
+    let marked = e.aram()[0x8800..].iter().filter(|&&b| b == 0x55).count();
+    assert!(sounding(&e), "the held note is still sounding");
+    assert!(marked > 20000, "echo region kept: {marked}");
 }

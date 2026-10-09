@@ -306,8 +306,9 @@ end
 -- 0), a marker name looked up in the toy's `markers` table, or false: set
 -- up but not playing until play().
 --
--- Returns { tick, length, playing, song, play(), stop() }, all but `song`
--- read live through __song_get; stop() keys every voice off and silences,
+-- Returns { tick, length, playing, loop, song, play(), stop() }, all but
+-- `song` read live through __song_get; stop() keys the song's own voices
+-- (its mask) off and silences,
 -- play() restarts from the top, anchored at the start of the frame being
 -- rendered (from frame(): that frame's t; from a timer hook: the next
 -- frame's). Setup-only, like song{}.
