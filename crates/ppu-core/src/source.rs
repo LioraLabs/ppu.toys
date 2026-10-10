@@ -763,6 +763,8 @@ pub struct ConvertOptions {
     pub dither_strength: Option<u8>,
     /// Source alpha >= this is opaque, 0-255 (default 128). bg + obj.
     pub alpha_threshold: Option<u8>,
+    /// bg + sheet: sub-palette cap 1-8 (default 8); lower merges harder.
+    pub max_palettes: Option<u8>,
 }
 
 /// Validate + collapse the remap-stage fields of [`ConvertOptions`].
@@ -823,6 +825,7 @@ pub fn convert_source_with_priority(
                 bit_depth,
                 tile_size: opts.tile_size.unwrap_or(8),
                 remap: remap_options(opts)?,
+                max_palettes: opts.max_palettes.unwrap_or(8),
             };
             let (src, meta) = crate::import::import_tile_bg(rgba, width, height, &io);
             Ok((SourcePayload::Bg(src), meta))
@@ -871,6 +874,7 @@ pub fn convert_source_with_priority(
                 bit_depth,
                 tile_size: 8, // sheet cells are fixed 8x8
                 remap: remap_options(opts)?,
+                max_palettes: opts.max_palettes.unwrap_or(8),
             };
             let (src, meta) = crate::import::import_tile_sheet(rgba, width, height, &io);
             Ok((SourcePayload::Sheet(src), meta))

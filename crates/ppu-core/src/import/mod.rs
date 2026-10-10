@@ -34,6 +34,9 @@ pub struct ImportOptions {
     pub tile_size: u8,
     /// Remap-stage look: dither mode/strength + opacity cutoff.
     pub remap: RemapOptions,
+    /// Sub-palette cap, 1-8 (default 8). Lower = the fitter merges harder:
+    /// fewer palettes, tiles remapped into the closest one that's left.
+    pub max_palettes: u8,
 }
 
 impl Default for ImportOptions {
@@ -42,6 +45,7 @@ impl Default for ImportOptions {
             bit_depth: 4,
             tile_size: 8,
             remap: RemapOptions::default(),
+            max_palettes: 8,
         }
     }
 }
@@ -168,6 +172,7 @@ pub fn import_tile_bg(
         8 => (8u8, 255usize, 1usize),
         _ => (4u8, 15usize, 8usize),
     };
+    let palette_count = palette_count.min(opts.max_palettes.clamp(1, 8) as usize);
     if opts.tile_size >= 16 {
         overflows.push(Overflow::TileSize16);
     }
@@ -297,6 +302,7 @@ pub fn import_tile_sheet(
         8 => (8u8, 255usize, 1usize),
         _ => (4u8, 15usize, 8usize),
     };
+    let palette_count = palette_count.min(opts.max_palettes.clamp(1, 8) as usize);
     let (w, h) = (width as usize, height as usize);
 
     let (ptiles, cols, rows) = split_tiles_at(rgba, w, h, opts.remap.alpha_threshold);
@@ -594,5 +600,42 @@ mod tests {
             .overflows
             .iter()
             .any(|o| matches!(o, Overflow::Colors { budget: 120, .. })));
+    }
+
+    #[test]
+    fn max_palettes_caps_the_fit_and_merges_harder() {
+        // 4 tiles, each a different 3-colour set: 2bpp needs 4 palettes
+        let tones = [
+            [255u8, 0, 0],
+            [0, 255, 0],
+            [0, 0, 255],
+            [255, 255, 0],
+            [0, 255, 255],
+            [255, 0, 255],
+            [128, 128, 128],
+            [64, 0, 0],
+            [0, 64, 0],
+            [0, 0, 64],
+            [200, 100, 0],
+            [0, 100, 200],
+        ];
+        let mut v = Vec::new();
+        for y in 0..8 {
+            for x in 0..32 {
+                v.extend_from_slice(&tones[(x / 8) * 3 + (x + y) % 3]);
+                v.push(255);
+            }
+        }
+        let run = |max_palettes| {
+            let opts = ImportOptions {
+                bit_depth: 2,
+                max_palettes,
+                ..Default::default()
+            };
+            import_tile_bg(&v, 32, 8, &opts).0.palettes.len()
+        };
+        assert_eq!(run(8), 4);
+        assert_eq!(run(2), 2);
+        assert_eq!(run(0), 1); // clamped to at least one
     }
 }

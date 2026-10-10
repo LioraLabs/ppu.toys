@@ -82,6 +82,7 @@ fn main() {
                 strength: 50,
                 alpha_threshold: 128,
             },
+            max_palettes: 8,
         };
         let (src, meta) = import_tile_bg(&rgba, W as u32, H as u32, &opts);
 

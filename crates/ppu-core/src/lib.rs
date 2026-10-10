@@ -270,7 +270,10 @@ mod tests {
         row.m7.cy = -32;
         let regs = derive_registers(&row, &Obsel::default(), &HashMap::new());
         assert_eq!(regs.iter().find(|r| r.addr == 0x211f).unwrap().value, 512);
-        assert_eq!(regs.iter().find(|r| r.addr == 0x2120).unwrap().value, 0x1fe0);
+        assert_eq!(
+            regs.iter().find(|r| r.addr == 0x2120).unwrap().value,
+            0x1fe0
+        );
     }
 
     #[test]
