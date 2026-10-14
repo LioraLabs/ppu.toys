@@ -1,7 +1,8 @@
 //! WASM/JS shim over the pure core. Compiled only for wasm32. Each method maps
 //! 1:1 to the TS `PpuCore` interface; the JS wrapper assembles `frame()`'s object.
 //! Owns a `LuaEngine`; frame() drives Lua -> LineTable -> compositor and caches
-//! the framebuffer/registers/cgram/oam for the per-field getters.
+//! the framebuffer/registers/cgram/oam for the per-field getters. advance() is
+//! frame() minus the compositor (see its doc for what stays stale).
 use std::collections::HashMap;
 
 use js_sys::{Object, Reflect, Uint8Array, Uint8ClampedArray};
@@ -79,24 +80,31 @@ impl PpuCore {
         to_set_source_result(self.engine.reset())
     }
 
+    /// Run one frame in full: Lua `frame()`, scanout, DSP/audio, sram, and the
+    /// compositor, refreshing every cached snapshot the getters read.
     pub fn frame(&mut self, t: f64, f: u32) -> Result<(), JsValue> {
         self.run(t, f, true)
     }
 
     /// Simulate one frame without compositing: the same Lua `frame()`, scanout,
-    /// DSP/audio, sram and register bookkeeping as [`Self::frame`], but no
-    /// pixels or host snapshots are produced. `audio()` is that frame's PCM;
-    /// the framebuffer/obj-overflow/screens getters keep the last composed
-    /// picture.
+    /// DSP/audio, sram and register bookkeeping as [`Self::frame`], but the
+    /// compositor does not run. `audio()` is that frame's PCM.
+    ///
+    /// Skipped: the framebuffer, `objOverflow`, `mainScreen`, `subScreen` and
+    /// `mathMask` keep the last composed picture. Updated as in `frame()`:
+    /// registers, cgram, oam and the scanline table behind `inspectScanline`,
+    /// `layerView`, the traces and the m7/window scanline getters. Those
+    /// therefore describe the advanced frame while the picture getters describe
+    /// an earlier one, so call `frame()` before reading inspection getters.
     pub fn advance(&mut self, t: f64, f: u32) -> Result<(), JsValue> {
         self.run(t, f, false)
     }
 
     fn run(&mut self, t: f64, f: u32, compose: bool) -> Result<(), JsValue> {
-        // Build the LineTable + update Memory. On a Lua runtime error, throw the
-        // structured LuaError (same shape as setSource) so the JS adapter's
-        // safeFrame surfaces it as an editor diagnostic. The cached framebuffer/
-        // registers/cgram/oam are left intact -> last good frame survives.
+        // Build the LineTable + update Memory. On a Lua runtime error (from
+        // frame() or advance() alike), throw the structured LuaError (same shape
+        // as setSource) so the JS adapter surfaces it as an editor diagnostic.
+        // Every cached snapshot is left intact -> last good frame survives.
         let mut lt = match self.engine.frame(t, f) {
             Ok(lt) => lt,
             Err(e) => {
