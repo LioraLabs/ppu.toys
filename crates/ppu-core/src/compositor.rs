@@ -12,6 +12,9 @@
 //!        and OBJ priority (0-3), honoring the BG3-priority bit (BGMODE.3);
 //!   4. apply INIDISP brightness ONCE to the final pixel (`apply_brightness`).
 //!
+//! Candidates are sampled once per line for both screens; each screen is then
+//! resolved from them with its own TM/TS and TMW/TSW.
+//!
 //! Brightness single-application point: HERE. The scanline primitives this
 //! compositor calls all return un-attenuated direct RGBA, so brightness is never
 //! double-applied.
@@ -203,17 +206,19 @@ fn tile_mode_ladder(mode: u8) -> Ladder {
     l
 }
 
-/// A priority ladder (front to back) in fixed storage: the longest is a
-/// four-BG tile mode, 4 + 4 + 4 OBJ levels.
+/// Longest ladder: 4 BGs x 2 tile-priority bits + 4 OBJ levels = 12.
+const LADDER_CAP: usize = 12;
+
+/// A priority ladder (front to back) in fixed storage of `LADDER_CAP` rungs.
 struct Ladder {
-    slots: [Slot; 12],
+    slots: [Slot; LADDER_CAP],
     len: usize,
 }
 
 impl Ladder {
     fn new() -> Self {
         Ladder {
-            slots: [Slot::Obj { prio: 0 }; 12],
+            slots: [Slot::Obj { prio: 0 }; LADDER_CAP],
             len: 0,
         }
     }
@@ -303,17 +308,13 @@ fn sample_line(
             if row.extbg() {
                 render_mode7_scanline_px_into(row, mem, y, &mut sc.m7);
             } else {
-                sc.flat.fill(0);
                 render_mode7_scanline(row, mem, y, &mut sc.flat);
             }
-        } else {
-            sc.m7.fill(None);
-            sc.flat.fill(0);
         }
     } else {
-        let used = ladder.layer_bits() & used;
+        let bg_used = ladder.layer_bits() & used;
         for (i, l) in row.bg.iter().enumerate() {
-            if used & (1 << i) != 0 {
+            if bg_used & (1 << i) != 0 {
                 render_bg_layer_scanline_px_into(l, mem, y, &mut sc.bgs[i]);
             }
         }
@@ -382,10 +383,13 @@ fn resolve_screen(
     }
 
     // Per-pixel priority resolution: the frontmost occupied rung wins, with
-    // backdrop showing through. Rungs this screen cannot show are dropped once.
+    // backdrop showing through. Tile modes interleave tilemap priority bit x mode
+    // layer order x OBJ priority; EXTBG splits the Mode-7 plane into two levels
+    // by pixel bit 7, interleaved with OBJ priority (see the ladder fns). Rungs this screen cannot show are dropped once.
     let mode7 = row.mode == 7;
     let mut rungs = Ladder::new();
     for &r in ladder.iter() {
+        // An invisible BG1 samples no Mode-7 plane, so m7 may be stale: never read it.
         let plane_off = mode7 && matches!(r, Slot::Bg { .. }) && !row.bg[0].visible;
         if slot_enabled(mask, &r) && !plane_off {
             rungs.push(r);
@@ -420,10 +424,10 @@ fn resolve_screen(
 /// the layers whose bit is set in `mask` (TM = main, TS = sub). `wmask` is the
 /// window-designation register for that screen (TMW = main, TSW = sub): a layer
 /// whose `wmask` bit is set is suppressed at any x inside that layer's combined
-/// window. Single-screen wrapper over the shared sampling and resolve steps that
-/// `render_frame_view` runs once for both screens.
+/// window. Single-screen test seam over the same sample_line / fill_hidden /
+/// resolve_screen steps `render_frame_view` uses.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
-#[cfg_attr(not(test), allow(dead_code))] // render_frame_view shares the steps; unit tests call this
 pub(crate) fn composite_screen(
     row: &RegRow,
     mem: &Memory,
@@ -518,8 +522,8 @@ pub struct FrameView {
 
 /// Compositor entry that ALSO returns the per-frame OBJ overflow diagnostic
 /// (`$213E` STAT77) and the pre-math/pre-brightness intermediates (M9 view
-/// seam). The per-line OBJ bin is computed ONCE here and reused by the main
-/// and sub `composite_screen` passes, so both screens composite the exact
+/// seam). The per-line OBJ bin is computed ONCE here and shared by `sample_line`
+/// and both `resolve_screen` passes, so both screens composite the exact
 /// same deterministically-capped sprite set (no drift).
 pub fn render_frame_view(lt: &LineTable, mem: &Memory) -> FrameView {
     let mut fb = vec![0u8; WIDTH * HEIGHT * 4];
