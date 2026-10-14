@@ -110,3 +110,28 @@ points in seconds.
 
 See also: [Background scrolling](backgrounds.md#scroll-bgnhofs-and-bgnvofs-210d-2114),
 [Mode 7](mode7.md), [windows](windows.md), and [color math](color-math.md).
+
+## Raw register rasters
+
+`raster(rows)` submits 224 SNES register snapshots, indexed 0..223. This avoids
+executing a Lua decoder for every scanline for a port that emits raw register writes.
+Pixels still pass through the native PPU. Each row contains byte indices 0..63
+and `palette[0..255]` with BGR555 colours. Reusing a row table is allowed.
+The layout is a packed register prefix:
+
+| Bytes | Register data |
+| --- | --- |
+| 0, 1, 2..3 | INIDISP, OBSEL, OAM address |
+| 4, 5, 6..9, 10..11 | BGMODE, MOSAIC, BGnSC, BGnNBA |
+| 12, 13 | M7SEL, SETINI |
+| 14..21, 22..29 | Four little-endian BG H/V scroll values |
+| 30..45 | Little-endian Mode 7 A,B,C,D,X,Y,H,V |
+| 46..47 | Packed BGR555 fixed colour |
+| 48..50, 51 | W12SEL, W34SEL, WOBJSEL, padding |
+| 52..55, 56..57 | WH0..3, WBGLOG, WOBJLOG |
+| 58..63 | TM, TS, TMW, TSW, CGADSUB, CGWSEL |
+
+VRAM and OBJ still use their normal frame-wide controls. Row zero supplies
+the frame palette; later palette changes affect only their scanlines. The
+SNES background scanout offset is applied automatically. Ordinary `hdma`
+hooks and Studio controls can override the captured rows afterward.

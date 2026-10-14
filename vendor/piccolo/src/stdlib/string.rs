@@ -6,6 +6,47 @@ pub fn load_string<'gc>(ctx: Context<'gc>) {
     string
         .set(
             ctx,
+            "byte",
+            Callback::from_fn(&ctx, |ctx, _, mut stack| {
+                let (value, first, last) =
+                    stack.consume::<(Value, Option<i64>, Option<i64>)>(ctx)?;
+                let bytes = match value {
+                    Value::String(s) => s,
+                    Value::Integer(i) => ctx.intern(i.to_string().as_bytes()),
+                    Value::Number(n) => ctx.intern(n.to_string().as_bytes()),
+                    v => {
+                        return Err(TypeError {
+                            expected: "string, integer or number",
+                            found: v.type_name(),
+                        }
+                        .into())
+                    }
+                };
+                let len = bytes.len() as i64;
+                let index = |i: i64| {
+                    if i < 0 {
+                        len.saturating_add(i).saturating_add(1)
+                    } else {
+                        i
+                    }
+                };
+                let first = first.unwrap_or(1);
+                let last = index(last.unwrap_or(first)).min(len);
+                let first = index(first).max(1);
+                stack.clear();
+                if first <= last {
+                    for &b in &bytes.as_bytes()[(first - 1) as usize..last as usize] {
+                        stack.push_back(Value::Integer(i64::from(b)));
+                    }
+                }
+                Ok(CallbackReturn::Return)
+            }),
+        )
+        .unwrap();
+
+    string
+        .set(
+            ctx,
             "len",
             Callback::from_fn(&ctx, |ctx, _, mut stack| {
                 let v: Option<Value> = stack.consume(ctx)?;

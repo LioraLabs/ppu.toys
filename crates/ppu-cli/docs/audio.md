@@ -486,3 +486,33 @@ mixer settings, never as Lua. Saving only the mix does not recompile the song or
 restart its timers. **Load saved** discards live changes; **Release all** clears
 all adjustments (save afterward to persist that reset). Opening another toy
 clears the previous toy's live adjustments.
+
+## Raw S-DSP drivers
+
+A Lua driver can set `dsp.raw = true` and submit `dsp.events` each frame. This
+selects direct S-DSP commands instead of the friendly voice/score/timer walker.
+The list is consumed once, in order, at sample offsets within that frame's
+533 or 534 stereo sample pairs. Each event has `at` (default 0) and one action:
+
+```lua
+dsp.events = {
+  {at=0, reset=true},
+  {at=0, addr=0x8000, data="\000\129\000\129"}, -- ARAM upload
+  {at=0, reg=0x5d, value=0x80},                 -- sample directory
+  {at=128, reg=0x4c, value=1},                 -- key on voice 0
+}
+```
+
+An upload accepts a binary string or a 1-based byte table and wraps at 64 KiB.
+Registers are 0..127 and values are 0..255. Offsets must be nondecreasing and
+within the current audio frame. The entire list is validated before any event
+is applied. Direct commands preserve the driver's directory, echo address,
+phase inversion, envelopes, noise, and key-event ordering. The sound inspector
+shows the resulting registers. Lua gameplay and driver logic remain in the toy.
+
+`bytebuffer(size)` provides compact storage for raw binary data. It grows
+on writes up to 32 MiB and supplies `r8/r16/r32/r64(address)`,
+`w8(address,value)` (returns the previous byte), `load(address,binaryString)`,
+`fill(address,value,count)`, and `copy(destination,source,count)`. Reads are
+little endian; missing bytes read as zero. Copy handles overlapping ranges.
+Functions use dot calls; addresses are bytes, beginning at zero.

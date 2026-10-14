@@ -167,3 +167,7 @@ Vendoring is a directory and three lines of `Cargo.toml`, hermetic and offline.
 
 Either way the check is the same: remove the patch stanza and confirm
 `crates/ppu-core/tests/lua_table_grow.rs` still passes.
+
+The local host-support work also adds binary `string.byte` reads and corrects
+`~=` precedence to match the other comparisons in Lua. Regression coverage:
+`crates/ppu-core/tests/lua_binary_data.rs`.

@@ -28,6 +28,8 @@ mod compositor;
 pub use compositor::*;
 
 mod lua;
+mod lua_buffer;
+mod lua_raster;
 pub use lua::*;
 
 mod quantize;

@@ -466,6 +466,7 @@ fn echo_region(delay: i64) -> (u32, u32) {
 /// `timer` share.
 #[derive(Default)]
 struct DmaRecorder {
+    raster: crate::lua_raster::Raster,
     active: Cell<bool>,
     placements: RefCell<Vec<DmaPlacement>>,
     vram_ranges: RefCell<Vec<(String, usize, usize)>>,
@@ -1414,6 +1415,7 @@ impl LuaEngine {
         if self.source_dirty {
             self.recompile()?;
         }
+        self.dma.raster.borrow_mut().take();
         // Reset the per-frame hook registry, then run frame(t,f) once.
         {
             let mut l = self.lua.borrow_mut();
@@ -1644,6 +1646,9 @@ impl LuaEngine {
         // globals to the working row, runs fn(y), and reads the row back.
         let err_sink: Rc<RefCell<Option<LuaError>>> = Rc::new(RefCell::new(None));
         let mut builder = LineTableBuilder::new(defaults.clone());
+        if let Some(rows) = self.dma.raster.borrow_mut().take() {
+            builder.hdma(0, HEIGHT - 1, move |y, row| *row = rows[y].clone());
+        }
         for (y0, y1, sf, file) in hooks {
             let lua = self.lua.clone();
             let keys = self.keys.clone();
@@ -1962,6 +1967,16 @@ impl LuaEngine {
                 }
             });
         }
+        if self
+            .lua
+            .borrow_mut()
+            .enter(|ctx| match ctx.get_global("dsp") {
+                Value::Table(d) => d.get(ctx, "raw").to_bool(),
+                _ => false,
+            })
+        {
+            return self.render_raw_frame_audio(f);
+        }
         self.flush_dsp_writes();
         if jump {
             let (lo, hi) = echo_region((self.dsp.read(0x7d) & 0x0f) as i64);
@@ -2050,6 +2065,127 @@ impl LuaEngine {
         let view = decode_dsp_view(&self.dsp);
         let mut l = self.lua.borrow_mut();
         l.enter(|ctx| publish_voice_readbacks(ctx, &view));
+        Ok(())
+    }
+
+    /// Raw S-DSP drivers can submit chip writes at exact sample offsets.
+    /// `dsp.raw` selects this path; `dsp.events` is consumed once per frame.
+    fn render_raw_frame_audio(&mut self, f: u32) -> Result<(), LuaError> {
+        enum Event {
+            Write(u8, u8),
+            Upload(usize, Vec<u8>),
+            Reset,
+        }
+        let n = (audio_start_s(f as u64 + 1) - audio_start_s(f as u64)) as usize;
+        let events =
+            self.lua
+                .borrow_mut()
+                .enter(|ctx| -> Result<Vec<(usize, Event)>, LuaError> {
+                    let fail = |message: &str| LuaError {
+                        message: message.into(),
+                        line: None,
+                        file: None,
+                    };
+                    let Value::Table(d) = ctx.get_global("dsp") else {
+                        unreachable!()
+                    };
+                    let Value::Table(list) = d.get(ctx, "events") else {
+                        return Ok(vec![]);
+                    };
+                    let mut events = Vec::new();
+                    let mut last = 0;
+                    for i in 1..=list.length() {
+                        let Value::Table(e) = list.get(ctx, i) else {
+                            return Err(fail("dsp.events entries must be tables"));
+                        };
+                        let at = e.get(ctx, "at").to_int().unwrap_or(0);
+                        if at < last || at < 0 || at > n as i64 {
+                            return Err(fail(
+                                "dsp.events offsets must increase within the audio frame",
+                            ));
+                        }
+                        last = at;
+                        let event = if e.get(ctx, "reset").to_bool() {
+                            Event::Reset
+                        } else if let Some(addr) = e.get(ctx, "addr").to_int() {
+                            if !(0..=65535).contains(&addr) {
+                                return Err(fail("dsp.events ARAM address is out of range"));
+                            }
+                            let bytes = match e.get(ctx, "data") {
+                                Value::String(b) => b.as_bytes().to_vec(),
+                                Value::Table(b) => {
+                                    let mut bytes = Vec::new();
+                                    for j in 1..=b.length() {
+                                        let v = b.get(ctx, j).to_int().ok_or_else(|| {
+                                            fail("dsp.events upload requires bytes")
+                                        })?;
+                                        if !(0..=255).contains(&v) {
+                                            return Err(fail(
+                                                "dsp.events upload byte is out of range",
+                                            ));
+                                        }
+                                        bytes.push(v as u8);
+                                    }
+                                    bytes
+                                }
+                                _ => {
+                                    return Err(fail(
+                                        "dsp.events upload requires a string or byte table",
+                                    ))
+                                }
+                            };
+                            if bytes.len() > 65536 {
+                                return Err(fail("dsp.events upload exceeds ARAM"));
+                            }
+                            Event::Upload(addr as usize, bytes)
+                        } else {
+                            let reg = e
+                                .get(ctx, "reg")
+                                .to_int()
+                                .ok_or_else(|| fail("dsp.events write requires reg"))?;
+                            let val = e
+                                .get(ctx, "value")
+                                .to_int()
+                                .ok_or_else(|| fail("dsp.events write requires value"))?;
+                            if !(0..=127).contains(&reg) || !(0..=255).contains(&val) {
+                                return Err(fail("dsp.events register or value is out of range"));
+                            }
+                            Event::Write(reg as u8, val as u8)
+                        };
+                        events.push((at as usize, event));
+                    }
+                    d.set(ctx, "events", Table::new(&ctx)).unwrap();
+                    Ok(events)
+                })?;
+        self.audio.resize(n * 2, 0);
+        let mut cursor = 0;
+        for (at, event) in events {
+            self.dsp
+                .render(&mut self.aram, &mut self.audio[cursor * 2..at * 2]);
+            match event {
+                Event::Write(reg, val) => self.dsp.write(reg, val),
+                Event::Reset => self.dsp = Dsp::new(),
+                Event::Upload(addr, bytes) => {
+                    for (i, b) in bytes.into_iter().enumerate() {
+                        self.aram[(addr + i) & 65535] = b
+                    }
+                }
+            }
+            cursor = at;
+        }
+        self.live_mix
+            .as_ref()
+            .unwrap_or(&self.saved_mix)
+            .apply(&mut self.dsp);
+        self.dsp
+            .render(&mut self.aram, &mut self.audio[cursor * 2..]);
+        self.unmixed_dsp = Some(decode_dsp_view(&self.dsp));
+        self.lua.borrow_mut().enter(|ctx| {
+            seed_dsp_tables(ctx, &self.dsp, None);
+            if let Value::Table(d) = ctx.get_global("dsp") {
+                d.set(ctx, "raw", true).unwrap();
+            }
+        });
         Ok(())
     }
 
@@ -2442,6 +2578,7 @@ fn set_pad_table(ctx: piccolo::Context<'_>, mask: u16) {
 }
 
 fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
+    crate::lua_buffer::install(ctx);
     // Throwaway: an empty mirror makes every sync_* write unconditional; the engine's own mirror starts empty too.
     let m = &mut Mirror::default();
     // controller: all released until the host sets a mask; init() may read it.
@@ -3133,6 +3270,7 @@ fn install_dma(
     rec: Rc<DmaRecorder>,
 ) {
     use crate::source::SourceKind;
+    crate::lua_raster::install(ctx, rec.raster.clone());
     let timer_rec = rec.clone();
     let song_store = store.clone();
     let song_rec = rec.clone();
