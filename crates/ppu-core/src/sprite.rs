@@ -183,6 +183,20 @@ pub fn render_scanline_for(
     width: usize,
 ) -> Vec<Option<SpritePixel>> {
     let mut out = vec![None; width];
+    render_scanline_for_into(mem, indices, y, &mut out);
+    out
+}
+
+/// [`render_scanline_for`] into a caller-owned buffer (`out.len()` is the
+/// width). Starts from all-`None`: eval-order priority relies on `is_some()`.
+pub fn render_scanline_for_into(
+    mem: &Memory,
+    indices: &[usize],
+    y: usize,
+    out: &mut [Option<SpritePixel>],
+) {
+    out.fill(None);
+    let width = out.len();
     let char_base = mem.obsel.char_base as u32;
     let size_sel = mem.obsel.size_sel;
     let name_select = mem.obsel.name_select as u32;
@@ -214,7 +228,6 @@ pub fn render_scanline_for(
             });
         }
     }
-    out
 }
 
 /// Composite every kept sprite for scanline `y` (self-binning convenience for the

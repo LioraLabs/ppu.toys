@@ -251,19 +251,31 @@ pub fn render_bg_layer_scanline_px(
     y: usize,
     width: usize,
 ) -> Vec<Option<BgPixel>> {
+    let mut out = vec![None; width];
+    render_bg_layer_scanline_px_into(layer, mem, y, &mut out);
+    out
+}
+
+/// [`render_bg_layer_scanline_px`] into a caller-owned buffer (`out.len()` is the
+/// width); every element is overwritten.
+pub fn render_bg_layer_scanline_px_into(
+    layer: &RegBg,
+    mem: &Memory,
+    y: usize,
+    out: &mut [Option<BgPixel>],
+) {
     if !layer.visible {
-        return vec![None; width];
+        out.fill(None);
+        return;
     }
-    (0..width)
-        .map(|x| {
-            sample_bg_pixel(layer, mem, x, y).and_then(|s| {
-                (s.index != 0).then(|| BgPixel {
-                    rgba: unpack_rgb15(s.color15),
-                    prio: s.prio,
-                })
+    for (x, o) in out.iter_mut().enumerate() {
+        *o = sample_bg_pixel(layer, mem, x, y).and_then(|s| {
+            (s.index != 0).then(|| BgPixel {
+                rgba: unpack_rgb15(s.color15),
+                prio: s.prio,
             })
-        })
-        .collect()
+        });
+    }
 }
 
 /// Render one BG layer for scanline `y` into `width` pixel candidates.

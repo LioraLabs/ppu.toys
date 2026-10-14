@@ -160,23 +160,34 @@ pub fn render_mode7_scanline_px(
     y: usize,
     width: usize,
 ) -> Vec<Option<Mode7Pixel>> {
+    let mut out = vec![None; width];
+    render_mode7_scanline_px_into(row, mem, y, &mut out);
+    out
+}
+
+/// [`render_mode7_scanline_px`] into a caller-owned buffer (`out.len()` is the
+/// width); every element is overwritten.
+pub fn render_mode7_scanline_px_into(
+    row: &RegRow,
+    mem: &Memory,
+    y: usize,
+    out: &mut [Option<Mode7Pixel>],
+) {
     let direct = row.bg[0].direct_color;
-    (0..width)
-        .map(|x| {
-            let raw = mode7_raw_index(row, mem, y, x);
-            let color = raw & 0x7f;
-            (color != 0).then(|| Mode7Pixel {
-                // Direct color (CGWSEL.0) expands the low-7-bit color to BGR555
-                // (pal 0), bypassing CGRAM; otherwise it's a CGRAM index.
-                rgba: if direct {
-                    unpack_rgb15(crate::bg::direct_color_bgr555(color, 0))
-                } else {
-                    unpack_rgb15(mem.cgram[color as usize])
-                },
-                prio: raw & 0x80 != 0,
-            })
-        })
-        .collect()
+    for (x, o) in out.iter_mut().enumerate() {
+        let raw = mode7_raw_index(row, mem, y, x);
+        let color = raw & 0x7f;
+        *o = (color != 0).then(|| Mode7Pixel {
+            // Direct color (CGWSEL.0) expands the low-7-bit color to BGR555
+            // (pal 0), bypassing CGRAM; otherwise it's a CGRAM index.
+            rgba: if direct {
+                unpack_rgb15(crate::bg::direct_color_bgr555(color, 0))
+            } else {
+                unpack_rgb15(mem.cgram[color as usize])
+            },
+            prio: raw & 0x80 != 0,
+        });
+    }
 }
 
 /// Render every scanline of a resolved line table as Mode 7 over `mem` into a

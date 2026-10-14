@@ -16,14 +16,14 @@
 //! compositor calls all return un-attenuated direct RGBA, so brightness is never
 //! double-applied.
 
-use crate::bg::{apply_brightness, render_bg_layer_scanline_px, BgPixel};
+use crate::bg::{apply_brightness, render_bg_layer_scanline_px_into, BgPixel};
 use crate::linetable::LineTable;
 use crate::memory::{rgb15, unpack_rgb15, Memory};
-use crate::mode7::{render_mode7_scanline, render_mode7_scanline_px};
+use crate::mode7::{render_mode7_scanline, render_mode7_scanline_px_into, Mode7Pixel};
 use crate::modes::mode_info;
 use crate::registers::RegRow;
-use crate::sprite::{bin_line, render_scanline_for};
-use crate::window::in_window;
+use crate::sprite::{bin_line, render_scanline_for_into, SpritePixel};
+use crate::window::{in_window, WindowRanges};
 use crate::ObjOverflow;
 use crate::{HEIGHT, WIDTH};
 
@@ -107,10 +107,10 @@ impl PixelSource {
 /// come from the mode table's `priority_order` ([BG1,BG2,BG3]); the OBJ-prio
 /// slots and the BG3-priority-bit lift are Mode-1 hardware semantics. `bg3_high`
 /// = BGMODE.3 set: BG3 tile-priority-1 pixels jump above every other layer.
-fn mode1_ladder(bg3_high: bool) -> Vec<Slot> {
+fn mode1_ladder(bg3_high: bool) -> Ladder {
     let ord = mode_info(1).map_or(&[0u8, 1, 2][..], |m| m.priority_order);
     let (bg1, bg2, bg3) = (ord[0] as usize, ord[1] as usize, ord[2] as usize);
-    let mut l = Vec::with_capacity(10);
+    let mut l = Ladder::new();
     if bg3_high {
         l.push(Slot::Bg {
             layer: bg3,
@@ -174,16 +174,16 @@ fn mode7_extbg_ladder() -> [Slot; 6] {
     ]
 }
 
-fn tile_mode_ladder(mode: u8) -> Vec<Slot> {
+fn tile_mode_ladder(mode: u8) -> Ladder {
     let Some(info) = mode_info(mode) else {
-        return vec![
+        return Ladder::from_slice(&[
             Slot::Obj { prio: 3 },
             Slot::Obj { prio: 2 },
             Slot::Obj { prio: 1 },
             Slot::Obj { prio: 0 },
-        ];
+        ]);
     };
-    let mut l = Vec::with_capacity(info.priority_order.len() * 2 + 4);
+    let mut l = Ladder::new();
     l.push(Slot::Obj { prio: 3 });
     for &layer in info.priority_order {
         l.push(Slot::Bg {
@@ -203,13 +203,227 @@ fn tile_mode_ladder(mode: u8) -> Vec<Slot> {
     l
 }
 
+/// A priority ladder (front to back) in fixed storage: the longest is a
+/// four-BG tile mode, 4 + 4 + 4 OBJ levels.
+struct Ladder {
+    slots: [Slot; 12],
+    len: usize,
+}
+
+impl Ladder {
+    fn new() -> Self {
+        Ladder {
+            slots: [Slot::Obj { prio: 0 }; 12],
+            len: 0,
+        }
+    }
+
+    fn from_slice(s: &[Slot]) -> Self {
+        let mut l = Ladder::new();
+        for &r in s {
+            l.push(r);
+        }
+        l
+    }
+
+    fn push(&mut self, slot: Slot) {
+        self.slots[self.len] = slot;
+        self.len += 1;
+    }
+
+    /// Designation bits (BG1..BG4 = 0..3, OBJ = 4) of every layer on the ladder.
+    fn layer_bits(&self) -> u8 {
+        self.iter().fold(0u8, |m, r| m | 1 << slot_bit(r))
+    }
+}
+
+impl std::ops::Deref for Ladder {
+    type Target = [Slot];
+    fn deref(&self) -> &[Slot] {
+        &self.slots[..self.len]
+    }
+}
+
+/// The priority ladder for this line's mode. Empty for non-EXTBG Mode 7, which
+/// has a single floor plus an OBJ overlay instead of a ladder.
+fn ladder_for(row: &RegRow) -> Ladder {
+    if row.mode == 7 {
+        if row.extbg() {
+            Ladder::from_slice(&mode7_extbg_ladder())
+        } else {
+            Ladder::new()
+        }
+    } else if row.mode == 1 {
+        mode1_ladder(row.bg3_priority)
+    } else {
+        tile_mode_ladder(row.mode)
+    }
+}
+
+/// Per-line scratch shared by the main and sub passes, allocated once per frame
+/// and overwritten each line. Candidate buffers hold stale data for layers that
+/// were not sampled; a screen only reads the layers its own mask enables, and
+/// those are always sampled (see `sample_line`).
+struct LineScratch {
+    bgs: [[Option<BgPixel>; WIDTH]; 4],
+    obj: [Option<SpritePixel>; WIDTH],
+    /// EXTBG Mode-7 plane candidates.
+    m7: [Option<Mode7Pixel>; WIDTH],
+    /// Non-EXTBG Mode-7 plane, RGBA with alpha 0 = transparent.
+    flat: [u8; WIDTH * 4],
+    /// Per layer (BG1..BG4, OBJ): columns inside that layer's combined window.
+    hidden: [[bool; WIDTH]; 5],
+}
+
+impl LineScratch {
+    fn new() -> Self {
+        LineScratch {
+            bgs: [[None; WIDTH]; 4],
+            obj: [None; WIDTH],
+            m7: [None; WIDTH],
+            flat: [0; WIDTH * 4],
+            hidden: [[false; WIDTH]; 5],
+        }
+    }
+}
+
+/// Sample, once, every layer that either screen (`used` = TM | TS) can show on
+/// this line. Windows are not applied here; they hide per screen at resolve.
+fn sample_line(
+    row: &RegRow,
+    mem: &Memory,
+    y: usize,
+    obj: &[usize],
+    ladder: &Ladder,
+    used: u8,
+    sc: &mut LineScratch,
+) {
+    if row.mode == 7 {
+        if row.bg[0].visible && used & 0x01 != 0 {
+            if row.extbg() {
+                render_mode7_scanline_px_into(row, mem, y, &mut sc.m7);
+            } else {
+                sc.flat.fill(0);
+                render_mode7_scanline(row, mem, y, &mut sc.flat);
+            }
+        } else {
+            sc.m7.fill(None);
+            sc.flat.fill(0);
+        }
+    } else {
+        let used = ladder.layer_bits() & used;
+        for (i, l) in row.bg.iter().enumerate() {
+            if used & (1 << i) != 0 {
+                render_bg_layer_scanline_px_into(l, mem, y, &mut sc.bgs[i]);
+            }
+        }
+    }
+    if used & (1 << 4) != 0 {
+        render_scanline_for_into(mem, obj, y, &mut sc.obj);
+    }
+}
+
+/// Fill `sc.hidden` for every layer whose bit is set in `wused` (TMW | TSW).
+fn fill_hidden(row: &RegRow, ranges: &WindowRanges, wused: u8, sc: &mut LineScratch) {
+    for (layer, h) in sc.hidden.iter_mut().enumerate() {
+        if wused & (1 << layer) != 0 {
+            let sel = row.layer_window(layer);
+            for (x, hx) in h.iter_mut().enumerate() {
+                *hx = in_window(&sel, ranges, x);
+            }
+        }
+    }
+}
+
+/// Resolve one screen of the line from the shared candidates: `mask` (TM/TS)
+/// picks the layers, `wmask` (TMW/TSW) the ones clipped by their window.
+#[allow(clippy::too_many_arguments)]
+fn resolve_screen(
+    row: &RegRow,
+    ladder: &Ladder,
+    mask: u8,
+    wmask: u8,
+    sc: &LineScratch,
+    backdrop: [u8; 4],
+    line: &mut [[u8; 4]],
+    src: &mut [PixelSource],
+) {
+    line.fill(backdrop);
+    src.fill(PixelSource::Backdrop);
+    let hidden = |layer: usize, x: usize| wmask & (1 << layer) != 0 && sc.hidden[layer][x];
+
+    if row.mode == 7 && !row.extbg() {
+        // Single Mode-7 floor, sprites overlaid on top ordered among
+        // themselves by prio.
+        if row.bg[0].visible && mask & 0x01 != 0 {
+            for (x, slot) in line.iter_mut().enumerate() {
+                if hidden(0, x) {
+                    continue;
+                }
+                let p = &sc.flat[x * 4..x * 4 + 4];
+                if p[3] != 0 {
+                    *slot = [p[0], p[1], p[2], 255];
+                    src[x] = PixelSource::Bg(0);
+                }
+            }
+        }
+        if mask & (1 << 4) != 0 {
+            for (x, slot) in line.iter_mut().enumerate() {
+                if hidden(4, x) {
+                    continue;
+                }
+                if let Some(s) = sc.obj[x] {
+                    *slot = s.rgba;
+                    src[x] = PixelSource::Obj { pal: s.pal };
+                }
+            }
+        }
+        return;
+    }
+
+    // Per-pixel priority resolution: the frontmost occupied rung wins, with
+    // backdrop showing through. Rungs this screen cannot show are dropped once.
+    let mode7 = row.mode == 7;
+    let mut rungs = Ladder::new();
+    for &r in ladder.iter() {
+        let plane_off = mode7 && matches!(r, Slot::Bg { .. }) && !row.bg[0].visible;
+        if slot_enabled(mask, &r) && !plane_off {
+            rungs.push(r);
+        }
+    }
+    for (x, slot) in line.iter_mut().enumerate() {
+        for rung in rungs.iter() {
+            if hidden(slot_bit(rung) as usize, x) {
+                continue;
+            }
+            let hit = match *rung {
+                Slot::Bg { prio, .. } if mode7 => sc.m7[x]
+                    .filter(|p| p.prio == prio)
+                    .map(|p| (p.rgba, PixelSource::Bg(0))),
+                Slot::Bg { layer, prio } => sc.bgs[layer][x]
+                    .filter(|p| p.prio == prio)
+                    .map(|p| (p.rgba, PixelSource::Bg(layer as u8))),
+                Slot::Obj { prio } => sc.obj[x]
+                    .filter(|s| s.prio == prio)
+                    .map(|s| (s.rgba, PixelSource::Obj { pal: s.pal })),
+            };
+            if let Some((rgba, source)) = hit {
+                *slot = rgba;
+                src[x] = source;
+                break;
+            }
+        }
+    }
+}
+
 /// Composite one scanline `y` of `row` into `line` for ONE screen, including only
 /// the layers whose bit is set in `mask` (TM = main, TS = sub). `wmask` is the
 /// window-designation register for that screen (TMW = main, TSW = sub): a layer
 /// whose `wmask` bit is set is suppressed at any x inside that layer's combined
-/// window. `pub(crate)` so the color-math ticket resolves the sub line via
-/// `composite_screen(.., row.ts, row.tsw, ..)`.
+/// window. Single-screen wrapper over the shared sampling and resolve steps that
+/// `render_frame_view` runs once for both screens.
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(test), allow(dead_code))] // render_frame_view shares the steps; unit tests call this
 pub(crate) fn composite_screen(
     row: &RegRow,
     mem: &Memory,
@@ -220,160 +434,12 @@ pub(crate) fn composite_screen(
     line: &mut [[u8; 4]],
     src: &mut [PixelSource],
 ) {
-    // 1. backdrop (opaque base).
+    let mut sc = Box::new(LineScratch::new());
+    let ladder = ladder_for(row);
+    sample_line(row, mem, y, obj, &ladder, mask, &mut sc);
+    fill_hidden(row, &row.window_ranges(), wmask, &mut sc);
     let backdrop = unpack_rgb15(mem.cgram[0]);
-    for px in line.iter_mut() {
-        *px = backdrop;
-    }
-    for s in src.iter_mut() {
-        *s = PixelSource::Backdrop;
-    }
-
-    // Window suppression: for each layer (0..3 = BG1..BG4, 4 = OBJ) whose wmask
-    // bit is set, precompute which columns fall inside its combined window (and
-    // are therefore hidden on this screen). `None` = layer not windowed here.
-    let ranges = row.window_ranges();
-    let win_hidden: [Option<Vec<bool>>; 5] = std::array::from_fn(|layer| {
-        if wmask & (1 << layer) != 0 {
-            let sel = row.layer_window(layer);
-            Some((0..WIDTH).map(|x| in_window(&sel, &ranges, x)).collect())
-        } else {
-            None
-        }
-    });
-    let hidden =
-        |layer: usize, x: usize| -> bool { win_hidden[layer].as_ref().is_some_and(|m| m[x]) };
-
-    // 2. BG + OBJ.
-    if row.mode == 7 {
-        if row.extbg() {
-            // EXTBG: the Mode-7 plane splits into two per-pixel priority levels
-            // (bit 7) interleaved with OBJ prio via `mode7_extbg_ladder`. Resolve
-            // per pixel like the tile-mode path; the only BG participant is the
-            // Mode-7 plane at layer 0.
-            let m7 = if row.bg[0].visible && mask & 0x01 != 0 {
-                render_mode7_scanline_px(row, mem, y, WIDTH)
-            } else {
-                vec![None; WIDTH]
-            };
-            let obj = if mask & (1 << 4) != 0 {
-                render_scanline_for(mem, obj, y, WIDTH)
-            } else {
-                vec![None; WIDTH]
-            };
-            let ladder = mode7_extbg_ladder();
-            for (x, slot) in line.iter_mut().enumerate() {
-                for rung in &ladder {
-                    if !slot_enabled(mask, rung) {
-                        continue;
-                    }
-                    let layer_bit = slot_bit(rung) as usize;
-                    if hidden(layer_bit, x) {
-                        continue;
-                    }
-                    let hit = match *rung {
-                        Slot::Bg { prio, .. } => m7[x]
-                            .filter(|p| p.prio == prio)
-                            .map(|p| (p.rgba, PixelSource::Bg(0))),
-                        Slot::Obj { prio } => obj[x]
-                            .filter(|s| s.prio == prio)
-                            .map(|s| (s.rgba, PixelSource::Obj { pal: s.pal })),
-                    };
-                    if let Some((rgba, source)) = hit {
-                        *slot = rgba;
-                        src[x] = source;
-                        break;
-                    }
-                }
-            }
-        } else {
-            // EXTBG off (today's behavior, byte-identical): single Mode-7 floor,
-            // sprites overlaid on top ordered among themselves by prio.
-            if row.bg[0].visible && mask & 0x01 != 0 {
-                let mut tmp = vec![0u8; WIDTH * 4];
-                render_mode7_scanline(row, mem, y, &mut tmp);
-                for (x, slot) in line.iter_mut().enumerate() {
-                    if hidden(0, x) {
-                        continue;
-                    }
-                    let p = &tmp[x * 4..x * 4 + 4];
-                    if p[3] != 0 {
-                        *slot = [p[0], p[1], p[2], 255];
-                        src[x] = PixelSource::Bg(0);
-                    }
-                }
-            }
-            if mask & (1 << 4) != 0 {
-                for (x, (slot, sp)) in line
-                    .iter_mut()
-                    .zip(render_scanline_for(mem, obj, y, WIDTH))
-                    .enumerate()
-                {
-                    if hidden(4, x) {
-                        continue;
-                    }
-                    if let Some(s) = sp {
-                        *slot = s.rgba;
-                        src[x] = PixelSource::Obj { pal: s.pal };
-                    }
-                }
-            }
-        }
-    } else {
-        // Tile modes: per-pixel priority resolution. Each BG layer and the OBJ
-        // layer produce one candidate per x; the ladder (front->back) picks the
-        // frontmost occupied rung, interleaving tilemap priority bit x mode layer
-        // order x sprite priority. Backdrop shows through if no rung hits.
-        let ladder = if row.mode == 1 {
-            mode1_ladder(row.bg3_priority)
-        } else {
-            tile_mode_ladder(row.mode)
-        };
-        // Only sample layers this screen can show: on the ladder AND enabled
-        // in `mask`. Everything else is a per-pixel walk nobody reads.
-        let used = ladder.iter().fold(0u8, |m, r| m | 1 << slot_bit(r)) & mask;
-        let bgs: Vec<Vec<Option<BgPixel>>> = row
-            .bg
-            .iter()
-            .enumerate()
-            .map(|(i, l)| {
-                if used & (1 << i) != 0 {
-                    render_bg_layer_scanline_px(l, mem, y, WIDTH)
-                } else {
-                    vec![None; WIDTH]
-                }
-            })
-            .collect();
-        let obj = if used & (1 << 4) != 0 {
-            render_scanline_for(mem, obj, y, WIDTH)
-        } else {
-            vec![None; WIDTH]
-        };
-        for (x, slot) in line.iter_mut().enumerate() {
-            for rung in &ladder {
-                if !slot_enabled(mask, rung) {
-                    continue;
-                }
-                let layer_bit = slot_bit(rung) as usize;
-                if hidden(layer_bit, x) {
-                    continue;
-                }
-                let hit = match *rung {
-                    Slot::Bg { layer, prio } => bgs[layer][x]
-                        .filter(|p| p.prio == prio)
-                        .map(|p| (p.rgba, PixelSource::Bg(layer as u8))),
-                    Slot::Obj { prio } => obj[x]
-                        .filter(|s| s.prio == prio)
-                        .map(|s| (s.rgba, PixelSource::Obj { pal: s.pal })),
-                };
-                if let Some((rgba, source)) = hit {
-                    *slot = rgba;
-                    src[x] = source;
-                    break;
-                }
-            }
-        }
-    }
+    resolve_screen(row, &ladder, mask, wmask, &sc, backdrop, line, src);
 }
 
 /// Blend one resolved MAIN pixel against the SUB screen (or COLDATA), returning
@@ -464,6 +530,7 @@ pub fn render_frame_view(lt: &LineTable, mem: &Memory) -> FrameView {
     let mut sub = vec![[0u8; 4]; WIDTH];
     let mut src_main = vec![PixelSource::Backdrop; WIDTH];
     let mut src_sub = vec![PixelSource::Backdrop; WIDTH];
+    let mut sc = Box::new(LineScratch::new());
     let mut stats = ObjOverflow::default();
     let rows = lt.rows.len().min(HEIGHT);
     let mut scratch: Option<Memory> = lt
@@ -499,23 +566,28 @@ pub fn render_frame_view(lt: &LineTable, mem: &Memory) -> FrameView {
         stats.time_over |= bin.time_over;
         stats.max_sprites = stats.max_sprites.max(bin.sprite_count);
         stats.max_tiles = stats.max_tiles.max(bin.tile_count);
-        composite_screen(
+        let ranges = row.window_ranges();
+        let ladder = ladder_for(row);
+        sample_line(row, m, y, &bin.sprites, &ladder, row.tm | row.ts, &mut sc);
+        fill_hidden(row, &ranges, row.tmw | row.tsw, &mut sc);
+        let backdrop = unpack_rgb15(m.cgram[0]);
+        resolve_screen(
             row,
-            m,
-            y,
+            &ladder,
             row.tm,
             row.tmw,
-            &bin.sprites,
+            &sc,
+            backdrop,
             &mut main,
             &mut src_main,
         );
-        composite_screen(
+        resolve_screen(
             row,
-            m,
-            y,
+            &ladder,
             row.ts,
             row.tsw,
-            &bin.sprites,
+            &sc,
+            backdrop,
             &mut sub,
             &mut src_sub,
         );
@@ -526,7 +598,6 @@ pub fn render_frame_view(lt: &LineTable, mem: &Memory) -> FrameView {
         }
         let bri = row.brightness;
         let cw_sel = row.color_window();
-        let ranges = row.window_ranges();
         let clip_mode = row.clip_mode();
         let prevent_mode = row.prevent_mode();
         for x in 0..WIDTH {
