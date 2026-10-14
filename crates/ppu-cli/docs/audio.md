@@ -512,7 +512,12 @@ shows the resulting registers. Lua gameplay and driver logic remain in the toy.
 
 `bytebuffer(size)` provides compact storage for raw binary data. It grows
 on writes up to 32 MiB and supplies `r8/r16/r32/r64(address)`,
-`w8(address,value)` (returns the previous byte), `load(address,binaryString)`,
-`fill(address,value,count)`, and `copy(destination,source,count)`. Reads are
-little endian; missing bytes read as zero. Copy handles overlapping ranges.
-Functions use dot calls; addresses are bytes, beginning at zero.
+`w8/w16/w32/w64(address,value)`, `load(address,binaryString)`,
+`fill(address,value,count)`, and `copy(destination,source,count)`. Reads and
+writes are little endian; missing bytes read as zero. A write stores the low
+1, 2, 4 or 8 bytes of the value and returns the previous value at that width,
+read as `r8..r64` would read it; `old ~ (value & mask)` is zero when nothing
+changed, and its nonzero bytes are the bytes that did. A wide write is checked
+against the 32 MiB limit as a whole before any byte is stored. Copy handles
+overlapping ranges. Functions use dot calls; addresses are bytes, beginning at
+zero.
