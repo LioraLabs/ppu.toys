@@ -92,10 +92,12 @@ impl PpuCore {
     ///
     /// Skipped: the framebuffer, `objOverflow`, `mainScreen`, `subScreen` and
     /// `mathMask` keep the last composed picture. Updated as in `frame()`:
-    /// registers, cgram, oam and the scanline table behind `inspectScanline`,
-    /// `layerView`, the traces and the m7/window scanline getters. Those
-    /// therefore describe the advanced frame while the picture getters describe
-    /// an earlier one, so call `frame()` before reading inspection getters.
+    /// registers, cgram, oam and the line tables. The line-table getters
+    /// (`inspectScanline`, `layerView`, `traceBgPixel`/`traceBgTile`, the
+    /// m7/window scanline getters) and the live-memory getters (`traceObj`,
+    /// `vram`, `m7MapView`, `dspState`, `scoreState`) both reflect the advanced
+    /// frame while the picture getters describe an earlier one, so call
+    /// `frame()` before reading inspection getters.
     pub fn advance(&mut self, t: f64, f: u32) -> Result<(), JsValue> {
         self.run(t, f, false)
     }
