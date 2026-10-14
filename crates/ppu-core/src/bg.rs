@@ -80,8 +80,13 @@ fn offset_word_value(word: u16) -> i16 {
 // bit. Mode 2 uses row 0 for H and row 1 for V. Mode 4 uses one word; bit15
 // selects V when set, H when clear. Bits are intentionally the tilemap attribute
 // bits so authors can poke raw vram[] or bg[3].map entries.
+/// Offset-per-tile only applies to BG1/BG2 (layers 0/1) in modes 2 and 4.
+fn uses_offset_per_tile(layer: &RegBg) -> bool {
+    matches!(layer.mode, 2 | 4) && layer.layer <= 1
+}
+
 fn offset_per_tile(layer: &RegBg, mem: &Memory, screen_x: usize) -> ColumnOffset {
-    if !matches!(layer.mode, 2 | 4) || layer.layer > 1 {
+    if !uses_offset_per_tile(layer) {
         return ColumnOffset::default();
     }
     let base_col = (screen_x as i64 + layer.scroll_x as i64).div_euclid(8) as u32;
@@ -268,6 +273,15 @@ pub fn render_bg_layer_scanline_px_into(
         out.fill(None);
         return;
     }
+    let ts = layer.tile_size as u32;
+    if matches!(layer.bpp, 2 | 4 | 8)
+        && matches!(ts, 8 | 16)
+        && layer.mosaic <= 1
+        && !uses_offset_per_tile(layer)
+    {
+        render_tile_spans(layer, mem, y, out);
+        return;
+    }
     for (x, o) in out.iter_mut().enumerate() {
         *o = sample_bg_pixel(layer, mem, x, y).and_then(|s| {
             (s.index != 0).then(|| BgPixel {
@@ -275,6 +289,101 @@ pub fn render_bg_layer_scanline_px_into(
                 prio: s.prio,
             })
         });
+    }
+}
+
+/// Palette indices of row `fy` (0..8) of the 8x8 char at VRAM word `addr`,
+/// leftmost pixel first. Same plane layout as [`char_pixel_index`].
+fn char_row_indices(mem: &Memory, addr: u16, bpp: u8, fy: u32) -> [u8; 8] {
+    let word = |off: u32| mem.vram[((addr as u32 + off) & 0x7fff) as usize];
+    let mut w = [0u16; 4];
+    w[0] = word(fy);
+    if bpp >= 4 {
+        w[1] = word(8 + fy);
+    }
+    if bpp == 8 {
+        w[2] = word(16 + fy);
+        w[3] = word(24 + fy);
+    }
+    let mut row = [0u8; 8];
+    for (fx, px) in row.iter_mut().enumerate() {
+        let bit = 7 - fx as u32;
+        for (pair, &v) in w.iter().enumerate() {
+            let p = (((v as u8) >> bit) & 1) | ((((v >> 8) as u8) >> bit) & 1) << 1;
+            *px |= p << (pair * 2);
+        }
+    }
+    row
+}
+
+/// Fast path of [`render_bg_layer_scanline_px_into`] for unmosaiced layers
+/// without offset-per-tile: `wy` is constant for the line, so each tile's map
+/// entry and char row are fetched once and shared by its (up to 16) pixels.
+/// Must stay pixel-identical to the [`sample_bg_pixel`] walk (differential test).
+fn render_tile_spans(layer: &RegBg, mem: &Memory, y: usize, out: &mut [Option<BgPixel>]) {
+    let ts = layer.tile_size as u32;
+    let (tiles_w, tiles_h): (u32, u32) = match layer.screen_size {
+        1 => (64, 32),
+        2 => (32, 64),
+        3 => (64, 64),
+        _ => (32, 32),
+    };
+    let words_per_char = layer.bpp as u32 * 4;
+    let wy = (y as i64 + layer.scroll_y as i64).rem_euclid((tiles_h * ts) as i64) as u32;
+    let width_px = tiles_w * ts;
+    let mut wx = (layer.scroll_x as i64).rem_euclid(width_px as i64) as u32;
+    let mut x = 0;
+    while x < out.len() {
+        let in_x = wx % ts;
+        let run = ((ts - in_x) as usize).min(out.len() - x);
+        let entry =
+            mem.vram[map_entry_addr(layer.map_base, layer.screen_size, wx / ts, wy / ts) as usize];
+        let mut fy = wy % ts;
+        if entry & 0x8000 != 0 {
+            fy = ts - 1 - fy; // V flip
+        }
+        // Stored (unflipped) tile row, 8 or 16 pixels wide.
+        let mut row = [0u8; 16];
+        for q in 0..ts / 8 {
+            let char_index = ((entry & 0x03ff) as u32 + q + (fy / 8) * 16) & 0x03ff;
+            let char_addr =
+                ((layer.char_base as u32 + char_index * words_per_char) & 0x7fff) as u16;
+            let r = char_row_indices(mem, char_addr, layer.bpp, fy % 8);
+            row[q as usize * 8..][..8].copy_from_slice(&r);
+        }
+        let pal = ((entry >> 10) & 0x07) as u8;
+        let direct = layer.bpp == 8 && layer.direct_color;
+        let cgram_base = if layer.bpp == 8 {
+            0
+        } else {
+            let mode0_band = if layer.mode == 0 && layer.bpp == 2 {
+                layer.layer as u16 * 32
+            } else {
+                0
+            };
+            mode0_band + pal as u16 * (1 << layer.bpp)
+        };
+        let prio = entry & 0x2000 != 0;
+        for (i, o) in out[x..x + run].iter_mut().enumerate() {
+            let mut fx = in_x + i as u32;
+            if entry & 0x4000 != 0 {
+                fx = ts - 1 - fx; // H flip
+            }
+            let index = row[fx as usize];
+            *o = (index != 0).then(|| {
+                let color15 = if direct {
+                    direct_color_bgr555(index, pal)
+                } else {
+                    mem.cgram[(cgram_base + index as u16) as usize]
+                };
+                BgPixel {
+                    rgba: unpack_rgb15(color15),
+                    prio,
+                }
+            });
+        }
+        x += run;
+        wx = (wx + run as u32) % width_px;
     }
 }
 
@@ -803,5 +912,95 @@ mod tests {
         let line = render_bg_layer_scanline_px(&l, &m, 0, 4);
         assert!(line[0].is_some());
         assert!(line[1].is_none());
+    }
+
+    /// The span fast path must equal the per-pixel `sample_bg_pixel` walk for
+    /// every layer configuration (fast path and fallback alike).
+    #[test]
+    fn scanline_matches_per_pixel_reference_on_random_layers() {
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let mut rnd = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as u32
+        };
+        let reference = |l: &RegBg, m: &Memory, y: usize, width: usize| -> Vec<Option<BgPixel>> {
+            if !l.visible {
+                return vec![None; width];
+            }
+            (0..width)
+                .map(|x| {
+                    sample_bg_pixel(l, m, x, y).and_then(|s| {
+                        (s.index != 0).then(|| BgPixel {
+                            rgba: unpack_rgb15(s.color15),
+                            prio: s.prio,
+                        })
+                    })
+                })
+                .collect()
+        };
+        let mut m = Memory::new();
+        for iter in 0..3000 {
+            if iter % 8 == 0 {
+                // Sparse-ish VRAM keeps index 0 common; CGRAM fully random.
+                for w in m.vram.iter_mut() {
+                    *w = (rnd() as u16) & (rnd() as u16 | rnd() as u16);
+                }
+                for c in m.cgram.iter_mut() {
+                    *c = rnd() as u16 & 0x7fff;
+                }
+            }
+            let mode = (rnd() % 5) as u8;
+            let mut l = layer(0);
+            l.mode = mode;
+            l.layer = (rnd() % if mode == 0 { 4 } else { 2 }) as u8;
+            l.bpp = [2, 4, 8][(rnd() % 3) as usize];
+            l.tile_size = if rnd() % 2 == 0 { 8 } else { 16 };
+            l.screen_size = (rnd() % 4) as u8;
+            l.map_base = ((rnd() % 32) * 0x400) as u16;
+            l.char_base = ((rnd() % 8) * 0x1000) as u16;
+            l.offset_map_base = ((rnd() % 32) * 0x400) as u16;
+            l.offset_screen_size = (rnd() % 4) as u8;
+            l.scroll_x = match rnd() % 3 {
+                0 => rnd() as i16,
+                1 => (rnd() % 1100) as i16 - 550,
+                _ => (rnd() % 8) as i16,
+            };
+            l.scroll_y = (rnd() as i16) >> (rnd() % 8);
+            if uses_offset_per_tile(&l) {
+                // Pre-existing: a negative `screen_x + scroll_x` wraps to a huge
+                // u32 column in offset_per_tile (debug-build multiply overflow).
+                // That fallback path is untouched here, so keep it in range.
+                l.scroll_x = l.scroll_x.max(0);
+            }
+            l.direct_color = rnd() % 2 == 0;
+            l.visible = rnd() % 8 != 0;
+            l.mosaic = if rnd() % 4 == 0 {
+                2 + (rnd() % 15) as u8
+            } else {
+                1
+            };
+            // Offset table: bit13 / bit15 / 10-bit deltas all vary.
+            for w in 0..64 {
+                let v = rnd() as u16;
+                m.vram[(l.offset_map_base as usize + w) & 0x7fff] = if rnd() % 4 == 0 {
+                    v & !0x2000
+                } else {
+                    v | 0x2000
+                };
+            }
+            let width = if rnd() % 8 == 0 {
+                1 + (rnd() % 300) as usize
+            } else {
+                256
+            };
+            let y = (rnd() % 224) as usize;
+            assert_eq!(
+                render_bg_layer_scanline_px(&l, &m, y, width),
+                reference(&l, &m, y, width),
+                "iter {iter}: {l:?} y={y} width={width}"
+            );
+        }
     }
 }
