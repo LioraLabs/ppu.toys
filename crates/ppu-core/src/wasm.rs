@@ -80,6 +80,19 @@ impl PpuCore {
     }
 
     pub fn frame(&mut self, t: f64, f: u32) -> Result<(), JsValue> {
+        self.run(t, f, true)
+    }
+
+    /// Simulate one frame without compositing: the same Lua `frame()`, scanout,
+    /// DSP/audio, sram and register bookkeeping as [`Self::frame`], but no
+    /// pixels or host snapshots are produced. `audio()` is that frame's PCM;
+    /// the framebuffer/obj-overflow/screens getters keep the last composed
+    /// picture.
+    pub fn advance(&mut self, t: f64, f: u32) -> Result<(), JsValue> {
+        self.run(t, f, false)
+    }
+
+    fn run(&mut self, t: f64, f: u32, compose: bool) -> Result<(), JsValue> {
         // Build the LineTable + update Memory. On a Lua runtime error, throw the
         // structured LuaError (same shape as setSource) so the JS adapter's
         // safeFrame surfaces it as an editor diagnostic. The cached framebuffer/
@@ -108,12 +121,14 @@ impl PpuCore {
         }
 
         let mem = self.engine.memory();
-        let view = render_frame_view(&lt, mem);
-        self.framebuffer = view.framebuffer;
-        self.obj_overflow = view.overflow;
-        self.main_screen = view.main;
-        self.sub_screen = view.sub;
-        self.math_mask = view.math_mask;
+        if compose {
+            let view = render_frame_view(&lt, mem);
+            self.framebuffer = view.framebuffer;
+            self.obj_overflow = view.overflow;
+            self.main_screen = view.main;
+            self.sub_screen = view.sub;
+            self.math_mask = view.math_mask;
+        }
         self.cgram = mem.cgram.to_vec();
         self.oam = mem.oam.iter().map(OamSprite::from).collect();
 
