@@ -189,13 +189,13 @@ pub fn derive_registers(row: &RegRow, obsel: &Obsel, prev: &HashMap<u16, i32>) -
     let obsel_val = ((obsel.char_base >> 13) as i32)
         | ((obsel.name_select as i32) << 3)
         | ((obsel.size_sel as i32) << 5);
-    // MOSAIC ($2106): size bits 0-3 | per-BG enable bits 4-7 (BG1..BG4).
-    let mosaic = (row.mosaic_size as i32 & 0x0f)
+    // MOSAIC ($2106): per-BG enable bits 0-3 (BG1..BG4) | size bits 4-7.
+    let mosaic = ((row.mosaic_size as i32 & 0x0f) << 4)
         | row
             .mosaic_enable
             .iter()
             .enumerate()
-            .map(|(i, &e)| (e as i32) << (4 + i))
+            .map(|(i, &e)| (e as i32) << i)
             .sum::<i32>();
     let entries: [(u16, &str, i32); 42] = [
         (
@@ -256,7 +256,7 @@ pub fn derive_registers(row: &RegRow, obsel: &Obsel, prev: &HashMap<u16, i32>) -
         .collect()
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "bindings"))]
 mod wasm;
 
 #[cfg(test)]
@@ -498,13 +498,13 @@ mod tests {
     fn derive_registers_includes_mosaic_2106() {
         let mut ltr = LineTableRow::default();
         ltr.mosaic_size = 5;
-        ltr.mosaic_enable = [true, false, true, false]; // BG1 + BG3 -> bits 4 and 6
+        ltr.mosaic_enable = [true, false, false, true]; // BG1 + BG4 -> bits 0 and 3
         let row = RegRow::from(&ltr);
         let regs = derive_registers(&row, &Obsel::default(), &HashMap::new());
         let mosaic = regs.iter().find(|r| r.name == "MOSAIC").unwrap();
         assert_eq!(mosaic.addr, 0x2106);
-        // size 5 (bits 0-3) | BG1 (bit4) | BG3 (bit6) = 0x05 | 0x10 | 0x40 = 0x55.
-        assert_eq!(mosaic.value, 0x55);
+        // Hardware layout: size 5 in bits 4-7 | BG1 (bit 0) | BG4 (bit 3) = 0x59.
+        assert_eq!(mosaic.value, 0x59);
     }
 }
 

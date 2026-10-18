@@ -10,19 +10,20 @@
 /// ponytail: width mask deferred; whole-pixel rounding is the load-bearing part.
 #[inline]
 pub fn scroll_reg(v: f32) -> i16 {
-    v.round() as i16
+    v.round() as i64 as i16 // a register write keeps the low bits; it never saturates
 }
 
-/// Mode 7 matrix entry a/b/c/d -> Q1.7.8 signed fixed point (`round(v*256)`).
+/// Mode 7 matrix entry a/b/c/d -> Q1.7.8 signed fixed point (`round(v*256)`),
+/// keeping the low 16 bits like the register write.
 #[inline]
 pub fn m7_matrix(v: f32) -> i16 {
-    (v * 256.0).round().clamp(i16::MIN as f32, i16::MAX as f32) as i16
+    (v * 256.0).round() as i64 as i16
 }
 
 /// Mode 7 center (M7X/M7Y): 13-bit signed whole-pixel coordinate. Round to nearest.
 #[inline]
 pub fn m7_center(v: f32) -> i16 {
-    v.round() as i16
+    v.round() as i64 as i16
 }
 
 /// Sprite X: 9-bit signed screen coordinate (negatives = partially off-left).
@@ -150,6 +151,7 @@ mod tests {
         assert_eq!(scroll_reg(10.7), 11); // round to nearest, NOT floor
         assert_eq!(scroll_reg(-0.4), 0);
         assert_eq!(scroll_reg(-1.6), -2);
+        assert_eq!(scroll_reg(51200.0), 51200u16 as i16); // wraps, as the register write does
     }
 
     #[test]

@@ -19,17 +19,21 @@ use crate::registers::{RegM7, RegRow};
 const FIX_SHIFT: u32 = 8;
 
 /// Map screen pixel (`x`,`y`) to integer source texel coords through the Mode 7
-/// affine transform. a/b/c/d arrive as Q8 fixed point; cx/cy and scroll are
-/// whole pixels (shifted into Q8 here). Caller wraps out-of-range texels.
+/// affine transform, with hardware's arithmetic (bsnes accuracy PPU): scroll and
+/// center are 13-bit signed, scroll - center is clipped to 10-bit signed, and
+/// each partial product of the line origin is truncated to a multiple of 64
+/// before the per-pixel `a*x` / `c*x` term. `y` is the line (screen row + 1)
+/// after any flip. a/b/c/d are Q8. Caller wraps out-of-range texels.
 pub fn mode7_texel(m7: &RegM7, scroll_x: i16, scroll_y: i16, x: i32, y: i32) -> (i64, i64) {
     let (a, b, c, d) = (m7.a as i64, m7.b as i64, m7.c as i64, m7.d as i64);
-    let cx = (m7.cx as i64) << FIX_SHIFT;
-    let cy = (m7.cy as i64) << FIX_SHIFT;
-    let px = ((x as i64) << FIX_SHIFT) + ((scroll_x as i64) << FIX_SHIFT) - cx;
-    let py = ((y as i64) << FIX_SHIFT) + ((scroll_y as i64) << FIX_SHIFT) - cy;
-    let u = ((a * px) >> FIX_SHIFT) + ((b * py) >> FIX_SHIFT) + cx;
-    let v = ((c * px) >> FIX_SHIFT) + ((d * py) >> FIX_SHIFT) + cy;
-    (u >> FIX_SHIFT, v >> FIX_SHIFT)
+    let i13 = |v: i16| ((v as i64 & 0x1fff) ^ 0x1000) - 0x1000;
+    let clip = |n: i64| if n & 0x2000 != 0 { n | !1023 } else { n & 1023 };
+    let (cx, cy) = (i13(m7.cx), i13(m7.cy));
+    let (h, v) = (clip(i13(scroll_x) - cx), clip(i13(scroll_y) - cy));
+    let (x, y) = (x as i64, y as i64);
+    let ox = (a * h & !63) + (b * v & !63) + (b * y & !63) + (cx << FIX_SHIFT);
+    let oy = (c * h & !63) + (d * v & !63) + (d * y & !63) + (cy << FIX_SHIFT);
+    ((ox + a * x) >> FIX_SHIFT, (oy + c * x) >> FIX_SHIFT)
 }
 
 /// Mode 7 plane size in pixels: 128 tiles x 8 px.
@@ -54,14 +58,16 @@ pub(crate) fn mode7_sample(row: &RegRow, mem: &Memory, y: usize, x: usize) -> Mo
     let bg = &row.bg[0];
     // Mode 7 mosaic is driven by the BG1 enable bit; block edge = size+1 (1 = off).
     // Snap the screen coordinate to the block's top-left before flip+affine, so the
-    // whole block resolves to its top-left texel (same absolute-row-0 anchoring as the
-    // tile BG path). Shared by the direct-CGRAM and EXTBG paths.
+    // whole block resolves to its top-left texel (rows counted from `mosaic_top`, as
+    // in the tile BG path), then +1 for hardware's line numbering (the top screen row
+    // is line 1) before the flip. Shared by the direct-CGRAM and EXTBG paths.
     let block = if row.mosaic_enable[0] {
         row.mosaic_size as i32 + 1
     } else {
         1
     };
-    let my = y as i32 / block * block;
+    let top = bg.mosaic_top as i32;
+    let my = top + (y as i32 - top) / block * block + 1;
     let mx = x as i32 / block * block;
     let sy = if m7.flip_y { 255 - my } else { my };
     let sx = if m7.flip_x { 255 - mx } else { mx };
@@ -242,7 +248,8 @@ pub fn mode7_scanline_segments(lt: &LineTable, width: usize, height: usize) -> V
         }
         let m7 = &row.m7;
         let bg = &row.bg[0];
-        let sy = if m7.flip_y { 255 - y as i32 } else { y as i32 };
+        let line = y as i32 + 1;
+        let sy = if m7.flip_y { 255 - line } else { line };
         let mut end = |x: i32| {
             let sx = if m7.flip_x { 255 - x } else { x };
             let (u, v) = mode7_texel(m7, bg.scroll_x, bg.scroll_y, sx, sy);
@@ -257,6 +264,16 @@ pub fn mode7_scanline_segments(lt: &LineTable, width: usize, height: usize) -> V
 
 #[cfg(test)]
 mod tests {
+    /// A row whose tilemap row 0 lands on screen row 0: hardware shows row
+    /// scroll_y + 1 on the top line, so every BG scrolls by -1.
+    fn top() -> LineTableRow {
+        let mut r = LineTableRow::default();
+        for b in &mut r.bg {
+            b.scroll_y = -1.0;
+        }
+        r
+    }
+
     use super::*;
     use crate::registers::{LineTableRow, Mode7};
 
@@ -318,7 +335,7 @@ mod tests {
         mem.cgram[5] = rgb15(255, 0, 0);
         set_map(&mut mem, 0, 0, 7); // map cell (0,0) -> tile 7
         set_char(&mut mem, 7, 3, 0, 5); // tile 7 pixel (3,0) -> palette index 5
-        let row = RegRow::from(&LineTableRow::default()); // identity m7
+        let row = RegRow::from(&top()); // identity m7
         let mut out = [9u8; 8 * 4];
         render_mode7_scanline(&row, &mem, 0, &mut out);
         assert_eq!(&out[12..16], &unpack_rgb15(rgb15(255, 0, 0))); // x=3 painted
@@ -332,7 +349,7 @@ mod tests {
         let mut mem = Memory::new();
         mem.vram[0] = (9u16 << 8) | 7; // char lane: index 9; map lane: tile 7
         mem.cgram[9] = rgb15(0, 255, 0);
-        let row = RegRow::from(&LineTableRow::default());
+        let row = RegRow::from(&top());
         let mut out = [0u8; 16 * 4];
         render_mode7_scanline(&row, &mem, 0, &mut out);
         // Screen x=8 -> map cell (1,0), still tile 0 (default) -> tile 0 char
@@ -349,7 +366,7 @@ mod tests {
         mem.cgram[3] = rgb15(0, 0, 255);
         set_map(&mut mem, 0, 1, 2); // second map row -> word 128
         set_char(&mut mem, 2, 0, 0, 3);
-        let row = RegRow::from(&LineTableRow::default());
+        let row = RegRow::from(&top());
         let mut out = [0u8; 4];
         render_mode7_scanline(&row, &mem, 8, &mut out); // screen y=8 -> ty=1, fy=0
         assert_eq!(&out[0..4], &unpack_rgb15(rgb15(0, 0, 255)));
@@ -359,7 +376,7 @@ mod tests {
     fn index_zero_is_transparent_even_if_cgram0_is_colored() {
         let mut mem = Memory::new();
         mem.cgram[0] = rgb15(255, 255, 255); // backdrop color must NOT bleed in
-        let row = RegRow::from(&LineTableRow::default());
+        let row = RegRow::from(&top());
         let mut out = [9u8; 8];
         render_mode7_scanline(&row, &mem, 0, &mut out);
         assert_eq!(out, [0u8; 8]);
@@ -371,7 +388,7 @@ mod tests {
         mem.cgram[2] = rgb15(255, 255, 255);
         set_map(&mut mem, 0, 0, 1);
         set_char(&mut mem, 1, 0, 0, 2); // only plane pixel (0,0) is set
-        let lt = LineTableBuilder::new(LineTableRow::default()).build(2);
+        let lt = LineTableBuilder::new(top()).build(2);
         let fb = render_mode7(&lt, &mem, 2, 2);
         assert_eq!(fb.len(), 2 * 2 * 4);
         assert_eq!(&fb[0..4], &unpack_rgb15(rgb15(255, 255, 255))); // (0,0)
@@ -381,7 +398,7 @@ mod tests {
     /// Row with identity matrix and scroll_x = -1: screen x=0 -> plane u=-1
     /// (out of field), screen x=1 -> plane u=0 (in field).
     fn row_scrolled_left(repeat: u8) -> RegRow {
-        let mut src = LineTableRow::default();
+        let mut src = top();
         src.bg[0].scroll_x = -1.0;
         src.m7.repeat = repeat;
         RegRow::from(&src)
@@ -446,7 +463,7 @@ mod tests {
         mem.cgram[1] = rgb15(255, 0, 0);
         set_map(&mut mem, 31, 0, 1); // plane pixel (255, 0): cell (31,0), fx=7
         set_char(&mut mem, 1, 7, 0, 1);
-        let mut src = LineTableRow::default();
+        let mut src = top();
         src.m7.flip_x = true;
         let row = RegRow::from(&src);
         let mut out = [0u8; 8];
@@ -461,16 +478,16 @@ mod tests {
     fn flip_y_mirrors_the_screen_vertically() {
         let mut mem = Memory::new();
         mem.cgram[1] = rgb15(0, 0, 255);
-        set_map(&mut mem, 0, 31, 1); // plane pixel (0, 255): cell (0,31), fy=7
-        set_char(&mut mem, 1, 0, 7, 1);
+        set_map(&mut mem, 0, 31, 1); // plane pixel (0, 254): cell (0,31), fy=6
+        set_char(&mut mem, 1, 0, 6, 1);
         let mut src = LineTableRow::default();
         src.m7.flip_y = true;
         let row = RegRow::from(&src);
         let mut out = [0u8; 4];
-        // Screen y=0 samples plane y = 255 - 0 = 255.
+        // Screen y=0 is line 1, which flips to plane y = 255 - 1 = 254.
         render_mode7_scanline(&row, &mem, 0, &mut out);
         assert_eq!(&out[0..4], &unpack_rgb15(rgb15(0, 0, 255)));
-        // Screen y=1 samples plane y = 254 (unset).
+        // Screen y=1 samples plane y = 253 (unset).
         render_mode7_scanline(&row, &mem, 1, &mut out);
         assert_eq!(&out[0..4], &[0, 0, 0, 0]);
     }
@@ -483,7 +500,7 @@ mod tests {
         mem.cgram[1] = rgb15(255, 255, 255);
         set_map(&mut mem, 63, 0, 1); // plane pixel (510, 0): cell (63,0), fx=6
         set_char(&mut mem, 1, 6, 0, 1);
-        let mut src = LineTableRow::default();
+        let mut src = top();
         src.m7.a = 2.0;
         src.m7.flip_x = true;
         let row = RegRow::from(&src);
@@ -500,7 +517,7 @@ mod tests {
         set_char(&mut mem, 0, 0, 0, 0xD3); // index 0xD3 = 0b11_010_011
                                            // If CGRAM were used it would read this; direct color must ignore it.
         mem.cgram[0xD3] = rgb15(9, 9, 9);
-        let mut src = LineTableRow::default();
+        let mut src = top();
         src.mode = 7;
         src.cgwsel = 0x01; // direct color on
         let row = RegRow::from(&src);
@@ -512,14 +529,14 @@ mod tests {
 
     #[test]
     fn out_of_field_applies_to_the_v_axis_too() {
-        // scroll_y = -1: screen y=0 -> plane v=-1 (out of field). Under
+        // scroll_y = -2: screen y=0 (line 1) -> plane v=-1 (out of field). Under
         // repeat=2 that pixel is transparent even though u=0 is in field.
         let mut mem = Memory::new();
         mem.cgram[1] = rgb15(255, 0, 0);
         set_map(&mut mem, 0, 127, 1); // plane (0,1023): would show under wrap
         set_char(&mut mem, 1, 0, 7, 1);
-        let mut src = LineTableRow::default();
-        src.bg[0].scroll_y = -1.0;
+        let mut src = top();
+        src.bg[0].scroll_y = -2.0;
         src.m7.repeat = 2;
         let row = RegRow::from(&src);
         let mut out = [0u8; 4];
@@ -537,7 +554,7 @@ mod tests {
         mem.cgram[5] = rgb15(255, 0, 0);
         set_map(&mut mem, 0, 0, 7);
         set_char(&mut mem, 7, 0, 0, 5); // ONLY plane pixel (0,0) is lit
-        let mut src = LineTableRow::default();
+        let mut src = top();
         src.mosaic_size = 1; // 2x2 blocks
         src.mosaic_enable[0] = true; // BG1 bit drives Mode 7
         let row = RegRow::from(&src);
@@ -557,7 +574,7 @@ mod tests {
         mem.cgram[5] = rgb15(255, 0, 0);
         set_map(&mut mem, 0, 0, 7);
         set_char(&mut mem, 7, 0, 0, 5); // only plane pixel (0,0) lit
-        let mut src = LineTableRow::default();
+        let mut src = top();
         src.mosaic_size = 1;
         src.mosaic_enable = [false, true, true, true]; // BG2-4 set, BG1 clear
         let row = RegRow::from(&src);
@@ -576,7 +593,7 @@ mod tests {
         mem.cgram[200] = rgb15(1, 2, 3);
         set_map(&mut mem, 0, 0, 7);
         set_char(&mut mem, 7, 0, 0, 200);
-        let row = RegRow::from(&LineTableRow::default());
+        let row = RegRow::from(&top());
         let mut out = [0u8; 4];
         render_mode7_scanline(&row, &mem, 0, &mut out);
         assert_eq!(&out[0..4], &unpack_rgb15(rgb15(1, 2, 3)));
@@ -591,7 +608,7 @@ mod tests {
         set_char(&mut mem, 7, 1, 0, 0x03); // bit7 clear (low) + color 3
         set_char(&mut mem, 7, 2, 0, 0x80); // bit7 set but color 0 -> transparent
         mem.cgram[3] = rgb15(0, 255, 0);
-        let row = RegRow::from(&LineTableRow::default());
+        let row = RegRow::from(&top());
         let px = render_mode7_scanline_px(&row, &mem, 0, 8);
         let hi = px[0].expect("x0 opaque");
         assert!(hi.prio); // bit7 -> high priority
@@ -620,7 +637,7 @@ mod tests {
     #[test]
     fn scanline_segments_identity_and_non_m7_rows() {
         use crate::linetable::LineTableBuilder;
-        let mut b = LineTableBuilder::new(LineTableRow::default());
+        let mut b = LineTableBuilder::new(top());
         b.hdma(0, 99, |_, r| r.mode = 7);
         let lt = b.build(224);
         let seg = mode7_scanline_segments(&lt, 256, 224);

@@ -171,3 +171,10 @@ Either way the check is the same: remove the patch stanza and confirm
 The local host-support work also adds binary `string.byte` reads and corrects
 `~=` precedence to match the other comparisons in Lua. Regression coverage:
 `crates/ppu-core/tests/lua_binary_data.rs`.
+
+The SNES compiler's differential checks also exposed two scalar-semantics bugs:
+integer `//` truncated toward zero, and parallel assignment stored early RHS
+values before evaluating later ones or indexed targets. Local fixes in
+`src/constant.rs` and `src/compiler/compiler.rs` restore Lua floor division,
+overflow-safe integer modulo, and simultaneous assignment. Regression coverage:
+`crates/ppu-core/tests/lua_scalar_semantics.rs` and `crates/ppu-cli/tests/snes.rs`.

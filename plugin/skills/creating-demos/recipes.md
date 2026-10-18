@@ -27,8 +27,8 @@ VRAM `0x0000–0x3FFF`; place the sky layers and sprites above it.
 
 Nothing below the horizon is drawn. On each water line `y`, set every
 layer's `scroll.y` so it samples the mirrored row:
-`r = 2 * horizon - 1 - y`, `bg[n].scroll.y = r - y` (plus the layer's own
-scroll). Then:
+`r = 2 * horizon - 1 - y`, `bg[n].scroll.y = r - y - 1` (line `y` shows row
+`scroll.y + y + 1`; add the layer's own scroll). Then:
 
 - Ripples: a per-line `scroll.x` offset whose amplitude grows toward the
   viewer and whose wavelength is perspective-spaced. A travelling gust is a

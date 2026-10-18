@@ -58,11 +58,21 @@ impl LineTableBuilder {
     /// Resolve all `height` scanlines, then quantize each to its absolute
     /// register state (quantize-on-write happens HERE, once per line).
     pub fn build(&self, height: usize) -> LineTable {
-        LineTable {
-            rows: (0..height)
-                .map(|y| RegRow::from(&self.resolve(y)))
-                .collect(),
+        let mut rows: Vec<RegRow> = (0..height)
+            .map(|y| RegRow::from(&self.resolve(y)))
+            .collect();
+        // A size change restarts the vertical mosaic count; same-size writes and
+        // enable-bit changes do not (bsnes accuracy PPU).
+        let mut top = 0;
+        for y in 1..rows.len() {
+            if rows[y].mosaic_size != rows[y - 1].mosaic_size {
+                top = y as u16;
+            }
+            for b in &mut rows[y].bg {
+                b.mosaic_top = top;
+            }
         }
+        LineTable { rows }
     }
 }
 
@@ -147,6 +157,24 @@ mod tests {
         def.bg[0].scroll_x = 30.7;
         let lt = LineTableBuilder::new(def).build(2);
         assert_eq!(lt.rows[0].bg[0].scroll_x, 31); // stored absolute, rounded
+    }
+
+    #[test]
+    fn mosaic_blocks_restart_where_the_size_changes() {
+        // Measured on bsnes (accuracy PPU): 4-row blocks from row 0, size 2 from
+        // row 101 gives blocks at 100, 101, 104, 107; an enable change at row 50
+        // and same-size rows do not restart the count.
+        let mut def = LineTableRow::default();
+        def.mosaic_size = 3;
+        def.mosaic_enable[0] = true;
+        let mut b = LineTableBuilder::new(def);
+        b.hdma(50, 223, |_, r| r.mosaic_enable[1] = true);
+        b.hdma(101, 223, |_, r| r.mosaic_size = 2);
+        let lt = b.build(HEIGHT);
+        assert_eq!(lt.rows[100].bg[0].mosaic_top, 0);
+        assert_eq!(lt.rows[101].bg[0].mosaic_top, 101);
+        assert_eq!(lt.rows[200].bg[3].mosaic_top, 101);
+        assert_eq!(lt.rows[101].bg[0].mosaic, 3);
     }
 
     #[test]

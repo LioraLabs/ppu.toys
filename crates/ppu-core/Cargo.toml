@@ -10,6 +10,12 @@ description = "Emulated SNES PPU and S-DSP driven from Lua: the engine behind pp
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# The Studio's engine bindings (wasm32 only); other wasm modules can link
+# ppu-core without them.
+default = ["bindings"]
+bindings = []
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

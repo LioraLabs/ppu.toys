@@ -3,7 +3,7 @@
 A lake at dusk: a big striped sun, pagoda, pines, a fishing boat, rising sky
 lanterns and stars. The whole lower 92 lines are not drawn. Every water
 scanline is an `hdma()` write that points BG1–3's vertical scroll back up at
-the row it mirrors (`scroll.y = r - y`, `r = 2·horizon − 1 − y`), shifts it
+the row it mirrors (`scroll.y = r - y - 1`, `r = 2·horizon − 1 − y`), shifts it
 sideways for perspective-spaced ripples, and darkens it with fixed-colour
 subtraction (green pulled hardest, so gold reflects rose).
 

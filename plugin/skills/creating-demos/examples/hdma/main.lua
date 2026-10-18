@@ -116,7 +116,7 @@ function frame(t, f)
     paint(r)
     local wob = ripple(d, t, calm, gust_at)
     s1.x, s2.x, s3.x = nx + wob, mx + wob, fx + wob
-    local vy = r - y -- read row r on line y: the mirror
+    local vy = r - y - 1 -- read row r on line y (which shows row vy + y + 1): the mirror
     s1.y, s2.y, s3.y = vy, vy, vy
     if d == 0 then
       color.op = "add" -- a thin gold seam where the sky meets its reflection

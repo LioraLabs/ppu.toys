@@ -63,10 +63,12 @@ pub(crate) fn map_entry_addr(map_base: u16, screen_size: u8, tx: u32, ty: u32) -
     ((map_base as u32 + off) & 0x7fff) as u16
 }
 
+/// Offset-per-tile replacements for one screen column: `h` replaces the layer's
+/// coarse HOFS (bits 3-9; its fine bits 0-2 stay), `v` replaces its VOFS.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct ColumnOffset {
-    h: i16,
-    v: i16,
+    h: Option<i16>,
+    v: Option<i16>,
 }
 
 fn offset_word_value(word: u16) -> i16 {
@@ -74,12 +76,13 @@ fn offset_word_value(word: u16) -> i16 {
 }
 
 // Offset-per-tile modes repurpose BG3 as a control table, so mode_info(2/4)
-// keeps BG3 out of priority_order. The table is addressed by 8-pixel column:
-// (screen_x + BGnHOFS) / 8, through BG3's 32x32 tilemap layout. Low 10 bits are
-// the scroll delta added before BG1/BG2 tilemap fetch; bit13 is the enable/valid
-// bit. Mode 2 uses row 0 for H and row 1 for V. Mode 4 uses one word; bit15
-// selects V when set, H when clear. Bits are intentionally the tilemap attribute
-// bits so authors can poke raw vram[] or bg[3].map entries.
+// keeps BG3 out of priority_order. As measured on hardware (bsnes accuracy PPU):
+// screen tile column c (columns start at the layer's fine HOFS) reads table
+// column c - 1 + BG3HOFS / 8, and column 0 reads nothing. BG3VOFS / 8 picks the
+// row: mode 2 reads H from it and V from the next row; mode 4 reads one word
+// whose bit 15 selects V (set) or H (clear). Bit 13 enables an entry for BG1,
+// bit 14 for BG2. Bits are the tilemap attribute bits, so authors can poke raw
+// vram[] or bg[3].map entries.
 /// Offset-per-tile only applies to BG1/BG2 (layers 0/1) in modes 2 and 4.
 fn uses_offset_per_tile(layer: &RegBg) -> bool {
     matches!(layer.mode, 2 | 4) && layer.layer <= 1
@@ -89,35 +92,31 @@ fn offset_per_tile(layer: &RegBg, mem: &Memory, screen_x: usize) -> ColumnOffset
     if !uses_offset_per_tile(layer) {
         return ColumnOffset::default();
     }
-    let base_col = (screen_x as i64 + layer.scroll_x as i64).div_euclid(8) as u32;
-    let addr =
-        map_entry_addr(layer.offset_map_base, layer.offset_screen_size, base_col, 0) as usize;
-    let word = mem.vram[addr];
-    if word & 0x2000 == 0 {
+    let col = (screen_x as i64 + (layer.scroll_x as i64 & 7)) / 8;
+    if col == 0 {
         return ColumnOffset::default();
     }
+    let shift = if layer.offset_tile_size == 16 { 4 } else { 3 };
+    let tx = ((8 * (col - 1) + (layer.offset_scroll_x as i64 & !7)) >> shift).rem_euclid(64) as u32;
+    let read = |y: i64| {
+        let ty = ((y + layer.offset_scroll_y as i64) >> shift).rem_euclid(64) as u32;
+        mem.vram[map_entry_addr(layer.offset_map_base, layer.offset_screen_size, tx, ty) as usize]
+    };
+    let valid = 0x2000u16 << layer.layer;
+    let entry = |word: u16| (word & valid != 0).then(|| offset_word_value(word));
+    let word = read(0);
     if layer.mode == 4 {
-        return if word & 0x8000 != 0 {
-            ColumnOffset {
-                h: 0,
-                v: offset_word_value(word),
-            }
-        } else {
-            ColumnOffset {
-                h: offset_word_value(word),
-                v: 0,
-            }
+        return match entry(word) {
+            Some(v) if word & 0x8000 != 0 => ColumnOffset {
+                h: None,
+                v: Some(v),
+            },
+            h => ColumnOffset { h, v: None },
         };
     }
-    let v_word = mem.vram
-        [map_entry_addr(layer.offset_map_base, layer.offset_screen_size, base_col, 1) as usize];
     ColumnOffset {
-        h: offset_word_value(word),
-        v: if v_word & 0x2000 != 0 {
-            offset_word_value(v_word)
-        } else {
-            0
-        },
+        h: entry(word),
+        v: entry(read(8)),
     }
 }
 
@@ -184,16 +183,20 @@ pub(crate) fn sample_bg_pixel(layer: &RegBg, mem: &Memory, x: usize, y: usize) -
     let words_per_char = layer.bpp as u32 * 4; // 2bpp = 8 words, 4bpp = 16, 8bpp = 32
                                                // Mosaic: snap sample coords to the block's top-left. `mosaic` is the block
                                                // edge in pixels (1 = off, so `by == y` / `bx == x` and output is unchanged).
-                                               // Documented simplification: `by` is anchored to absolute screen row 0, not
-                                               // a frame-latched counter (no mid-frame HDMA $2106 block-boundary latch).
+                                               // Rows count from `mosaic_top`, where the MOSAIC size last changed.
+                                               // Then +1: hardware's first visible line is line 1, so screen row y
+                                               // shows tilemap row scroll_y + y + 1.
     let block = layer.mosaic.max(1) as i64;
-    let sy = (y as i64 / block * block) as usize;
+    let top = layer.mosaic_top as i64;
+    let sy = (top + (y as i64 - top) / block * block + 1) as usize;
     let sx = (x as i64 / block * block) as usize;
     let opt = offset_per_tile(layer, mem, sx);
-    let wx =
-        (sx as i64 + layer.scroll_x as i64 + opt.h as i64).rem_euclid((tiles_w * ts) as i64) as u32;
-    let wy =
-        (sy as i64 + layer.scroll_y as i64 + opt.v as i64).rem_euclid((tiles_h * ts) as i64) as u32;
+    let hofs = opt.h.map_or(layer.scroll_x as i64, |h| {
+        (h as i64 & !7) | (layer.scroll_x as i64 & 7)
+    });
+    let vofs = opt.v.map_or(layer.scroll_y, |v| v) as i64;
+    let wx = (sx as i64 + hofs).rem_euclid((tiles_w * ts) as i64) as u32;
+    let wy = (sy as i64 + vofs).rem_euclid((tiles_h * ts) as i64) as u32;
     let map_addr = map_entry_addr(layer.map_base, layer.screen_size, wx / ts, wy / ts);
     let entry = mem.vram[map_addr as usize];
     let (mut fx, mut fy) = (wx % ts, wy % ts);
@@ -329,7 +332,7 @@ fn render_tile_spans(layer: &RegBg, mem: &Memory, y: usize, out: &mut [Option<Bg
         _ => (32, 32),
     };
     let words_per_char = layer.bpp as u32 * 4;
-    let wy = (y as i64 + layer.scroll_y as i64).rem_euclid((tiles_h * ts) as i64) as u32;
+    let wy = (y as i64 + 1 + layer.scroll_y as i64).rem_euclid((tiles_h * ts) as i64) as u32;
     let width_px = tiles_w * ts;
     let mut wx = (layer.scroll_x as i64).rem_euclid(width_px as i64) as u32;
     let mut x = 0;
@@ -426,6 +429,16 @@ pub fn render_bg_scanline(row: &RegRow, mem: &Memory, y: usize, width: usize) ->
 
 #[cfg(test)]
 mod tests {
+    /// A row whose tilemap row 0 lands on screen row 0: hardware shows row
+    /// scroll_y + 1 on the top line, so every BG scrolls by -1.
+    fn top() -> LineTableRow {
+        let mut r = LineTableRow::default();
+        for b in &mut r.bg {
+            b.scroll_y = -1.0;
+        }
+        r
+    }
+
     use super::*;
 
     #[test]
@@ -448,7 +461,7 @@ mod tests {
 
     /// A Mode-1 layer to mutate per test: index 0 = BG1 (4bpp), 2 = BG3 (2bpp).
     fn layer(i: usize) -> RegBg {
-        RegRow::from(&LineTableRow::default()).bg[i].clone()
+        RegRow::from(&top()).bg[i].clone()
     }
 
     fn put_8bpp_row(mem: &mut Memory, addr: usize, row: usize, values: [u8; 8]) {
@@ -511,7 +524,7 @@ mod tests {
         m.cgram[8 * 4 + 1] = rgb15(0, 255, 0);
         m.vram[0x2000 + 8] = 0x0080;
         m.vram[0] = 1;
-        let mut src = LineTableRow::default();
+        let mut src = top();
         src.mode = 0;
         src.bg[1].char_base = 0x2000;
         let row = RegRow::from(&src);
@@ -519,57 +532,86 @@ mod tests {
         assert_eq!(px.rgba, unpack_rgb15(rgb15(0, 255, 0)));
     }
 
-    #[test]
-    fn mode2_bg3_words_add_independent_h_and_v_offsets_per_column() {
-        let mut m = Memory::new();
-        m.cgram[1] = rgb15(255, 0, 0);
-
-        // BG1 tile 1 has only pixel (0, 1) set. Without offsets, scanline y=0 is empty.
-        m.vram[0x1000 + 16 + 1] = 0x0080;
-        m.vram[1] = 1; // BG1 map cell (1, 0): tile 1, reached by +8 H offset.
-
-        // BG3 offset table at 0x0800, column 0:
-        // bit13 enables BG1/BG2 offset word use, bit15 marks V when set.
-        m.vram[0x0800] = 0x2000 | 8; // row 0: H += 8
-        m.vram[0x0800 + 32] = 0x2000 | 0x8000 | 1; // row 1: V += 1
-
+    fn opt_layer(mode: u8) -> RegBg {
         let mut l = layer(0);
-        l.mode = 2;
-        l.layer = 0;
+        l.mode = mode;
         l.char_base = 0x1000;
         l.offset_map_base = 0x0800;
-
-        let line = render_bg_layer_scanline_px(&l, &m, 0, 1);
-        assert_eq!(line[0].unwrap().rgba, unpack_rgb15(rgb15(255, 0, 0)));
-
-        // Clearing V offset keeps H shifted to tile 1 but samples empty row 0.
-        m.vram[0x0800 + 32] = 0;
-        assert!(render_bg_layer_scanline_px(&l, &m, 0, 1)[0].is_none());
+        (l.offset_scroll_x, l.offset_scroll_y) = (0, 0);
+        l
     }
 
     #[test]
-    fn mode4_bg3_word_bit15_selects_h_or_v_offset() {
+    fn offset_table_columns_follow_hardware() {
+        // Measured on bsnes (accuracy PPU): entry k drives screen tile column
+        // k + 1, columns start at the layer's fine HOFS, BG3's scroll picks the
+        // entry, and bit 13 / bit 14 enable it for BG1 / BG2.
         let mut m = Memory::new();
-        m.cgram[1] = rgb15(0, 255, 0);
-        m.vram[0x1000 + 16 + 1] = 0x0080; // tile 1, pixel (0, 1)
-        m.vram[1] = 1; // H-shift target tile
-        m.vram[0] = 1; // V-shift target tile
-
-        let mut l = layer(0);
-        l.mode = 4;
-        l.layer = 0;
-        l.char_base = 0x1000;
-        l.offset_map_base = 0x0800;
-
-        // H-only word: reaches tile column 1 but row 0 is transparent.
-        m.vram[0x0800] = 0x2000 | 8;
-        assert!(render_bg_layer_scanline_px(&l, &m, 0, 1)[0].is_none());
-
-        // V-only word: samples row 1 of tile column 0 and becomes visible.
-        m.vram[0x0800] = 0x2000 | 0x8000 | 1;
+        let mut l = opt_layer(2);
+        let h = |l: &RegBg, m: &Memory, x: usize| offset_per_tile(l, m, x).h;
+        m.vram[0x0800 + 5] = 0x2000 | 16;
         assert_eq!(
-            render_bg_layer_scanline_px(&l, &m, 0, 1)[0].unwrap().rgba,
-            unpack_rgb15(rgb15(0, 255, 0))
+            [47, 48, 55, 56].map(|x| h(&l, &m, x)),
+            [None, Some(16), Some(16), None]
+        );
+        l.scroll_x = 3;
+        assert_eq!(
+            [44, 45, 52, 53].map(|x| h(&l, &m, x)),
+            [None, Some(16), Some(16), None]
+        );
+        l.scroll_x = 0;
+        l.offset_scroll_x = 8;
+        assert_eq!([39, 40, 48].map(|x| h(&l, &m, x)), [None, Some(16), None]);
+        l.offset_scroll_x = 0;
+        l.offset_scroll_y = 8; // rows 1 (H) and 2 (V)
+        assert_eq!(h(&l, &m, 48), None);
+        m.vram[0x0800 + 32 + 5] = 0x2000 | 16;
+        assert_eq!(h(&l, &m, 48), Some(16));
+        l.offset_scroll_y = 0;
+        m.vram[0x0800] = 0x2000 | 16; // column 0 never reads the table
+        assert_eq!([0, 7, 8].map(|x| h(&l, &m, x)), [None, None, Some(16)]);
+        l.layer = 1; // BG2 needs bit 14
+        assert_eq!(h(&l, &m, 48), None);
+        m.vram[0x0800 + 5] = 0x4000 | 16;
+        assert_eq!(h(&l, &m, 48), Some(16));
+    }
+
+    #[test]
+    fn offset_entries_replace_the_scroll() {
+        // H replaces HOFS bits 3-9 (the entry's low 3 bits are dropped, the
+        // layer's fine scroll stays); V replaces VOFS outright.
+        let mut m = Memory::new();
+        let mut l = opt_layer(2);
+        l.scroll_x = 11;
+        l.scroll_y = 10;
+        m.vram[0x0800 + 5] = 0x2000 | 19;
+        m.vram[0x0800 + 32 + 5] = 0x2000 | 4;
+        let s = sample_bg_pixel(&l, &m, 45, 0).unwrap(); // column 6 reads entry 5
+        assert_eq!((s.tx, s.fx), (8, 0)); // 45 + 16 + 3 = 64
+        assert_eq!((s.ty, s.fy), (0, 5)); // line 1 + 4
+        let s = sample_bg_pixel(&l, &m, 44, 0).unwrap(); // column 5: no entry
+        assert_eq!((s.tx, s.fx, s.ty, s.fy), (6, 7, 1, 3)); // 44 + 11, 1 + 10
+    }
+
+    #[test]
+    fn mode4_offset_word_bit15_selects_v_or_h() {
+        let mut m = Memory::new();
+        let l = opt_layer(4);
+        m.vram[0x0800 + 5] = 0x2000 | 16;
+        assert_eq!(
+            offset_per_tile(&l, &m, 48),
+            ColumnOffset {
+                h: Some(16),
+                v: None
+            }
+        );
+        m.vram[0x0800 + 5] = 0x2000 | 0x8000 | 4;
+        assert_eq!(
+            offset_per_tile(&l, &m, 48),
+            ColumnOffset {
+                h: None,
+                v: Some(4)
+            }
         );
     }
 
@@ -623,7 +665,7 @@ mod tests {
         l.scroll_x = -264; // -264.rem_euclid(256) == 248 -> same as -8
         assert!(render_bg_layer_scanline_px(&l, &m, 0, 16)[8].is_some());
         l.scroll_x = 0;
-        l.scroll_y = -3; // pixel row 0 of the tile appears at screen y 3
+        l.scroll_y = -4; // screen y 3 shows row 3 + 1 - 4 = 0, the tile's pixel row 0
         assert!(render_bg_layer_scanline_px(&l, &m, 3, 1)[0].is_some());
         assert!(render_bg_layer_scanline_px(&l, &m, 2, 1)[0].is_none());
     }
@@ -688,8 +730,7 @@ mod tests {
         l.char_base = 0x1000;
         l.screen_size = 1; // 64x32 -> 512px wide extent
         l.scroll_x = 256; // screen x 0 -> world x 256 -> tile col 32
-        assert!(render_bg_layer_scanline_px(&l, &m, 0, 1)[0].is_some());
-        // The 64-tile extent wraps: scroll 512 aliases scroll 0 (empty cell 0,0).
+                          // The 64-tile extent wraps: scroll 512 aliases scroll 0 (empty cell 0,0).
         l.scroll_x = 512;
         assert!(render_bg_layer_scanline_px(&l, &m, 0, 1)[0].is_none());
     }
@@ -706,7 +747,7 @@ mod tests {
         m.vram[0x2000 + 8] = 0b1100_0000 << 8;
         m.vram[0x0000] = 1; // BG1 map at 0x0000
         m.vram[0x0800] = 1; // BG3 map at 0x0800
-        let mut src = LineTableRow::default();
+        let mut src = top();
         src.bg[0].char_base = 0x1000;
         src.bg[2].char_base = 0x2000;
         src.bg[2].map_base = 0x0800;
@@ -721,7 +762,7 @@ mod tests {
     fn composite_shows_backdrop_and_applies_brightness() {
         let mut m = Memory::new();
         m.cgram[0] = rgb15(200, 200, 200);
-        let mut row = RegRow::from(&LineTableRow::default());
+        let mut row = RegRow::from(&top());
         row.brightness = 15;
         assert_eq!(
             render_bg_scanline(&row, &m, 0, 2)[0],
@@ -876,6 +917,24 @@ mod tests {
     }
 
     #[test]
+    fn mosaic_rows_count_from_mosaic_top() {
+        // Pixel (0,0) lit. Blocks of 2 counted from row 1: rows 1-2 sample row 1
+        // (empty), rows 3-4 sample row 3; counted from row 0 instead, row 1 would
+        // replicate the lit row 0.
+        let mut m = Memory::new();
+        m.cgram[1] = rgb15(255, 0, 0);
+        m.vram[0x1000 + 16] = 0b1000_0000;
+        m.vram[0] = 1;
+        let mut l = layer(0);
+        l.char_base = 0x1000;
+        l.mosaic = 2;
+        assert!(render_bg_layer_scanline_px(&l, &m, 1, 1)[0].is_some());
+        l.mosaic_top = 1;
+        assert!(render_bg_layer_scanline_px(&l, &m, 1, 1)[0].is_none());
+        assert!(render_bg_layer_scanline_px(&l, &m, 2, 1)[0].is_none());
+    }
+
+    #[test]
     fn sample_bg_pixel_reports_the_full_walk() {
         // char 1 at 0x1000, pixel (0,0) = index 1; map cell (1,0) = tile1 pal2 prio1;
         // scroll_x = 8 puts screen x=0 on that cell.
@@ -883,7 +942,7 @@ mod tests {
         m.cgram[2 * 16 + 1] = rgb15(0, 255, 0);
         m.vram[0x1000 + 16] = 0x0080; // 4bpp char 1, plane0 row0 bit7
         m.vram[0x0001] = 1 | (2 << 10) | (1 << 13);
-        let mut row = crate::registers::LineTableRow::default();
+        let mut row = top();
         row.bg[0].scroll_x = 8.0;
         row.bg[0].char_base = 0x1000;
         let reg = crate::registers::RegRow::from(&row);

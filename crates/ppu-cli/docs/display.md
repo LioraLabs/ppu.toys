@@ -50,5 +50,9 @@ mosaic = 7
 bg[1].mosaic = true
 ```
 
+Blocks count down from the top of the screen. Changing the size in a scanline
+callback starts a fresh row of blocks on that line, as on hardware. Rewriting
+the same size, or switching a layer's enable bit, keeps the count running.
+
 See also: [Backgrounds](backgrounds.md), [Mode 7](mode7.md), and
 [scanline effects](scanlines.md).

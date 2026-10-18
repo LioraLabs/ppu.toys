@@ -10,7 +10,7 @@ local flat = mode7_transform(90, 2, 512, 256)
 assert(abs(flat.a) < 0.00001 and flat.b == -0.5)
 assert(flat.c == 0.5 and abs(flat.d) < 0.00001)
 assert(flat.cx == 512 and flat.cy == 256)
-assert(flat.scroll_x == 384 and flat.scroll_y == 144)
+assert(flat.scroll_x == 384 and flat.scroll_y == 143) -- screen row 112 is line 113
 assert(m7.a == before)
 local far = mode7_floor(96, 80, 64, 0, 512, 0)
 local near = mode7_floor(208, 80, 64, 0, 512, 0)

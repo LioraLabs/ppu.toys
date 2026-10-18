@@ -120,9 +120,9 @@ end
         top[1] > 200 && top[0] < 100 && top[2] < 100,
         "top band should show the mode-1 bg, got {top:?}"
     );
-    // Bottom band: screen (4,150) maps to track texel (4,6) under the
-    // identity matrix — a blue-dominant color no bg palette write clobbers.
-    let bot = common::px(&fb, 4, 150);
+    // Bottom band: screen (4,149), line 150, maps to track texel (4,6) under
+    // the identity matrix — a blue-dominant color no bg palette write clobbers.
+    let bot = common::px(&fb, 4, 149);
     assert!(
         bot[2] > 200 && bot[0] < 120 && bot[1] < 120,
         "bottom band should show the m7 texture, got {bot:?}"

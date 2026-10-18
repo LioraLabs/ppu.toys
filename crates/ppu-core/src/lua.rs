@@ -50,6 +50,9 @@ pub struct PlacementView {
     pub char: u16,
     pub map: u16,
     pub pal: u8,
+    /// The `dma()` result's other integer fields (`next_char`, `bit_depth`, ...),
+    /// so the SNES compiler resolves them as the preview does.
+    pub fields: Vec<(&'static str, i64)>,
 }
 
 /// What the current program's init window placed where — the DMA panel's
@@ -332,6 +335,8 @@ struct DmaPlacement {
     char_base: u16,
     map_base: u16,
     cgram_base: u8,
+    /// The result's other integer fields (`next_char`, `bit_depth`, ...).
+    fields: Vec<(&'static str, i64)>,
 }
 
 /// The resolved result of one init-stage `dma(name, { addr })` call on a
@@ -751,6 +756,7 @@ impl LuaEngine {
                     char: p.char_base,
                     map: p.map_base,
                     pal: p.cgram_base,
+                    fields: p.fields.clone(),
                 })
                 .collect(),
         }
@@ -785,6 +791,16 @@ impl LuaEngine {
 
     /// The live S-DSP core — read-only; all writes go through the `dsp`/
     /// `voice[]` DSL tables, flushed by `render_frame_audio`.
+    /// Start logging every DSP register write with its 32 kHz sample time.
+    pub fn start_dsp_log(&mut self) {
+        self.dsp.log = Some(Vec::new());
+    }
+
+    /// The writes logged since `start_dsp_log` (or the last take).
+    pub fn take_dsp_log(&mut self) -> Vec<(u64, u8, u8)> {
+        self.dsp.log.as_mut().map(std::mem::take).unwrap_or_default()
+    }
+
     pub fn dsp(&self) -> &Dsp {
         &self.dsp
     }
@@ -1409,6 +1425,43 @@ impl LuaEngine {
             let mut l = self.lua.borrow_mut();
             call_controls_hook::<()>(&mut l, "__ppu_controls_restore");
         }
+    }
+
+    /// Build-time evaluation (the SNES exporter bakes tables with it): call the
+    /// global function `name` with integer arguments and return its result, a
+    /// Lua sequence of integers. Runs after the program's `init()`.
+    pub fn call_ints(&mut self, name: &str, args: &[i64]) -> Result<Vec<i64>, LuaError> {
+        if self.source_dirty {
+            self.recompile()?;
+        }
+        let mut l = self.lua.borrow_mut();
+        let ex = l.enter(|ctx| {
+            let f = match ctx.globals().get(ctx, piccolo::String::from_slice(&ctx, name.as_bytes())) {
+                Value::Function(f) => f,
+                _ => return Err(format!("no global function {name}")),
+            };
+            Ok(ctx.stash(Executor::start(ctx, f, piccolo::Variadic(args.to_vec()))))
+        });
+        let ex = ex.map_err(|message| LuaError { message, line: None, file: None })?;
+        l.finish(&ex);
+        l.try_enter(|ctx| {
+            let Value::Table(t) = ctx.fetch(&ex).take_result::<Value>(ctx)?? else {
+                return Ok(Err(format!("{name} must return a sequence of integers")));
+            };
+            let mut out = Vec::new();
+            loop {
+                match t.get(ctx, out.len() as i64 + 1) {
+                    Value::Nil => break,
+                    v => match v.to_int() {
+                        Some(n) => out.push(n),
+                        None => return Ok(Err(format!("{name} returned a non-integer"))),
+                    },
+                }
+            }
+            Ok(Ok(out))
+        })
+        .map_err(static_error_to_lua)?
+        .map_err(|message| LuaError { message, line: None, file: None })
     }
 
     pub fn frame(&mut self, t: f64, f: u32) -> Result<LineTable, LuaError> {
@@ -2164,7 +2217,11 @@ impl LuaEngine {
                 .render(&mut self.aram, &mut self.audio[cursor * 2..at * 2]);
             match event {
                 Event::Write(reg, val) => self.dsp.write(reg, val),
-                Event::Reset => self.dsp = Dsp::new(),
+                Event::Reset => {
+                    let (clock, log) = (self.dsp.clock, self.dsp.log.take());
+                    self.dsp = Dsp::new();
+                    (self.dsp.clock, self.dsp.log) = (clock, log);
+                }
                 Event::Upload(addr, bytes) => {
                     for (i, b) in bytes.into_iter().enumerate() {
                         self.aram[(addr + i) & 65535] = b
@@ -2788,7 +2845,8 @@ fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
             [c / zoom, -s / zoom, s / zoom, c / zoom],
             cx,
             cy,
-            cy - 112,
+            // Screen row 112 is line 113: py = 112 + 1 + scroll_y - cy = 0.
+            cy - 113,
             true,
         );
         stack.replace(ctx, t);
@@ -3615,11 +3673,19 @@ fn install_dma(
         rec.cgram_ranges
             .borrow_mut()
             .push((name.clone(), cgram.0, cgram.1));
+        let fields = ["next_char", "next_map", "next_pal", "bit_depth", "screen_size", "tile", "cell_size"]
+            .into_iter()
+            .filter_map(|k| match ret.get(ctx, k) {
+                Value::Integer(v) => Some((k, v)),
+                _ => None,
+            })
+            .collect();
         rec.placements.borrow_mut().push(DmaPlacement {
             name,
             char_base: char_base as u16,
             map_base: map_base as u16,
             cgram_base: cgram_base as u8,
+            fields,
         });
         stack.clear();
         stack.replace(ctx, ret);

@@ -57,6 +57,8 @@ pub struct BgTraceRegs {
     pub scroll_y: i16,
     /// Effective mosaic block edge (1 = off).
     pub mosaic: u8,
+    /// First line of the current mosaic block run (blocks restart where the size changes).
+    pub mosaic_top: u16,
     pub direct_color: bool,
     pub visible: bool,
 }
@@ -145,6 +147,7 @@ fn bg_regs(row: &RegRow, layer: usize) -> BgTraceRegs {
         scroll_x: l.scroll_x,
         scroll_y: l.scroll_y,
         mosaic: l.mosaic,
+        mosaic_top: l.mosaic_top,
         direct_color: l.direct_color,
         visible: l.visible,
     }
@@ -229,6 +232,7 @@ fn trace_mode7(row: &RegRow, mem: &Memory, x: usize, y: usize) -> BgTrace {
             scroll_x: row.bg[0].scroll_x,
             scroll_y: row.bg[0].scroll_y,
             mosaic: row.bg[0].mosaic,
+            mosaic_top: row.bg[0].mosaic_top,
             direct_color: row.bg[0].direct_color,
             visible: row.bg[0].visible,
         },
@@ -344,6 +348,7 @@ pub fn trace_bg_tile(
                 scroll_x: row.bg[0].scroll_x,
                 scroll_y: row.bg[0].scroll_y,
                 mosaic: row.bg[0].mosaic,
+                mosaic_top: row.bg[0].mosaic_top,
                 direct_color: row.bg[0].direct_color,
                 visible: row.bg[0].visible,
             },
@@ -488,14 +493,21 @@ pub fn render_layer_view(lt: &LineTable, mem: &Memory, plane: u8) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    /// A row whose tilemap row 0 lands on screen row 0: hardware shows row
+    /// scroll_y + 1 on the top line, so every BG scrolls by -1.
+    fn top() -> LineTableRow {
+        let mut r = LineTableRow::default();
+        for b in &mut r.bg {
+            b.scroll_y = -1.0;
+        }
+        r
+    }
+
     /// Power-on TM is empty (a layer draws only once designated). These tests
     /// are about what the layers DO once on screen, so they start from a row
     /// with all five designated on the main screen.
     fn all_on() -> LineTableRow {
-        LineTableRow {
-            tm: 0x1f,
-            ..LineTableRow::default()
-        }
+        LineTableRow { tm: 0x1f, ..top() }
     }
 
     use super::*;

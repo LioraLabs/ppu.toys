@@ -974,6 +974,84 @@ impl<S: StringInterner> Compiler<S> {
             Ok(())
         }
 
+        // LOCAL DELTA: freeze indexed targets and all RHS values before parallel stores.
+        if target_len > 1 {
+            enum Target<S> {
+                Variable(VariableDescriptor<S>),
+                Field(RegisterIndex, RegisterIndex),
+            }
+            let top = self.current_function.register_allocator.stack_top();
+            let mut targets = Vec::new();
+            for target in &assignment.targets {
+                let resolved = match target {
+                    AssignmentTarget::Name(name) => match self.find_variable(name.clone())? {
+                        VariableDescriptor::Global(name) => {
+                            let env = self.get_environment()?;
+                            let table = self.expr_discharge(env, ExprDestination::PushNew)?;
+                            let key = self.expr_discharge(
+                                ExprDescriptor::Constant(Constant::String(name)),
+                                ExprDestination::PushNew,
+                            )?;
+                            Target::Field(table, key)
+                        }
+                        variable => Target::Variable(variable),
+                    },
+                    AssignmentTarget::Field(head, field) => {
+                        let table = self.suffixed_expression(head)?;
+                        let table = self.expr_discharge(table, ExprDestination::PushNew)?;
+                        let key = match field {
+                            FieldSuffix::Named(name) => {
+                                ExprDescriptor::Constant(Constant::String(name.clone()))
+                            }
+                            FieldSuffix::Indexed(index) => self.expression(index)?,
+                        };
+                        let key = self.expr_discharge(key, ExprDestination::PushNew)?;
+                        Target::Field(table, key)
+                    }
+                };
+                targets.push(resolved);
+            }
+            let mut values = Vec::new();
+            for (i, value) in assignment.values.iter().enumerate() {
+                let value = self.expression(value)?;
+                if i >= target_len {
+                    let register = self.expr_discharge(value, ExprDestination::AllocateNew)?;
+                    self.current_function.register_allocator.free(register);
+                } else if i == val_len - 1 {
+                    let count = (target_len - i)
+                        .try_into()
+                        .map_err(|_| CompileErrorKind::Registers)?;
+                    let first = self.expr_push_count(value, count)?;
+                    for j in 0..count {
+                        values.push(RegisterIndex(first.0 + j));
+                    }
+                } else {
+                    values.push(self.expr_discharge(value, ExprDestination::PushNew)?);
+                }
+            }
+            for (target, source) in targets.into_iter().zip(values).rev() {
+                let value = ExprDescriptor::Variable(VariableDescriptor::Local(source));
+                match target {
+                    Target::Variable(VariableDescriptor::Local(dest)) => {
+                        self.expr_discharge(value, ExprDestination::Register(dest))?;
+                    }
+                    Target::Variable(VariableDescriptor::UpValue(dest)) => {
+                        self.current_function
+                            .operations
+                            .push(Operation::SetUpValue { source, dest });
+                    }
+                    Target::Variable(VariableDescriptor::Global(_)) => unreachable!(),
+                    Target::Field(table, key) => self.set_table(
+                        ExprDescriptor::Variable(VariableDescriptor::Local(table)),
+                        ExprDescriptor::Variable(VariableDescriptor::Local(key)),
+                        value,
+                    )?,
+                }
+            }
+            self.current_function.register_allocator.pop_to(top);
+            return Ok(());
+        }
+
         for i in 0..val_len {
             let expr = self.expression(&assignment.values[i])?;
 

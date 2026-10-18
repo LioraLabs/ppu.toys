@@ -1921,26 +1921,27 @@ fn cavern_scrolls_an_assembled_import_beside_the_tilesheet_layer() {
 fn cavern_gid_adapter_puts_the_authored_level_on_screen() {
     let fb = cavern_pinned(0.0, 0, true);
     // At camera 0 the lava pit (level columns 22..30) sits at screen x 176..247,
-    // its surface on screen tile row 26 -> y 208..215.
-    let lava = px(&fb, 200, 212);
+    // its surface on map tile row 26 -> map y 208..215, screen y 207..214.
+    let lava = px(&fb, 200, 211);
     assert!(
         lava[0] > 0xa0 && lava[2] < 0x70,
-        "expected lava at (200,212), got {lava:?}"
+        "expected lava at (200,211), got {lava:?}"
     );
     // A plain rock column at the same row is grey — r, g and b within 0x20.
-    let rock = px(&fb, 8, 212);
+    let rock = px(&fb, 8, 211);
     let (lo, hi) = (
         rock[0].min(rock[1]).min(rock[2]),
         rock[0].max(rock[1]).max(rock[2]),
     );
     assert!(
         hi - lo < 0x20,
-        "expected grey rock at (8,212), got {rock:?}"
+        "expected grey rock at (8,211), got {rock:?}"
     );
     // Tiled's empty cell (gid 0) maps onto sheet cell 0, which is blank. Level
-    // rows 0..2 are entirely gid 0, so screen y 128..151 is a band the streaming
+    // rows 0..2 are entirely gid 0, so map y 128..151 (screen y 127..150, as the
+    // top line shows map row 1) is a band the streaming
     // loop DOES write, every entry of it through gid_to_tile(0) — the band above
-    // (y < 128) is never written at all and would stay transparent whatever the
+    // (screen y < 127) is never written at all and would stay transparent whatever the
     // adapter did, which is why it is the wrong place to check this.
     let no_sheet = cavern_pinned_src(
         &CAVERN_SRC.replace("bg[1].char_base = 0x1000", "screen.main.bg1 = false"),
@@ -1948,7 +1949,7 @@ fn cavern_gid_adapter_puts_the_authored_level_on_screen() {
         0,
         true,
     );
-    for y in 128..152 {
+    for y in 127..151 {
         for x in 0..WIDTH {
             assert_eq!(
                 px(&fb, x, y),
@@ -1958,7 +1959,7 @@ fn cavern_gid_adapter_puts_the_authored_level_on_screen() {
         }
     }
     // ...and the sheet layer is genuinely doing something lower down.
-    assert_ne!(px(&fb, 8, 212), px(&no_sheet, 8, 212));
+    assert_ne!(px(&fb, 8, 211), px(&no_sheet, 8, 211));
 }
 
 // PPU-95: the sheet must stay under the 1024-char ceiling. Past it a cells[k]

@@ -341,9 +341,10 @@ fn lava_cycles_its_three_variants() {
     assert_ne!(p0, p1, "the animation phase changed nothing on screen");
     assert_eq!(p0, p3, "lava is not a 3-variant cycle");
 
-    // Only the lava rows move: everything above LEVEL row 12 (y < 144) is
-    // identical between phases.
-    for y in 0..144 {
+    // Only the lava rows move: everything above LEVEL row 12 (map y < 144) is
+    // identical between phases. The top line shows map row 1, so that is
+    // screen y < 143.
+    for y in 0..143 {
         for x in 0..WIDTH {
             assert_eq!(
                 px(&p0, x, y),

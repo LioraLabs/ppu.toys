@@ -200,3 +200,16 @@ fn lua_direct_color_and_force_blank_globals() {
         .expect("compiles");
     assert!(e3.frame(0.0, 0).expect("runs").rows[0].direct_color());
 }
+
+#[test]
+fn call_ints_evaluates_a_global_after_init() {
+    let mut engine = LuaEngine::new();
+    engine
+        .set_source(
+            "local k = 0\nfunction init() k = 10 end\nfunction frame(t, f) end\n\
+             function rows(a, b) local r = {} for i = 1, 3 do r[i] = a * i + b + k end return r end",
+        )
+        .unwrap();
+    assert_eq!(engine.call_ints("rows", &[2, 1]).unwrap(), vec![13, 15, 17]);
+    assert!(engine.call_ints("missing", &[]).is_err());
+}

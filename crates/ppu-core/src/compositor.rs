@@ -642,14 +642,21 @@ pub fn render_frame_stats(lt: &LineTable, mem: &Memory) -> (Vec<u8>, ObjOverflow
 
 #[cfg(test)]
 mod tests {
+    /// A row whose tilemap row 0 lands on screen row 0: hardware shows row
+    /// scroll_y + 1 on the top line, so every BG scrolls by -1.
+    fn top() -> LineTableRow {
+        let mut r = LineTableRow::default();
+        for b in &mut r.bg {
+            b.scroll_y = -1.0;
+        }
+        r
+    }
+
     /// Power-on TM is empty (a layer draws only once designated). These tests
     /// are about what the layers DO once on screen, so they start from a row
     /// with all five designated on the main screen.
     fn all_on() -> LineTableRow {
-        LineTableRow {
-            tm: 0x1f,
-            ..LineTableRow::default()
-        }
+        LineTableRow { tm: 0x1f, ..top() }
     }
 
     use super::*;

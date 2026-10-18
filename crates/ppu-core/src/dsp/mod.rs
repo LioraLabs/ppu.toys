@@ -207,6 +207,12 @@ pub struct Dsp {
     noise: i32,
     echo_pos: i32,
     echo_length: i32,
+
+    /// Stereo frames rendered so far (32 kHz), the time base of `log`.
+    pub clock: u64,
+    /// When set, every register write as (clock, register, value): what an
+    /// exporter replays on a real SPC700.
+    pub log: Option<Vec<(u64, u8, u8)>>,
 }
 
 impl Dsp {
@@ -224,6 +230,8 @@ impl Dsp {
             noise: 0x4000,
             echo_pos: 0,
             echo_length: 0,
+            clock: 0,
+            log: None,
         }
     }
 
@@ -274,6 +282,9 @@ impl Dsp {
     pub fn write(&mut self, reg: u8, val: u8) {
         if reg & 0x80 != 0 {
             return;
+        }
+        if let Some(log) = &mut self.log {
+            log.push((self.clock, reg, val));
         }
         self.regs[reg as usize] = val;
 
@@ -334,6 +345,7 @@ impl Dsp {
     /// sample data, the sample directory, and the echo buffer.
     pub fn render(&mut self, aram: &mut [u8; 0x10000], out: &mut [i16]) {
         let num_frames = out.len() / 2;
+        self.clock += num_frames as u64;
         for frame in 0..num_frames {
             let counter = self.counter;
             let noise_clock = (self.regs[0x6c] & 0x1f) as i32;

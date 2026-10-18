@@ -69,6 +69,7 @@ fn traced_pixel_uses_the_scanlines_palette() {
     mem.cgram[1] = 31;
     let mut defaults = ppu_core::LineTableRow::default();
     defaults.bg[0].map_base = 0x1000;
+    defaults.bg[0].scroll_y = -1.0; // the top line shows tile row 0
     defaults.cgram = vec![(1, 992)];
     let row = ppu_core::RegRow::from(&defaults);
     let trace = trace_bg_screen(&row, &mem, 0, 0, 0).unwrap();

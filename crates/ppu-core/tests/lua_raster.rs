@@ -22,7 +22,8 @@ fn register_raster_preserves_hud_irq_mosaic_palettes_and_later_overrides() {
     assert_eq!(e.memory().cgram[0], 31);
     assert_eq!(rows[30].bg[0].scroll_x, 7);
     assert_eq!(rows[31].bg[0].scroll_x, 120);
-    assert_eq!(rows[0].bg[0].scroll_y, 1);
+    // Raster rows are hardware register values, used as they are.
+    assert_eq!(rows[0].bg[0].scroll_y, 0);
     assert_eq!(rows[31].cgram, vec![(0, 1023)]);
     assert_eq!(rows[40].brightness, 3);
     assert_eq!(rows[41].brightness, 15);

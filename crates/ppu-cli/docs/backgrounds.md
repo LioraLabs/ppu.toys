@@ -33,6 +33,9 @@ to calculate the hardware layout. In BGnSC, bits 0–1 are `screen_size` and bit
 Scroll moves the tilemap behind the 256×224 display. Values wrap naturally
 when the map wraps.
 
+As on hardware, whose first visible scanline is line 1, the top display line
+shows tilemap row `scroll.y + 1`. Set `scroll.y = -1` to put row 0 at the top.
+
 ```lua
 function frame(t, f)
   bg[1].scroll.x = t * 16

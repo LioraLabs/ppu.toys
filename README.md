@@ -39,6 +39,10 @@ Then open `my-demo.ppu.json` at [ppu.toys](https://ppu.toys). `ppu docs` prints
 the same guides that live in [crates/ppu-cli/docs/](crates/ppu-cli/docs/). Start with
 [the authoring loop](crates/ppu-cli/docs/cli.md) and [the PPU pipeline](crates/ppu-cli/docs/registers.md).
 
+To run a toy on a real SNES, open it in the [ppu.toys](https://ppu.toys) Studio:
+its SNES panel checks it against the console's limits as you type, and
+**Export to ROM** builds a cartridge image for an emulator or flash cart.
+
 To have Claude Code author toys with you, install the `creating-demos` skill:
 
 ```sh

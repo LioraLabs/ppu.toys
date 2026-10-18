@@ -123,7 +123,14 @@ impl<S: AsRef<[u8]>> Constant<S> {
                 if b == 0 {
                     None
                 } else {
-                    Some(Self::Integer(a.wrapping_div(b)))
+                    // LOCAL DELTA: Lua rounds integer division toward negative infinity.
+                    let q = a.wrapping_div(b);
+                    let r = a.wrapping_rem(b);
+                    Some(Self::Integer(if r != 0 && (a < 0) != (b < 0) {
+                        q - 1
+                    } else {
+                        q
+                    }))
                 }
             }
             (a, b) => Some(Self::Number((a.to_number()? / b.to_number()?).floor())),
@@ -138,7 +145,13 @@ impl<S: AsRef<[u8]>> Constant<S> {
                 if b == 0 {
                     None
                 } else {
-                    Some(Self::Integer(((a % b) + b) % b))
+                    // Avoid overflow at MIN/-1 and when adding a large same-sign divisor.
+                    let r = a.wrapping_rem(b);
+                    Some(Self::Integer(if r != 0 && (r < 0) != (b < 0) {
+                        r + b
+                    } else {
+                        r
+                    }))
                 }
             }
             (a, b) => {

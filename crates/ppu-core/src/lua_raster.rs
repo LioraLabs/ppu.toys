@@ -17,7 +17,7 @@ pub(crate) fn install(ctx: Context<'_>, raster: Raster) {
             let Value::Table(r) = lines.get(ctx, y as i64) else {
                 return Err(error("raster requires 224 register rows"));
             };
-            let mut row = if let Some(row) = cache.get(&r) {
+            let row = if let Some(row) = cache.get(&r) {
                 LineTableRow::clone(row)
             } else {
                 let mut b = [0u8; 64];
@@ -53,16 +53,6 @@ pub(crate) fn install(ctx: Context<'_>, raster: Raster) {
                 cache.insert(r, row.clone());
                 row
             };
-            // BG scanout starts at SNES line 1; sprite scanout starts at zero.
-            for i in 0..4 {
-                let block = if row.mosaic_enable[i] {
-                    row.mosaic_size as usize + 1
-                } else {
-                    1
-                };
-                let phase = ((y + 1) / block - y / block) * block;
-                row.bg[i].scroll_y = (row.bg[i].scroll_y as u16).wrapping_add(phase as u16) as f32;
-            }
             rows.push(row);
         }
         if let Value::Table(pal) = ctx.get_global("cgram") {

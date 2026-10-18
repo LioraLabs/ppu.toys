@@ -174,9 +174,9 @@ pub struct LineTableRow {
     pub cgadsub: u8,
     /// COLDATA ($2132) fixed color, 15-bit BGR. Power-on 0 = black.
     pub coldata: u16,
-    /// MOSAIC ($2106) bits 0-3: block size (0 = off = 1x1, N = (N+1)x(N+1)).
+    /// MOSAIC ($2106) bits 4-7: block size (0 = off = 1x1, N = (N+1)x(N+1)).
     pub mosaic_size: u8,
-    /// MOSAIC ($2106) bits 4-7: per-BG enable (index 0..3 = BG1..BG4).
+    /// MOSAIC ($2106) bits 0-3: per-BG enable (index 0..3 = BG1..BG4).
     pub mosaic_enable: [bool; 4],
     /// SETINI ($2133) screen-init byte. Only bit 6 (EXTBG) is load-bearing in
     /// M8: it splits the Mode 7 plane into two per-pixel priority sub-levels by
@@ -250,6 +250,10 @@ pub struct RegBg {
     pub offset_map_base: u16,
     /// BG3 screen size selector for the offset table.
     pub offset_screen_size: u8,
+    /// BG3 scroll and tile edge: they pick which offset-table entries are read.
+    pub offset_scroll_x: i16,
+    pub offset_scroll_y: i16,
+    pub offset_tile_size: u8,
     /// Bits per pixel this layer renders at in the row's mode, resolved from
     /// the mode table (modes.rs) at quantize time; 0 = the layer does not
     /// exist in this mode (renders transparent).
@@ -262,6 +266,10 @@ pub struct RegBg {
     /// Resolved by `RegRow::from` from the row's MOSAIC size + this layer's
     /// enable bit; the rasterizer snaps sample coords to this block.
     pub mosaic: u8,
+    /// Screen row the vertical mosaic blocks count from: 0, or the last row
+    /// whose MOSAIC size differs from the row above (hardware restarts the
+    /// vertical counter there). Set by `LineTableBuilder::build`.
+    pub mosaic_top: u16,
 }
 
 impl From<&Bg> for RegBg {
@@ -278,9 +286,13 @@ impl From<&Bg> for RegBg {
             char_base: quantize::bg_char_base(b.char_base),
             offset_map_base: 0,
             offset_screen_size: 0,
+            offset_scroll_x: 0,
+            offset_scroll_y: 0,
+            offset_tile_size: 8,
             bpp: 0, // resolved from the mode table by RegRow::from (needs the row's mode)
             direct_color: false,
             mosaic: 1, // off by default; RegRow::from overrides for enabled layers
+            mosaic_top: 0,
         }
     }
 }
@@ -368,11 +380,13 @@ impl From<&LineTableRow> for RegRow {
             };
             b
         });
-        let offset_map_base = bg[2].map_base;
-        let offset_screen_size = bg[2].screen_size;
+        let table = bg[2].clone();
         for b in &mut bg {
-            b.offset_map_base = offset_map_base;
-            b.offset_screen_size = offset_screen_size;
+            b.offset_map_base = table.map_base;
+            b.offset_screen_size = table.screen_size;
+            b.offset_scroll_x = table.scroll_x;
+            b.offset_scroll_y = table.scroll_y;
+            b.offset_tile_size = table.tile_size;
         }
         RegRow {
             mode,

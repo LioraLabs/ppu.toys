@@ -1,6 +1,6 @@
 ---
 name: creating-demos
-description: Create and edit uploadable ppu.toys demos and games with the standalone ppu CLI. Use Lua controller input, register and memory control, Mode 7, HDMA, sprites, windows, color math, and S-DSP music, then render, check, and pack a self-contained toy.
+description: Create and edit uploadable ppu.toys demos and games with the standalone ppu CLI. Use Lua controller input, register and memory control, Mode 7, HDMA, sprites, windows, color math, and S-DSP music, then render, check, and pack a self-contained toy, written so it can also become a real SNES cartridge.
 ---
 
 # Creating ppu.toys demos
@@ -195,6 +195,30 @@ Return the editable directory, packed upload file, rendered samples (a
 contact sheet, and an MP4 from `scripts/film.py` when motion matters), and
 check results. Open the packed file in Studio when available for a final
 compatibility check. Publishing needs user authorization.
+
+## A real cartridge
+
+Cartridges are built on ppu.toys: the Studio's SNES panel compiles a toy for
+the console as you edit, and **Export to ROM** builds the `.sfc`. When the
+user wants one, read the SNES chapter of the guide (https://ppu.toys/docs#snes)
+before writing code and stay inside the subset it describes from the start:
+integer and fixed-point state with declared ranges, bounded loops, constant
+`dma()` placement, no strings or general tables at run time (declared integer
+arrays are fine). Retrofitting a toy written for the browser usually means
+rewriting it.
+
+Annotate as you write: `---@snes range name min max` on persistent integer
+state, `---@snes array name size min max` on number tables, `---@snes fixed
+10` for fractions, `t` or trig. A range is a promise the cartridge enforces by
+stopping, so declare the honest bound of every value the code can produce and
+clamp or wrap the value itself (off-screen positions, timers, moving Mode 7
+centers). Put big graphics in image sources placed with `dma()`: `vram[]`
+loops in `init()` keep a real console on a black screen for seconds.
+
+Hand over the packed toy and tell the user to open it in the Studio: the SNES
+panel lists anything to fix with its line, and Export to ROM downloads the
+cartridge. With the Studio's agent link connected, `snes_check` and
+`export_rom` do the same from here.
 
 ## Sound
 

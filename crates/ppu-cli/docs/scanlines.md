@@ -132,6 +132,7 @@ The layout is a packed register prefix:
 | 58..63 | TM, TS, TMW, TSW, CGADSUB, CGWSEL |
 
 VRAM and OBJ still use their normal frame-wide controls. Row zero supplies
-the frame palette; later palette changes affect only their scanlines. The
-SNES background scanout offset is applied automatically. Ordinary `hdma`
+the frame palette; later palette changes affect only their scanlines. Scroll
+values mean what they mean on hardware, so a captured VOFS needs no adjusting.
+Ordinary `hdma`
 hooks and Studio controls can override the captured rows afterward.
