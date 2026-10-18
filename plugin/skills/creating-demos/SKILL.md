@@ -19,7 +19,7 @@ requires the authoring commands introduced in ppu 0.1.0 (`new`, `render`,
 cargo install --git https://github.com/LioraLabs/ppu.toys.git --locked ppu-cli
 ```
 
-Read `ppu docs cli` for the project format and commands. Read only the API
+Read `ppu docs cli` for the project format and commands. Read `ppu docs pixel-art` before drawing any art. Read only the API
 topics needed for the effect: `backgrounds`, `sprites`, `mode7`, `scanlines`,
 `windows`, `color-math`, `sources`, `dma`, `display`, or `pad`. These docs
 ship inside the executable and match its engine version. Do not invent APIs

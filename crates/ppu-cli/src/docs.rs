@@ -12,6 +12,7 @@ const TOPICS: &[(&str, &str)] = &[
     ("windows", include_str!("../docs/windows.md")),
     ("color-math", include_str!("../docs/color-math.md")),
     ("sources", include_str!("../docs/sources.md")),
+    ("pixel-art", include_str!("../docs/pixel-art.md")),
     ("dma", include_str!("../docs/dma.md")),
     ("pad", include_str!("../docs/pad.md")),
     ("audio", include_str!("../docs/audio.md")),
