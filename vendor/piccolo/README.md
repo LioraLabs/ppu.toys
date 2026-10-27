@@ -1,8 +1,9 @@
-# vendor/piccolo — piccolo 0.3.3 with one upstream fix backported and one local fix
+# vendor/piccolo — piccolo 0.3.3 with one upstream fix backported and local fixes
 
 This is not a fork we intend to maintain. It is crates.io `piccolo` 0.3.3, byte
-for byte, with one already-upstream bug fix applied because upstream never
-released it. **Delete this directory as soon as either condition below is met.**
+for byte, plus one already-upstream bug fix applied because upstream never
+released it and a few small local fixes (listed below). **Delete this
+directory as soon as either condition below is met.**
 
 ## Why it exists
 
@@ -179,11 +180,12 @@ values before evaluating later ones or indexed targets. Local fixes in
 overflow-safe integer modulo, and simultaneous assignment. Regression coverage:
 `crates/ppu-core/tests/lua_scalar_semantics.rs` and `crates/ppu-cli/tests/snes.rs`.
 
-A second local fix, in `src/thread/thread.rs`: a Lua function called with fewer
+Another local fix, in `src/thread/thread.rs`: a Lua function called with fewer
 arguments than it has parameters read the caller's leftover register contents in
-the missing parameters instead of nil. `call_function` resized the stack but never
-overwrote slots that already existed, so `{ g("pluck", {}), 5, "C6" }` followed by
-`{ g("hat") }` gave `g` the string `"C6"` as its second argument. `call_function`
-now truncates the stack to the arguments before resizing, so every missing
-parameter is nil, as `tail_call_function` already guaranteed. The generic-`for`, metamethod and callback call paths were checked and
-needed no change. Regression coverage: `crates/ppu-core/tests/lua_call_args.rs`.
+the missing parameters instead of nil. `call_function` resized the stack but
+never overwrote slots that already existed, so `{ g("pluck", {}), 5, "C6" }`
+followed by `{ g("hat") }` gave `g` the string `"C6"` as its second argument.
+`call_function` now truncates the stack to the arguments before resizing, so
+every missing parameter is nil, as `tail_call_function` already guaranteed. The
+generic-`for`, metamethod and callback call paths were checked and needed no
+change. Regression coverage: `crates/ppu-core/tests/lua_call_args.rs`.

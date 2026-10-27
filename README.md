@@ -56,7 +56,7 @@ claude plugin install ppu-toys@lioralabs
   windows, color math, HDMA, the S-DSP, PNG import, and the Lua bindings. It
   also builds to WebAssembly for the site.
 - `crates/ppu-cli` is the `ppu` binary: new, pack, unpack, check, render, docs.
-- `vendor/piccolo` is the Lua VM, crates.io 0.3.3 plus one backported fix. Its
+- `vendor/piccolo` is the Lua VM, crates.io 0.3.3 plus one backported fix and a few local ones. Its
   README says when to drop it.
 - `crates/ppu-cli/docs/` holds the authoring guides, embedded into both the CLI and the site.
 - `plugin/` is the Claude Code plugin: the `creating-demos` skill and its

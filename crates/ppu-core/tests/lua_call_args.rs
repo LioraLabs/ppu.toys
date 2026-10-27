@@ -1,5 +1,7 @@
 // A Lua function called with fewer arguments than parameters must see nil in
 // every missing parameter, whatever the caller's registers held before.
+// The `do local d1, d2, ... = "s1", ... end` lines leave non-nil values in the
+// registers that a missing parameter would otherwise read.
 use ppu_core::LuaEngine;
 
 fn run(src: &str) {
@@ -77,6 +79,8 @@ end
 "#);
 }
 
+// The next four tests guard call paths that already start the callee with an
+// exact stack length, so they pass both before and after the fix.
 #[test]
 fn call_metamethod() {
     run(r#"
@@ -131,7 +135,6 @@ function frame()
   do local d1, d2, d3, d4, d5, d6, d7, d8 = "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8" end
   for i in iter, "state", 0 do seen = seen + 1 end
   assert(seen == 2)
-  do local e1, e2, e3, e4, e5, e6, e7, e8, e9 = 1, 1, 1, 1, 1, 1, 1, 1, 1 end -- widen the frame
 end
 "#);
 }
