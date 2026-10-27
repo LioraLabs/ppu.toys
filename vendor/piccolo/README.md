@@ -85,11 +85,12 @@ Upstream's later commit
 [`a1c6e3a`](https://github.com/kyren/piccolo/commit/a1c6e3a) ("Properly handle
 dead keys in `RawTable::length`", 2024-07-04) is also not taken — see below.
 
-Every local delta carries a `LOCAL DELTA` comment. To audit, grep for that
-marker and diff against the published crate. The upstream backport accounts for
-`src/string.rs` (one hunk) and `src/table/raw.rs` (all hunks inside `set` and
-`grow_array`); the later local fixes listed at the end of this file touch more
-files, each marked in the source:
+Local deltas carry a `LOCAL DELTA` comment, except the host-support changes
+(binary `string.byte`, `~=` precedence) listed at the end of this file. To audit,
+grep for that marker and diff against the published crate. The upstream backport
+accounts for `src/string.rs` (one hunk) and `src/table/raw.rs` (all hunks inside
+`set` and `grow_array`); the later local fixes listed at the end of this file
+touch more files:
 
 ```sh
 diff -r vendor/piccolo/src ~/.cargo/registry/src/*/piccolo-0.3.3/src
