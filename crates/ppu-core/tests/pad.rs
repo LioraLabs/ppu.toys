@@ -19,3 +19,16 @@ fn pad_global_mirrors_the_mask_each_frame() {
     e.set_pad(0);
     assert_eq!(e.frame(0.0, 3).unwrap().rows[0].brightness, 9);
 }
+
+#[test]
+fn pad2_is_the_second_controller() {
+    let mut e = LuaEngine::new();
+    e.set_source("function frame(t, f)\n  brightness = pad2.a and 3 or (pad.a and 5 or 9)\nend\n")
+        .unwrap();
+    assert_eq!(e.frame(0.0, 0).unwrap().rows[0].brightness, 9);
+    e.set_pad2(1 << 4);
+    assert_eq!(e.frame(0.0, 1).unwrap().rows[0].brightness, 3);
+    e.set_pad2(0);
+    e.set_pad(1 << 4);
+    assert_eq!(e.frame(0.0, 2).unwrap().rows[0].brightness, 5);
+}

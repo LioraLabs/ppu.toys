@@ -40,6 +40,16 @@ function frame(t, f)
 end
 ```
 
+## Two players
+
+`pad2` is the second controller, with the same fields as `pad`.
+
+```lua
+function frame(t, f)
+  if pad2.left then obj[1].x = obj[1].x - 1 end
+end
+```
+
 ## Controls
 
 | SNES | Keyboard | Gamepad |
@@ -50,6 +60,9 @@ end
 | L / R | Q / W | Left / right shoulder |
 | Start | Enter | Start |
 | Select | Shift | Select |
+
+Controller 2 on the keyboard: IJKL for the D-pad, N/M for B/A, H/Y for Y/X,
+U/O for L/R, and P for Start. The second connected gamepad is controller 2.
 
 Click the output once to give keyboard controls focus. Standard-mapping
 gamepads work without focus. Recorded clips and thumbnails use released input,

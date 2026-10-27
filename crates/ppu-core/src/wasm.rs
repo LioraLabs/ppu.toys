@@ -246,6 +246,12 @@ impl PpuCore {
         self.engine.set_pad(mask);
     }
 
+    /// The second controller's bitmask (Lua `pad2`), same bit order.
+    #[wasm_bindgen(js_name = setPad2)]
+    pub fn set_pad2(&mut self, mask: u16) {
+        self.engine.set_pad2(mask);
+    }
+
     /// Battery-backed save data: JSON of the Lua `sram` table. Set BEFORE
     /// setSources so init() sees it; invalid JSON resets to `{}`.
     #[wasm_bindgen(js_name = setSram)]
