@@ -60,7 +60,7 @@ line. The other local fixes are listed at the end of this file.
    `TryFrom::Error = Infallible`; the `else` arm is live and correct for the other
    seven types), and `mismatched_lifetime_syntaxes` on two elided-lifetime returns
    (`src/stack.rs:78`, `src/thread/thread.rs:206`). Kept in the manifest rather
-   than in `src/` so the audit diff below stays confined to two files.
+   than in `src/` so the upstream backport's diff stays confined to two files.
 
 ### What was deliberately NOT taken from `f617091a`
 
@@ -85,12 +85,11 @@ Upstream's later commit
 [`a1c6e3a`](https://github.com/kyren/piccolo/commit/a1c6e3a) ("Properly handle
 dead keys in `RawTable::length`", 2024-07-04) is also not taken — see below.
 
-Local deltas carry a `LOCAL DELTA` comment, except the host-support changes
-(binary `string.byte`, `~=` precedence) listed at the end of this file. To audit,
-grep for that marker and diff against the published crate. The upstream backport
-accounts for `src/string.rs` (one hunk) and `src/table/raw.rs` (all hunks inside
-`set` and `grow_array`); the later local fixes listed at the end of this file
-touch more files:
+Most local deltas carry a `LOCAL DELTA` comment, but not all of them do: the
+fix list at the end of this file is the complete record, and the diff below is
+the audit. The upstream backport accounts for `src/string.rs` (one hunk) and
+`src/table/raw.rs` (all hunks inside `set` and `grow_array`); the later local
+fixes touch more files:
 
 ```sh
 diff -r vendor/piccolo/src ~/.cargo/registry/src/*/piccolo-0.3.3/src
