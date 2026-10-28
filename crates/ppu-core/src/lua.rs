@@ -202,7 +202,7 @@ pub struct LuaError {
 impl LuaError {
     /// Tag this error with the source file it belongs to.
     fn in_file(mut self, name: &str) -> LuaError {
-        self.file = Some(name.to_string());
+        self.file.get_or_insert_with(|| name.to_string());
         self
     }
 }
@@ -917,6 +917,10 @@ impl LuaEngine {
             })
             .collect();
         let files = normalized.as_slice();
+        let precision_files: Vec<_> = files.iter().copied()
+            .filter(|(n, _)| *n != AUDIO_MIX_FILE && *n != CONTROLS_FILE).collect();
+        let precision_chunks = crate::precision::prepare_sources(&precision_files)
+            .map_err(|(file, e)| LuaError { file: Some(file), line: Some(e.line as u32), message: format!("{} {}", e.message, e.help) })?;
         let saved_mix = AudioMix::parse(
             files
                 .iter()
@@ -1049,6 +1053,7 @@ impl LuaEngine {
                 .expect("controls_env.lua is static and must load/run cleanly");
         }
 
+        if precision_chunks.is_some() { lua.enter(crate::precision::install); }
         run_chunk(&mut lua, "kit", Self::KIT_LUA)?;
         run_chunk(&mut lua, "ramps", include_str!("ramps.lua"))?;
         run_chunk(&mut lua, "vram_helpers", include_str!("vram_helpers.lua"))?;
@@ -1068,11 +1073,20 @@ impl LuaEngine {
             None => Vec::new(),
         };
 
-        for (name, src) in files
-            .iter()
-            .filter(|(name, _)| *name != AUDIO_MIX_FILE && *name != CONTROLS_FILE)
-        {
-            run_chunk(&mut lua, name, src)?;
+        for (i, (name, src)) in precision_files.iter().enumerate() {
+            if let Some(chunks) = &precision_chunks {
+                let compiled = &chunks[i];
+                let load = lua.try_enter(|ctx| {
+                    let prototype = piccolo::FunctionPrototype::from_compiled_map_strings(
+                        &ctx, ctx.intern(name.as_bytes()), compiled, |s| ctx.intern(s));
+                    let closure = Closure::new(&ctx, prototype, Some(ctx.globals()))?;
+                    Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
+                });
+                load.and_then(|ex| lua.execute::<()>(&ex))
+                    .map_err(|e| static_error_to_lua(e).in_file(name))?;
+            } else {
+                run_chunk(&mut lua, name, src)?;
+            }
         }
 
         let (frame_fn, frame_file, init_fn, init_file) = lua.enter(|ctx| {
@@ -1137,7 +1151,7 @@ impl LuaEngine {
             });
             if let Err(e) = l.execute::<()>(&ex) {
                 let mut err = static_error_to_lua(e);
-                err.file = file;
+                err.file = err.file.or(file);
                 res = Err(err);
                 break;
             }
@@ -1509,7 +1523,7 @@ impl LuaEngine {
                         call_controls_hook::<()>(&mut l, "__ppu_controls_restore");
                     }
                     let mut err = static_error_to_lua(e);
-                    err.file = self.frame_file.clone();
+                    err.file = err.file.or_else(|| self.frame_file.clone());
                     return Err(err);
                 }
             }
@@ -1737,7 +1751,7 @@ impl LuaEngine {
                     }
                     Err(e) => {
                         let mut err = static_error_to_lua(e);
-                        err.file = file.clone();
+                        err.file = err.file.or_else(|| file.clone());
                         *sink.borrow_mut() = Some(err);
                     }
                 }
@@ -3996,6 +4010,11 @@ fn function_chunk_name(f: &Function<'_>) -> Option<String> {
 }
 
 fn static_error_to_lua(e: StaticError) -> LuaError {
+    if let StaticError::Runtime(rt) = &e {
+        if let Some(failure) = rt.downcast::<crate::precision::Failure>() {
+            return LuaError { file: Some(failure.file.clone()), line: Some(failure.line), message: failure.message.clone() };
+        }
+    }
     let line = if let StaticError::Runtime(rt) = &e {
         rt.downcast::<PrototypeError>().and_then(|pe| match pe {
             // `LineNumber` is 0-indexed; render it 1-based for the editor.
