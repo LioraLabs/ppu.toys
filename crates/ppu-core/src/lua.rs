@@ -247,6 +247,7 @@ pub struct LuaEngine {
     /// Controller state for the next frame: a PAD_* bitmask mirrored into the
     /// Lua `pad` table before frame() runs. JS owns the key/gamepad mapping.
     pad: u16,
+    pad2: u16,
     /// The live S-DSP core (M12/audio). Survives recompiles and `Memory::new()`
     /// resets — only `render_frame_audio` writes to it.
     dsp: Dsp,
@@ -546,6 +547,7 @@ impl LuaEngine {
             program_sources: Vec::new(),
             source_dirty: false,
             pad: 0,
+            pad2: 0,
             dsp,
             aram: Box::new([0u8; 0x10000]),
             audio: Vec::new(),
@@ -1389,6 +1391,11 @@ impl LuaEngine {
         self.pad = mask;
     }
 
+    /// The second controller's mask, published as `pad2` (same bit order).
+    pub fn set_pad2(&mut self, mask: u16) {
+        self.pad2 = mask;
+    }
+
     /// Bind the `sram` global to a save blob (JSON object or array). Lands in
     /// the live VM now and seeds every later recompile, so `init()` sees it.
     /// Anything else (invalid JSON, a scalar) resets to an empty table.
@@ -1472,10 +1479,11 @@ impl LuaEngine {
         // Reset the per-frame hook registry, then run frame(t,f) once.
         {
             let mut l = self.lua.borrow_mut();
-            let pad = self.pad;
+            let (pad, pad2) = (self.pad, self.pad2);
             l.enter(|ctx| {
                 ctx.set_global("__ppu_hooks", Table::new(&ctx)).unwrap();
-                set_pad_table(ctx, pad);
+                set_pad_table(ctx, "pad", pad);
+                set_pad_table(ctx, "pad2", pad2);
             });
             // Begin the controls undo bracket BEFORE the program's own
             // frame() runs, not after — an explicit `apply_pokes()` call
@@ -2625,13 +2633,13 @@ pub const PAD_NAMES: [&str; 12] = [
     "up", "down", "left", "right", "a", "b", "x", "y", "l", "r", "start", "select",
 ];
 
-/// Publish the controller mask as the `pad` global: one boolean per button.
-fn set_pad_table(ctx: piccolo::Context<'_>, mask: u16) {
+/// Publish a controller mask as a global (`pad`, `pad2`): one boolean per button.
+fn set_pad_table(ctx: piccolo::Context<'_>, global: &'static str, mask: u16) {
     let pad = Table::new(&ctx);
     for (bit, name) in PAD_NAMES.iter().enumerate() {
         pad.set(ctx, *name, mask & (1 << bit) != 0).unwrap();
     }
-    ctx.set_global("pad", pad).unwrap();
+    ctx.set_global(global, pad).unwrap();
 }
 
 fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
@@ -2639,7 +2647,8 @@ fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
     // Throwaway: an empty mirror makes every sync_* write unconditional; the engine's own mirror starts empty too.
     let m = &mut Mirror::default();
     // controller: all released until the host sets a mask; init() may read it.
-    set_pad_table(ctx, 0);
+    set_pad_table(ctx, "pad", 0);
+    set_pad_table(ctx, "pad2", 0);
     // battery-backed save data; set_sources overwrites it from the host blob.
     ctx.set_global("sram", Table::new(&ctx)).unwrap();
     // scalar registers
