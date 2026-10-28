@@ -34,6 +34,7 @@ pub use lua::*;
 
 mod quantize;
 pub use quantize::*;
+pub mod precision;
 
 mod modes;
 pub use modes::*;
