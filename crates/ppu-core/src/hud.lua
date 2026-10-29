@@ -49,9 +49,8 @@ function hud_number(map, x, y, value, width, palette)
   for column = min(x + width, map.width) - 1, x, -1 do
     local tile = padding
     if remaining ~= 0 or column == x + width - 1 then
-      local quotient = remaining // 10
-      tile = 16 + remaining - quotient * 10
-      remaining = quotient
+      tile = 16 + remaining % 10
+      remaining = remaining // 10
     end
     vram[map.map + y * 32 + column] = tile + color * 1024
   end
