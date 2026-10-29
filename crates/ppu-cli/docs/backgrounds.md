@@ -71,3 +71,42 @@ assigning its rows.
 
 See also: [Source placement](dma.md), [main and sub screens](color-math.md#main-and-sub-screens),
 and [scanline scrolling](scanlines.md#raster-effects).
+
+## Draw a HUD
+
+`hud_text`, `hud_number` and `hud_clear` share a map descriptor. Coordinates
+are zero-based cells in a single 32-cell-stride background map. Load a font
+sheet whose tiles contain printable ASCII in order, with space at tile zero:
+
+```lua
+local font = dma("font", {char=0x6000, pal=112})
+local hud = {map=0x7000, width=32, height=4, palette=7, padding="0"}
+
+function init()
+  bg[1].char_base, bg[1].map_base = font.char, hud.map
+  screen.main.bg1 = true
+  hud_clear(hud)
+  hud_text(hud, 1, 1, "SCORE")
+end
+
+function frame(t, f)
+  hud_number(hud, 7, 1, f % 10000, 6)
+end
+```
+
+- `hud_text(map, x, y, label, palette)` writes a string. The palette override
+  is optional; otherwise it uses `map.palette` (0..7).
+- `hud_number(map, x, y, value, width, palette)` writes a right-aligned
+  nonnegative integer up to 2,147,483,647 in 1..10 cells. Padding defaults to
+  spaces; `map.padding="0"` selects leading zeroes. A value that does not fit
+  displays `#` in every field cell. Set `map.wrap=true` to deliberately keep
+  only the last digits instead.
+- `hud_clear(map, x, y, width, height)` clears a rectangle to tile zero. Omit
+  the rectangle to clear the descriptor's whole map.
+
+Fields must fit the descriptor's 1..32-cell width and height. Invalid positions,
+fractional numbers, palettes, absent characters and VRAM extents raise errors.
+The descriptor names an existing VRAM area; these helpers do not allocate a
+font or map. The same Lua helpers run in preview and compile with the game.
+Bounded writes participate in automatic VBlank planning. Calls still cost CPU
+time; clear static labels once in `init()` or when the screen changes.

@@ -1070,6 +1070,7 @@ impl LuaEngine {
         run_chunk(&mut lua, "kit", Self::KIT_LUA)?;
         run_chunk(&mut lua, "ramps", include_str!("ramps.lua"))?;
         run_chunk(&mut lua, "vram_helpers", include_str!("vram_helpers.lua"))?;
+        run_chunk(&mut lua, "hud", include_str!("hud.lua"))?;
 
         // ppuglobals.lua runs FIRST among the sketch's files, wherever it sits
         // in the list, so `markers`/`scanlines`/`apply_pokes` exist before
