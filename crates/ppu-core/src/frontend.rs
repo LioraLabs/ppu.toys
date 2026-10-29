@@ -117,15 +117,7 @@ impl Visitor for Lower {
 pub fn prepare(source: &str) -> Result<Cow<'_, str>, Error> {
     let Ok(ast) = full_moon::parse_fallible(source, full_moon::LuaVersion::luau()).into_result()
     else {
-        // Validate the fallback, including its full byte stream, before accepting it.
-        piccolo::compiler::parse_chunk(
-            source.as_bytes(),
-            piccolo::compiler::interning::BasicInterner::default(),
-        )
-        .map_err(|error| Error {
-            line: (error.line_number.0 + 1) as u32,
-            message: error.to_string(),
-        })?;
+        // The existing parser validates the original bytes and retains its diagnostics.
         return Ok(Cow::Borrowed(source));
     };
     let mut lower = Lower::default();
@@ -210,7 +202,8 @@ mod tests {
         ] {
             assert!(prepare(source).is_err(), "{source}");
         }
-        assert_eq!(prepare("-- ok\n\0").unwrap_err().line, 2);
+        let mut engine = crate::LuaEngine::new();
+        assert_eq!(engine.set_source("-- ok\n\0").unwrap_err().line, Some(2));
     }
     #[test]
     fn nested_compounds_preserve_execution_and_rhs_precedence() {
