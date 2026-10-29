@@ -800,7 +800,11 @@ impl LuaEngine {
 
     /// The writes logged since `start_dsp_log` (or the last take).
     pub fn take_dsp_log(&mut self) -> Vec<(u64, u8, u8)> {
-        self.dsp.log.as_mut().map(std::mem::take).unwrap_or_default()
+        self.dsp
+            .log
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
     }
 
     pub fn dsp(&self) -> &Dsp {
@@ -917,10 +921,17 @@ impl LuaEngine {
             })
             .collect();
         let files = normalized.as_slice();
-        let precision_files: Vec<_> = files.iter().copied()
-            .filter(|(n, _)| *n != AUDIO_MIX_FILE && *n != CONTROLS_FILE).collect();
-        let precision_chunks = crate::precision::prepare_sources(&precision_files)
-            .map_err(|(file, e)| LuaError { file: Some(file), line: Some(e.line as u32), message: format!("{} {}", e.message, e.help) })?;
+        let precision_files: Vec<_> = files
+            .iter()
+            .copied()
+            .filter(|(n, _)| *n != AUDIO_MIX_FILE && *n != CONTROLS_FILE)
+            .collect();
+        let precision_chunks =
+            crate::precision::prepare_sources(&precision_files).map_err(|(file, e)| LuaError {
+                file: Some(file),
+                line: Some(e.line as u32),
+                message: format!("{} {}", e.message, e.help),
+            })?;
         let saved_mix = AudioMix::parse(
             files
                 .iter()
@@ -1053,7 +1064,9 @@ impl LuaEngine {
                 .expect("controls_env.lua is static and must load/run cleanly");
         }
 
-        if precision_chunks.is_some() { lua.enter(crate::precision::install); }
+        if precision_chunks.is_some() {
+            lua.enter(crate::precision::install);
+        }
         run_chunk(&mut lua, "kit", Self::KIT_LUA)?;
         run_chunk(&mut lua, "ramps", include_str!("ramps.lua"))?;
         run_chunk(&mut lua, "vram_helpers", include_str!("vram_helpers.lua"))?;
@@ -1078,7 +1091,11 @@ impl LuaEngine {
                 let compiled = &chunks[i];
                 let load = lua.try_enter(|ctx| {
                     let prototype = piccolo::FunctionPrototype::from_compiled_map_strings(
-                        &ctx, ctx.intern(name.as_bytes()), compiled, |s| ctx.intern(s));
+                        &ctx,
+                        ctx.intern(name.as_bytes()),
+                        compiled,
+                        |s| ctx.intern(s),
+                    );
                     let closure = Closure::new(&ctx, prototype, Some(ctx.globals()))?;
                     Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
                 });
@@ -1457,13 +1474,20 @@ impl LuaEngine {
         }
         let mut l = self.lua.borrow_mut();
         let ex = l.enter(|ctx| {
-            let f = match ctx.globals().get(ctx, piccolo::String::from_slice(&ctx, name.as_bytes())) {
+            let f = match ctx
+                .globals()
+                .get(ctx, piccolo::String::from_slice(&ctx, name.as_bytes()))
+            {
                 Value::Function(f) => f,
                 _ => return Err(format!("no global function {name}")),
             };
             Ok(ctx.stash(Executor::start(ctx, f, piccolo::Variadic(args.to_vec()))))
         });
-        let ex = ex.map_err(|message| LuaError { message, line: None, file: None })?;
+        let ex = ex.map_err(|message| LuaError {
+            message,
+            line: None,
+            file: None,
+        })?;
         l.finish(&ex);
         l.try_enter(|ctx| {
             let Value::Table(t) = ctx.fetch(&ex).take_result::<Value>(ctx)?? else {
@@ -1482,7 +1506,11 @@ impl LuaEngine {
             Ok(Ok(out))
         })
         .map_err(static_error_to_lua)?
-        .map_err(|message| LuaError { message, line: None, file: None })
+        .map_err(|message| LuaError {
+            message,
+            line: None,
+            file: None,
+        })
     }
 
     pub fn frame(&mut self, t: f64, f: u32) -> Result<LineTable, LuaError> {
@@ -3696,13 +3724,21 @@ fn install_dma(
         rec.cgram_ranges
             .borrow_mut()
             .push((name.clone(), cgram.0, cgram.1));
-        let fields = ["next_char", "next_map", "next_pal", "bit_depth", "screen_size", "tile", "cell_size"]
-            .into_iter()
-            .filter_map(|k| match ret.get(ctx, k) {
-                Value::Integer(v) => Some((k, v)),
-                _ => None,
-            })
-            .collect();
+        let fields = [
+            "next_char",
+            "next_map",
+            "next_pal",
+            "bit_depth",
+            "screen_size",
+            "tile",
+            "cell_size",
+        ]
+        .into_iter()
+        .filter_map(|k| match ret.get(ctx, k) {
+            Value::Integer(v) => Some((k, v)),
+            _ => None,
+        })
+        .collect();
         rec.placements.borrow_mut().push(DmaPlacement {
             name,
             char_base: char_base as u16,
@@ -4012,7 +4048,11 @@ fn function_chunk_name(f: &Function<'_>) -> Option<String> {
 fn static_error_to_lua(e: StaticError) -> LuaError {
     if let StaticError::Runtime(rt) = &e {
         if let Some(failure) = rt.downcast::<crate::precision::Failure>() {
-            return LuaError { file: Some(failure.file.clone()), line: Some(failure.line), message: failure.message.clone() };
+            return LuaError {
+                file: Some(failure.file.clone()),
+                line: Some(failure.line),
+                message: failure.message.clone(),
+            };
         }
     }
     let line = if let StaticError::Runtime(rt) = &e {

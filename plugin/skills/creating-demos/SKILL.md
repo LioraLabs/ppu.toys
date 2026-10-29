@@ -41,18 +41,18 @@ claim every physical SNES register or hardware feature is emulated. The Lua
 surface gives register-level control over the supported pipeline, with raw
 aliases for screen/window/color-math registers and friendly names elsewhere.
 
-| Surface | What it controls |
-| --- | --- |
-| `init()`, `frame(t, f)` | Setup, then animation from seconds and frame number |
-| `pad.up/down/left/right`, `pad.a/b/x/y/l/r/start/select` | First SNES controller; booleans refreshed before each frame |
-| `mode`, `brightness`, `force_blank`, `mosaic` | Display and background configuration |
-| `bg[1]` through `bg[4]` | Character/map bases, tilemaps, scrolling, layer settings |
-| `m7.a/b/c/d`, `m7.cx/cy`, `m7.wrap`, `m7.extbg` | Affine sampling, perspective via scanlines, and Mode 7 priority |
-| `obj[0]` through `obj[127]`, `obj.char_base`, `obj.size_sel` | OAM sprites, metasprites, priority, flips, size, and tiles |
-| `screen.main`, `screen.sub`, `win`, `color` | Layer designation, masking, add/subtract/half color compositing |
-| `hdma(first, last, function(y) ... end)` | Inclusive per-line register and palette changes; `scanline` is an alias |
-| `vram[address]`, `cgram[index]` | Direct tile/map words and palette colors |
-| `dma("source", options)` | Place imported graphics during setup; returns addresses/cells |
+| Surface                                                      | What it controls                                                        |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| `init()`, `frame(t, f)`                                      | Setup, then animation from seconds and frame number                     |
+| `pad.up/down/left/right`, `pad.a/b/x/y/l/r/start/select`     | First SNES controller; booleans refreshed before each frame             |
+| `mode`, `brightness`, `force_blank`, `mosaic`                | Display and background configuration                                    |
+| `bg[1]` through `bg[4]`                                      | Character/map bases, tilemaps, scrolling, layer settings                |
+| `m7.a/b/c/d`, `m7.cx/cy`, `m7.wrap`, `m7.extbg`              | Affine sampling, perspective via scanlines, and Mode 7 priority         |
+| `obj[0]` through `obj[127]`, `obj.char_base`, `obj.size_sel` | OAM sprites, metasprites, priority, flips, size, and tiles              |
+| `screen.main`, `screen.sub`, `win`, `color`                  | Layer designation, masking, add/subtract/half color compositing         |
+| `hdma(first, last, function(y) ... end)`                     | Inclusive per-line register and palette changes; `scanline` is an alias |
+| `vram[address]`, `cgram[index]`                              | Direct tile/map words and palette colors                                |
+| `dma("source", options)`                                     | Place imported graphics during setup; returns addresses/cells           |
 
 Read the topic docs for the exact field names and limits. `hdma` cannot run
 DMA or rewrite frame-global OAM. VRAM addresses are words, not bytes.
@@ -108,7 +108,7 @@ sources. Lua files share globals; use locals or clearly named shared tables.
 A PNG source entry looks like:
 
 ```json
-{"name":"floor","kind":"m7","file":"assets/floor.png","options":{}}
+{ "name": "floor", "kind": "m7", "file": "assets/floor.png", "options": {} }
 ```
 
 The CLI converts PNGs on every load, so editing the PNG is enough. Source

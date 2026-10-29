@@ -34,15 +34,15 @@ These helpers are always available in `main.lua` and other sketch files;
 no generated `ppuglobals.lua` or imports are needed. The Studio panels use
 the same helpers when generating ramps.
 
-| Function | Result |
-| --- | --- |
-| `clamp(value, min, max)` | Number limited to inclusive bounds; requires `min <= max`, does not round |
-| `lerp(a, b, t)` | `a + (b - a) * t`; extrapolates outside `t = 0..1` |
-| `lerp_color(a, b, t)` | Blend of two packed 15-bit colors, with `t` clamped to 0..1 |
-| `ramp(keys, position)` | Interpolated number, including fractions |
-| `ramp_int(keys, position)` | Integer rounded with `floor(value + 0.5)` |
-| `ramp_color(keys, position)` | Packed 15-bit color, interpolating each RGB channel separately |
-| `ease(progress, easing)` | Eased progress; pass progress from 0 to 1 |
+| Function                     | Result                                                                    |
+| ---------------------------- | ------------------------------------------------------------------------- |
+| `clamp(value, min, max)`     | Number limited to inclusive bounds; requires `min <= max`, does not round |
+| `lerp(a, b, t)`              | `a + (b - a) * t`; extrapolates outside `t = 0..1`                        |
+| `lerp_color(a, b, t)`        | Blend of two packed 15-bit colors, with `t` clamped to 0..1               |
+| `ramp(keys, position)`       | Interpolated number, including fractions                                  |
+| `ramp_int(keys, position)`   | Integer rounded with `floor(value + 0.5)`                                 |
+| `ramp_color(keys, position)` | Packed 15-bit color, interpolating each RGB channel separately            |
+| `ease(progress, easing)`     | Eased progress; pass progress from 0 to 1                                 |
 
 For a simple blend, no keyframe table is needed:
 
@@ -119,17 +119,17 @@ Pixels still pass through the native PPU. Each row contains byte indices 0..63
 and `palette[0..255]` with BGR555 colours. Reusing a row table is allowed.
 The layout is a packed register prefix:
 
-| Bytes | Register data |
-| --- | --- |
-| 0, 1, 2..3 | INIDISP, OBSEL, OAM address |
-| 4, 5, 6..9, 10..11 | BGMODE, MOSAIC, BGnSC, BGnNBA |
-| 12, 13 | M7SEL, SETINI |
-| 14..21, 22..29 | Four little-endian BG H/V scroll values |
-| 30..45 | Little-endian Mode 7 A,B,C,D,X,Y,H,V |
-| 46..47 | Packed BGR555 fixed colour |
-| 48..50, 51 | W12SEL, W34SEL, WOBJSEL, padding |
-| 52..55, 56..57 | WH0..3, WBGLOG, WOBJLOG |
-| 58..63 | TM, TS, TMW, TSW, CGADSUB, CGWSEL |
+| Bytes              | Register data                           |
+| ------------------ | --------------------------------------- |
+| 0, 1, 2..3         | INIDISP, OBSEL, OAM address             |
+| 4, 5, 6..9, 10..11 | BGMODE, MOSAIC, BGnSC, BGnNBA           |
+| 12, 13             | M7SEL, SETINI                           |
+| 14..21, 22..29     | Four little-endian BG H/V scroll values |
+| 30..45             | Little-endian Mode 7 A,B,C,D,X,Y,H,V    |
+| 46..47             | Packed BGR555 fixed colour              |
+| 48..50, 51         | W12SEL, W34SEL, WOBJSEL, padding        |
+| 52..55, 56..57     | WH0..3, WBGLOG, WOBJLOG                 |
+| 58..63             | TM, TS, TMW, TSW, CGADSUB, CGWSEL       |
 
 VRAM and OBJ still use their normal frame-wide controls. Row zero supplies
 the frame palette; later palette changes affect only their scanlines. Scroll

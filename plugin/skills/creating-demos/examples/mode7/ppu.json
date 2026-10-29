@@ -4,7 +4,12 @@
   "files": ["art.lua", "main.lua"],
   "sources": [
     { "name": "world", "kind": "m7", "options": {}, "file": "assets/world.png" },
-    { "name": "ceiling", "kind": "bg", "options": { "bit_depth": 4 }, "file": "assets/ceiling.png" },
+    {
+      "name": "ceiling",
+      "kind": "bg",
+      "options": { "bit_depth": 4 },
+      "file": "assets/ceiling.png"
+    },
     { "name": "bank", "kind": "bg", "options": { "bit_depth": 4 }, "file": "assets/bank.png" },
     { "name": "craft", "kind": "obj", "options": { "cell_size": 32 }, "file": "assets/craft.png" }
   ]

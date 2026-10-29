@@ -7,11 +7,5 @@
   },
   "repository": "https://github.com/LioraLabs/ppu.toys",
   "license": "MIT",
-  "keywords": [
-    "ppu",
-    "snes",
-    "lua",
-    "demos",
-    "pixel-art"
-  ]
+  "keywords": ["ppu", "snes", "lua", "demos", "pixel-art"]
 }

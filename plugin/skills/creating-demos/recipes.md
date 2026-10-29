@@ -36,7 +36,7 @@ layer's `scroll.y` so it samples the mirrored row:
 - Darken the water with fixed-colour subtract on water lines only; pulling
   one channel harder tints the reflection (green → gold reflects rose).
 - Per-line palette effects (a sun's stripes, haze bands) must be looked up
-  by *source* row so the reflection inherits them.
+  by _source_ row so the reflection inherits them.
 - Sprites are not mirrored by scroll: place an explicit `flip_y` twin at the
   mirrored height with the same ripple offset.
 
@@ -68,14 +68,14 @@ line. Compute `win.w1.lo/hi` (and `w2`) inside `hdma()` and the mask becomes
 any shape that is convex per row: a cone pivoting on a lamp, a circle, a
 craft's silhouette.
 
-- Things that exist only in the light: window a layer to the *outside* of
+- Things that exist only in the light: window a layer to the _outside_ of
   the inverted beams (both windows inverted, combined with `"AND"`), on main
   and sub as needed. Fog, rain, even a sprite (`win.obj`) appear only where
   the beam falls.
 - Light that adds: restrict colour math with the colour window
   (`win.color.w1/w2`, `color.region = "inside"`).
 - A cast shadow: reshape a window per line to the caster's outline (precompute
-  spans per pose in the art script) and colour-math *subtract* inside it.
+  spans per pose in the art script) and colour-math _subtract_ inside it.
 - Window logic is per layer, and each layer has only two windows: plan which
   effect gets which window before writing the scene.
 
@@ -128,7 +128,7 @@ such as `{0, 0.5, 0.25, 0.75}[y % 4 + 1]` added before `floor`), then pack
   for performances hash instead: `sin(n * 12.9898) * 43758.5453`.
 - `cgram[i]` reads return only what Lua wrote, never colours placed by
   `dma()`. Importers store each palette in ascending BGR555 order, so a
-  generator can draw palette *indices* (index k as a known colour) and
+  generator can draw palette _indices_ (index k as a known colour) and
   `main.lua` can set every real colour itself.
 - `hdma()` hooks live one frame: register them in `frame()` every frame.
 - OAM persists: turn off every sprite slot you stop using.

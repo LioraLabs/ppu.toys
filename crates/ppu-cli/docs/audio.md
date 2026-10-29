@@ -209,7 +209,7 @@ these globals (a user chunk that defines the same name wins):
   [sequencer song](#sequencer-songs) source on the timeline, voices chosen
   per note. `at` anchors tick 0: seconds, a marker name, or `false` (set
   up, not playing). Setup-only. Returns `{ tick, length, playing, loop,
-  song, play(), stop() }`.
+song, play(), stop() }`.
 
 `song{}` is gone (calling it is an error that names `score{}`). Its patterns
 become a [song source](#sequencer-songs), built in the sequencer grid or

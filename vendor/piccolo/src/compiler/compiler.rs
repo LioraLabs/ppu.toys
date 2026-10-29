@@ -206,6 +206,7 @@ enum ExprDescriptor<S> {
     Variable(VariableDescriptor<S>),
     Constant(Constant<S>),
     VarArgs,
+    Single(Box<ExprDescriptor<S>>),
     UnaryOperator {
         op: UnaryOperator,
         expr: Box<ExprDescriptor<S>>,
@@ -1259,7 +1260,22 @@ impl<S: StringInterner> Compiler<S> {
             PrimaryExpression::Name(name) => {
                 Ok(ExprDescriptor::Variable(self.find_variable(name.clone())?))
             }
-            PrimaryExpression::GroupedExpression(expr) => self.expression(expr),
+            PrimaryExpression::GroupedExpression(expr) => {
+                let expr = self.expression(expr)?;
+                // Parentheses suppress multiple results in returns, arguments and list tails.
+                Ok(
+                    if matches!(
+                        expr,
+                        ExprDescriptor::FunctionCall { .. }
+                            | ExprDescriptor::MethodCall { .. }
+                            | ExprDescriptor::VarArgs
+                    ) {
+                        ExprDescriptor::Single(Box::new(expr))
+                    } else {
+                        expr
+                    },
+                )
+            }
         }
     }
 
@@ -1954,6 +1970,7 @@ impl<S: StringInterner> Compiler<S> {
         }
 
         let result = match expr {
+            ExprDescriptor::Single(expr) => self.expr_discharge(*expr, dest)?,
             ExprDescriptor::Variable(variable) => match variable {
                 VariableDescriptor::Local(source) => {
                     let dest = new_destination(self, dest)?;

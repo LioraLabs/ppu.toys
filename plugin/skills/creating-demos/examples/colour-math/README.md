@@ -1,7 +1,7 @@
 # Undersea · colour math showcase
 
 A sunlit sunken temple, 12-second seamless loop, silent. Everything bright is
-*added* by the PPU's colour math rather than painted into the art.
+_added_ by the PPU's colour math rather than painted into the art.
 
 - **Sub-screen light layer.** BG3 is on the sub screen only (`light.lua`, a
   Lua-generated 2bpp layer). `color.addend = "sub"`, `op = "add"` on BG1, BG2,

@@ -6,6 +6,11 @@
     { "name": "reef", "kind": "bg", "options": { "bit_depth": 4 }, "file": "assets/reef.png" },
     { "name": "ruins", "kind": "bg", "options": { "bit_depth": 4 }, "file": "assets/ruins.png" },
     { "name": "fish", "kind": "obj", "options": { "cell_size": 16 }, "file": "assets/fish.png" },
-    { "name": "bubbles", "kind": "obj", "options": { "cell_size": 8 }, "file": "assets/bubbles.png" }
+    {
+      "name": "bubbles",
+      "kind": "obj",
+      "options": { "cell_size": 8 },
+      "file": "assets/bubbles.png"
+    }
   ]
 }

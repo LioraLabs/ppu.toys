@@ -24,7 +24,7 @@ All art comes from `build_art.py` (seeded numpy/PIL), which also writes `art.lua
 - **Craft:** four 32×32 OBJ form one 64×64 frame. It has 7 bank poses from a tiny
   software rasteriser, and banks with the turn rate.
 - **Shadow:** colour window 1 is reshaped per line to the craft's silhouette, and colour
-  math *subtracts* inside it.
+  math _subtracts_ inside it.
 - **Water:** crest colours rotate through four CGRAM entries (palette cycling). Sun
   glints are re-coloured per line, hot near the horizon and cool up close.
 

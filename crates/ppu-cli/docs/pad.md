@@ -52,14 +52,14 @@ end
 
 ## Controls
 
-| SNES | Keyboard | Gamepad |
-|---|---|---|
-| D-pad | Arrow keys | D-pad or left stick |
-| B / A | Z / X | Bottom / right face button |
-| Y / X | A / S | Left / top face button |
-| L / R | Q / W | Left / right shoulder |
-| Start | Enter | Start |
-| Select | Shift | Select |
+| SNES   | Keyboard   | Gamepad                    |
+| ------ | ---------- | -------------------------- |
+| D-pad  | Arrow keys | D-pad or left stick        |
+| B / A  | Z / X      | Bottom / right face button |
+| Y / X  | A / S      | Left / top face button     |
+| L / R  | Q / W      | Left / right shoulder      |
+| Start  | Enter      | Start                      |
+| Select | Shift      | Select                     |
 
 Controller 2 on the keyboard: IJKL for the D-pad, N/M for B/A, H/Y for Y/X,
 U/O for L/R, and P for Start. The second connected gamepad is controller 2.
