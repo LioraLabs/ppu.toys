@@ -247,6 +247,18 @@ pub fn annotations(source: &str) -> Result<Vec<Annotation>, PreviewError> {
             diagnostics.push(PreviewError::new(line as u64, "Use ---@snes range <name> <min> <max>, with ordered signed 32-bit integer bounds, immediately before a declaration.", ANNOTATION_HELP));
         }
     }
+    if let Some(prepared) = crate::bounded::prepare(&[("", source)], false).map_err(|(_, e)| e)? {
+        for d in prepared.declarations {
+            if result.iter().any(|a| a.line == d.line && a.name == d.name) {
+                return Err(PreviewError::new(
+                    d.line,
+                    "makeBounded already declares this binding's contract.",
+                    "Remove the numeric annotation above the constructor.",
+                ));
+            }
+            result.push(d.annotation());
+        }
+    }
     match diagnostics.into_iter().next() {
         Some(e) => Err(e),
         None => Ok(result),
@@ -332,12 +344,32 @@ pub fn enabled(source: &str) -> bool {
 }
 
 /// The same bounded source guard used by raw preview and cartridge validation.
-/// No canonical annotation leaves the old Lua execution path untouched.
+/// Programs without canonical precision or bounded declarations keep ordinary Lua execution.
 pub fn prepare_sources(
     files: &[(&str, &str)],
 ) -> Result<Option<Vec<compiler::CompiledPrototype<Text>>>, (String, PreviewError)> {
-    if !files.iter().any(|(_, s)| enabled(s)) {
-        return Ok(None);
+    let canonical = files.iter().any(|(_, s)| enabled(s));
+    let bounded = crate::bounded::prepare(files, !canonical)?;
+    if !canonical {
+        return bounded
+            .map(|p| {
+                p.chunks
+                    .into_iter()
+                    .map(|(file, chunk)| {
+                        compiler::compile_chunk(&chunk, BasicInterner::default()).map_err(|e| {
+                            (
+                                file,
+                                PreviewError::new(
+                                    e.line_number.0 + 1,
+                                    &e.to_string(),
+                                    "Split this large function into smaller helpers.",
+                                ),
+                            )
+                        })
+                    })
+                    .collect()
+            })
+            .transpose();
     }
     let mut scopes = vec![HashMap::new()];
     let mut chunks = vec![];
@@ -352,14 +384,20 @@ pub fn prepare_sources(
                     return Err(PreviewError::new(lexer.line_number().0+1,"This name is reserved for precision execution.","Rename identifiers beginning __ppu_precision_; ordinary strings and comments may contain that text."));
                 }
             }
-            let mut chunk = compiler::parse_chunk(source.as_bytes(), BasicInterner::default())
-                .map_err(|e| {
+            let mut chunk = if let Some((_, chunk)) = bounded
+                .as_ref()
+                .and_then(|p| p.chunks.iter().find(|(f, _)| f == file))
+            {
+                chunk.clone()
+            } else {
+                compiler::parse_chunk(source.as_bytes(), BasicInterner::default()).map_err(|e| {
                     PreviewError::new(
                         e.line_number.0 + 1,
                         &e.to_string(),
                         "Fix the Lua syntax at this location.",
                     )
-                })?;
+                })?
+            };
             scopes.push(HashMap::new());
             let mut transform = Transform {
                 scopes: &mut scopes,

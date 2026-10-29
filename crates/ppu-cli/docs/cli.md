@@ -123,3 +123,16 @@ allow generated graphics; `obj[]` controls OAM. `voice[]`, `dsp`, `timer()`,
 and the music kit drive the S-DSP (see `ppu docs audio`). This is a PPU
 playground, not a stock SNES CPU/DMA timing simulator. Modes 5/6, interlace,
 overscan, and read-only counter registers are not currently modelled.
+
+Use `makeBounded(initial, minimum, maximum)` to declare an ordinary integer
+binding whose later assignments must stay within inclusive bounds:
+
+```lua
+local health = makeBounded(100, 0, 100)
+health = max(0, health - 3)
+```
+
+Invalid values raise an error; this does not clamp. Bounds must be ordered
+signed 32-bit integer literals. Use a new local declaration, or a new
+unconditional file-level global. This constructor cannot be aliased, nested
+inside another expression, or used to declare a table field's contract.

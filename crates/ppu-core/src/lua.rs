@@ -1066,6 +1066,7 @@ impl LuaEngine {
 
         if precision_chunks.is_some() {
             lua.enter(crate::precision::install);
+            lua.enter(crate::bounded::install);
         }
         run_chunk(&mut lua, "kit", Self::KIT_LUA)?;
         run_chunk(&mut lua, "ramps", include_str!("ramps.lua"))?;
