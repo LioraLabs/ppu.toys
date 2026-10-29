@@ -74,6 +74,8 @@ Luau syntax first, erases type syntax, then runs the existing Lua VM. If Luau
 rejects the syntax, the existing Lua parser gets the original source. Existing
 Lua bitwise operators therefore keep working. No project dialect setting or
 source migration is required; `main.lua` can contain typed Luau.
+Selection is per file. Mixing Luau types with Lua-only bitwise syntax in the
+same file is not supported; separate files can use either dialect.
 
 Type annotations, aliases, generics and casts are erased without removing
 comments or changing line numbers. Compound assignments such as `score += 1`
