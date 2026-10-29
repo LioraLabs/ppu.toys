@@ -67,6 +67,27 @@ for stateful games. Sprite overflow is checked on every continuous frame.
 the manifest and converts PNGs, but does not execute Lua. Check the final
 packed artifact as well as the source directory.
 
+## Lua and typed Luau
+
+Sources use the same frontend in the CLI and the WebAssembly engine. It tries
+Luau syntax first, erases type syntax, then runs the existing Lua VM. If Luau
+rejects the syntax, the existing Lua parser gets the original source. Existing
+Lua bitwise operators therefore keep working. No project dialect setting or
+source migration is required; `main.lua` can contain typed Luau.
+
+Type annotations, aliases, generics and casts are erased without removing
+comments or changing line numbers. Compound assignments such as `score += 1`
+and `player.x += speed` are supported. Indexed/computed compound targets,
+`continue`, if expressions, interpolated strings, attributes, condition bindings
+and const declarations are rejected. Accepted Luau syntax with unsupported
+execution semantics produces an error rather than trying another dialect.
+
+This is a supported Luau syntax subset, not a Luau VM or type checker. Type
+annotations alone do not enforce runtime types, numeric bounds or SNES limits.
+Use an editor checker for types and `makeBounded` for checked numeric state.
+Ordinary relative `require` modules and Luau standard-library parity are not
+provided by this frontend. Files still execute in manifest order and share globals.
+
 ## Project manifest
 
 ```json

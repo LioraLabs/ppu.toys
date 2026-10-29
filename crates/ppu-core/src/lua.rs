@@ -904,6 +904,26 @@ impl LuaEngine {
     /// has run (`main.lua` is convention, not special-cased); `init()` runs
     /// once if present. Errors carry `{file, line?, message}`.
     pub fn set_sources(&mut self, files: &[(&str, &str)]) -> Result<(), LuaError> {
+        let prepared: Vec<_> = files
+            .iter()
+            .map(|&(name, source)| {
+                let source = if name == AUDIO_MIX_FILE {
+                    std::borrow::Cow::Borrowed(source)
+                } else {
+                    crate::frontend::prepare(source).map_err(|e| LuaError {
+                        file: Some(name.into()),
+                        line: Some(e.line),
+                        message: e.message,
+                    })?
+                };
+                Ok((name, source))
+            })
+            .collect::<Result<_, LuaError>>()?;
+        let files: Vec<_> = prepared
+            .iter()
+            .map(|(name, source)| (*name, source.as_ref()))
+            .collect();
+        let files = files.as_slice();
         // Older saved toys used controls.lua for the generated document.
         // A user's controls.lua stays ordinary code; an existing ppuglobals.lua wins.
         let has_globals = files.iter().any(|(name, _)| *name == CONTROLS_FILE);
