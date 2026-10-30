@@ -14,6 +14,138 @@ fn raw_source_q10_expressions_and_store_rounding() {
 }
 
 #[test]
+fn fixed_constructor_checks_later_stores_and_chooses_binary_accuracy() {
+    let source = "local x=makeFixed(.1+.1,-4,4,16)\nfunction frame(t,f)\n obj[0].x=floor(x*16)\n x=-.03125\n obj[1].x=floor(x*16)\nend";
+    assert_eq!(&frame(source)[..2], [3, -1]);
+    let mut e = LuaEngine::new();
+    e.set_source("local x=makeFixed(0,-1,1)\nfunction frame(t,f) x=f;obj[0].x=x end")
+        .unwrap();
+    let error = e.frame(0., 2).unwrap_err();
+    assert_eq!(error.line, Some(2));
+    assert!(error.message.contains("range contract"), "{error:?}");
+}
+
+#[test]
+fn precision_records_keep_aliases_nested_lists_and_fractional_feedback() {
+    let source = r#"
+local time=makeFixed(0,0,10)
+local state={members={{x=0.0,velocity=46/188}},label="ready"}
+function frame(t,f)
+ local member=state.members[1]
+ member.x=member.x+member.velocity
+ time=time+1/60
+ obj[0].x=floor(member.x*16)
+ obj[1].x=floor(time*1024)
+ obj[2].x=#state.members
+ obj[3].x=state.label=="ready" and 1 or 0
+end
+"#;
+    let mut e = LuaEngine::new();
+    e.set_source(source).unwrap();
+    for f in 0..5 {
+        e.frame(0., f).unwrap();
+    }
+    assert_eq!(
+        e.memory().oam[..4].iter().map(|o| o.x).collect::<Vec<_>>(),
+        [19, 85, 1, 1]
+    );
+}
+
+#[test]
+fn precision_records_refuse_a_later_fractional_field_type_change() {
+    let source = "local time=makeFixed(0,0,10)\nlocal state={x=0}\nfunction frame() state.x=.1 end";
+    assert!(LuaEngine::new().set_source(source).is_err());
+}
+
+#[test]
+fn record_alias_indexes_and_parallel_values_are_evaluated_once() {
+    let source = r#"
+local clock=makeFixed(0,0,10)
+local count=0
+local rows={{x=.1,y=.2},{x=.3,y=.4}}
+local function index() count=count+1;return 1 end
+function frame(t,f)
+ local row=rows[index()]
+ row["x"],row.y=row.y,row.x
+ obj[0].x=floor(rows[1].x*1024)
+ obj[1].x=floor(row.y*1024)
+ obj[2].x=count
+end
+"#;
+    assert_eq!(&frame(source)[..3], [205, 102, 1]);
+}
+
+#[test]
+fn precision_field_stores_and_comparisons_enforce_the_numeric_representation() {
+    for action in [
+        "state.x=2097152",
+        "local ignored=state.x<3000000",
+        "local ignored=state.x==3000000",
+    ] {
+        let mut e = LuaEngine::new();
+        e.set_source(&format!("local clock=makeFixed(0,0,10)\nlocal state={{x=0.0}}\nfunction frame(t,f)\n {action}\nend")).unwrap();
+        let error = e.frame(0., 0).unwrap_err();
+        assert_eq!(error.line, Some(4), "{action}: {error:?}");
+        assert!(
+            error.message.contains("representation"),
+            "{action}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn fixed_constructor_rejects_invalid_contracts_and_respects_custom_helpers() {
+    for declaration in [
+        "local x=makeFixed(0,-1,1,0)",
+        "local x=makeFixed(0,-1,1,3)",
+        "local x=makeFixed(0,-1,1,2048)",
+        "local x=makeFixed(0,-1,1,-2)",
+        "local x=makeFixed(0,-1,1,1/16)",
+        "local x=makeFixed(0,1,-1)",
+        "local x=makeFixed(0,-2097153,1)",
+        "local x=makeFixed(0,-1,2097152)",
+        "local x=makeFixed(0,-1.5,1)",
+        "local x=makeFixed(0,-1)",
+        "local x=makeFixed(0,-1,1)+1",
+        "local x={y=makeFixed(0,-1,1)}",
+        "local x=makeFixed",
+        "---@snes fixed x -1 1\nlocal x=makeFixed(0,-1,1)",
+    ] {
+        assert!(
+            LuaEngine::new().set_source(declaration).is_err(),
+            "{declaration}"
+        );
+    }
+    for source in [
+        "-- makeFixed\nfunction frame() obj[0].x=floor((.1+.1)*1024+.5) end",
+        "local function makeFixed(v) return v end\nlocal x=makeFixed(.1+.1)\nfunction frame() obj[0].x=floor(x*1024+.5) end",
+    ] {assert_eq!(frame(source)[0],205);}
+}
+
+#[test]
+fn precision_constructor_tail_results_are_explicit_instead_of_silently_lost() {
+    for constructor in [
+        "local rows={pair()}",
+        "---@snes fixed rows -1 1\nlocal rows={pair()}",
+    ] {
+        let source=format!("local clock=makeFixed(0,0,10)\nlocal function pair() return .1,.2 end\n{constructor}\nfunction frame() end");
+        let error = LuaEngine::new().set_source(&source).unwrap_err();
+        assert!(error.message.contains("constructor tail"), "{error:?}");
+    }
+}
+
+#[test]
+fn typed_luau_record_fields_and_multifile_globals_share_precision() {
+    let mut e = LuaEngine::new();
+    e.set_sources(&[
+        ("state.lua","local clock: number=makeFixed(0,0,10)\ntype State={x:number}\nlocal initial: State={x=0.0}\nstate=initial"),
+        ("main.lua","function frame(t: number,f: number)\n state.x += .1\n obj[0].x=floor(state.x*1024)\nend"),
+    ]).unwrap();
+    e.frame(0., 0).unwrap();
+    assert_eq!(e.memory().oam[0].x, 102);
+}
+
+#[test]
 fn arithmetic_uses_q10_before_a_coarse_store() {
     let source = "---@snes fixed x -1000 1000\nlocal x = -.1\nfunction frame(t,f)\n obj[0].x = floor((x * .1) * 1024)\n obj[1].x = floor((x / 3) * 1024)\n obj[2].x = floor((x % .0625) * 1024)\n obj[3].x = floor((max(1, .1) / 60) * 1024)\nend\n";
     assert_eq!(frame(source), [-10, -34, 26, 17]);

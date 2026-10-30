@@ -1,4 +1,4 @@
-//! `makeBounded` declares an ordinary integer binding with checked stores.
+//! Numeric constructors declare ordinary bindings with checked stores.
 use crate::precision::PreviewError;
 use piccolo::compiler::{self, interning::BasicInterner, parser as ast};
 use std::{collections::HashMap, rc::Rc};
@@ -6,7 +6,7 @@ use std::{collections::HashMap, rc::Rc};
 type Text = Rc<[u8]>;
 type Expr = ast::Expression<Text>;
 type Scope = HashMap<String, Option<Declaration>>;
-const HELP: &str = "Declare an integer with makeBounded(initial, minimum, maximum), using ordered signed 32-bit integer literals for the bounds. It checks later assignments without clamping. Use a separate local declaration for a new contract.";
+const HELP: &str = "Use makeBounded(initial, minimum, maximum) for integers or makeFixed(initial, minimum, maximum[, denominator]) for Q10 arithmetic and binary storage accuracy. Bounds are ordered integer literals; the denominator is a power of two from 1 through 1024 (default 1024). Later stores are checked without clamping. Declare each new contract in a separate binding.";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Declaration {
@@ -15,6 +15,8 @@ pub struct Declaration {
     pub name: String,
     pub min: i32,
     pub max: i32,
+    pub fixed: bool,
+    pub denominator: Option<u16>,
 }
 impl Declaration {
     pub fn annotation(&self) -> crate::precision::Annotation {
@@ -28,8 +30,8 @@ impl Declaration {
             min: self.min,
             max: self.max,
             capacity: None,
-            fixed: false,
-            precision: None,
+            fixed: self.fixed,
+            precision: self.denominator,
         }
     }
 }
@@ -45,7 +47,10 @@ pub fn prepare(
     files: &[(&str, &str)],
     preview: bool,
 ) -> Result<Option<Prepared>, (String, PreviewError)> {
-    if !files.iter().any(|(_, s)| s.contains("makeBounded")) {
+    if !files
+        .iter()
+        .any(|(_, s)| s.contains("makeBounded") || s.contains("makeFixed"))
+    {
         return Ok(None);
     }
     let mut chunks = Vec::new();
@@ -67,6 +72,7 @@ pub fn prepare(
     let mut globals = Scope::new();
     let mut declarations = Vec::new();
     let mut rewritten = Vec::new();
+    let mut fixed = false;
     for pass_index in 0..2 {
         let mut pass = chunks.clone();
         declarations.clear();
@@ -77,15 +83,22 @@ pub fn prepare(
                 scopes: vec![globals.clone(), Scope::new()],
                 declarations: &mut declarations,
                 depth: 0,
-                instrument: preview && pass_index == 1,
+                instrument: preview && pass_index == 1 && !fixed,
             };
             walk.block(&mut chunk.block, false)
                 .map_err(|e| (file.clone(), e))?;
             globals = walk.scopes.remove(0);
         }
-        if pass_index == 0 && !declarations.is_empty() && globals.contains_key("makeBounded") {
-            let d = &declarations[0];
-            return Err((d.file.clone(), PreviewError {line:d.line,message:"A program using the built-in makeBounded cannot replace its global function.".into(),help:"Rename the replacement helper or use a local function with a separate name.".into()}));
+        if pass_index == 0 {
+            fixed = declarations.iter().any(|d| d.fixed);
+            for (name, is_fixed) in [("makeBounded", false), ("makeFixed", true)] {
+                if let Some(d) = declarations
+                    .iter()
+                    .find(|d| d.fixed == is_fixed && globals.contains_key(name))
+                {
+                    return Err((d.file.clone(), PreviewError {line:d.line,message:format!("A program using the built-in {name} cannot replace its global function."),help:"Rename the replacement helper or use a local function with a separate name.".into()}));
+                }
+            }
         }
         rewritten = pass;
     }
@@ -177,8 +190,8 @@ impl Walk<'_> {
     fn binding(&self, n: &str) -> Option<Option<Declaration>> {
         self.scopes.iter().rev().find_map(|s| s.get(n).cloned())
     }
-    fn builtin(&self) -> bool {
-        self.binding("makeBounded").is_none()
+    fn builtin(&self, name: &str) -> bool {
+        matches!(name, "makeBounded" | "makeFixed") && self.binding(name).is_none()
     }
     fn block(&mut self, b: &mut ast::Block<Text>, scoped: bool) -> Result<(), PreviewError> {
         if scoped {
@@ -223,27 +236,60 @@ impl Walk<'_> {
         n: &str,
         local: bool,
     ) -> Result<Option<Declaration>, PreviewError> {
-        if !self.builtin() || !e.tail.is_empty() {
+        if !e.tail.is_empty() {
             return Ok(None);
         }
         let ast::HeadExpression::Simple(ast::SimpleExpression::Suffixed(s)) = e.head.as_mut()
         else {
             return Ok(None);
         };
-        if !matches!(&s.primary,ast::PrimaryExpression::Name(n) if text(n)=="makeBounded") {
+        let ast::PrimaryExpression::Name(callee) = &s.primary else {
+            return Ok(None);
+        };
+        let callee = text(callee);
+        if !self.builtin(&callee) {
             return Ok(None);
         }
         let [ast::SuffixPart::Call(ast::CallSuffix::Function(args))] = s.suffixes.as_slice() else {
-            return Err(self.error("makeBounded must directly initialize a named binding."));
+            return Err(self.error(&format!(
+                "{callee} must directly initialize a named binding."
+            )));
         };
-        let [initial, min, max] = args.as_slice() else {
-            return Err(self.error("makeBounded needs an initial value and two integer bounds."));
+        let fixed = callee == "makeFixed";
+        let (initial, min, max, denominator) = match args.as_slice() {
+            [initial, min, max] => (initial, min, max, fixed.then_some(1024)),
+            [initial, min, max, step] if fixed => {
+                let denominator = literal(step)
+                    .and_then(|n| u16::try_from(n).ok())
+                    .filter(|n| n.is_power_of_two() && *n <= 1024)
+                    .ok_or_else(|| {
+                        self.error(
+                            "makeFixed denominator must be a power of two from 1 through 1024.",
+                        )
+                    })?;
+                (initial, min, max, Some(denominator))
+            }
+            _ => {
+                return Err(self.error(&format!(
+                    "{callee} needs an initial value and two integer bounds{}.",
+                    if fixed {
+                        ", optionally followed by a binary denominator"
+                    } else {
+                        ""
+                    }
+                )))
+            }
         };
         let (Some(min), Some(max)) = (literal(min), literal(max)) else {
-            return Err(self.error("makeBounded bounds must be signed 32-bit integer literals."));
+            return Err(self.error(&format!(
+                "{callee} bounds must be signed 32-bit integer literals."
+            )));
         };
         if min > max {
-            return Err(self.error("makeBounded minimum exceeds its maximum."));
+            return Err(self.error(&format!("{callee} minimum exceeds its maximum.")));
+        }
+        if fixed && (min.checked_mul(1024).is_none() || max.checked_mul(1024).is_none()) {
+            return Err(self.error("makeFixed bounds exceed Q21.10."));
         }
         let d = Declaration {
             file: self.file.into(),
@@ -251,13 +297,15 @@ impl Walk<'_> {
             name: n.into(),
             min,
             max,
+            fixed,
+            denominator,
         };
         if !local
             && (self.depth != 0
                 || self.scopes.len() != 2
                 || self.binding(n).is_some_and(|old| old.as_ref() != Some(&d)))
         {
-            return Err(self.error("makeBounded initializes a new binding; declare globals unconditionally at file level and use a new local elsewhere."));
+            return Err(self.error(&format!("{callee} initializes a new binding; declare globals unconditionally at file level and use a new local elsewhere.")));
         }
         if self
             .declarations
@@ -445,7 +493,7 @@ impl Walk<'_> {
     }
     fn suffixed(&mut self, s: &mut ast::SuffixedExpression<Text>) -> Result<(), PreviewError> {
         match &mut s.primary {
-            ast::PrimaryExpression::Name(n) if text(n)=="makeBounded" && self.builtin()=>return Err(self.error("makeBounded must directly initialize a named binding; it cannot be aliased or nested inside another expression.")),
+            ast::PrimaryExpression::Name(n) if self.builtin(&text(n))=>return Err(self.error(&format!("{} must directly initialize a named binding; it cannot be aliased or nested inside another expression.",text(n)))),
             ast::PrimaryExpression::GroupedExpression(e)=>self.expr(e)?,
             _=>{},
         }

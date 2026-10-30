@@ -252,7 +252,7 @@ pub fn annotations(source: &str) -> Result<Vec<Annotation>, PreviewError> {
             if result.iter().any(|a| a.line == d.line && a.name == d.name) {
                 return Err(PreviewError::new(
                     d.line,
-                    "makeBounded already declares this binding's contract.",
+                    "The numeric constructor already declares this binding's contract.",
                     "Remove the numeric annotation above the constructor.",
                 ));
             }
@@ -271,6 +271,15 @@ enum Kind {
     Fixed,
     Bool,
     Other,
+    Table(usize),
+}
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum Key {
+    Named(String),
+    Element,
+}
+struct Record {
+    fields: HashMap<Key, Kind>,
 }
 impl Kind {
     fn numeric(self) -> bool {
@@ -331,7 +340,7 @@ fn call(n: &str, args: Vec<Expr>) -> Expr {
     }))
 }
 
-/// True only for an actual canonical annotation, never annotation-shaped string data.
+/// True for a canonical annotation or built-in makeFixed declaration, not string data.
 pub fn enabled(source: &str) -> bool {
     comments(source).iter().any(|(_, c)| {
         let p: Vec<_> = c
@@ -340,7 +349,11 @@ pub fn enabled(source: &str) -> bool {
             .split_whitespace()
             .collect();
         p.first() == Some(&"fixed") && p.as_slice() != ["fixed", "10"]
-    })
+    }) || source.contains("makeFixed")
+        && crate::bounded::prepare(&[("", source)], false)
+            .ok()
+            .flatten()
+            .is_some_and(|p| p.declarations.iter().any(|d| d.fixed))
 }
 
 /// The same bounded source guard used by raw preview and cartridge validation.
@@ -348,8 +361,21 @@ pub fn enabled(source: &str) -> bool {
 pub fn prepare_sources(
     files: &[(&str, &str)],
 ) -> Result<Option<Vec<compiler::CompiledPrototype<Text>>>, (String, PreviewError)> {
-    let canonical = files.iter().any(|(_, s)| enabled(s));
-    let bounded = crate::bounded::prepare(files, !canonical)?;
+    let annotated = files.iter().any(|(_, s)| {
+        comments(s).iter().any(|(_, c)| {
+            let p: Vec<_> = c
+                .strip_prefix("---@snes")
+                .unwrap_or("")
+                .split_whitespace()
+                .collect();
+            p.first() == Some(&"fixed") && p.as_slice() != ["fixed", "10"]
+        })
+    });
+    let bounded = crate::bounded::prepare(files, !annotated)?;
+    let canonical = annotated
+        || bounded
+            .as_ref()
+            .is_some_and(|p| p.declarations.iter().any(|d| d.fixed));
     if !canonical {
         return bounded
             .map(|p| {
@@ -372,6 +398,7 @@ pub fn prepare_sources(
             .transpose();
     }
     let mut scopes = vec![HashMap::new()];
+    let mut records = vec![];
     let mut chunks = vec![];
     for &(file, source) in files {
         let result = (|| {
@@ -407,6 +434,7 @@ pub fn prepare_sources(
                 file,
                 line: 1,
                 returns: vec![],
+                records: &mut records,
             };
             transform.block(&mut chunk.block, false)?;
             if let Some(a) = transform
@@ -432,6 +460,7 @@ struct Transform<'a> {
     file: &'a str,
     line: u64,
     returns: Vec<Vec<Kind>>,
+    records: &'a mut Vec<Record>,
 }
 impl Transform<'_> {
     fn helper(&self, n: &str, mut args: Vec<Expr>) -> Expr {
@@ -521,6 +550,167 @@ impl Transform<'_> {
             ],
         )
     }
+    fn fixed_value(&self, e: Expr) -> Expr {
+        self.helper(
+            "__ppu_precision_op",
+            vec![
+                simple(ast::SimpleExpression::String(name("add"))),
+                e,
+                integer(0),
+                integer(1),
+                integer(self.line as i64),
+            ],
+        )
+    }
+    fn key(&mut self, field: &mut ast::FieldSuffix<Text>) -> Result<Key, PreviewError> {
+        match field {
+            ast::FieldSuffix::Named(n) => Ok(Key::Named(text(n))),
+            ast::FieldSuffix::Indexed(e) => {
+                if e.tail.is_empty() {
+                    if let ast::HeadExpression::Simple(ast::SimpleExpression::String(n)) =
+                        e.head.as_ref()
+                    {
+                        return Ok(Key::Named(text(n)));
+                    }
+                }
+                if self.expr(e)? != Kind::Int {
+                    return Err(self.error(
+                        "A precision list index must be an integer.",
+                        "Use an integer index or a literal field name.",
+                    ));
+                }
+                Ok(Key::Element)
+            }
+        }
+    }
+    fn compatible(&self, a: Kind, b: Kind, seen: &mut Vec<(usize, usize)>) -> bool {
+        if a == b {
+            return true;
+        }
+        let (Kind::Table(a), Kind::Table(b)) = (a, b) else {
+            return false;
+        };
+        if seen.contains(&(a, b)) {
+            return true;
+        }
+        seen.push((a, b));
+        let (a, b) = (&self.records[a].fields, &self.records[b].fields);
+        a.len() == b.len()
+            && a.iter().all(|(key, &kind)| {
+                b.get(key)
+                    .is_some_and(|&other| self.compatible(kind, other, seen))
+            })
+    }
+    fn constructor(&mut self, t: &mut ast::TableConstructor<Text>) -> Result<Kind, PreviewError> {
+        if matches!(t.fields.last(),Some(ast::ConstructorField::Array(e)) if self.returned_kinds(e).len()>1)
+        {
+            return Err(self.error("A precision constructor tail cannot expand multiple helper results.","Capture the results into named locals, then list each constructor entry explicitly."));
+        }
+        let mut fields: HashMap<Key, Kind> = HashMap::new();
+        for field in &mut t.fields {
+            let (key, value) = match field {
+                ast::ConstructorField::Array(e) => (Key::Element, e),
+                ast::ConstructorField::Record(k, e) => {
+                    let key = match k {
+                        ast::RecordKey::Named(n) => Key::Named(text(n)),
+                        ast::RecordKey::Indexed(index) => {
+                            if index.tail.is_empty() {
+                                if let ast::HeadExpression::Simple(ast::SimpleExpression::String(
+                                    n,
+                                )) = index.head.as_ref()
+                                {
+                                    Key::Named(text(n))
+                                } else {
+                                    if self.expr(index)? != Kind::Int {
+                                        return Err(self.error("A precision record key must be a literal name or integer.","Use named fields and integer list indexes."));
+                                    }
+                                    Key::Element
+                                }
+                            } else {
+                                if self.expr(index)? != Kind::Int {
+                                    return Err(self.error(
+                                        "A precision record key must be a literal name or integer.",
+                                        "Use named fields and integer list indexes.",
+                                    ));
+                                }
+                                Key::Element
+                            }
+                        }
+                    };
+                    (key, e)
+                }
+            };
+            let kind = self.expr(value)?;
+            if let Some(&previous) = fields.get(&key) {
+                let combined = if previous.numeric() && kind.numeric() {
+                    previous.pair(kind)
+                } else if self.compatible(previous, kind, &mut vec![]) {
+                    previous
+                } else {
+                    return Err(self.error("A precision list needs consistent element types.","Keep numeric lists and record lists separate; initialize every record with the same field types."));
+                };
+                fields.insert(key, combined);
+            } else {
+                fields.insert(key, kind);
+            }
+        }
+        if fields.get(&Key::Element) == Some(&Kind::Fixed) {
+            for field in &mut t.fields {
+                match field {
+                    ast::ConstructorField::Array(e) => *e = self.fixed_value(e.clone()),
+                    ast::ConstructorField::Record(ast::RecordKey::Indexed(index), e)
+                        if !matches!(
+                            index.head.as_ref(),
+                            ast::HeadExpression::Simple(ast::SimpleExpression::String(_))
+                        ) =>
+                    {
+                        *e = self.fixed_value(e.clone())
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let id = self.records.len();
+        self.records.push(Record { fields });
+        Ok(Kind::Table(id))
+    }
+    fn record_head(
+        &mut self,
+        s: &mut ast::SuffixedExpression<Text>,
+    ) -> Result<Option<Kind>, PreviewError> {
+        let ast::PrimaryExpression::Name(n) = &s.primary else {
+            return Ok(None);
+        };
+        let Some(binding) = self.binding(&text(n)) else {
+            return Ok(None);
+        };
+        let Kind::Table(_) = binding.kind else {
+            return Ok(None);
+        };
+        let mut kind = binding.kind;
+        for suffix in &mut s.suffixes {
+            let Kind::Table(id) = kind else {
+                return Err(self.error(
+                    "A scalar precision value has no fields.",
+                    "Access fields on a record, and use numbers directly.",
+                ));
+            };
+            let ast::SuffixPart::Field(field) = suffix else {
+                return Err(self.error(
+                    "Calling a record field is outside precision execution.",
+                    "Use a named helper with numeric arguments.",
+                ));
+            };
+            let key = self.key(field)?;
+            kind = *self.records[id].fields.get(&key).ok_or_else(|| {
+                self.error(
+                    "This precision field has no known type.",
+                    "Initialize the record field or list before reading it.",
+                )
+            })?;
+        }
+        Ok(Some(kind))
+    }
     fn block(&mut self, b: &mut Block, scoped: bool) -> Result<(), PreviewError> {
         if scoped {
             self.scopes.push(HashMap::new());
@@ -577,7 +767,9 @@ impl Transform<'_> {
                     let mut binding = Binding::scalar(Kind::Other);
                     if let Some(e) = s.values.get_mut(i) {
                         if let ast::HeadExpression::Simple(ast::SimpleExpression::TableConstructor(t)) = e.head.as_mut() {
+                            if a.is_some() {
                             if e.tail.is_empty() {
+                                if matches!(t.fields.last(),Some(ast::ConstructorField::Array(e)) if self.returned_kinds(e).len()>1) {return Err(self.error("A precision constructor tail cannot expand multiple helper results.","Capture the results into named locals, then list each constructor entry explicitly."));}
                                 let cap = a.as_ref().and_then(|a| a.capacity).unwrap_or(t.fields.len());
                                 if cap == 0 || cap > 32767 { return Err(self.error("A numeric array needs a bounded capacity.", "Use a nonempty numeric constructor, or stack a matching array capacity annotation above fixed.")); }
                                 let mut kind = Kind::Int;
@@ -591,6 +783,7 @@ impl Transform<'_> {
                                 if t.fields.len() > cap { return Err(self.error("The array constructor exceeds its capacity.", "Increase the matching capacity annotation or shorten the constructor.")); }
                                 binding.kind = if a.as_ref().is_some_and(|a| a.fixed) { Kind::Fixed } else { kind };
                                 binding.capacity = Some(cap);
+                            }
                             }
                         }
                         if binding.capacity.is_none() {
@@ -800,10 +993,30 @@ impl Transform<'_> {
             return Ok(());
         }
         let mut stores = vec![];
+        let mut record_targets = vec![];
         for t in &mut s.targets {
+            record_targets.push(None);
             let b = match t {
                 ast::AssignmentTarget::Name(n) => self.binding(&text(n)),
                 ast::AssignmentTarget::Field(head, field) => {
+                    if let Some(kind) = self.record_head(head)? {
+                        let Kind::Table(id) = kind else {
+                            return Err(self.error(
+                                "A scalar precision value has no fields.",
+                                "Assign a record field or a numeric binding.",
+                            ));
+                        };
+                        let key = self.key(field)?;
+                        stores.push(
+                            self.records[id]
+                                .fields
+                                .get(&key)
+                                .copied()
+                                .map(Binding::scalar),
+                        );
+                        *record_targets.last_mut().unwrap() = Some((id, key));
+                        continue;
+                    }
                     if let ast::PrimaryExpression::Name(n) = &head.primary {
                         if head.suffixes.is_empty() {
                             if let Some(b) = self.binding(&text(n)).filter(|b| b.capacity.is_some())
@@ -868,15 +1081,23 @@ impl Transform<'_> {
                     ));
                 }
                 if b.kind == Kind::Int && k == Kind::Fixed {
-                    return Err(self.error("A later fractional store changes an inferred integer binding.","Annotate that binding with ---@snes fixed name lo hi before its declaration."));
+                    return Err(self.error("A later fractional store changes an inferred integer binding.","Initialize a fractional record field with 0.0, or declare a scalar using makeFixed(initial, minimum, maximum)."));
+                }
+                if matches!(b.kind, Kind::Table(_)) && !self.compatible(b.kind, k, &mut vec![]) {
+                    return Err(self.error("A precision record replacement changes its field types.","Initialize replacement records with the same fields and numeric representations."));
                 }
                 if let Some(a) = b.annotation.as_ref().filter(|a| a.fixed || explicit) {
                     *e = self.store(e.clone(), a);
+                } else if b.kind == Kind::Fixed {
+                    *e = self.fixed_value(e.clone());
                 }
             } else if let Some(ast::AssignmentTarget::Name(n)) = s.targets.get(i) {
                 if self.binding(&text(n)).is_none() {
                     self.scopes[0].insert(text(n), Binding::scalar(k));
                 }
+            }
+            if let Some(Some((id, key))) = record_targets.get(i) {
+                self.records[*id].fields.entry(key.clone()).or_insert(k);
             }
         }
         self.parallel(&mut s.values);
@@ -919,12 +1140,13 @@ impl Transform<'_> {
                 ast::SimpleExpression::True|ast::SimpleExpression::False=>Kind::Bool,
                 ast::SimpleExpression::Nil|ast::SimpleExpression::String(_)=>Kind::Other,
                 ast::SimpleExpression::Suffixed(s)=>self.suffixed(s)?,
+                ast::SimpleExpression::TableConstructor(t)=>self.constructor(t)?,
                 _=>return Err(self.error("This value is outside the precision preview surface.","Use named numeric helpers, scalar bindings and numeric list constructors; replace varargs, anonymous functions and table aliases with those forms.")),
             },
             ast::HeadExpression::UnaryOperator(op,v)=>{
                 let k=if matches!(op,ast::UnaryOperator::Len) {
                     let valid=matches!(v.head.as_ref(),ast::HeadExpression::Simple(ast::SimpleExpression::Suffixed(ast::SuffixedExpression {primary:ast::PrimaryExpression::Name(n),suffixes})) if v.tail.is_empty() && suffixes.is_empty() && self.binding(&text(n)).is_some_and(|b|b.capacity.is_some()));
-                    if !valid { return Err(self.error("Precision length needs a direct numeric array.", "Use #A on the original array binding.")); }
+                    if !valid && !matches!(self.expr(v)?,Kind::Table(_)) { return Err(self.error("Precision length needs an array or record list.", "Use #A on a numeric array or list.")); }
                     Kind::Int
                 } else { self.expr(v)? };
                 if matches!(op,ast::UnaryOperator::Not) {Kind::Bool}
@@ -975,6 +1197,29 @@ impl Transform<'_> {
                     | B::GreaterThan
                     | B::GreaterEqual
             ) {
+                if kind.numeric() && r.numeric() {
+                    let code = match op {
+                        B::Equal => "eq",
+                        B::NotEqual => "ne",
+                        B::LessThan => "lt",
+                        B::LessEqual => "le",
+                        B::GreaterThan => "gt",
+                        B::GreaterEqual => "ge",
+                        _ => unreachable!(),
+                    };
+                    left = self.helper(
+                        "__ppu_precision_op",
+                        vec![
+                            simple(ast::SimpleExpression::String(name(code))),
+                            left,
+                            right,
+                            integer((kind.pair(r) == Kind::Fixed) as i64),
+                            integer(self.line as i64),
+                        ],
+                    );
+                    kind = Kind::Bool;
+                    continue;
+                }
                 kind = Kind::Bool;
                 left.tail.push((op, right));
                 continue;
@@ -1078,6 +1323,9 @@ impl Transform<'_> {
                 {
                     return Err(self.error("A fractional argument needs an annotated helper parameter.", "Put ---@snes fixed parameter lo hi above the helper definition to declare its Q10 parameter."));
                 }
+                if kinds.iter().any(|k| matches!(k, Kind::Table(_))) {
+                    return Err(self.error("Record helper arguments need precision type inference.","Pass the numeric fields to this helper until record parameter inference is available."));
+                }
                 return Ok(binding
                     .as_ref()
                     .and_then(|b| b.returns.as_ref())
@@ -1160,6 +1408,9 @@ impl Transform<'_> {
             };
             *s = replacement;
             return Ok(b.kind);
+        }
+        if let Some(kind) = self.record_head(s)? {
+            return Ok(kind);
         }
         self.hardware(s)?;
         Ok(if n == "m7" {
@@ -1252,6 +1503,19 @@ pub(crate) fn install(ctx: piccolo::Context<'_>) {
                 "operand exceeds its numeric representation",
             )
         })? as i64;
+        let comparison = match code {
+            b"eq" => Some(a == b),
+            b"ne" => Some(a != b),
+            b"lt" => Some(a < b),
+            b"le" => Some(a <= b),
+            b"gt" => Some(a > b),
+            b"ge" => Some(a >= b),
+            _ => None,
+        };
+        if let Some(result) = comparison {
+            stack.replace(ctx, Value::Boolean(result));
+            return Ok(CallbackReturn::Return);
+        }
         if b == 0 && matches!(code, b"div" | b"idiv" | b"mod") {
             return Err(fail(ctx, line, &file, "division by zero"));
         }

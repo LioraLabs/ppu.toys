@@ -90,6 +90,32 @@ Use an editor checker for types and `makeBounded` for checked numeric state.
 Ordinary relative `require` modules and Luau standard-library parity are not
 provided by this frontend. Files still execute in manifest order and share globals.
 
+## Checked numeric bindings
+
+`local health = makeBounded(100, 0, 100)` declares an ordinary integer with
+inclusive bounds checked on every later assignment. It never clamps. Bounds
+must be signed 32-bit integer literals; constructors initialize named bindings,
+not table fields or arbitrary expressions.
+
+`local x = makeFixed(0, -120, 120, 16)` chooses fractional arithmetic and a
+storage step of 1/16. Omit the last argument for 1/1024; allowed denominators
+are powers of two from 1 through 1024. Stores round to nearest, exact halves
+away from zero, then check bounds. A coarse step can discard a small increment;
+keep accumulating clocks at a suitable accuracy.
+
+Using `makeFixed` opts the supported sketch into shared Q10 arithmetic. Numeric
+literals round to 1/1024; fractional products and quotients truncate toward zero.
+Only that binding's stores use its chosen denominator. Other fractional values
+keep Q10 arithmetic; bounds do not travel with a number copied into another field.
+
+Named records, nested lists and local aliases can hold numeric state. Initialize
+fractional fields with a fractional value such as `0.0`; a later change from an
+integer field to a fractional field currently refuses. Keep helper parameters
+numeric; record parameter inference, forward helpers and nonlinear runtime math
+are not supported by this precision surface yet. Pure annotated lookup bodies
+retain their authored math. Unsupported precision code produces a source
+diagnostic before replacing the running program.
+
 ## Project manifest
 
 ```json
