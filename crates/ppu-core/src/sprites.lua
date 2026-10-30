@@ -8,6 +8,9 @@ sprites = {flicker = false}
 
 local ARTS = {}
 local records, rotation = {}, 0
+-- sprites.hold keeps last frame's managed sprites; a frame either holds or draws.
+local held, drawn = false, false
+local CONFLICT = "sprites.draw and sprites.hold cannot both run in one frame"
 -- Flicker advances the slot rotation by this many sprites a frame, so the sprites a crowded
 -- scanline drops differ from frame to frame.
 local STRIDE = 23
@@ -42,7 +45,14 @@ function sprites.art(levels, sheet)
   return art
 end
 
+function sprites.hold()
+  if drawn then error(CONFLICT, 2) end
+  held = true
+end
+
 function sprites.draw(art, x, y, options)
+  if held then error(CONFLICT, 2) end
+  drawn = true
   assert(ARTS[art], "sprites.draw needs art made by sprites.art")
   assert(type(x) == "number" and type(y) == "number" and x == x and y == y, "sprites.draw position must be numbers")
   local layer, depth, size, prio = 0, 0, nil, 3
@@ -68,6 +78,11 @@ function sprites.draw(art, x, y, options)
 end
 
 function __ppu_sprites_flush()
+  if held then
+    held, drawn = false, false
+    return
+  end
+  drawn = false
   local free = __ppu_sprites_free
   local slots = #free
   if slots == 0 then records = {} return end

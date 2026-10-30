@@ -71,3 +71,22 @@ fn the_sprites_chapter_snippet_runs() {
     assert_eq!((oam[0].x, oam[1].x), (8, 120));
     assert!(oam[1..12].iter().all(|o| o.on) && !oam[12].on);
 }
+
+#[test]
+fn hold_keeps_last_frames_sprites_and_refuses_a_draw() {
+    let program = r#"local dot = sprites.art({{size = 16, columns = 1, cells = {1}}}, sheet)
+function frame(t, f)
+  if f == 1 then sprites.hold() return end
+  sprites.draw(dot, 40 + f, 50)
+  if f == 2 then sprites.hold() end
+end"#;
+    let mut e = LuaEngine::new();
+    e.set_source(&format!("{SHEET}{program}")).unwrap();
+    e.frame(0., 0).unwrap();
+    let before = e.memory().oam.clone();
+    e.frame(1. / 60., 1).unwrap();
+    assert_eq!(e.memory().oam, before);
+    assert!(before[0].on);
+    let err = e.frame(2. / 60., 2).unwrap_err();
+    assert!(err.message.contains("sprites.draw and sprites.hold cannot both run in one frame"), "{}", err.message);
+}

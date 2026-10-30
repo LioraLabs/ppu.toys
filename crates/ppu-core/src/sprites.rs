@@ -305,6 +305,12 @@ impl Visitor for Walk<'_> {
                     self.fail(call, "sprites.draw takes (art, x, y) and an optional literal options table {layer = , depth = , size = , prio = }");
                 }
             }
+            "sprites.hold" => {
+                self.draws = true;
+                if !args.is_empty() {
+                    self.fail(call, "sprites.hold takes no arguments");
+                }
+            }
             "sprites.art" => {
                 self.art = true;
                 if self.functions > 0 || self.loops > 0 {

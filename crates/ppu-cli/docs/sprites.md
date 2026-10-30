@@ -116,6 +116,8 @@ end
 - Past the free slots, the last sprites in order are dropped. Set
   `sprites.flicker = true` to rotate the slot order every frame, so a line
   with more than 32 sprites flickers instead of losing the same ones.
+- `sprites.hold()` keeps last frame's sprites as they were, for a frame that
+  draws none (a pause screen). A frame that holds may not also draw.
 - Cells are large sprites; keep `obj.size_sel` at 0 for 16x16. The library
   does not flip cells.
 
