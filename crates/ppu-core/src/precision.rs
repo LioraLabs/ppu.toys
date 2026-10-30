@@ -11,17 +11,15 @@ pub fn denominator(step: &str) -> Option<u16> {
     (n.is_power_of_two() && n <= 1024).then_some(n)
 }
 
-/// Encode a Q10 expression in storage units, rounding nearest, ties away from
-/// zero. The caller supplies a validated binary denominator in 1..=1024.
+/// Encode a Q10 expression in storage units, rounding down (floor): an arithmetic
+/// right shift, as fixed point stores on the hardware. The caller supplies a
+/// validated binary denominator in 1..=1024.
 pub fn encode(raw: i32, denominator: u16) -> i32 {
     assert!(denominator.is_power_of_two() && denominator <= 1024);
-    let divisor = 1024 / denominator as i64;
-    let magnitude = (raw as i64).abs();
-    let rounded = (magnitude + divisor / 2) / divisor;
-    (if raw < 0 { -rounded } else { rounded }) as i32
+    raw >> (1024 / denominator as u32).trailing_zeros()
 }
 
-/// The logical Q10 value after a store; None means rounding exceeds Q10.
+/// The logical Q10 value after a store; rounding down never leaves Q21.10.
 pub fn snap(raw: i32, denominator: u16) -> Option<i32> {
     encode(raw, denominator).checked_mul(1024 / denominator as i32)
 }
@@ -37,11 +35,12 @@ mod tests {
             assert_eq!(denominator(bad), None, "{bad}");
         }
         assert_eq!(encode(204, 16), 3);
-        assert_eq!(encode(32, 16), 1);
+        assert_eq!(encode(32, 16), 0);
+        assert_eq!(encode(64, 16), 1);
         assert_eq!(encode(-32, 16), -1);
-        assert_eq!(encode(-31, 16), 0);
+        assert_eq!(encode(-1, 16), -1);
         assert_eq!(snap(i32::MIN, 1), Some(i32::MIN));
-        assert_eq!(snap(i32::MAX, 1), None);
+        assert_eq!(snap(i32::MAX, 1), Some(2097151 * 1024));
     }
 }
 
@@ -383,6 +382,29 @@ fn lookup_definition_lines(source: &str) -> Vec<u64> {
 pub fn prepare_sources(
     files: &[(&str, &str)],
 ) -> Result<Option<Vec<compiler::CompiledPrototype<Text>>>, (String, PreviewError)> {
+    prepare_sources_with(files, false)
+}
+
+/// `surface`: a Luau-surface program, whose makeFixed law runs as rewritten source
+/// (`frontend::fixed_point`) instead of canonical precision; fixed bindings only round stores.
+pub fn prepare_sources_with(
+    files: &[(&str, &str)],
+    surface: bool,
+) -> Result<Option<Vec<compiler::CompiledPrototype<Text>>>, (String, PreviewError)> {
+    if surface {
+        return crate::bounded::prepare_with(files, true, true)?
+            .map(|p| {
+                p.chunks
+                    .into_iter()
+                    .map(|(file, chunk)| {
+                        compiler::compile_chunk(&chunk, BasicInterner::default()).map_err(|e| {
+                            (file, PreviewError::new(e.line_number.0 + 1, &e.to_string(), "Split this large function into smaller helpers."))
+                        })
+                    })
+                    .collect()
+            })
+            .transpose();
+    }
     let annotated = files.iter().any(|(_, s)| {
         comments(s).iter().any(|(_, c)| {
             let p: Vec<_> = c

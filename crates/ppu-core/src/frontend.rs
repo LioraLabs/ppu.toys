@@ -305,6 +305,15 @@ pub fn prepare(source: &str) -> Result<Cow<'_, str>, Error> {
 /// True when a table constructor declares a field with makeFixed: a record contract, which
 /// opts the program into makeFixed's arithmetic (`fixed_point`).
 pub fn fixed_contracts(source: &str) -> bool {
+    makes_fixed(source, false)
+}
+
+/// True when any call to makeFixed is written: a record field or a binding (the Luau surface).
+pub fn fixed_calls(source: &str) -> bool {
+    makes_fixed(source, true)
+}
+
+fn makes_fixed(source: &str, anywhere: bool) -> bool {
     if !source.contains("makeFixed") {
         return false;
     }
@@ -313,8 +322,12 @@ pub fn fixed_contracts(source: &str) -> bool {
         return false;
     };
     #[derive(Default)]
-    struct Found(bool);
+    struct Found(bool, bool);
     impl Visitor for Found {
+        fn visit_function_call(&mut self, node: &ast::FunctionCall) {
+            self.0 |= self.1
+                && matches!(node.prefix(), ast::Prefix::Name(n) if n.token().to_string() == "makeFixed");
+        }
         fn visit_table_constructor(&mut self, node: &ast::TableConstructor) {
             self.0 |= node.fields().iter().any(|field| {
                 let ast::Field::NameKey { value, .. } = field else { return false };
@@ -323,7 +336,7 @@ pub fn fixed_contracts(source: &str) -> bool {
             });
         }
     }
-    let mut found = Found::default();
+    let mut found = Found(false, anywhere);
     found.visit_ast(&ast);
     found.0
 }

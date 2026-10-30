@@ -47,6 +47,16 @@ pub fn prepare(
     files: &[(&str, &str)],
     preview: bool,
 ) -> Result<Option<Prepared>, (String, PreviewError)> {
+    prepare_with(files, preview, false)
+}
+
+/// `fixed_bindings`: the program runs makeFixed's law without canonical precision (the
+/// Luau surface), so fixed bindings are instrumented too, rounding each store to its step.
+pub fn prepare_with(
+    files: &[(&str, &str)],
+    preview: bool,
+    fixed_bindings: bool,
+) -> Result<Option<Prepared>, (String, PreviewError)> {
     if !files
         .iter()
         .any(|(_, s)| s.contains("makeBounded") || s.contains("makeFixed"))
@@ -83,7 +93,7 @@ pub fn prepare(
                 scopes: vec![globals.clone(), Scope::new()],
                 declarations: &mut declarations,
                 depth: 0,
-                instrument: preview && pass_index == 1 && !fixed,
+                instrument: preview && pass_index == 1 && (!fixed || fixed_bindings),
             };
             walk.block(&mut chunk.block, false)
                 .map_err(|e| (file.clone(), e))?;
@@ -337,9 +347,10 @@ impl Walk<'_> {
                     string(&d.name),
                     integer(d.min as i64),
                     integer(d.max as i64),
+                    integer(if d.fixed { d.denominator.unwrap_or(1024) as i64 } else { 0 }),
                 ]);
             } else {
-                args.extend([simple(ast::SimpleExpression::Nil), integer(0), integer(0)]);
+                args.extend([simple(ast::SimpleExpression::Nil), integer(0), integer(0), integer(0)]);
             }
         }
         args.append(values);
@@ -541,16 +552,30 @@ pub(crate) fn install(ctx: piccolo::Context<'_>) {
         let file = stack.get(0).to_string();
         let line = stack.get(1).to_integer().unwrap_or(0) as u32;
         let count = stack.get(2).to_integer().unwrap_or(0) as usize;
-        let values = (0..count)
-            .map(|i| stack.get(3 + count * 3 + i))
+        let mut values = (0..count)
+            .map(|i| stack.get(3 + count * 4 + i))
             .collect::<Vec<_>>();
-        for (i, &value) in values.iter().enumerate() {
-            let binding = stack.get(3 + i * 3);
+        for (i, value) in values.iter_mut().enumerate() {
+            let binding = stack.get(3 + i * 4);
             if binding.is_nil() {
                 continue;
             }
-            let min = stack.get(4 + i * 3).to_integer().unwrap();
-            let max = stack.get(5 + i * 3).to_integer().unwrap();
+            let min = stack.get(4 + i * 4).to_integer().unwrap();
+            let max = stack.get(5 + i * 4).to_integer().unwrap();
+            let denominator = stack.get(6 + i * 4).to_integer().unwrap();
+            if denominator > 0 {
+                // makeFixed's store: Q10 (nearest), then down to the step; bounds check the result.
+                let stored = value.to_number().map(|v| {
+                    let raw = (v * 1024.).round() as i64;
+                    (raw >> (1024 / denominator).trailing_zeros()) as f64 / denominator as f64
+                });
+                match stored {
+                    Some(v) if v >= min as f64 && v <= max as f64 => *value = Value::Number(v),
+                    _ => return Err(crate::precision::Failure {file,line,message:format!("makeFixed binding {binding} requires a value in {min}..{max}; got {value}")}.into()),
+                }
+                continue;
+            }
+            let value = *value;
             let n = matches!(value, Value::Integer(_) | Value::Number(_))
                 .then(|| value.to_integer())
                 .flatten();

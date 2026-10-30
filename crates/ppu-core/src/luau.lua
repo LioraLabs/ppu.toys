@@ -207,7 +207,8 @@ local function __ppu_contract(name, contract, value)
     error(kind .. " field " .. name .. " requires a number; got " .. tostring(value), 3)
   end
   if fixed then
-    value = __ppu_round(__ppu_round(value * 1024) * denominator / 1024) / denominator
+    -- Q10 first (nearest, as literals), then down to the field's step.
+    value = math.floor(__ppu_round(value * 1024) * denominator / 1024) / denominator
   elseif value ~= math.floor(value) then
     error(kind .. " field " .. name .. " requires an integer; got " .. tostring(value), 3)
   end

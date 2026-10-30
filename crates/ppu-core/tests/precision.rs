@@ -10,7 +10,8 @@ fn frame(source: &str) -> Vec<i16> {
 #[test]
 fn raw_source_q10_expressions_and_store_rounding() {
     let source = "---@snes fixed x -10 10 step 1/16\nlocal x = .1 + .1\n---@snes fixed y -10 10\nlocal y = .1 + .1\nfunction frame(t,f)\n obj[0].x = floor(x * 16)\n obj[1].x = floor(y * 1024 + .5)\n local dt = 1 / 60\n x = dt * 60\n obj[2].x = floor(x * 16)\n x = -.03125\n obj[3].x = floor(x * 16)\nend\n";
-    assert_eq!(frame(source), [3, 204, 16, -1]);
+    // dt is 17/1024; 17 * 60 = 1020 rounds down to 15/16.
+    assert_eq!(frame(source), [3, 204, 15, -1]);
 }
 
 #[test]
@@ -233,12 +234,12 @@ fn arithmetic_uses_q10_before_a_coarse_store() {
 #[test]
 fn lexical_parameters_captures_arrays_and_parallel_stores() {
     let source = "---@snes fixed A -4 4 step 1/16\nlocal A = {-.03125, .09375}\n---@snes fixed x -4 4 step 1/4\nlocal x = .1\n---@snes fixed n -4 4 step 1/16\nlocal function plus(n) return n + x end\nfunction frame(t,f)\n A[1], A[2] = A[2] + .03125, A[1]\n x = plus(.1)\n obj[0].x = floor(A[1] * 16)\n obj[1].x = floor(A[2] * 16)\n obj[2].x = floor(x * 16)\n do\n  ---@snes fixed x -4 4 step 1/2\n  local x = .25\n  ---@snes fixed n -4 4 step 1/16\n  local function captured(n) return x + n end\n  obj[3].x = floor(captured(-.03125) * 16)\n end\nend\n";
-    assert_eq!(frame(source), [3, -1, 4, 7]);
+    assert_eq!(frame(source), [1, -1, 0, -1]);
 }
 
 #[test]
 fn failed_parallel_store_keeps_all_destinations_and_calls_once() {
-    let source = "local calls = 0\n---@snes fixed x -1 1 step 1/16\nlocal x = 1.01\n---@snes fixed y -1 1 step 1/16\nlocal y = -1.01\nlocal function once() calls = calls + 1 return .25 end\nfunction frame(t,f)\n if f == 0 then x, y = once(), 2 end\n obj[0].x = floor(x * 16)\n obj[1].x = floor(y * 16)\n obj[2].x = calls\nend\n";
+    let source = "local calls = 0\n---@snes fixed x -1 1 step 1/16\nlocal x = 1.01\n---@snes fixed y -1 1 step 1/16\nlocal y = -1\nlocal function once() calls = calls + 1 return .25 end\nfunction frame(t,f)\n if f == 0 then x, y = once(), 2 end\n obj[0].x = floor(x * 16)\n obj[1].x = floor(y * 16)\n obj[2].x = calls\nend\n";
     let mut e = LuaEngine::new();
     for assignment in ["once(), 2", "2, once()"] {
         let source = source.replace("once(), 2", assignment);
@@ -263,7 +264,7 @@ fn array_capacity_uninitialized_access_and_index_calls_are_checked() {
         assert!(e.frame(0., 0).is_err(), "{expression}");
     }
     let source="local calls=0\n---@snes fixed A -2 2 step 1/16\nlocal A={0,0}\nlocal function index() calls=calls+1 return 2 end\nfunction frame(t,f)\n A[index()] = .09375\n obj[0].x = floor(A[index()] * 16)\n obj[1].x = calls\n obj[2].x = #A\nend";
-    assert_eq!(&frame(source)[..3], [2, 2, 2]);
+    assert_eq!(&frame(source)[..3], [1, 2, 2]);
 }
 
 #[test]
@@ -368,11 +369,12 @@ fn forward_stores_keep_the_later_binding_contract_and_coarse_accuracy() {
     let mut e = LuaEngine::new();
     e.set_source(source).unwrap();
     e.frame(0., 0).unwrap();
-    assert_eq!(e.memory().oam[0].x, 2);
-    for f in 1..8 {
+    // .1 is 102/1024, one 1/16 step once rounded down.
+    assert_eq!(e.memory().oam[0].x, 1);
+    for f in 1..16 {
         e.frame(0., f).unwrap();
     }
-    assert!(e.frame(0., 8).is_err());
+    assert!(e.frame(0., 16).is_err());
 }
 
 #[test]
@@ -443,8 +445,8 @@ end"#;
     e.set_sources(&[("main.luau", source)]).unwrap();
     e.frame(0., 0).unwrap();
     let x: Vec<i16> = e.memory().oam[..4].iter().map(|o| o.x).collect();
-    // 3/32 is a tie: away from zero to 2/16, and -1/32 to -1/16; 922 is the f64 sample 0.9 in Q10.
-    assert_eq!(x, [2, -1, 63, 922]);
+    // Stores round down: 3/32 to 1/16, -1/32 to -1/16; 922 is the f64 sample 0.9 in Q10.
+    assert_eq!(x, [1, -1, 63, 922]);
 }
 
 #[test]
@@ -471,4 +473,32 @@ fn programs_without_record_contracts_keep_lua_numbers() {
     e.set_sources(&[("main.luau", source)]).unwrap();
     e.frame(0., 0).unwrap();
     assert_eq!(e.memory().oam[0].x, 31907 % 256);
+}
+
+/// A makeFixed binding in a Luau program follows the same law as record contracts,
+/// with the whole Luau surface available.
+#[test]
+fn luau_fixed_bindings_use_the_law_with_the_whole_surface() {
+    let source = r#"local x = makeFixed(0, -8, 8, 16)
+local hp = makeBounded(3, 0, 3)
+function frame(t, f)
+  x = math.clamp(x + 190 * 0.164 / 60, -8, 8)
+  obj[0].x = math.floor(x * 1024)
+  obj[1].x = hp
+end"#;
+    let mut e = LuaEngine::new();
+    e.set_sources(&[("main.luau", source)]).unwrap();
+    e.frame(0., 0).unwrap();
+    // 190 * 168/1024 = 31.17 (Q10 31920), / 60 = 532/1024, down to 8/16 = 512/1024.
+    assert_eq!([e.memory().oam[0].x, e.memory().oam[1].x], [512, 3]);
+    let broken = source.replace("-8, 8)\n  obj", "-8, 9)\n  obj").replace("+ 190", "+ 1900");
+    let mut e = LuaEngine::new();
+    e.set_sources(&[("main.luau", &broken)]).unwrap();
+    for f in 0..2 {
+        if let Err(error) = e.frame(0., f) {
+            assert!(error.message.contains("makeFixed binding x"), "{error:?}");
+            return;
+        }
+    }
+    panic!("a store above 8 should break x's contract");
 }

@@ -969,17 +969,19 @@ impl LuaEngine {
             line: Some(e.line),
             message: e.message,
         })?;
-        let precision_chunks =
-            crate::precision::prepare_sources(&precision_files).map_err(|(file, e)| LuaError {
-                file: Some(file),
-                line: Some(e.line as u32),
-                message: format!("{} {}", e.message, e.help),
-            })?;
-        // Canonical precision already runs this law; otherwise makeFixed programs get it here.
+        // The Luau surface runs makeFixed's law as rewritten source, bindings included; a Lua
+        // program with canonical annotations or fixed bindings keeps canonical precision.
+        let surface = precision_files
+            .iter()
+            .any(|(n, s)| n.ends_with(".luau") || !crate::frontend::requires(s).is_empty());
+        let fixed_point = fixed_point
+            || surface && precision_files.iter().any(|(_, s)| crate::frontend::fixed_calls(s));
+        let dynamic = fixed_point
+            && (surface || !precision_files.iter().any(|(_, s)| crate::precision::enabled(s)));
         let fixed_sources: Vec<(&str, std::borrow::Cow<str>)> = precision_files
             .iter()
             .map(|&(name, source)| {
-                let source = if fixed_point && precision_chunks.is_none() {
+                let source = if dynamic {
                     crate::frontend::fixed_point(source)
                 } else {
                     std::borrow::Cow::Borrowed(source)
@@ -989,6 +991,12 @@ impl LuaEngine {
             .collect();
         let precision_files: Vec<(&str, &str)> =
             fixed_sources.iter().map(|(n, s)| (*n, s.as_ref())).collect();
+        let precision_chunks = crate::precision::prepare_sources_with(&precision_files, dynamic && surface)
+            .map_err(|(file, e)| LuaError {
+                file: Some(file),
+                line: Some(e.line as u32),
+                message: format!("{} {}", e.message, e.help),
+            })?;
         let saved_mix = AudioMix::parse(
             files
                 .iter()

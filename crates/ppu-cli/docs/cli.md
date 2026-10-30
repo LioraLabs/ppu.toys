@@ -99,9 +99,9 @@ not table fields or arbitrary expressions.
 
 `local x = makeFixed(0, -120, 120, 16)` chooses fractional arithmetic and a
 storage step of 1/16. Omit the last argument for 1/1024; allowed denominators
-are powers of two from 1 through 1024. Stores round to nearest, exact halves
-away from zero, then check bounds. A coarse step can discard a small increment;
-keep accumulating clocks at a suitable accuracy.
+are powers of two from 1 through 1024. Stores round down to the step (an
+arithmetic shift, as fixed point does on hardware), then check bounds. A coarse
+step can discard a small increment; keep accumulating clocks at a suitable accuracy.
 
 Using `makeFixed` opts the supported sketch into shared Q10 arithmetic. Numeric
 literals round to 1/1024; fractional products and quotients truncate toward zero.

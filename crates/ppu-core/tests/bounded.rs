@@ -119,7 +119,7 @@ fn bounded_integers_coexist_with_explicit_fractional_storage() {
     e.set_source("---@snes fixed y -4 4 step 1/16\nlocal y=.1\nlocal x=makeBounded(2,0,100)\nfunction frame()\n x=x+1\n obj[0].x=x;obj[1].x=floor(y*16)\nend").unwrap();
     e.frame(0., 0).unwrap();
     assert_eq!(e.memory().oam[0].x, 3);
-    assert_eq!(e.memory().oam[1].x, 2);
+    assert_eq!(e.memory().oam[1].x, 1);
 }
 
 #[test]
