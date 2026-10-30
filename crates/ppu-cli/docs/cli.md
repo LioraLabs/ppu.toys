@@ -108,15 +108,20 @@ literals round to 1/1024; fractional products and quotients truncate toward zero
 Only that binding's stores use its chosen denominator. Other fractional values
 keep Q10 arithmetic; bounds do not travel with a number copied into another field.
 
-Named records, nested lists and local aliases can hold numeric state. Initialize
-fractional fields with a fractional value such as `0.0`; a later change from an
-integer field to a fractional field currently refuses. Mixed tuples use literal
-positions; dynamic list indexes need a shared element type, and nested numeric
-lists may have different lengths. Keep helper parameters numeric; record
-parameter inference, forward helpers and nonlinear runtime math
-are not supported by this precision surface yet. Pure annotated lookup bodies
-retain their authored math. Unsupported precision code produces a source
-diagnostic before replacing the running program.
+Named records, nested lists and local aliases can hold numeric state. Representation
+inference considers later stores and helper calls: `{y = 0}` can acquire fractional
+motion without a `0.0` hint. A fractional binding uses Q10 throughout its lifetime.
+Helpers may reference globals initialized later, accept records and inferred
+fractional parameters, and return records or strings. Files still execute in their
+authored order; inference does not initialize a record before its assignment.
+Lexical shadows remain separate, and copying a number does not copy its bounds.
+
+Mixed tuples use literal positions; dynamic list indexes need a shared element
+type, and nested numeric lists may have different lengths. Explicit integer
+contracts continue to reject fractional assignments. Nonlinear runtime math,
+resource APIs and scanline callbacks are not fully integrated with this precision
+surface yet. Pure annotated lookup bodies retain their authored math. Unsupported
+precision code produces a source diagnostic before replacing the running program.
 
 ## Project manifest
 

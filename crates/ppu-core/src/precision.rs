@@ -95,6 +95,8 @@ pub fn comments(source: &str) -> Vec<(usize, &str)> {
 use piccolo::compiler::{self, interning::BasicInterner, parser as ast, LineNumber};
 use std::{collections::HashMap, rc::Rc};
 
+mod inference;
+
 type Text = Rc<[u8]>;
 type Expr = ast::Expression<Text>;
 type Block = ast::Block<Text>;
@@ -270,6 +272,7 @@ enum Kind {
     Int,
     Fixed,
     Bool,
+    String,
     Other,
     Table(usize),
 }
@@ -279,6 +282,7 @@ enum Key {
     Position(i64),
     Element,
 }
+#[derive(Clone)]
 struct Record {
     fields: HashMap<Key, Kind>,
 }
@@ -359,6 +363,23 @@ pub fn enabled(source: &str) -> bool {
 
 /// The same bounded source guard used by raw preview and cartridge validation.
 /// Programs without canonical precision or bounded declarations keep ordinary Lua execution.
+fn lookup_definition_lines(source: &str) -> Vec<u64> {
+    comments(source)
+        .iter()
+        .filter_map(|(line, comment)| {
+            comment
+                .strip_prefix("---@snes")
+                .filter(|a| a.split_whitespace().next() == Some("lookup"))?;
+            source
+                .lines()
+                .enumerate()
+                .skip(*line)
+                .find(|(_, line)| !line.trim().is_empty() && !line.trim_start().starts_with("--"))
+                .map(|(i, _)| i as u64 + 1)
+        })
+        .collect()
+}
+
 pub fn prepare_sources(
     files: &[(&str, &str)],
 ) -> Result<Option<Vec<compiler::CompiledPrototype<Text>>>, (String, PreviewError)> {
@@ -398,44 +419,47 @@ pub fn prepare_sources(
             })
             .transpose();
     }
-    let mut scopes = vec![HashMap::new()];
-    let mut records = vec![];
-    let mut chunks = vec![];
+    let mut parsed = vec![];
+    let mut all_annotations = vec![];
     for &(file, source) in files {
         let result = (|| {
             let annotations = annotations(source)?;
-            let mut lexer =
-                compiler::lexer::Lexer::new(source.as_bytes(), BasicInterner::default());
+            let mut lexer = compiler::lexer::Lexer::new(source.as_bytes(), BasicInterner::default());
             while let Ok(Some(token)) = lexer.read_token() {
-                if matches!(token,compiler::lexer::Token::Name(n) if n.starts_with(b"__ppu_precision_"))
-                {
+                if matches!(token,compiler::lexer::Token::Name(n) if n.starts_with(b"__ppu_precision_")) {
                     return Err(PreviewError::new(lexer.line_number().0+1,"This name is reserved for precision execution.","Rename identifiers beginning __ppu_precision_; ordinary strings and comments may contain that text."));
                 }
             }
-            let mut chunk = if let Some((_, chunk)) = bounded
-                .as_ref()
-                .and_then(|p| p.chunks.iter().find(|(f, _)| f == file))
-            {
+            let chunk = if let Some((_,chunk)) = bounded.as_ref().and_then(|p|p.chunks.iter().find(|(f,_)|f==file)) {
                 chunk.clone()
             } else {
-                compiler::parse_chunk(source.as_bytes(), BasicInterner::default()).map_err(|e| {
-                    PreviewError::new(
-                        e.line_number.0 + 1,
-                        &e.to_string(),
-                        "Fix the Lua syntax at this location.",
-                    )
-                })?
+                compiler::parse_chunk(source.as_bytes(), BasicInterner::default()).map_err(|e|PreviewError::new(e.line_number.0+1,&e.to_string(),"Fix the Lua syntax at this location."))?
             };
+            Ok((chunk,annotations))
+        })().map_err(|e|(file.to_string(),e))?;
+        parsed.push(result.0);
+        all_annotations.push(result.1);
+    }
+    let facts = inference::infer(&parsed, &all_annotations, files);
+    let mut records = facts.records.clone();
+    let mut scopes = vec![HashMap::new()];
+    let mut chunks = vec![];
+    for (i, chunk) in parsed.iter_mut().enumerate() {
+        let (file, source) = files[i];
+        let result = (|| {
             scopes.push(HashMap::new());
             let mut transform = Transform {
                 scopes: &mut scopes,
-                annotations,
+                annotations: all_annotations[i].clone(),
                 used: vec![],
                 source,
                 file,
                 line: 1,
                 returns: vec![],
                 records: &mut records,
+                facts: &facts,
+                function_depth: 0,
+                expected_returns: vec![],
             };
             transform.block(&mut chunk.block, false)?;
             if let Some(a) = transform
@@ -443,10 +467,10 @@ pub fn prepare_sources(
                 .iter()
                 .find(|a| !transform.used.contains(&(a.line, a.name.clone())))
             {
-                return Err(PreviewError::new(a.comment.0, "This numeric annotation did not bind to a supported declaration.", "Put the annotation immediately before its local/global numeric declaration or named helper parameter."));
+                return Err(PreviewError::new(a.comment.0,"This numeric annotation did not bind to a supported declaration.","Put the annotation immediately before its local/global numeric declaration or named helper parameter."));
             }
             transform.scopes.pop();
-            compiler::compile_chunk(&chunk, BasicInterner::default()).map_err(|e| PreviewError::new(e.line_number.0+1,&e.to_string(),"Split this large precision function or assignment into smaller named helpers and explicit stores."))
+            compiler::compile_chunk(chunk,BasicInterner::default()).map_err(|e|PreviewError::new(e.line_number.0+1,&e.to_string(),"Split this large precision function or assignment into smaller named helpers and explicit stores."))
         })();
         chunks.push(result.map_err(|e| (file.to_string(), e))?);
     }
@@ -462,6 +486,9 @@ struct Transform<'a> {
     line: u64,
     returns: Vec<Vec<Kind>>,
     records: &'a mut Vec<Record>,
+    facts: &'a inference::Facts,
+    function_depth: usize,
+    expected_returns: Vec<Vec<Kind>>,
 }
 impl Transform<'_> {
     fn helper(&self, n: &str, mut args: Vec<Expr>) -> Expr {
@@ -515,7 +542,15 @@ impl Transform<'_> {
         PreviewError::new(self.line, message, help)
     }
     fn binding(&self, n: &str) -> Option<Binding> {
-        self.scopes.iter().rev().find_map(|s| s.get(n).cloned())
+        self.scopes
+            .iter()
+            .rev()
+            .find_map(|s| s.get(n).cloned())
+            .or_else(|| {
+                (self.function_depth > 0)
+                    .then(|| self.facts.globals.get(n).cloned())
+                    .flatten()
+            })
     }
     fn annotation(&mut self, n: &str) -> Result<Option<Annotation>, PreviewError> {
         let a = self
@@ -592,7 +627,7 @@ impl Transform<'_> {
             }
         }
     }
-    fn table_key(fields: &HashMap<Key, Kind>, key: Key) -> Key {
+    fn table_key<T>(fields: &HashMap<Key, T>, key: Key) -> Key {
         if matches!(key, Key::Position(_))
             && !fields.contains_key(&key)
             && fields.contains_key(&Key::Element)
@@ -621,6 +656,11 @@ impl Transform<'_> {
             })
     }
     fn constructor(&mut self, t: &mut ast::TableConstructor<Text>) -> Result<Kind, PreviewError> {
+        let inferred = self
+            .facts
+            .constructors
+            .get(&(t as *const _ as usize))
+            .copied();
         if matches!(t.fields.last(),Some(ast::ConstructorField::Array(e)) if self.returned_kinds(e).len()>1)
         {
             return Err(self.error("A precision constructor tail cannot expand multiple helper results.","Capture the results into named locals, then list each constructor entry explicitly."));
@@ -696,12 +736,18 @@ impl Transform<'_> {
                 "Use literal positions for mixed tuples and homogeneous types for dynamic indexes.",
             ));
         }
+        if let Some(id) = inferred {
+            fields = self.records[id].fields.clone();
+        }
         for (field, key) in t.fields.iter_mut().zip(keys) {
             if fields.get(&Self::table_key(&fields, key)) == Some(&Kind::Fixed) {
                 let (ast::ConstructorField::Array(value) | ast::ConstructorField::Record(_, value)) =
                     field;
                 *value = self.fixed_value(value.clone());
             }
+        }
+        if let Some(id) = inferred {
+            return Ok(Kind::Table(id));
         }
         let id = self.records.len();
         self.records.push(Record { fields });
@@ -755,14 +801,28 @@ impl Transform<'_> {
         }
         if let Some(r) = &mut b.return_statement {
             self.line = r.line_number.0 + 1;
-            let kinds = r
+            let mut kinds = r
                 .inner
                 .returns
                 .iter_mut()
                 .map(|e| self.expr(e))
                 .collect::<Result<Vec<_>, _>>()?;
-            if kinds.iter().any(|k| !k.numeric() && *k != Kind::Bool) {
-                return Err(self.error("Precision helpers return only scalar values.", "Return named numbers or booleans; keep tables in their original numeric-array binding."));
+            if let Some(expected) = self.expected_returns.last() {
+                let expected = expected.clone();
+                for ((value, kind), expected) in
+                    r.inner.returns.iter_mut().zip(&mut kinds).zip(expected)
+                {
+                    if expected == Kind::Fixed && kind.numeric() {
+                        *value = self.fixed_value(value.clone());
+                        *kind = Kind::Fixed;
+                    }
+                }
+            }
+            if kinds
+                .iter()
+                .any(|k| !k.numeric() && !matches!(k, Kind::Bool | Kind::String | Kind::Table(_)))
+            {
+                return Err(self.error("This precision return has no stable representation.", "Return numbers, booleans, strings or inferred records; keep one type per returned value."));
             }
             self.returns.push(kinds);
         }
@@ -792,6 +852,7 @@ impl Transform<'_> {
         use ast::Statement as S;
         match s {
             S::LocalStatement(s) => {
+                let inferred=self.facts.locals.get(&(s as *const _ as usize)).cloned();
                 let annotations = s.names.iter().map(|n| self.annotation(&text(n))).collect::<Result<Vec<_>,_>>()?;
                 if s.values.len() != s.names.len() && annotations.iter().any(Option::is_some) { return Err(self.error("An annotated declaration needs one explicit value per name.", "Split a multiple-return call into unannotated temporaries, then declare each annotated value explicitly.")); }
                 let returned=s.values.last().map(|e|self.returned_kinds(e)).unwrap_or_default();
@@ -835,6 +896,14 @@ impl Transform<'_> {
                         }
                     }
                     if i>=s.values.len() {binding.kind=returned.get(i+1-s.values.len()).copied().unwrap_or(Kind::Other);}
+                    if a.is_none() {
+                        if let Some(expected)=inferred.as_ref().and_then(|v|v.get(i)).filter(|b|b.kind!=Kind::Other) {
+                            if expected.kind==Kind::Fixed && binding.kind.numeric() {
+                                if let Some(e)=s.values.get_mut(i) {*e=self.fixed_value(e.clone());}
+                            }
+                            binding.kind=expected.kind;
+                        }
+                    }
                     binding.annotation = a;
                     bindings.push((text(n), binding));
                 }
@@ -845,7 +914,8 @@ impl Transform<'_> {
             S::Function(s) => {
                 if !s.fields.is_empty() || s.method.is_some() { return Err(self.error("Precision helpers need plain names.", "Use a named helper such as local function update(x), then call update(x).")); }
                 let binding = self.function(&mut s.definition, &text(&s.name))?;
-                self.scopes[0].insert(text(&s.name), binding);
+                let n=text(&s.name);
+                if let Some(scope)=self.scopes.iter_mut().rev().find(|s|s.contains_key(&n)) {scope.insert(n,binding);} else {self.scopes[0].insert(n,binding);}
             }
             S::LocalFunction(s) => {
                 let binding = self.function(&mut s.definition, &text(&s.name))?;
@@ -886,17 +956,8 @@ impl Transform<'_> {
         n: &str,
     ) -> Result<Binding, PreviewError> {
         let line = self.line;
-        let lookup = comments(self.source).iter().any(|(l, c)| {
-            c.strip_prefix("---@snes")
-                .is_some_and(|a| a.split_whitespace().next() == Some("lookup"))
-                && self
-                    .source
-                    .lines()
-                    .enumerate()
-                    .skip(*l)
-                    .find(|(_, l)| !l.trim().is_empty() && !l.trim_start().starts_with("--"))
-                    .is_some_and(|(i, _)| i as u64 + 1 == line)
-        });
+        let inferred = self.facts.functions.get(&(f as *const _ as usize)).cloned();
+        let lookup = lookup_definition_lines(self.source).contains(&line);
         if lookup {
             return Ok(Binding {
                 returns: Some(vec![Kind::Int]),
@@ -910,6 +971,13 @@ impl Transform<'_> {
                 "Give the helper named numeric parameters.",
             ));
         }
+        self.function_depth += 1;
+        self.expected_returns.push(
+            inferred
+                .as_ref()
+                .and_then(|b| b.returns.clone())
+                .unwrap_or_default(),
+        );
         self.scopes.push(HashMap::new());
         let mut parameters = vec![];
         let mut stores = ast::AssignmentStatement {
@@ -920,8 +988,15 @@ impl Transform<'_> {
             let a = self.annotation(&text(p))?;
             let kind = if a.as_ref().is_some_and(|a| a.fixed) || n == "frame" && i == 0 {
                 Kind::Fixed
-            } else {
+            } else if a.is_some() {
                 Kind::Int
+            } else {
+                inferred
+                    .as_ref()
+                    .and_then(|b| b.parameters.as_ref())
+                    .and_then(|p| p.get(i))
+                    .copied()
+                    .unwrap_or(Kind::Int)
             };
             parameters.push(kind);
             let mut b = Binding::scalar(kind);
@@ -955,6 +1030,8 @@ impl Transform<'_> {
         self.block(&mut f.body, false)?;
         let rows = std::mem::replace(&mut self.returns, prev);
         self.scopes.pop();
+        self.expected_returns.pop();
+        self.function_depth -= 1;
         self.line = line;
         self.parallel(&mut stores.values);
         if !stores.targets.is_empty() {
@@ -983,7 +1060,7 @@ impl Transform<'_> {
             }
         }
         Ok(Binding {
-            returns: Some(kinds),
+            returns: inferred.and_then(|b| b.returns).or(Some(kinds)),
             parameters: Some(parameters),
             ..Binding::scalar(Kind::Other)
         })
@@ -1031,7 +1108,9 @@ impl Transform<'_> {
         for t in &mut s.targets {
             record_targets.push(None);
             let b = match t {
-                ast::AssignmentTarget::Name(n) => self.binding(&text(n)),
+                ast::AssignmentTarget::Name(n) => self
+                    .binding(&text(n))
+                    .or_else(|| self.facts.globals.get(&text(n)).cloned()),
                 ast::AssignmentTarget::Field(head, field) => {
                     if let Some(kind) = self.record_head(head)? {
                         let Kind::Table(id) = kind else {
@@ -1116,7 +1195,16 @@ impl Transform<'_> {
                     ));
                 }
                 if b.kind == Kind::Int && k == Kind::Fixed {
-                    return Err(self.error("A later fractional store changes an inferred integer binding.","Initialize a fractional record field with 0.0, or declare a scalar using makeFixed(initial, minimum, maximum)."));
+                    return Err(self.error("A fractional store cannot enter an integer contract.","Use makeFixed for fractional state, or a fixed parameter contract; integer contracts do not round or clamp."));
+                }
+                if !b.kind.numeric()
+                    && b.kind != Kind::Other
+                    && !self.compatible(b.kind, k, &mut vec![])
+                {
+                    return Err(self.error(
+                        "A precision assignment changes its nonnumeric representation.",
+                        "Keep booleans, strings and record values in separate bindings.",
+                    ));
                 }
                 if matches!(b.kind, Kind::Table(_)) && !self.compatible(b.kind, k, &mut vec![]) {
                     return Err(self.error("A precision record replacement changes its field types.","Initialize replacement records with the same fields and numeric representations."));
@@ -1126,9 +1214,17 @@ impl Transform<'_> {
                 } else if b.kind == Kind::Fixed {
                     *e = self.fixed_value(e.clone());
                 }
-            } else if let Some(ast::AssignmentTarget::Name(n)) = s.targets.get(i) {
-                if self.binding(&text(n)).is_none() {
-                    self.scopes[0].insert(text(n), Binding::scalar(k));
+            }
+            if let Some(ast::AssignmentTarget::Name(n)) = s.targets.get(i) {
+                if self.function_depth == 0 && self.binding(&text(n)).is_none() {
+                    self.scopes[0].insert(
+                        text(n),
+                        self.facts
+                            .globals
+                            .get(&text(n))
+                            .cloned()
+                            .unwrap_or_else(|| Binding::scalar(k)),
+                    );
                 }
             }
             if let Some(Some((id, key))) = record_targets.get(i) {
@@ -1147,9 +1243,20 @@ impl Transform<'_> {
         };
         if !matches!(
             text(n).as_str(),
-            "obj" | "bg" | "m7" | "vram" | "cgram" | "raster" | "pad" | "voice" | "dsp"
+            "obj"
+                | "bg"
+                | "m7"
+                | "vram"
+                | "cgram"
+                | "raster"
+                | "pad"
+                | "voice"
+                | "dsp"
+                | "win"
+                | "color"
+                | "screen"
         ) {
-            return Err(self.error(&format!("Precision analysis cannot resolve fields on {:?}.",text(n)),"Use direct hardware access, or initialize a record before helpers that read it. Forward record/helper inference is not yet supported."));
+            return Err(self.error(&format!("Precision analysis cannot resolve fields on {:?}.",text(n)),"Declare the record and initialize its fields; helpers may reference globals initialized later. Use supported hardware bindings directly."));
         }
         for suffix in &mut head.suffixes {
             match suffix {
@@ -1173,7 +1280,8 @@ impl Transform<'_> {
                 ast::SimpleExpression::Integer(n)=>{if i32::try_from(*n).is_err(){return Err(self.error("Integer literal exceeds the cartridge range.","Keep literal integers within signed 32-bit range."));} Kind::Int},
                 ast::SimpleExpression::Float(v)=>{let raw=(*v*1024.).round(); if !raw.is_finite() || raw < i32::MIN as f64 || raw>i32::MAX as f64 {return Err(self.error("Fractional literal exceeds Q21.10.","Keep fractional literals in the Q21.10 range."));} *v=raw/1024.; Kind::Fixed},
                 ast::SimpleExpression::True|ast::SimpleExpression::False=>Kind::Bool,
-                ast::SimpleExpression::Nil|ast::SimpleExpression::String(_)=>Kind::Other,
+                ast::SimpleExpression::Nil=>Kind::Other,
+                ast::SimpleExpression::String(_)=>Kind::String,
                 ast::SimpleExpression::Suffixed(s)=>self.suffixed(s)?,
                 ast::SimpleExpression::TableConstructor(t)=>self.constructor(t)?,
                 _=>return Err(self.error("This value is outside the precision preview surface.","Use named numeric helpers, scalar bindings and numeric list constructors; replace varargs, anonymous functions and table aliases with those forms.")),
@@ -1181,7 +1289,7 @@ impl Transform<'_> {
             ast::HeadExpression::UnaryOperator(op,v)=>{
                 let k=if matches!(op,ast::UnaryOperator::Len) {
                     let valid=matches!(v.head.as_ref(),ast::HeadExpression::Simple(ast::SimpleExpression::Suffixed(ast::SuffixedExpression {primary:ast::PrimaryExpression::Name(n),suffixes})) if v.tail.is_empty() && suffixes.is_empty() && self.binding(&text(n)).is_some_and(|b|b.capacity.is_some()));
-                    if !valid && !matches!(self.expr(v)?,Kind::Table(_)) { return Err(self.error("Precision length needs an array or record list.", "Use #A on a numeric array or list.")); }
+                    if !valid && !matches!(self.expr(v)?,Kind::Table(_)|Kind::String) { return Err(self.error("Precision length needs an array or record list.", "Use #A on a numeric array or list.")); }
                     Kind::Int
                 } else { self.expr(v)? };
                 if matches!(op,ast::UnaryOperator::Not) {Kind::Bool}
@@ -1317,7 +1425,16 @@ impl Transform<'_> {
                 }
                 return Ok(b.kind);
             }
-            return match n.as_str(){"BGMODE"|"MOSAIC"|"WH0"|"WH1"|"WH2"|"WH3"=>Ok(Kind::Int),_=>Err(self.error(&format!("Unknown precision input {n:?}."),"Declare numeric state and helpers before their uses; give helper parameters explicit numeric names."))};
+            if self.function_depth == 0 && self.facts.globals.contains_key(&n) {
+                return Err(self.error(&format!("Precision input {n:?} is read before initialization."),"Move the expression after the global initializer, or read it from a helper called after initialization."));
+            }
+            return match n.as_str() {
+                "BGMODE" | "MOSAIC" | "WH0" | "WH1" | "WH2" | "WH3" => Ok(Kind::Int),
+                _ => Err(self.error(
+                    &format!("Unknown precision input {n:?}."),
+                    "Declare state and named helpers; keep one numeric representation per binding.",
+                )),
+            };
         }
         if let Some(ast::SuffixPart::Call(_)) = s.suffixes.last() {
             let callee = if s.suffixes.len() == 1 {
@@ -1356,10 +1473,20 @@ impl Transform<'_> {
                     .zip(&kinds)
                     .any(|(p, k)| *p == Kind::Int && *k == Kind::Fixed)
                 {
-                    return Err(self.error("A fractional argument needs an annotated helper parameter.", "Put ---@snes fixed parameter lo hi above the helper definition to declare its Q10 parameter."));
+                    return Err(self.error("A fractional argument cannot enter an integer parameter contract.", "Use a fixed parameter contract for fractional input; inferred numeric parameters follow their callers."));
                 }
-                if kinds.iter().any(|k| matches!(k, Kind::Table(_))) {
-                    return Err(self.error("Record helper arguments need precision type inference.","Pass the numeric fields to this helper until record parameter inference is available."));
+                if params.iter().zip(&kinds).any(|(p, k)| {
+                    matches!(p, Kind::Table(_)) && !self.compatible(*p, *k, &mut vec![])
+                }) {
+                    return Err(self.error(
+                        "Record helper arguments have incompatible shapes.",
+                        "Pass records with the same fields and numeric representations.",
+                    ));
+                }
+                for (arg, p) in args.iter_mut().zip(params) {
+                    if *p == Kind::Fixed {
+                        *arg = self.fixed_value(arg.clone());
+                    }
                 }
                 return Ok(binding
                     .as_ref()

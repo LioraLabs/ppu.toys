@@ -52,9 +52,62 @@ end
 }
 
 #[test]
-fn precision_records_refuse_a_later_fractional_field_type_change() {
-    let source = "local time=makeFixed(0,0,10)\nlocal state={x=0}\nfunction frame() state.x=.1 end";
-    assert!(LuaEngine::new().set_source(source).is_err());
+fn precision_infers_fractional_record_fields_from_later_stores() {
+    let source="local time=makeFixed(0,0,10)\nlocal state={x=0}\nfunction frame() state.x=state.x+.1;obj[0].x=floor(state.x*1024)%256 end";
+    let mut e = LuaEngine::new();
+    e.set_source(source).unwrap();
+    for f in 0..5 {
+        e.frame(0., f).unwrap();
+    }
+    assert_eq!(e.memory().oam[0].x, 254);
+}
+
+#[test]
+fn precision_infers_forward_globals_record_parameters_and_record_returns() {
+    let mut e = LuaEngine::new();
+    e.set_sources(&[
+        ("helpers.lua", "local time=makeFixed(0,0,10)\nfunction step() move(state.nodes[1],.1);return state.nodes[1] end\nfunction move(node,amount) node.x=node.x+amount end"),
+        ("state.lua", "state={nodes={{x=0}}}"),
+        ("main.lua", "function frame(t,f) local node=step();obj[0].x=floor(node.x*1024)%256 end"),
+    ]).unwrap();
+    for f in 0..5 {
+        e.frame(0., f).unwrap();
+    }
+    assert_eq!(e.memory().oam[0].x, 254);
+}
+
+#[test]
+fn precision_inference_keeps_lexical_shadows_and_numeric_copies_independent() {
+    let mut e = LuaEngine::new();
+    e.set_sources(&[
+        ("helpers.lua", "local time=makeFixed(0,0,10)\nfunction step() state.x=state.x+.1 end\nlocal state={x=3000000}\nfunction large() return state.x end"),
+        ("state.lua", "state={x=0}\nlocal bounded=makeBounded(0,0,10)\nlocal copy=bounded\nfunction frame(t,f) step();copy=copy+.1;bounded=1;obj[0].x=floor(state.x*1024)%256;obj[1].x=large()%256;obj[2].x=floor(copy*1024)%256 end"),
+    ]).unwrap();
+    e.frame(0., 0).unwrap();
+    assert_eq!(
+        e.memory().oam[..3].iter().map(|o| o.x).collect::<Vec<_>>(),
+        [102, 192, 102]
+    );
+    let source="local clock=makeFixed(0,0,10)\nlocal large=3000000\nlocal value=0\nfunction frame(t,f)\n value=.1\n value=large\nend";
+    e.set_source(source).unwrap();
+    let error = e.frame(0., 0).unwrap_err();
+    assert_eq!(error.line, Some(6));
+}
+
+#[test]
+fn precision_infers_string_helper_parameters_without_numeric_annotations() {
+    let source="local clock=makeFixed(0,0,10)\nlocal function width(label) return #label end\nfunction frame(t,f) obj[0].x=width('CORE') end";
+    assert_eq!(frame(source)[0], 4);
+}
+
+#[test]
+fn precision_inference_does_not_accept_undefined_globals_or_type_changes() {
+    for source in [
+        "local clock=makeFixed(0,0,10)\nfunction frame(t,f) obj[0].x=missing.x+.1 end",
+        "local clock=makeFixed(0,0,10)\nlocal active=false\nfunction frame(t,f) active=3 end",
+        "local clock=makeFixed(0,0,10)\nlocal state={label='ready'}\nfunction frame(t,f) state.label=3 end",
+        "local clock=makeFixed(0,0,10)\nlocal value=makeBounded(0,0,10)\nfunction frame(t,f) value=.1 end",
+    ] {assert!(LuaEngine::new().set_source(source).is_err(),"{source}");}
 }
 
 #[test]
@@ -308,4 +361,35 @@ fn unrelated_multiple_returns_and_array_length_arithmetic_keep_lua_semantics() {
         .unwrap();
     e.frame(8. / 60., 8).unwrap();
     assert_eq!(e.memory().oam[0].x, 128);
+}
+
+#[test]
+fn forward_stores_keep_the_later_binding_contract_and_coarse_accuracy() {
+    let source="function step() speed=speed+.1 end\nspeed=makeFixed(0,-1,1,16)\nfunction frame(t,f) step();obj[0].x=floor(speed*16) end";
+    let mut e = LuaEngine::new();
+    e.set_source(source).unwrap();
+    e.frame(0., 0).unwrap();
+    assert_eq!(e.memory().oam[0].x, 2);
+    for f in 1..8 {
+        e.frame(0., f).unwrap();
+    }
+    assert!(e.frame(0., 8).is_err());
+}
+
+#[test]
+fn forward_lookup_signatures_stay_integer_and_keep_authored_math() {
+    let source="local clock=makeFixed(0,0,10)\nfunction frame(t,f) obj[0].x=sample(f%2) end\n---@snes lookup n 0 1\nfunction sample(n) return floor(sin(n*.1)*100+.5) end";
+    assert_eq!(frame(source)[0], 0);
+}
+
+#[test]
+fn precision_keeps_window_color_and_screen_controls_available() {
+    let source="local clock=makeFixed(0,0,10)\nfunction frame(t,f)\n win.color.w1=true;win.color.combine='XOR';color.region='inside';color.on.bg1=true;screen.main.bg1=true\n obj[0].x=win.color.w1 and 1 or 0;obj[1].x=screen.main.bg1 and 1 or 0\nend";
+    assert_eq!(&frame(source)[..2], [1, 1]);
+}
+
+#[test]
+fn precision_inference_respects_shadowed_numeric_builtins() {
+    let source="local clock=makeFixed(0,0,10)\nfunction sample() return abs(.1) end\nfunction abs(x) return x*2 end\nfunction frame(t,f) obj[0].x=floor(sample()*1024) end";
+    assert_eq!(frame(source)[0], 204);
 }
