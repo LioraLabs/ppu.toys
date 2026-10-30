@@ -392,3 +392,66 @@ fn precision_inference_respects_shadowed_numeric_builtins() {
     let source="local clock=makeFixed(0,0,10)\nfunction sample() return abs(.1) end\nfunction abs(x) return x*2 end\nfunction frame(t,f) obj[0].x=floor(sample()*1024) end";
     assert_eq!(frame(source)[0], 204);
 }
+
+/// Record contracts follow makeFixed's one law: Q10 expressions, store rounding to 1/den.
+/// The same motion written with canonical bindings shows the same bits every frame.
+#[test]
+fn record_contracts_use_the_canonical_fixed_point_law() {
+    let body = "
+  vx = vx + (190 - vx) * 0.164
+  x = min(max(x + vx / 60, -118), 118)
+  obj[0].x = floor(x * 16) % 256
+  obj[1].x = floor(vx * 1024) % 256
+  cgram[0] = floor(vx * 1024) % 32768
+  cgram[1] = floor(x * 16) % 32768
+end";
+    let bindings = format!("local x = makeFixed(0, -118, 118, 16)\nlocal vx = makeFixed(0, -190, 190)\nfunction frame(t, f){body}");
+    let record = format!(
+        "local s = {{x = makeFixed(0, -118, 118, 16), vx = makeFixed(0, -190, 190)}}\nfunction frame(t, f)\n  local x, vx = s.x, s.vx{}",
+        body.replace("\n  obj[0]", "\n  s.x, s.vx = x, vx\n  x, vx = s.x, s.vx\n  obj[0]")
+    );
+    let (mut a, mut b) = (LuaEngine::new(), LuaEngine::new());
+    a.set_sources(&[("main.luau", &bindings)]).unwrap();
+    b.set_sources(&[("main.luau", &record)]).unwrap();
+    for f in 0..240 {
+        a.frame(f as f64 / 60., f).unwrap();
+        b.frame(f as f64 / 60., f).unwrap();
+        assert_eq!(a.memory().cgram[..2], b.memory().cgram[..2], "frame {f}");
+        assert_eq!(a.memory().oam[..2], b.memory().oam[..2], "frame {f}");
+    }
+    // Q10 product of 190 and 0.164 (168/1024), not the f64 31.16.
+    let mut e = LuaEngine::new();
+    e.set_sources(&[("main.luau", &record)]).unwrap();
+    e.frame(0., 0).unwrap();
+    assert_eq!(e.memory().cgram[0], 31920 % 32768);
+}
+
+#[test]
+fn record_contracts_round_stores_and_keep_lookup_bodies_and_integer_products_exact() {
+    let source = r#"local s = {x = makeFixed(0, -8, 8, 16), n = makeBounded(0, 0, 100)}
+local half = lookup({i = {0, 3}}, function(i) return i * 0.3 end)
+function frame(t, f)
+  s.x = 0.03125 * 3
+  obj[0].x = floor(s.x * 16)
+  s.x = -0.03125
+  obj[1].x = floor(s.x * 16)
+  s.n = 7 * 9
+  obj[2].x = s.n
+  obj[3].x = floor(half(3) * 1024)
+end"#;
+    let mut e = LuaEngine::new();
+    e.set_sources(&[("main.luau", source)]).unwrap();
+    e.frame(0., 0).unwrap();
+    let x: Vec<i16> = e.memory().oam[..4].iter().map(|o| o.x).collect();
+    // 3/32 is a tie: away from zero to 2/16, and -1/32 to -1/16; 922 is the f64 sample 0.9 in Q10.
+    assert_eq!(x, [2, -1, 63, 922]);
+}
+
+#[test]
+fn programs_without_record_contracts_keep_lua_numbers() {
+    let source = "local s = {x = 0}\n-- makeFixed\nfunction frame(t, f) s.x = 190 * 0.164 obj[0].x = floor(s.x * 1024) % 256 end";
+    let mut e = LuaEngine::new();
+    e.set_sources(&[("main.luau", source)]).unwrap();
+    e.frame(0., 0).unwrap();
+    assert_eq!(e.memory().oam[0].x, 31907 % 256);
+}

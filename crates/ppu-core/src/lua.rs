@@ -246,6 +246,8 @@ pub struct LuaEngine {
     reports: Vec<ImportBudget>,
     program_sources: Vec<(String, String)>,
     source_dirty: bool,
+    /// Run fixed-point arithmetic even without a makeFixed contract in the sources.
+    fixed_point: bool,
     /// Controller state for the next frame: a PAD_* bitmask mirrored into the
     /// Lua `pad` table before frame() runs. JS owns the key/gamepad mapping.
     pad: u16,
@@ -549,6 +551,7 @@ impl LuaEngine {
             reports: Vec::new(),
             program_sources: Vec::new(),
             source_dirty: false,
+            fixed_point: false,
             pad: 0,
             pad2: 0,
             dsp,
@@ -887,6 +890,13 @@ impl LuaEngine {
 
     /// Single-file sugar for [`Self::set_sources`]; the chunk keeps its
     /// historical name `"source"` so existing diagnostics are unchanged.
+    /// Opt every following `set_sources` into makeFixed's arithmetic (see
+    /// `frontend::fixed_point`), as if the program declared a makeFixed contract.
+    /// A tool evaluating a derived copy of such a program uses this.
+    pub fn set_fixed_point(&mut self, on: bool) {
+        self.fixed_point = on;
+    }
+
     pub fn set_source(&mut self, src: &str) -> Result<(), LuaError> {
         self.set_sources(&[("source", src)])
     }
@@ -908,6 +918,10 @@ impl LuaEngine {
     /// once if present. Errors carry `{file, line?, message}`.
     /// A file named by `require("./name")` in any file runs as a module (see `luau.lua`).
     pub fn set_sources(&mut self, files: &[(&str, &str)]) -> Result<(), LuaError> {
+        let fixed_point = self.fixed_point
+            || files.iter().any(|(name, source)| {
+                *name != AUDIO_MIX_FILE && crate::frontend::fixed_contracts(source)
+            });
         let prepared: Vec<_> = files
             .iter()
             .map(|&(name, source)| {
@@ -961,6 +975,20 @@ impl LuaEngine {
                 line: Some(e.line as u32),
                 message: format!("{} {}", e.message, e.help),
             })?;
+        // Canonical precision already runs this law; otherwise makeFixed programs get it here.
+        let fixed_sources: Vec<(&str, std::borrow::Cow<str>)> = precision_files
+            .iter()
+            .map(|&(name, source)| {
+                let source = if fixed_point && precision_chunks.is_none() {
+                    crate::frontend::fixed_point(source)
+                } else {
+                    std::borrow::Cow::Borrowed(source)
+                };
+                (name, source)
+            })
+            .collect();
+        let precision_files: Vec<(&str, &str)> =
+            fixed_sources.iter().map(|(n, s)| (*n, s.as_ref())).collect();
         let saved_mix = AudioMix::parse(
             files
                 .iter()

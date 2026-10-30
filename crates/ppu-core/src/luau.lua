@@ -166,6 +166,29 @@ local function __ppu_round(x)
   return -math.floor(-x + 0.5)
 end
 
+-- Fixed-point arithmetic (frontend::fixed_point): Q10 operands, products and quotients
+-- truncated toward zero, integer products staying integers; the canonical precision law.
+local function __ppu_raw(x)
+  if math.type(x) == "integer" then return x * 1024 end
+  return __ppu_round(x * 1024)
+end
+
+local function __ppu_trunc(x)
+  if x >= 0 then return math.floor(x) end
+  return -math.floor(-x)
+end
+
+function __ppu_mul(a, b)
+  if math.type(a) == "integer" and math.type(b) == "integer" then return a * b end
+  return __ppu_trunc(__ppu_raw(a) * __ppu_raw(b) / 1024) / 1024
+end
+
+function __ppu_div(a, b)
+  local divisor = __ppu_raw(b)
+  if divisor == 0 then error("division by zero", 2) end
+  return __ppu_trunc(__ppu_raw(a) * 1024 / divisor) / 1024
+end
+
 local function __ppu_contract(name, contract, value)
   local fixed, lo, hi, denominator = contract[1], contract[2], contract[3], contract[4]
   local kind = fixed and "makeFixed" or "makeBounded"

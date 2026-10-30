@@ -302,10 +302,137 @@ pub fn prepare(source: &str) -> Result<Cow<'_, str>, Error> {
     Ok(Cow::Owned(result))
 }
 
+/// True when a table constructor declares a field with makeFixed: a record contract, which
+/// opts the program into makeFixed's arithmetic (`fixed_point`).
+pub fn fixed_contracts(source: &str) -> bool {
+    if !source.contains("makeFixed") {
+        return false;
+    }
+    let Ok(ast) = full_moon::parse_fallible(source, full_moon::LuaVersion::luau()).into_result()
+    else {
+        return false;
+    };
+    #[derive(Default)]
+    struct Found(bool);
+    impl Visitor for Found {
+        fn visit_table_constructor(&mut self, node: &ast::TableConstructor) {
+            self.0 |= node.fields().iter().any(|field| {
+                let ast::Field::NameKey { value, .. } = field else { return false };
+                let ast::Expression::FunctionCall(call) = value.as_ref() else { return false };
+                matches!(call.prefix(), ast::Prefix::Name(n) if n.token().to_string() == "makeFixed")
+            });
+        }
+    }
+    let mut found = Found::default();
+    found.visit_ast(&ast);
+    found.0
+}
+
+/// Fixed-point arithmetic for a program with makeFixed contracts: the same law canonical
+/// precision uses. Fractional literals round to Q10 (nearest, ties away from zero), and `*`
+/// and `/` run on Q10 operands with the result truncated toward zero (`__ppu_mul`/`__ppu_div`
+/// in luau.lua). Sums, differences, comparisons, floors and `%` of Q10 values are already
+/// exact. Functions passed to `lookup` keep f64: they are sampled tables, not runtime code.
+/// Runs on `prepare`d text, so compound assignments are already plain operators.
+pub fn fixed_point(source: &str) -> Cow<'_, str> {
+    let Ok(ast) = full_moon::parse_fallible(source, full_moon::LuaVersion::luau()).into_result()
+    else {
+        return Cow::Borrowed(source);
+    };
+    #[derive(Default)]
+    struct Sampled(Vec<Range<usize>>);
+    impl Visitor for Sampled {
+        fn visit_function_call(&mut self, node: &ast::FunctionCall) {
+            let ast::Prefix::Name(name) = node.prefix() else { return };
+            if name.token().to_string() != "lookup" {
+                return;
+            }
+            for suffix in node.suffixes() {
+                let ast::Suffix::Call(ast::Call::AnonymousCall(args)) = suffix else { continue };
+                if let ast::FunctionArgs::Parentheses { arguments, .. } = args.as_ref() {
+                    for a in arguments.iter().filter(|a| matches!(a, ast::Expression::Function(_))) {
+                        self.0.push(range(a));
+                    }
+                }
+            }
+        }
+    }
+    struct Fixed {
+        sampled: Vec<Range<usize>>,
+        // (span, visit order, text); one position's insertions keep the outer call first.
+        edits: Vec<(Range<usize>, usize, String)>,
+    }
+    impl Fixed {
+        fn runtime(&self, at: usize) -> bool {
+            !self.sampled.iter().any(|r| r.contains(&at))
+        }
+    }
+    impl Visitor for Fixed {
+        fn visit_expression(&mut self, node: &ast::Expression) {
+            let order = self.edits.len();
+            match node {
+                ast::Expression::BinaryOperator { lhs, binop, rhs } if self.runtime(range(node).start) => {
+                    let helper = match binop {
+                        ast::BinOp::Star(_) => "__ppu_mul",
+                        ast::BinOp::Slash(_) => "__ppu_div",
+                        _ => return,
+                    };
+                    let start = range(lhs.as_ref()).start;
+                    self.edits.push((start..start, order, format!("{helper}(")));
+                    self.edits.push((range(binop), order, ",".into()));
+                    let end = range(rhs.as_ref()).end;
+                    self.edits.push((end..end, order, ")".into()));
+                }
+                ast::Expression::Number(n) if self.runtime(range(node).start) => {
+                    let text = n.token().to_string();
+                    if text.starts_with("0x") || text.starts_with("0X") || !text.contains(['.', 'e', 'E']) {
+                        return;
+                    }
+                    let Ok(value) = text.parse::<f64>() else { return };
+                    let raw = (value * 1024.).round();
+                    if raw / 1024. != value {
+                        let q = raw / 1024.;
+                        let q = if q.fract() == 0. { format!("{q:.1}") } else { format!("{q:?}") };
+                        self.edits.push((range(n), order, q));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut sampled = Sampled::default();
+    sampled.visit_ast(&ast);
+    let mut fixed = Fixed { sampled: sampled.0, edits: vec![] };
+    fixed.visit_ast(&ast);
+    if fixed.edits.is_empty() {
+        return Cow::Borrowed(source);
+    }
+    let mut result = source.to_string();
+    // Back to front; at one insertion point the later-visited (inner) text goes in first.
+    fixed
+        .edits
+        .sort_by(|a, b| (b.0.start, b.0.end, b.1).cmp(&(a.0.start, a.0.end, a.1)));
+    for (span, _, text) in fixed.edits {
+        result.replace_range(span, &text);
+    }
+    Cow::Owned(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use piccolo::compiler::{interning::BasicInterner, parse_chunk};
+
+    #[test]
+    fn fixed_point_rewrites_products_quotients_and_literals_outside_lookups() {
+        let source = "local a = x * 0.164 / 60\nlocal b = 1.5 + 2 * -y\nlocal t = lookup(g, function(s) return s * 0.3 end, {\"s\"})\n";
+        let out = fixed_point(source);
+        assert_eq!(
+            out,
+            "local a = __ppu_div(__ppu_mul(x , 0.1640625) , 60)\nlocal b = 1.5 + __ppu_mul(2 , -y)\nlocal t = lookup(g, function(s) return s * 0.3 end, {\"s\"})\n"
+        );
+        assert!(parse_chunk(out.as_bytes(), BasicInterner::default()).is_ok());
+    }
 
     #[test]
     fn ordinary_lua_and_legacy_bitwise_code_stay_byte_identical() {
