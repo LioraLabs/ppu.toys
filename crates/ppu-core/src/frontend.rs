@@ -69,12 +69,124 @@ impl Visitor for Lower {
         visit_exported_type_function: ExportedTypeFunction,
     }
     reject! {
-        visit_if_expression: IfExpression => "if expressions",
         visit_interpolated_string: InterpolatedString => "interpolated strings",
         visit_if_condition_binding: IfConditionBinding => "condition bindings",
         visit_luau_attribute: LuauAttribute => "attributes",
         visit_const_assignment: ConstAssignment => "const declarations",
         visit_const_function: ConstFunction => "const functions",
+    }
+    // `if c then a elseif d then b else e` -> `((c) and (a) or ((d) and (b) or (e)))`.
+    // Only keyword tokens are replaced, so nested expressions and line breaks stay in place.
+    fn visit_if_expression(&mut self, node: &luau::IfExpression) {
+        let branches = std::iter::once((node.binding(), node.if_expression())).chain(
+            node.else_if_expressions()
+                .into_iter()
+                .flatten()
+                .map(|e| (e.binding(), e.expression())),
+        );
+        for (binding, value) in branches {
+            if binding.is_some() {
+                return self.reject(node, "condition bindings");
+            }
+            // `c and a or b` picks `b` when `a` is false or nil.
+            if may_be_false(value) {
+                return self.reject(value, "if expressions whose then-value may be false or nil; use an if statement");
+            }
+        }
+        let mut swap = |token: &full_moon::tokenizer::TokenReference, text: &str| {
+            let span = range(token);
+            self.edits.push((span.start, span, text.into()));
+        };
+        swap(node.if_token(), "((");
+        swap(node.then_token(), ") and (");
+        let mut closers = 2;
+        for e in node.else_if_expressions().into_iter().flatten() {
+            swap(e.else_if_token(), ") or ((");
+            swap(e.then_token(), ") and (");
+            closers += 1;
+        }
+        swap(node.else_token(), ") or (");
+        let span = range(node);
+        self.edits.push((span.start, span.end..span.end, ")".repeat(closers)));
+    }
+    // `{x = makeFixed(0, -8, 8)}` -> `__ppu_record({x = __ppu_initial(0, -8, 8)}, {x = {true, -8, 8, 1024}})`:
+    // a record whose field keeps its contract for every later store (see luau.lua).
+    fn visit_table_constructor(&mut self, node: &ast::TableConstructor) {
+        let mut contracts = vec![];
+        for field in node.fields() {
+            let ast::Field::NameKey { key, value, .. } = field else { continue };
+            let ast::Expression::FunctionCall(call) = value.as_ref() else { continue };
+            let ast::Prefix::Name(callee) = call.prefix() else { continue };
+            let fixed = match callee.token().to_string().as_str() {
+                "makeFixed" => true,
+                "makeBounded" => false,
+                _ => continue,
+            };
+            let [ast::Suffix::Call(ast::Call::AnonymousCall(args))] =
+                call.suffixes().collect::<Vec<_>>().as_slice()
+            else {
+                continue;
+            };
+            let ast::FunctionArgs::Parentheses { arguments, .. } = args.as_ref() else { continue };
+            let text = |e: &ast::Expression| e.tokens().map(|t| t.token().to_string()).collect::<String>();
+            let args: Vec<String> = arguments.iter().map(text).collect();
+            if args.len() != 3 && !(fixed && args.len() == 4) {
+                continue; // the runtime constructor reports the arity error
+            }
+            let denominator = args.get(3).map_or("1024", String::as_str);
+            contracts.push(format!(
+                "{} = {{{fixed}, {}, {}, {denominator}}}",
+                key.token(),
+                args[1],
+                args[2]
+            ));
+            let span = range(callee);
+            self.edits.push((span.start, span, "__ppu_initial".into()));
+        }
+        if contracts.is_empty() {
+            return;
+        }
+        let span = range(node);
+        self.edits.push((span.start, span.start..span.start, "__ppu_record(".into()));
+        self.edits.push((span.start, span.end..span.end, format!(", {{{}}})", contracts.join(", "))));
+    }
+    // Luau iterates a table directly; `pairs` visits the array part in order, then the rest.
+    fn visit_generic_for(&mut self, node: &ast::GenericFor) {
+        let mut values = node.expressions().iter();
+        if let (Some(value), None) = (values.next(), values.next()) {
+            if !matches!(value, ast::Expression::FunctionCall(_)) {
+                let span = range(value);
+                self.edits.push((span.start, span.start..span.start, "pairs(".into()));
+                self.edits.push((span.start, span.end..span.end, ")".into()));
+            }
+        }
+    }
+    // lookup/bakeHdma grids are keyed by parameter name, which Lua cannot read at run time.
+    fn visit_function_call(&mut self, node: &ast::FunctionCall) {
+        let ast::Prefix::Name(name) = node.prefix() else { return };
+        if !matches!(name.token().to_string().as_str(), "lookup" | "bakeHdma") {
+            return;
+        }
+        let [ast::Suffix::Call(ast::Call::AnonymousCall(args))] =
+            node.suffixes().collect::<Vec<_>>().as_slice()
+        else {
+            return;
+        };
+        let ast::FunctionArgs::Parentheses { parentheses, arguments } = args.as_ref() else {
+            return;
+        };
+        let Some(ast::Expression::Function(f)) = arguments.iter().last() else { return };
+        let names: Vec<String> = f
+            .body()
+            .parameters()
+            .iter()
+            .filter_map(|p| match p {
+                ast::Parameter::Name(n) => Some(format!("{:?}", n.token().to_string())),
+                _ => None,
+            })
+            .collect();
+        let close = range(parentheses.tokens().1).start;
+        self.edits.push((close, close..close, format!(", {{{}}}", names.join(", "))));
     }
     fn visit_last_stmt(&mut self, node: &ast::LastStmt) {
         if matches!(node, ast::LastStmt::Continue(_)) {
@@ -111,6 +223,48 @@ impl Visitor for Lower {
     }
 }
 
+/// The `require("./name")` paths in `source`, in order of appearance.
+pub fn requires(source: &str) -> Vec<&str> {
+    let mut paths = vec![];
+    for (at, _) in source.match_indices("require(") {
+        let rest = &source[at + "require(".len()..];
+        let Some(quote) = rest.chars().next().filter(|c| *c == '"' || *c == '\'') else { continue };
+        let Some(end) = rest[1..].find(quote) else { continue };
+        if let Some(path) = rest[1..1 + end].strip_prefix("./") {
+            paths.push(path);
+        }
+    }
+    paths
+}
+
+/// The listed files some file requires: `./state` names `state.luau`, else `state.lua`.
+pub fn required_files(files: &[(&str, &str)]) -> std::collections::HashSet<String> {
+    let names: std::collections::HashSet<&str> = files.iter().map(|(n, _)| *n).collect();
+    files
+        .iter()
+        .flat_map(|(_, s)| requires(s))
+        .filter_map(|p| {
+            [format!("{p}.luau"), format!("{p}.lua")]
+                .into_iter()
+                .find(|f| names.contains(f.as_str()))
+        })
+        .collect()
+}
+
+// shortcut: names, fields and calls are assumed to hold non-false values; type-directed check if that bites.
+fn may_be_false(value: &ast::Expression) -> bool {
+    match value {
+        ast::Expression::Symbol(t) => matches!(t.token().to_string().as_str(), "false" | "nil"),
+        ast::Expression::Parentheses { expression, .. } => may_be_false(expression),
+        ast::Expression::UnaryOperator { unop, .. } => matches!(unop, ast::UnOp::Not(_)),
+        ast::Expression::BinaryOperator { binop, .. } => matches!(
+            binop.token().token().to_string().as_str(),
+            "==" | "~=" | "<" | "<=" | ">" | ">=" | "and" | "or"
+        ),
+        _ => false,
+    }
+}
+
 /// Normalize supported Luau syntax without moving comments or newlines.
 /// A Luau syntax rejection returns the original source for the existing parser.
 /// An accepted but unsupported Luau construct is an error, never a fallback.
@@ -140,7 +294,8 @@ pub fn prepare(source: &str) -> Result<Cow<'_, str>, Error> {
         return Ok(Cow::Borrowed(source));
     }
     let mut result = String::from_utf8(masked).expect("only whole syntax tokens are erased");
-    lower.edits.sort_by(|a, b| b.1.start.cmp(&a.1.start));
+    // At one position, replace a token before inserting in front of it.
+    lower.edits.sort_by(|a, b| (b.1.start, b.1.end).cmp(&(a.1.start, a.1.end)));
     for (_, span, replacement) in lower.edits {
         result.replace_range(span, &replacement);
     }
@@ -195,7 +350,7 @@ mod tests {
     #[test]
     fn unsupported_luau_does_not_fall_back_or_drop_code() {
         for source in [
-            "local n=if true then 1 else 2",
+            "local n=if true then false else 2",
             "local s=`hello`",
             "while true do continue end",
             "local a={{x=1}} a[1].x += 1",

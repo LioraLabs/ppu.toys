@@ -160,7 +160,6 @@ fn fixed_constructor_rejects_invalid_contracts_and_respects_custom_helpers() {
         "local x=makeFixed(0,-1.5,1)",
         "local x=makeFixed(0,-1)",
         "local x=makeFixed(0,-1,1)+1",
-        "local x={y=makeFixed(0,-1,1)}",
         "local x=makeFixed",
         "---@snes fixed x -1 1\nlocal x=makeFixed(0,-1,1)",
     ] {

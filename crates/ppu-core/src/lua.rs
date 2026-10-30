@@ -903,6 +903,7 @@ impl LuaEngine {
     /// name as chunk name. `frame`/`init` are resolved only after every chunk
     /// has run (`main.lua` is convention, not special-cased); `init()` runs
     /// once if present. Errors carry `{file, line?, message}`.
+    /// A file named by `require("./name")` in any file runs as a module (see `luau.lua`).
     pub fn set_sources(&mut self, files: &[(&str, &str)]) -> Result<(), LuaError> {
         let prepared: Vec<_> = files
             .iter()
@@ -1108,24 +1109,53 @@ impl LuaEngine {
             None => Vec::new(),
         };
 
-        for (i, (name, src)) in precision_files.iter().enumerate() {
-            if let Some(chunks) = &precision_chunks {
-                let compiled = &chunks[i];
-                let load = lua.try_enter(|ctx| {
+        run_chunk(&mut lua, "luau", include_str!("luau.lua"))?;
+
+        // A file another file requires is a module: it runs on its first require, not in tab order.
+        let modules = crate::frontend::required_files(&precision_files);
+        fn compile<'gc>(
+            ctx: piccolo::Context<'gc>,
+            compiled: Option<&piccolo::compiler::CompiledPrototype<Rc<[u8]>>>,
+            name: &str,
+            src: &str,
+        ) -> Result<Closure<'gc>, piccolo::Error<'gc>> {
+            Ok(match compiled {
+                Some(compiled) => {
                     let prototype = piccolo::FunctionPrototype::from_compiled_map_strings(
                         &ctx,
                         ctx.intern(name.as_bytes()),
                         compiled,
                         |s| ctx.intern(s),
                     );
-                    let closure = Closure::new(&ctx, prototype, Some(ctx.globals()))?;
-                    Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
-                });
-                load.and_then(|ex| lua.execute::<()>(&ex))
-                    .map_err(|e| static_error_to_lua(e).in_file(name))?;
-            } else {
-                run_chunk(&mut lua, name, src)?;
+                    Closure::new(&ctx, prototype, Some(ctx.globals()))?
+                }
+                None => Closure::load(ctx, Some(name), src.as_bytes())?,
+            })
+        }
+        let chunk = |i: usize| precision_chunks.as_ref().map(|c| &c[i]);
+        for (i, (name, src)) in precision_files.iter().enumerate() {
+            if modules.contains(*name as &str) {
+                lua.try_enter(|ctx| {
+                    let closure = compile(ctx, chunk(i), name, src)?;
+                    let Value::Table(registry) = ctx.get_global("__ppu_modules") else {
+                        unreachable!("luau.lua defines the module registry")
+                    };
+                    registry.set(ctx, ctx.intern(name.as_bytes()), closure)?;
+                    Ok(())
+                })
+                .map_err(|e| static_error_to_lua(e).in_file(name))?;
             }
+        }
+        for (i, (name, src)) in precision_files.iter().enumerate() {
+            if modules.contains(*name as &str) {
+                continue;
+            }
+            let load = lua.try_enter(|ctx| {
+                let closure = compile(ctx, chunk(i), name, src)?;
+                Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
+            });
+            load.and_then(|ex| lua.execute::<()>(&ex))
+                .map_err(|e| static_error_to_lua(e).in_file(name))?;
         }
 
         let (frame_fn, frame_file, init_fn, init_file) = lua.enter(|ctx| {

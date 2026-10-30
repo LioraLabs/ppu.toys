@@ -113,9 +113,9 @@ fn read_manifest(dir: &Path) -> Result<Manifest> {
 pub fn pack(dir: &Path) -> Result<String> {
     let manifest = read_manifest(dir)?;
 
-    if !manifest.files.iter().any(|name| name == "main.lua") {
+    if !manifest.files.iter().any(|name| name == "main.lua" || name == "main.luau") {
         bail!(
-            "{} must list main.lua in \"files\" (Studio requires it)",
+            "{} must list main.lua or main.luau in \"files\" (Studio requires it)",
             dir.join(MANIFEST).display()
         );
     }

@@ -102,7 +102,6 @@ fn invalid_values_and_declarations_fail_without_clamping() {
         "local x=makeBounded(0,0,1.5)",
         "local x=makeBounded(0,0)",
         "local x=makeBounded(0,0,10)+1",
-        "local t={hp=makeBounded(0,0,10)}",
         "local f=makeBounded",
         "local x=0;x=makeBounded(0,0,10)",
         "if true then x=makeBounded(0,0,10) end",
@@ -110,6 +109,8 @@ fn invalid_values_and_declarations_fail_without_clamping() {
     ] {
         assert!(LuaEngine::new().set_source(source).is_err(), "{source}");
     }
+    // Record fields keep their contract (see luau_surface.rs).
+    assert!(LuaEngine::new().set_source("local t={hp=makeBounded(0,0,10)}").is_ok());
 }
 
 #[test]

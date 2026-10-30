@@ -156,8 +156,8 @@ fn load_body(path: &Path) -> Result<FileBody> {
         body.version
     );
     ensure!(
-        body.files.iter().any(|f| f.name == "main.lua"),
-        "toy must include main.lua"
+        body.files.iter().any(|f| f.name == "main.lua" || f.name == "main.luau"),
+        "toy must include main.lua or main.luau"
     );
     let mut names = HashSet::new();
     for file in &body.files {
@@ -198,7 +198,29 @@ fn engine(body: &FileBody) -> Result<LuaEngine> {
     Ok(engine)
 }
 
-fn draw(engine: &mut LuaEngine, frame: u32) -> Result<(Vec<u8>, ObjOverflow)> {
+/// Buttons held on frames `[from, to)`: `r@450-460` or `a+l@600-610`, comma-separated.
+pub fn parse_holds(value: &str) -> Result<Vec<(u16, u32, u32)>> {
+    value
+        .split(',')
+        .map(|hold| {
+            let (buttons, frames) = hold.split_once('@').context("hold needs buttons@from-to")?;
+            let (from, to) = frames.split_once('-').context("hold needs buttons@from-to")?;
+            let mut mask = 0;
+            for button in buttons.split('+') {
+                let bit = ppu_core::PAD_NAMES
+                    .iter()
+                    .position(|n| *n == button)
+                    .with_context(|| format!("unknown button {button:?}"))?;
+                mask |= 1 << bit;
+            }
+            Ok((mask, from.parse()?, to.parse()?))
+        })
+        .collect()
+}
+
+fn draw(engine: &mut LuaEngine, frame: u32, holds: &[(u16, u32, u32)]) -> Result<(Vec<u8>, ObjOverflow)> {
+    let held = holds.iter().filter(|(_, from, to)| (*from..*to).contains(&frame));
+    engine.set_pad(held.fold(0, |mask, (buttons, _, _)| mask | buttons));
     let time = f64::from(frame) / 60.0;
     let lines = engine
         .frame(time, frame)
@@ -224,14 +246,14 @@ pub fn parse_times(value: &str) -> Result<Vec<u32>> {
 }
 
 /// Render sequentially from zero, including intermediate frames for stateful toys.
-pub fn render(path: &Path, frames: &[u32], out: &Path) -> Result<()> {
+pub fn render(path: &Path, frames: &[u32], out: &Path, holds: &[(u16, u32, u32)]) -> Result<()> {
     ensure!(!frames.is_empty(), "at least one sample time is required");
     let body = load_body(path)?;
     let mut engine = engine(&body)?;
     let wanted: std::collections::BTreeSet<_> = frames.iter().copied().collect();
     fs::create_dir_all(out)?;
     for f in 0..=*wanted.last().unwrap() {
-        let (pixels, overflow) = draw(&mut engine, f)?;
+        let (pixels, overflow) = draw(&mut engine, f, holds)?;
         if wanted.contains(&f) {
             let output = out.join(format!("frame-{f:08}.png"));
             write_png(&output, WIDTH as u32, HEIGHT as u32, &pixels)?;
@@ -251,6 +273,7 @@ pub fn check(
     seeks: &[u32],
     loop_seconds: Option<f64>,
     allow_overflow: bool,
+    holds: &[(u16, u32, u32)],
 ) -> Result<()> {
     let end = frame_number(duration)?;
     ensure!(end > 0, "duration must be at least one frame");
@@ -278,7 +301,7 @@ pub fn check(
     let (mut max_sprites, mut max_tiles, mut overflow_frames) = (0, 0, 0);
     // Include the endpoint so exact cuts and loop boundaries are exercised.
     for f in 0..=end {
-        let (pixels, overflow) = draw(&mut runner, f)?;
+        let (pixels, overflow) = draw(&mut runner, f, holds)?;
         max_sprites = max_sprites.max(overflow.max_sprites);
         max_tiles = max_tiles.max(overflow.max_tiles);
         if overflow.range_over || overflow.time_over {
@@ -291,12 +314,12 @@ pub fn check(
     }
     for (&f, expected) in references.iter().rev() {
         ensure!(
-            draw(&mut runner, f)?.0 == *expected,
+            draw(&mut runner, f, holds)?.0 == *expected,
             "backward seek differs at frame {f}"
         );
         let mut fresh = engine(&body)?;
         ensure!(
-            draw(&mut fresh, f)?.0 == *expected,
+            draw(&mut fresh, f, holds)?.0 == *expected,
             "direct seek differs at frame {f}"
         );
         if let Some(period) = period {
@@ -304,7 +327,7 @@ pub fn check(
                 .checked_add(period)
                 .context("loop sample exceeds frame range")?;
             ensure!(
-                draw(&mut runner, shifted)?.0 == *expected,
+                draw(&mut runner, shifted, holds)?.0 == *expected,
                 "loop differs at frame {f} + {period}"
             );
         }
