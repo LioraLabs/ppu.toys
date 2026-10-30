@@ -16,12 +16,14 @@ fn run(program: &str, frames: u32) -> LuaEngine {
 }
 
 #[test]
-fn sprites_order_by_layer_then_depth_then_draw_order_and_hide_the_rest() {
+fn sorted_sprites_order_by_layer_then_depth_then_draw_order_and_hide_the_rest() {
     let e = run(
         r#"local dot = sprites.art({{size = 16, columns = 1, cells = {1}}}, sheet)
 local big = sprites.art({{size = 8, columns = 1, cells = {3}}, {size = 32, columns = 2, cells = {4, 5, 6, 7}}}, sheet)
 function frame(t, f)
   sprites.draw(dot, 10, 10, {layer = 1, depth = 5})
+  -- Sorting applies to the whole frame, the draws before the call too.
+  sprites.sort()
   sprites.draw(dot, 20, 10, {layer = 1, depth = 2})
   sprites.draw(dot, 30, 10, {layer = 0, depth = 9})
   sprites.draw(dot, 40, 10, {layer = 1, depth = 2})
@@ -42,20 +44,45 @@ end"#,
 }
 
 #[test]
+fn unsorted_sprites_take_slots_in_draw_order_whatever_their_layer_and_depth() {
+    let e = run(
+        r#"local dot = sprites.art({{size = 16, columns = 1, cells = {1}}}, sheet)
+function frame(t, f)
+  if f == 1 then sprites.sort() end
+  sprites.draw(dot, 10, 10, {layer = 1, depth = 5})
+  sprites.draw(dot, 20, 10, {layer = 0, depth = 9})
+  sprites.draw(dot, 30, 10, {layer = 0, depth = -3})
+end"#,
+        3,
+    );
+    // Frame 2 did not sort (frame 1 did): first drawn, lowest slot.
+    let xs: Vec<i16> = e.memory().oam[..3].iter().map(|o| o.x).collect();
+    assert_eq!(xs, [2, 12, 22]);
+}
+
+#[test]
 fn raw_slots_stay_the_programs_and_overflow_drops_the_back() {
     let e = run(
         r#"local dot = sprites.art({{size = 16, columns = 1, cells = {1}}}, sheet)
 function frame(t, f)
   obj[0].x, obj[0].on = 77, true
+  if f == 1 then sprites.sort() end
   for i = 1, 140 do sprites.draw(dot, i, 50, {depth = -i}) end
 end"#,
-        1,
+        2,
     );
     let oam = &e.memory().oam;
     assert_eq!((oam[0].x, oam[0].on), (77, true));
-    // 127 managed slots: the nearest (most negative depth) first; draws 13 and below are dropped.
-    assert_eq!(oam[1].x, 132);
-    assert_eq!(oam[127].x, 6);
+    // Sorted: the first 128 draws, the nearest (most negative depth) first; 127 managed slots drop draw 1.
+    assert_eq!((oam[1].x, oam[127].x), (120, -6));
+    // Unsorted: draw order; draws 128 and later are dropped.
+    let e = run(r#"local dot = sprites.art({{size = 16, columns = 1, cells = {1}}}, sheet)
+function frame(t, f)
+  obj[0].x, obj[0].on = 77, true
+  for i = 1, 140 do sprites.draw(dot, i, 50, {depth = -i}) end
+end"#, 1);
+    let oam = &e.memory().oam;
+    assert_eq!((oam[1].x, oam[127].x), (-7, 119));
 }
 
 #[test]

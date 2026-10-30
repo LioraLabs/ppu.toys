@@ -108,7 +108,8 @@ Fields must fit the descriptor's 1..32-cell width and height. Invalid positions,
 fractional numbers, palettes, absent characters and VRAM extents raise errors.
 The descriptor names an existing VRAM area; these helpers do not allocate a
 font or map. The same Lua helpers run in preview and compile with the game.
-For sprites drawn in layer and depth order without OAM bookkeeping, see
+For sprites drawn without OAM bookkeeping, in draw order or sorted by layer
+and depth, see
 [the sprites library](sprites.md#draw-sprites-in-order--the-sprites-library).
 Bounded writes participate in automatic VBlank planning. Calls still cost CPU
 time; clear static labels once in `init()` or when the screen changes.

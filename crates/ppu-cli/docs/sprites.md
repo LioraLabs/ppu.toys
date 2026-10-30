@@ -95,6 +95,7 @@ local dot = sprites.art({{size = 16, columns = 1, cells = {5}}}, sheet)
 
 function frame(t, f)
   obj[0].x, obj[0].y, obj[0].tile, obj[0].on = 8, 8, sheet.tile, true
+  sprites.sort()
   sprites.draw(dot, 128, 100, {layer = 0})
   for i = 0, 3 do
     sprites.draw(ship, 40 + i * 50, 120, {layer = 1, depth = i * 100, size = 8 + i * 8})
@@ -106,14 +107,20 @@ end
   to whole pixels. `size` picks the first level at least that large (the
   largest otherwise; omitted, the largest). `prio` is the OBJ priority
   against the backgrounds, 0..3 (default 3).
-- After `frame()` the frame's sprites get OAM slots in order: lower `layer`
-  (0..7, default 0) first, then lower `depth` (whole numbers,
-  -32768..32767, default 0), then draw order. A lower slot draws on top.
+- After `frame()` the frame's sprites get OAM slots in draw order: the first
+  drawn takes the lowest free slot, and a lower slot draws on top.
+- `sprites.sort()`, called anywhere in a frame, orders that frame's sprites
+  instead: lower `layer` (0..7, default 0) first, then lower `depth` (whole
+  numbers, -32768..32767, default 0), then draw order. `layer` and `depth`
+  matter only in a frame that sorts. Sorting costs CPU time: draw in the
+  order you want shown, and sort when depth must decide it.
 - Slots the program indexes itself, like `obj[0]` above, stay its own. Every
   other slot belongs to the library, which hides the ones not drawn this
   frame. Index `obj` with constants, constant `for` bounds, or offsets of
   them, so the slots are known before the program runs.
-- Past the free slots, the last sprites in order are dropped. Set
+- A frame keeps the first 128 sprites it draws on screen; later draws are
+  dropped.
+  Past the free slots, the last sprites in order are dropped. Set
   `sprites.flicker = true` to rotate the slot order every frame, so a line
   with more than 32 sprites flickers instead of losing the same ones.
 - `sprites.hold()` keeps last frame's sprites as they were, for a frame that

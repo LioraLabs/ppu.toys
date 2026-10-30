@@ -1,13 +1,18 @@
 -- Managed sprites (see sprites.rs for the static plan). sprites.draw records a sprite; after each
--- frame() the engine calls __ppu_sprites_flush, which orders the frame's sprites by layer (lower on
--- top), then depth (nearer, lower depth, on top), then draw order, and assigns OAM slots in that
--- order: a lower slot draws on top. Slots the program indexes through obj[...] are its own; the
--- rest are the library's, and the ones not drawn this frame are hidden. Cells are 16x16 large
--- sprites: keep obj.size_sel at 0 (8x8 small, 16x16 large).
+-- frame() the engine calls __ppu_sprites_flush, which assigns OAM slots to the frame's sprites in
+-- draw order, or, in a frame that called sprites.sort(), ordered by layer (lower on top), then depth
+-- (nearer, lower depth, on top), then draw order: a lower slot draws on top. A frame keeps its first
+-- RECORDS sprites on screen. Slots the program indexes through obj[...] are its own; the rest are
+-- the library's, and the ones not drawn this frame are hidden. Cells are 16x16 large sprites: keep
+-- obj.size_sel at 0 (8x8 small, 16x16 large).
 sprites = {flicker = false}
 
 local ARTS = {}
 local records, rotation = {}, 0
+-- Every kept sprite shows a cell, so this many fill the 128 slots; later draws are dropped.
+local RECORDS = 128
+-- sprites.sort() orders this frame's sprites by layer and depth.
+local sorted = false
 -- sprites.hold keeps last frame's managed sprites; a frame either holds or draws.
 local held, drawn = false, false
 local CONFLICT = "sprites.draw and sprites.hold cannot both run in one frame"
@@ -45,6 +50,10 @@ function sprites.art(levels, sheet)
   return art
 end
 
+function sprites.sort()
+  sorted = true
+end
+
 function sprites.hold()
   if drawn then error(CONFLICT, 2) end
   held = true
@@ -73,11 +82,14 @@ function sprites.draw(art, x, y, options)
   x, y, depth = floor(x), floor(y), floor(depth)
   -- Whole art off screen: no record. Cells tile the box, so a kept record shows a cell.
   if x + level.x1 <= -16 or x + level.x0 >= 256 or y + level.y1 <= -16 or y + level.y0 >= 224 then return end
+  if #records == RECORDS then return end
   records[#records + 1] = {level = level, x = x, y = y, layer = layer, depth = depth, prio = prio,
     pal = art.pal}
 end
 
 function __ppu_sprites_flush()
+  local sort = sorted
+  sorted = false
   if held then
     held, drawn = false, false
     return
@@ -87,7 +99,7 @@ function __ppu_sprites_flush()
   local slots = #free
   if slots == 0 then records = {} return end
   -- Stable insertion sort: equal keys keep draw order.
-  for i = 2, #records do
+  for i = 2, sort and #records or 0 do
     local r, j = records[i], i - 1
     while j >= 1 and (records[j].layer > r.layer or (records[j].layer == r.layer and records[j].depth > r.depth)) do
       records[j + 1] = records[j]
