@@ -57,6 +57,15 @@ local function __ppu_sample(api, axis, value)
   return axis.lo + math.floor((value - axis.lo) / axis.step + 0.5) * axis.step
 end
 
+-- Results keep 1/1024 precision, as the cartridge stores fractional lookup tables.
+local function __ppu_q10(...)
+  local out = table.pack(...)
+  for i = 1, out.n do
+    if type(out[i]) == "number" then out[i] = math.floor(out[i] * 1024 + 0.5) / 1024 end
+  end
+  return table.unpack(out, 1, out.n)
+end
+
 function lookup(grid, evaluate, names)
   local axes = __ppu_axes("lookup", grid, names, 0)
   local count = #axes
@@ -64,7 +73,7 @@ function lookup(grid, evaluate, names)
     assert(count <= 5, "lookup supports at most five inputs")
     local args = {a, b, c, d, e}
     for i = 1, count do args[i] = __ppu_sample("lookup", axes[i], args[i]) end
-    return evaluate(table.unpack(args, 1, count))
+    return __ppu_q10(evaluate(table.unpack(args, 1, count)))
   end
 end
 
