@@ -221,6 +221,8 @@ pub struct LuaEngine {
     init_fn: Option<StashedFunction>,
     /// Defining chunk of `frame_fn`, for runtime error attribution.
     frame_file: Option<String>,
+    /// The program calls `sprites.draw`: each frame() ends with the library's flush.
+    sprites: bool,
     /// `ppuglobals.lua`'s `apply_pokes`, stashed from the tracked
     /// `__ppu_controls_env` (see [`Self::load_controls`]). `None` when the
     /// current program carries no controls document — `frame()`'s Phase A
@@ -538,6 +540,7 @@ impl LuaEngine {
             frame_fn: None,
             init_fn: None,
             frame_file: None,
+            sprites: false,
             controls_fn: None,
             controls_vram: Vec::new(),
             memory: Memory::new(),
@@ -947,6 +950,11 @@ impl LuaEngine {
             .copied()
             .filter(|(n, _)| *n != AUDIO_MIX_FILE && *n != CONTROLS_FILE)
             .collect();
+        let sprite_plan = crate::sprites::plan(&precision_files).map_err(|e| LuaError {
+            file: Some(e.file),
+            line: Some(e.line),
+            message: e.message,
+        })?;
         let precision_chunks =
             crate::precision::prepare_sources(&precision_files).map_err(|(file, e)| LuaError {
                 file: Some(file),
@@ -1093,6 +1101,16 @@ impl LuaEngine {
         run_chunk(&mut lua, "ramps", include_str!("ramps.lua"))?;
         run_chunk(&mut lua, "vram_helpers", include_str!("vram_helpers.lua"))?;
         run_chunk(&mut lua, "hud", include_str!("hud.lua"))?;
+        run_chunk(&mut lua, "sprites", include_str!("sprites.lua"))?;
+        if let Some(plan) = &sprite_plan {
+            lua.enter(|ctx| {
+                let free = Table::new(&ctx);
+                for (i, slot) in plan.free().into_iter().enumerate() {
+                    free.set(ctx, i as i64 + 1, slot as i64).unwrap();
+                }
+                ctx.set_global("__ppu_sprites_free", free).unwrap();
+            });
+        }
 
         // ppuglobals.lua runs FIRST among the sketch's files, wherever it sits
         // in the list, so `markers`/`scanlines`/`apply_pokes` exist before
@@ -1176,6 +1194,7 @@ impl LuaEngine {
         *self.mirror.borrow_mut() = Mirror::default();
         self.frame_fn = frame_fn;
         self.frame_file = frame_file;
+        self.sprites = sprite_plan.is_some();
         self.init_fn = init_fn;
         self.controls_fn = controls_fn;
         self.controls_vram = controls_vram;
@@ -1605,6 +1624,19 @@ impl LuaEngine {
                     let mut err = static_error_to_lua(e);
                     err.file = err.file.or_else(|| self.frame_file.clone());
                     return Err(err);
+                }
+            }
+            if self.sprites {
+                let ex = l.enter(|ctx| {
+                    let func = ctx.get_global("__ppu_sprites_flush");
+                    let Value::Function(func) = func else { unreachable!("sprites.lua defines the flush") };
+                    ctx.stash(Executor::start(ctx, func, ()))
+                });
+                if let Err(e) = l.execute::<()>(&ex) {
+                    if self.controls_fn.is_some() {
+                        call_controls_hook::<()>(&mut l, "__ppu_controls_restore");
+                    }
+                    return Err(static_error_to_lua(e));
                 }
             }
         }

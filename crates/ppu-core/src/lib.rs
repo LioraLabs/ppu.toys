@@ -36,6 +36,7 @@ mod quantize;
 pub use quantize::*;
 pub mod bounded;
 pub mod frontend;
+pub mod sprites;
 pub mod precision;
 
 mod modes;

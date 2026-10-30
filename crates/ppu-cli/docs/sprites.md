@@ -78,6 +78,47 @@ obj[0].flip_x = cell.flip_x
 obj[0].flip_y = cell.flip_y
 ```
 
+## Draw sprites in order · the sprites library
+
+`sprites.draw` places art and leaves the OAM bookkeeping to the library. Make
+art once, at file level, from a sprite sheet and its levels of detail: each
+level is a grid of 16x16 sheet cells, `columns` wide, centered on the drawn
+point.
+
+```lua
+local sheet = dma("ship", {char = 0x4000, pal = 0})
+local ship = sprites.art({
+  {size = 16, columns = 1, cells = {0}},
+  {size = 32, columns = 2, cells = {1, 2, 3, 4}},
+}, sheet)
+local dot = sprites.art({{size = 16, columns = 1, cells = {5}}}, sheet)
+
+function frame(t, f)
+  obj[0].x, obj[0].y, obj[0].tile, obj[0].on = 8, 8, sheet.tile, true
+  sprites.draw(dot, 128, 100, {layer = 0})
+  for i = 0, 3 do
+    sprites.draw(ship, 40 + i * 50, 120, {layer = 1, depth = i * 100, size = 8 + i * 8})
+  end
+end
+```
+
+- `sprites.draw(art, x, y, {layer, depth, size, prio})`: positions round down
+  to whole pixels. `size` picks the first level at least that large (the
+  largest otherwise; omitted, the largest). `prio` is the OBJ priority
+  against the backgrounds, 0..3 (default 3).
+- After `frame()` the frame's sprites get OAM slots in order: lower `layer`
+  (0..7, default 0) first, then lower `depth` (whole numbers,
+  -32768..32767, default 0), then draw order. A lower slot draws on top.
+- Slots the program indexes itself, like `obj[0]` above, stay its own. Every
+  other slot belongs to the library, which hides the ones not drawn this
+  frame. Index `obj` with constants, constant `for` bounds, or offsets of
+  them, so the slots are known before the program runs.
+- Past the free slots, the last sprites in order are dropped. Set
+  `sprites.flicker = true` to rotate the slot order every frame, so a line
+  with more than 32 sprites flickers instead of losing the same ones.
+- Cells are large sprites; keep `obj.size_sel` at 0 for 16x16. The library
+  does not flip cells.
+
 ## Priority rotation · OAMADD `$2102–$2103`
 
 Normally lower OAM indices are considered first. `obj.first` starts evaluation
