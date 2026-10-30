@@ -66,6 +66,11 @@ local function __ppu_q10(...)
   return table.unpack(out, 1, out.n)
 end
 
+-- While a lookup samples its function, helpers it calls keep f64 too: __ppu_mul, __ppu_div
+-- and fractional literals (frontend::fixed_point) read this.
+-- shortcut: an error inside a lookup leaves this set; it ends the program, so nothing reads it after.
+__ppu_sampling = false
+
 function lookup(grid, evaluate, names)
   local axes = __ppu_axes("lookup", grid, names, 0)
   local count = #axes
@@ -73,7 +78,11 @@ function lookup(grid, evaluate, names)
     assert(count <= 5, "lookup supports at most five inputs")
     local args = {a, b, c, d, e}
     for i = 1, count do args[i] = __ppu_sample("lookup", axes[i], args[i]) end
-    return __ppu_q10(evaluate(table.unpack(args, 1, count)))
+    local outer = __ppu_sampling
+    __ppu_sampling = true
+    local results = table.pack(evaluate(table.unpack(args, 1, count)))
+    __ppu_sampling = outer
+    return __ppu_q10(table.unpack(results, 1, results.n))
   end
 end
 
@@ -168,6 +177,7 @@ end
 
 -- Fixed-point arithmetic (frontend::fixed_point): Q10 operands, products and quotients
 -- truncated toward zero, integer products staying integers; the canonical precision law.
+-- Code a lookup is sampling keeps f64, like the lookup's own function.
 local function __ppu_raw(x)
   if math.type(x) == "integer" then return x * 1024 end
   return __ppu_round(x * 1024)
@@ -179,11 +189,12 @@ local function __ppu_trunc(x)
 end
 
 function __ppu_mul(a, b)
-  if math.type(a) == "integer" and math.type(b) == "integer" then return a * b end
+  if __ppu_sampling or math.type(a) == "integer" and math.type(b) == "integer" then return a * b end
   return __ppu_trunc(__ppu_raw(a) * __ppu_raw(b) / 1024) / 1024
 end
 
 function __ppu_div(a, b)
+  if __ppu_sampling then return a / b end
   local divisor = __ppu_raw(b)
   if divisor == 0 then error("division by zero", 2) end
   return __ppu_trunc(__ppu_raw(a) * 1024 / divisor) / 1024

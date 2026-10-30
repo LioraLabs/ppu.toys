@@ -448,6 +448,23 @@ end"#;
 }
 
 #[test]
+fn helpers_a_lookup_samples_keep_f64_and_runtime_calls_use_the_law() {
+    let source = r#"local s = {x = makeFixed(0, -8, 8)}
+local function scale(v) return v * 0.3 end
+local tenth = lookup({i = {0, 3}}, function(i) return scale(i) end)
+function frame(t, f)
+  s.x = scale(3)
+  obj[0].x = floor(s.x * 1024)
+  obj[1].x = floor(tenth(3) * 1024)
+end"#;
+    let mut e = LuaEngine::new();
+    e.set_sources(&[("main.luau", source)]).unwrap();
+    e.frame(0., 0).unwrap();
+    // At run time 0.3 is 307/1024: 3 * 307 = 921. Sampled, 0.9 in f64 rounds to 922.
+    assert_eq!([e.memory().oam[0].x, e.memory().oam[1].x], [921, 922]);
+}
+
+#[test]
 fn programs_without_record_contracts_keep_lua_numbers() {
     let source = "local s = {x = 0}\n-- makeFixed\nfunction frame(t, f) s.x = 190 * 0.164 obj[0].x = floor(s.x * 1024) % 256 end";
     let mut e = LuaEngine::new();

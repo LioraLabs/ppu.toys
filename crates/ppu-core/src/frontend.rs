@@ -332,7 +332,8 @@ pub fn fixed_contracts(source: &str) -> bool {
 /// precision uses. Fractional literals round to Q10 (nearest, ties away from zero), and `*`
 /// and `/` run on Q10 operands with the result truncated toward zero (`__ppu_mul`/`__ppu_div`
 /// in luau.lua). Sums, differences, comparisons, floors and `%` of Q10 values are already
-/// exact. Functions passed to `lookup` keep f64: they are sampled tables, not runtime code.
+/// exact. Functions passed to `lookup` keep f64: they are sampled tables, not runtime code;
+/// helpers they call follow `__ppu_sampling` at run time.
 /// Runs on `prepare`d text, so compound assignments are already plain operators.
 pub fn fixed_point(source: &str) -> Cow<'_, str> {
     let Ok(ast) = full_moon::parse_fallible(source, full_moon::LuaVersion::luau()).into_result()
@@ -393,7 +394,8 @@ pub fn fixed_point(source: &str) -> Cow<'_, str> {
                     if raw / 1024. != value {
                         let q = raw / 1024.;
                         let q = if q.fract() == 0. { format!("{q:.1}") } else { format!("{q:?}") };
-                        self.edits.push((range(n), order, q));
+                        // A helper a lookup is sampling sees the authored value.
+                        self.edits.push((range(n), order, format!("(__ppu_sampling and {text} or {q})")));
                     }
                 }
                 _ => {}
@@ -429,7 +431,7 @@ mod tests {
         let out = fixed_point(source);
         assert_eq!(
             out,
-            "local a = __ppu_div(__ppu_mul(x , 0.1640625) , 60)\nlocal b = 1.5 + __ppu_mul(2 , -y)\nlocal t = lookup(g, function(s) return s * 0.3 end, {\"s\"})\n"
+            "local a = __ppu_div(__ppu_mul(x , (__ppu_sampling and 0.164 or 0.1640625)) , 60)\nlocal b = 1.5 + __ppu_mul(2 , -y)\nlocal t = lookup(g, function(s) return s * 0.3 end, {\"s\"})\n"
         );
         assert!(parse_chunk(out.as_bytes(), BasicInterner::default()).is_ok());
     }
