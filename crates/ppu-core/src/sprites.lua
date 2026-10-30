@@ -70,6 +70,7 @@ end
 function __ppu_sprites_flush()
   local free = __ppu_sprites_free
   local slots = #free
+  if slots == 0 then records = {} return end
   -- Stable insertion sort: equal keys keep draw order.
   for i = 2, #records do
     local r, j = records[i], i - 1
