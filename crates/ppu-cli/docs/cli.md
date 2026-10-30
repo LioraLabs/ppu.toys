@@ -110,8 +110,10 @@ keep Q10 arithmetic; bounds do not travel with a number copied into another fiel
 
 Named records, nested lists and local aliases can hold numeric state. Initialize
 fractional fields with a fractional value such as `0.0`; a later change from an
-integer field to a fractional field currently refuses. Keep helper parameters
-numeric; record parameter inference, forward helpers and nonlinear runtime math
+integer field to a fractional field currently refuses. Mixed tuples use literal
+positions; dynamic list indexes need a shared element type, and nested numeric
+lists may have different lengths. Keep helper parameters numeric; record
+parameter inference, forward helpers and nonlinear runtime math
 are not supported by this precision surface yet. Pure annotated lookup bodies
 retain their authored math. Unsupported precision code produces a source
 diagnostic before replacing the running program.

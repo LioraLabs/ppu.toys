@@ -146,6 +146,33 @@ fn typed_luau_record_fields_and_multifile_globals_share_precision() {
 }
 
 #[test]
+fn precision_tuples_keep_position_types_and_allow_ragged_numeric_lists() {
+    let source = r#"
+local clock=makeFixed(0,0,10)
+local levels={{4,1,{0}},{24,2,{5,6,7,8}}}
+function frame(t,f)
+ local row=levels[f%2+1]
+ obj[0].x=row[1]
+ obj[1].x=row[2]
+ obj[2].x=#row[3]
+ obj[3].x=row[3][1]
+end
+"#;
+    let mut e = LuaEngine::new();
+    e.set_source(source).unwrap();
+    e.frame(0., 0).unwrap();
+    assert_eq!(
+        e.memory().oam[..4].iter().map(|o| o.x).collect::<Vec<_>>(),
+        [4, 1, 1, 0]
+    );
+    e.frame(0., 1).unwrap();
+    assert_eq!(
+        e.memory().oam[..4].iter().map(|o| o.x).collect::<Vec<_>>(),
+        [24, 2, 4, 5]
+    );
+}
+
+#[test]
 fn arithmetic_uses_q10_before_a_coarse_store() {
     let source = "---@snes fixed x -1000 1000\nlocal x = -.1\nfunction frame(t,f)\n obj[0].x = floor((x * .1) * 1024)\n obj[1].x = floor((x / 3) * 1024)\n obj[2].x = floor((x % .0625) * 1024)\n obj[3].x = floor((max(1, .1) / 60) * 1024)\nend\n";
     assert_eq!(frame(source), [-10, -34, 26, 17]);

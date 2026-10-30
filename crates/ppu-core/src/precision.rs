@@ -276,6 +276,7 @@ enum Kind {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum Key {
     Named(String),
+    Position(i64),
     Element,
 }
 struct Record {
@@ -573,14 +574,32 @@ impl Transform<'_> {
                         return Ok(Key::Named(text(n)));
                     }
                 }
+                let position = if e.tail.is_empty() {
+                    match e.head.as_ref() {
+                        ast::HeadExpression::Simple(ast::SimpleExpression::Integer(n)) => Some(*n),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
                 if self.expr(e)? != Kind::Int {
                     return Err(self.error(
                         "A precision list index must be an integer.",
                         "Use an integer index or a literal field name.",
                     ));
                 }
-                Ok(Key::Element)
+                Ok(position.map(Key::Position).unwrap_or(Key::Element))
             }
+        }
+    }
+    fn table_key(fields: &HashMap<Key, Kind>, key: Key) -> Key {
+        if matches!(key, Key::Position(_))
+            && !fields.contains_key(&key)
+            && fields.contains_key(&Key::Element)
+        {
+            Key::Element
+        } else {
+            key
         }
     }
     fn compatible(&self, a: Kind, b: Kind, seen: &mut Vec<(usize, usize)>) -> bool {
@@ -607,39 +626,31 @@ impl Transform<'_> {
             return Err(self.error("A precision constructor tail cannot expand multiple helper results.","Capture the results into named locals, then list each constructor entry explicitly."));
         }
         let mut fields: HashMap<Key, Kind> = HashMap::new();
+        let mut keys = vec![];
+        let mut position = 0;
         for field in &mut t.fields {
             let (key, value) = match field {
-                ast::ConstructorField::Array(e) => (Key::Element, e),
+                ast::ConstructorField::Array(e) => {
+                    position += 1;
+                    (Key::Position(position), e)
+                }
                 ast::ConstructorField::Record(k, e) => {
                     let key = match k {
                         ast::RecordKey::Named(n) => Key::Named(text(n)),
                         ast::RecordKey::Indexed(index) => {
-                            if index.tail.is_empty() {
-                                if let ast::HeadExpression::Simple(ast::SimpleExpression::String(
-                                    n,
-                                )) = index.head.as_ref()
-                                {
-                                    Key::Named(text(n))
-                                } else {
-                                    if self.expr(index)? != Kind::Int {
-                                        return Err(self.error("A precision record key must be a literal name or integer.","Use named fields and integer list indexes."));
-                                    }
-                                    Key::Element
-                                }
-                            } else {
-                                if self.expr(index)? != Kind::Int {
-                                    return Err(self.error(
-                                        "A precision record key must be a literal name or integer.",
-                                        "Use named fields and integer list indexes.",
-                                    ));
-                                }
-                                Key::Element
-                            }
+                            let mut field = ast::FieldSuffix::Indexed(index.clone());
+                            let key = self.key(&mut field)?;
+                            let ast::FieldSuffix::Indexed(value) = field else {
+                                unreachable!()
+                            };
+                            *index = value;
+                            key
                         }
                     };
                     (key, e)
                 }
             };
+            keys.push(key.clone());
             let kind = self.expr(value)?;
             if let Some(&previous) = fields.get(&key) {
                 let combined = if previous.numeric() && kind.numeric() {
@@ -647,27 +658,49 @@ impl Transform<'_> {
                 } else if self.compatible(previous, kind, &mut vec![]) {
                     previous
                 } else {
-                    return Err(self.error("A precision list needs consistent element types.","Keep numeric lists and record lists separate; initialize every record with the same field types."));
+                    return Err(self.error(
+                        "A precision field has incompatible initializer types.",
+                        "Keep one type per field; use literal positions for mixed tuples.",
+                    ));
                 };
                 fields.insert(key, combined);
             } else {
                 fields.insert(key, kind);
             }
         }
-        if fields.get(&Key::Element) == Some(&Kind::Fixed) {
-            for field in &mut t.fields {
-                match field {
-                    ast::ConstructorField::Array(e) => *e = self.fixed_value(e.clone()),
-                    ast::ConstructorField::Record(ast::RecordKey::Indexed(index), e)
-                        if !matches!(
-                            index.head.as_ref(),
-                            ast::HeadExpression::Simple(ast::SimpleExpression::String(_))
-                        ) =>
-                    {
-                        *e = self.fixed_value(e.clone())
-                    }
-                    _ => {}
+        let mut common = None;
+        let mut uniform = true;
+        for key in &keys {
+            if matches!(key, Key::Named(_)) {
+                continue;
+            }
+            let kind = fields[key];
+            common = match common {
+                None => Some(kind),
+                Some(previous) if previous.numeric() && kind.numeric() => Some(previous.pair(kind)),
+                Some(previous) if self.compatible(previous, kind, &mut vec![]) => Some(previous),
+                _ => {
+                    uniform = false;
+                    break;
                 }
+            };
+        }
+        if uniform {
+            if let Some(kind) = common {
+                fields.retain(|key, _| matches!(key, Key::Named(_)));
+                fields.insert(Key::Element, kind);
+            }
+        } else if fields.contains_key(&Key::Element) {
+            return Err(self.error(
+                "Dynamic precision list keys need one element type.",
+                "Use literal positions for mixed tuples and homogeneous types for dynamic indexes.",
+            ));
+        }
+        for (field, key) in t.fields.iter_mut().zip(keys) {
+            if fields.get(&Self::table_key(&fields, key)) == Some(&Kind::Fixed) {
+                let (ast::ConstructorField::Array(value) | ast::ConstructorField::Record(_, value)) =
+                    field;
+                *value = self.fixed_value(value.clone());
             }
         }
         let id = self.records.len();
@@ -702,6 +735,7 @@ impl Transform<'_> {
                 ));
             };
             let key = self.key(field)?;
+            let key = Self::table_key(&self.records[id].fields, key);
             kind = *self.records[id].fields.get(&key).ok_or_else(|| {
                 self.error(
                     "This precision field has no known type.",
@@ -1007,6 +1041,7 @@ impl Transform<'_> {
                             ));
                         };
                         let key = self.key(field)?;
+                        let key = Self::table_key(&self.records[id].fields, key);
                         stores.push(
                             self.records[id]
                                 .fields
@@ -1114,7 +1149,7 @@ impl Transform<'_> {
             text(n).as_str(),
             "obj" | "bg" | "m7" | "vram" | "cgram" | "raster" | "pad" | "voice" | "dsp"
         ) {
-            return Err(self.error("This field or table alias is outside the precision preview surface.","Keep numbers in scalar bindings or numeric arrays; access hardware through its direct global name."));
+            return Err(self.error(&format!("Precision analysis cannot resolve fields on {:?}.",text(n)),"Use direct hardware access, or initialize a record before helpers that read it. Forward record/helper inference is not yet supported."));
         }
         for suffix in &mut head.suffixes {
             match suffix {
