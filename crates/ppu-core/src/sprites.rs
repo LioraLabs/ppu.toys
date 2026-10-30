@@ -337,6 +337,9 @@ fn module_fields(ast: &ast::Ast) -> Option<HashMap<String, i64>> {
 /// that never calls `sprites.draw`. Files that do not parse as Luau are skipped; they cannot
 /// reach the library through this syntax.
 pub fn plan(files: &[(&str, &str)]) -> Result<Option<Plan>, Error> {
+    if !files.iter().any(|(_, s)| s.contains("sprites.")) {
+        return Ok(None);
+    }
     let parsed: Vec<(&str, ast::Ast)> = files
         .iter()
         .filter(|(_, s)| s.contains("sprites") || s.contains("obj"))
