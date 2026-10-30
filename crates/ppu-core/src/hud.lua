@@ -31,10 +31,11 @@ function hud_text(map, x, y, message, palette)
   local color = palette or map.palette
   __ppu_hud_bounds(map, x, y, #message, 1)
   assert(color == floor(color) and color >= 0 and color <= 7, "HUD palette must be 0..7")
-  -- Validation rejects overflow first; bounded columns retain proofs across different callers.
-  for column = x, min(x + #message, map.width) - 1 do
-    local i = column - x + 1
-    vram[map.map + y * 32 + column] = __ppu_hud_glyph(string.sub(message, i, i)) + color * 1024
+  -- Validation rejects overflow first. Counting characters from 1 keeps string.sub on its
+  -- positive-index path; the row address and palette bits are computed once.
+  local base, tint = map.map + y * 32 + x - 1, color * 1024
+  for i = 1, min(#message, map.width - x) do
+    vram[base + i] = __ppu_hud_glyph(string.sub(message, i, i)) + tint
   end
 end
 
@@ -44,19 +45,21 @@ function hud_number(map, x, y, value, width, palette)
   assert(width >= 1 and width <= 10, "HUD number width must be 1..10 cells")
   assert(value == floor(value) and value >= 0 and value <= 2147483647, "HUD number must be an integer in 0..2147483647")
   assert(color == floor(color) and color >= 0 and color <= 7, "HUD palette must be 0..7")
-  local padding = __ppu_hud_glyph(map.padding or " ")
+  local tint = color * 1024
+  local padding = __ppu_hud_glyph(map.padding or " ") + tint
+  local base = map.map + y * 32
   local remaining = value
   for column = min(x + width, map.width) - 1, x, -1 do
     local tile = padding
     if remaining ~= 0 or column == x + width - 1 then
-      tile = 16 + remaining % 10
+      tile = 16 + remaining % 10 + tint
       remaining = remaining // 10
     end
-    vram[map.map + y * 32 + column] = tile + color * 1024
+    vram[base + column] = tile
   end
   if remaining ~= 0 and map.wrap ~= true then
     for column = x, min(x + width, map.width) - 1 do
-      vram[map.map + y * 32 + column] = 3 + color * 1024
+      vram[base + column] = 3 + tint
     end
   end
 end
@@ -65,9 +68,11 @@ function hud_clear(map, x, y, width, height)
   local left, top = x or 0, y or 0
   local columns, rows = width or map.width, height or map.height
   __ppu_hud_bounds(map, left, top, columns, rows)
+  local last = min(left + columns, map.width) - 1
   for row = top, min(top + rows, map.height) - 1 do
-    for column = left, min(left + columns, map.width) - 1 do
-      vram[map.map + row * 32 + column] = 0
+    local base = map.map + row * 32
+    for column = left, last do
+      vram[base + column] = 0
     end
   end
 end
