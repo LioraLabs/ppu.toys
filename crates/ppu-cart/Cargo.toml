@@ -9,3 +9,7 @@ description = "A SNES console that runs cartridge ROMs, written from hardware do
 
 [dependencies]
 ppu-core = { path = "../ppu-core", default-features = false }
+
+[[example]]
+name = "ppu_cart_libretro"
+crate-type = ["cdylib"]
