@@ -969,6 +969,16 @@ impl LuaEngine {
             line: Some(e.line),
             message: e.message,
         })?;
+        // Each sprites.art and sprites.group call passes its number in the plan.
+        let numbered: Vec<(&str, String)> = match &sprite_plan {
+            Some(plan) => precision_files.iter().map(|(n, s)| (*n, crate::sprites::number_sites(plan, n, s))).collect(),
+            None => vec![],
+        };
+        let precision_files: Vec<(&str, &str)> = if sprite_plan.is_some() {
+            numbered.iter().map(|(n, s)| (*n, s.as_str())).collect()
+        } else {
+            precision_files
+        };
         // The Luau surface runs makeFixed's law as rewritten source, bindings included; a Lua
         // program with canonical annotations or fixed bindings keeps canonical precision.
         let surface = precision_files
@@ -1212,6 +1222,31 @@ impl LuaEngine {
                 .map_err(|e| static_error_to_lua(e).in_file(name))?;
         }
 
+        // The groups' slots, now that every art has run: the plan's layout by each art's cells.
+        if let Some(plan) = &sprite_plan {
+            let cells: Vec<u64> = lua.enter(|ctx| {
+                let Value::Table(t) = ctx.get_global("__ppu_sprites_cells") else { unreachable!("sprites.lua defines the cells") };
+                (1..=plan.arts.len())
+                    .map(|k| match t.get(ctx, k as i64) {
+                        Value::Integer(n) => n.max(0) as u64,
+                        Value::Number(n) => n.max(0.0) as u64,
+                        _ => 0,
+                    })
+                    .collect()
+            });
+            let layout = plan.layout(&cells).map_err(|e| LuaError { file: Some(e.file), line: Some(e.line), message: e.message })?;
+            lua.enter(|ctx| {
+                let t = Table::new(&ctx);
+                for (i, (first, size)) in layout.iter().enumerate() {
+                    let g = Table::new(&ctx);
+                    g.set(ctx, "first", *first as i64).unwrap();
+                    g.set(ctx, "size", *size as i64).unwrap();
+                    g.set(ctx, "sort", plan.groups[i].sort).unwrap();
+                    t.set(ctx, i as i64 + 1, g).unwrap();
+                }
+                ctx.set_global("__ppu_sprites_layout", t).unwrap();
+            });
+        }
         let (frame_fn, frame_file, init_fn, init_file) = lua.enter(|ctx| {
             let (frame_fn, frame_file) = match ctx.get_global("frame") {
                 Value::Function(f) => (Some(ctx.stash(f)), function_chunk_name(&f)),

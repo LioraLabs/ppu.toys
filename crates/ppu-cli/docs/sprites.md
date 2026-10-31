@@ -78,12 +78,13 @@ obj[0].flip_x = cell.flip_x
 obj[0].flip_y = cell.flip_y
 ```
 
-## Draw sprites in order · the sprites library
+## Draw sprites in groups · the sprites library
 
 `sprites.draw` places art and leaves the OAM bookkeeping to the library. Make
 art once, at file level, from a sprite sheet and its levels of detail: each
 level is a grid of 16x16 sheet cells, `columns` wide, centered on the drawn
-point.
+point. Groups set what draws on top: make them at file level (or in
+`init()`), the first on top, and draw into them.
 
 ```lua
 local sheet = dma("ship", {char = 0x4000, pal = 0})
@@ -92,91 +93,96 @@ local ship = sprites.art({
   {size = 32, columns = 2, cells = {1, 2, 3, 4}},
 }, sheet)
 local dot = sprites.art({{size = 16, columns = 1, cells = {5}}}, sheet)
+-- Groups draw in the order they are made: the first on top.
+local top = sprites.group()
+local world = sprites.group({sort = true})
 
 function frame(t, f)
   obj[0].x, obj[0].y, obj[0].tile, obj[0].on = 8, 8, sheet.tile, true
-  sprites.sort()
-  sprites.draw(dot, 128, 100, {layer = 0})
+  top:draw(dot, 128, 100)
   for i = 0, 3 do
-    sprites.draw(ship, 40 + i * 50, 120, {layer = 1, depth = i * 100, size = 8 + i * 8})
+    world:draw(ship, 40 + i * 50, 120, {depth = 100 - i * 30, size = 8 + i * 8})
   end
+  sprites.draw(dot, 20, 200)
 end
 ```
 
-- `sprites.draw(art, x, y, {layer, depth, size, prio})`: positions round down
+- `group:draw(art, x, y, {size, prio, key, depth})`: positions round down
   to whole pixels. `size` picks the first level at least that large (the
   largest otherwise; omitted, the largest). `prio` is the OBJ priority
   against the backgrounds, 0..3 (default 3).
-- After `frame()` the frame's sprites get OAM slots in draw order: the first
-  drawn takes the lowest free slot, and a lower slot draws on top.
-- `sprites.sort()`, called anywhere in a frame, orders that frame's sprites
-  instead: lower `layer` (0..7, default 0) first, then lower `depth` (whole
-  numbers, -32768..32767, default 0), then draw order. `layer` and `depth`
-  matter only in a frame that sorts. Sorting costs CPU time: draw in the
-  order you want shown, and sort when depth must decide it.
-- Slots the program indexes itself, like `obj[0]` above, stay its own. Every
-  other slot belongs to the library, which hides the ones not drawn this
-  frame. Index `obj` with constants, constant `for` bounds, or offsets of
-  them, so the slots are known before the program runs.
-- A frame keeps the first 128 sprites it draws on screen; later draws are
-  dropped.
-  Past the free slots, the last sprites in order are dropped. Set
-  `sprites.flicker = true` to rotate the slot order every frame, so a line
-  with more than 32 sprites flickers instead of losing the same ones.
-- `sprites.hold()` keeps last frame's sprites as they were, for a frame that
-  draws none (a pause screen). A frame that holds may not also draw.
+- Groups take the free slots in the order they are made (`sprites.group`
+  calls in source order), so a group made earlier draws on top of one made
+  later. Plain `sprites.draw` and `sprites.keep` use the default group, which
+  draws behind every other group and takes the slots they leave.
+- A group has as many slots as its draws can fill in a frame: each draw's
+  loops (constant bounds, or a file-level table) times its function's calls,
+  by the most cells its art (made at file level, or a file-level table of
+  it) can show. When that can't be told, the draw's line is an error: give
+  the group `sprites.group({slots = n})`. Groups that need more than the free
+  slots are an error at the first that does not fit.
+- In a group, draws take its slots in call order; a frame that draws more
+  than fit drops that group's last ones. `sprites.group({sort = true})`
+  orders its entries by `depth` instead (whole numbers, -32768..32767,
+  nearer and lower on top, then call order); `depth` matters only there.
+- Slots the program indexes itself, like `obj[0]` above, stay its own and
+  are never a group's. Index `obj` with constants, constant `for` bounds,
+  or offsets of them, so the slots are known before the program runs.
+- `sprites.flicker = true` rotates each unsorted group's unkeyed sprites
+  every frame, so a line with more than 32 sprites flickers instead of
+  losing the same ones.
+- `sprites.hold()` keeps every group's sprites as they were, for a frame
+  that draws none (a pause screen). A frame that holds may not also draw.
 - Cells are large sprites; keep `obj.size_sel` at 0 for 16x16. The library
   does not flip cells.
 
 ## Keep sprites that did not move · keys
 
-A keyed draw gives its sprites slots of their own, so a frame can leave them
-as they are instead of drawing them again. Give each sprite that persists a
-key, an integer 0..127, and keep the ones that did not move:
+A keyed draw gives its sprites slots of their own in its group, so a frame
+can leave them as they are instead of drawing them again. Give each sprite
+that persists a key, an integer 0..127 (keys are the group's own), and keep
+the ones that did not move:
 
 ```lua
 local sheet = dma("ship", {char = 0x4000, pal = 0})
 local star = sprites.art({{size = 16, columns = 1, cells = {5}}}, sheet)
-local stars = {}
-for i = 1, 8 do stars[i] = {x = i * 28, y = 0, moved = true} end
+local ship = sprites.group()
+local stars = sprites.group()
+local field = {}
+for i = 1, 8 do field[i] = {x = i * 28, y = -1} end
 
 function frame(t, f)
-  for i, s in ipairs(stars) do
-    local y = (i * 37 + f // 4) % 200
-    s.moved, s.y = y ~= s.y or f == 0, y
-  end
-  for i, s in ipairs(stars) do
-    if s.moved then
-      sprites.draw(star, s.x, s.y, {key = i})
+  ship:draw(star, 128, 100 + f % 20)
+  for i = 1, 8 do
+    local s, y = field[i], (i * 37 + f // 4) % 200
+    if y ~= s.y then
+      s.y = y
+      stars:draw(star, s.x, y, {key = i})
     else
-      sprites.keep(i)
+      stars:keep(i)
     end
   end
-  sprites.draw(star, 128, 100 + f % 20)
 end
 ```
 
-- `sprites.draw(art, x, y, {key = k, size, prio})`: the first draw of key `k`
-  gives it a block of slots, as many as the art's largest level has cells.
-  Cell *n* of every later draw of `k` goes to slot *n* of its block; a smaller
-  level, or a cell off screen, hides its slot. A later draw of `k` with art
-  larger than its block is an error.
-- `sprites.keep(k)` leaves key `k`'s sprites exactly as they were.
-- A key a frame neither draws nor keeps is hidden; `sprites.keep(k)` then
-  keeps it hidden until it is drawn again.
-- Blocks are taken from the last free slots down, in the order keys are
-  first drawn, and stay the key's for the rest of the run. Keyed sprites
-  draw beneath every unkeyed sprite, and a key first drawn later draws above
-  one first drawn earlier.
-- A key's first draw shows at the end of its frame. From the next frame on,
-  unkeyed draws take only the slots no block owns: keyed sprites are never
-  dropped, sorted, or rotated by `sprites.flicker`. A keyed draw takes no
-  `layer` or `depth`.
-- `sprites.hold()` keeps every key, as it keeps every unkeyed sprite.
+- The first draw of key `k` in a group gives it a block of the group's
+  slots, as many as the art's largest level has cells, after the blocks
+  before it: blocks come first in their group, in the order keys are first
+  drawn, then the group's unkeyed sprites. Cell *n* of every later draw of
+  `k` goes to slot *n* of its block; a smaller level, or a cell off screen,
+  hides its slot. A later draw of `k` with art larger than its block is an
+  error.
+- `group:keep(k)` leaves key `k`'s sprites exactly as they were. In a sorted
+  group a kept entry takes its place by its depth again.
+- A key a frame neither draws nor keeps is hidden; keeping it then keeps it
+  hidden until it is drawn again.
+- A key's first draw shows at the end of its frame; from the next frame on
+  the group's unkeyed draws take only the slots after its blocks. Keyed
+  sprites are never rotated by `sprites.flicker` or dropped.
 - Each of these is an error: drawing or keeping a key twice in one frame,
-  drawing and keeping it in one frame, keeping a key never drawn, a key
-  outside 0..127, and a first draw that needs more slots than the blocks
-  have left.
+  drawing and keeping it in one frame, keeping a key never drawn in that
+  group, a key outside 0..127, and a first draw that needs more slots than
+  its group has left.
 
 ## Priority rotation · OAMADD `$2102–$2103`
 
