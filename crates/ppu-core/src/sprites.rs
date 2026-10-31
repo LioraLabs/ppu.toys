@@ -11,6 +11,8 @@ use full_moon::{
 };
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+/// A keyed draw with a layer or depth: its block's slots fix where it draws.
+pub const KEYED_ORDER: &str = "a keyed sprites.draw has its own slots, so layer and depth do not apply to it";
 pub const UNPROVABLE_SLOT: &str = "can't tell which sprite slots this obj write uses; give the index constant bounds or draw it with sprites.draw";
 
 /// Where the analysis rejects a program.
@@ -294,15 +296,29 @@ impl Visitor for Walk<'_> {
         match name.as_str() {
             "sprites.draw" => {
                 self.draws = true;
-                let options_ok = match args.get(3) {
-                    None => true,
-                    Some(Expression::TableConstructor(t)) => t.fields().iter().all(|f| {
-                        matches!(f, ast::Field::NameKey { key, .. } if matches!(text(key).as_str(), "layer" | "depth" | "size" | "prio"))
-                    }),
-                    _ => false,
+                let names: Option<Vec<String>> = match args.get(3) {
+                    None => Some(vec![]),
+                    Some(Expression::TableConstructor(t)) => t
+                        .fields()
+                        .iter()
+                        .map(|f| match f {
+                            ast::Field::NameKey { key, .. } => Some(text(key)),
+                            _ => None,
+                        })
+                        .collect(),
+                    _ => None,
                 };
+                let options_ok = names.as_ref().is_some_and(|n| n.iter().all(|k| matches!(k.as_str(), "layer" | "depth" | "size" | "prio" | "key")));
                 if !(3..=4).contains(&args.len()) || !options_ok {
-                    self.fail(call, "sprites.draw takes (art, x, y) and an optional literal options table {layer = , depth = , size = , prio = }");
+                    self.fail(call, "sprites.draw takes (art, x, y) and an optional literal options table {layer = , depth = , size = , prio = , key = }");
+                } else if names.is_some_and(|n| n.iter().any(|k| k == "key") && n.iter().any(|k| k == "layer" || k == "depth")) {
+                    self.fail(call, KEYED_ORDER);
+                }
+            }
+            "sprites.keep" => {
+                self.draws = true;
+                if args.len() != 1 {
+                    self.fail(call, "sprites.keep takes one key");
                 }
             }
             "sprites.hold" => {

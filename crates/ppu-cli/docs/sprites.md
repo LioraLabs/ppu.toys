@@ -128,6 +128,56 @@ end
 - Cells are large sprites; keep `obj.size_sel` at 0 for 16x16. The library
   does not flip cells.
 
+## Keep sprites that did not move · keys
+
+A keyed draw gives its sprites slots of their own, so a frame can leave them
+as they are instead of drawing them again. Give each sprite that persists a
+key, an integer 0..127, and keep the ones that did not move:
+
+```lua
+local sheet = dma("ship", {char = 0x4000, pal = 0})
+local star = sprites.art({{size = 16, columns = 1, cells = {5}}}, sheet)
+local stars = {}
+for i = 1, 8 do stars[i] = {x = i * 28, y = 0, moved = true} end
+
+function frame(t, f)
+  for i, s in ipairs(stars) do
+    local y = (i * 37 + f // 4) % 200
+    s.moved, s.y = y ~= s.y or f == 0, y
+  end
+  for i, s in ipairs(stars) do
+    if s.moved then
+      sprites.draw(star, s.x, s.y, {key = i})
+    else
+      sprites.keep(i)
+    end
+  end
+  sprites.draw(star, 128, 100 + f % 20)
+end
+```
+
+- `sprites.draw(art, x, y, {key = k, size, prio})`: the first draw of key `k`
+  gives it a block of slots, as many as the art's largest level has cells.
+  Cell *n* of every later draw of `k` goes to slot *n* of its block; a smaller
+  level, or a cell off screen, hides its slot. A later draw of `k` with art
+  larger than its block is an error.
+- `sprites.keep(k)` leaves key `k`'s sprites exactly as they were.
+- A key a frame neither draws nor keeps is hidden; `sprites.keep(k)` then
+  keeps it hidden until it is drawn again.
+- Blocks are taken from the last free slots down, in the order keys are
+  first drawn, and stay the key's for the rest of the run. Keyed sprites
+  draw beneath every unkeyed sprite, and a key first drawn later draws above
+  one first drawn earlier.
+- A key's first draw shows at the end of its frame. From the next frame on,
+  unkeyed draws take only the slots no block owns: keyed sprites are never
+  dropped, sorted, or rotated by `sprites.flicker`. A keyed draw takes no
+  `layer` or `depth`.
+- `sprites.hold()` keeps every key, as it keeps every unkeyed sprite.
+- Each of these is an error: drawing or keeping a key twice in one frame,
+  drawing and keeping it in one frame, keeping a key never drawn, a key
+  outside 0..127, and a first draw that needs more slots than the blocks
+  have left.
+
 ## Priority rotation · OAMADD `$2102–$2103`
 
 Normally lower OAM indices are considered first. `obj.first` starts evaluation
