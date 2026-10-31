@@ -322,6 +322,10 @@ fn text(s: &Text) -> String {
 fn name(s: &str) -> Text {
     Rc::from(s.as_bytes())
 }
+/// A literal `nil`: clearing a binding carries no representation (it neither types nor converts).
+fn nil(e: &Expr) -> bool {
+    e.tail.is_empty() && matches!(e.head.as_ref(), ast::HeadExpression::Simple(ast::SimpleExpression::Nil))
+}
 fn simple(s: ast::SimpleExpression<Text>) -> Expr {
     Expr {
         head: Box::new(ast::HeadExpression::Simple(s)),
@@ -1208,8 +1212,9 @@ impl Transform<'_> {
             if matrix && constant_expression(e) {
                 continue;
             } // Mode7 constants have one authored-f64 -> Q8 rounding.
+            let cleared = nil(e);
             let k = self.expr(e)?;
-            if let Some(b) = stores.get(i).and_then(Option::as_ref) {
+            if let Some(b) = stores.get(i).and_then(Option::as_ref).filter(|b| !cleared || b.annotation.is_some()) {
                 if !k.numeric() && b.kind.numeric() {
                     return Err(self.error(
                         "A numeric binding needs a numeric store.",

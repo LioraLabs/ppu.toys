@@ -502,3 +502,17 @@ end"#;
     }
     panic!("a store above 8 should break x's contract");
 }
+
+#[test]
+fn precision_nil_initialized_bindings_take_the_representation_of_later_stores() {
+    // Declared nil at file scope, set and advanced later: nil types nothing.
+    let source = "local x=makeFixed(0,-64,64,16)\ncount=nil\nspeed=nil\nlocal last=nil\nfunction frame(t,f)\n if count==nil or count>3 then count=1;speed=f%2+.5 else count=count+1 end\n x=math.min(x+speed*count,60)\n last=count\n obj[0].x=floor(x*16)%256\n obj[1].x=last\n if f==4 then count=nil end\nend";
+    let mut e = LuaEngine::new();
+    e.set_source(source).unwrap();
+    for f in 0..6 {
+        e.frame(0., f).unwrap();
+    }
+    // .5 * (1+2+3+4) + .5 (count wraps at f=4, then is cleared) + 1.5 (f=5 restarts at speed 1.5) = 7
+    assert_eq!(e.memory().oam[0].x, 112);
+    assert_eq!(e.memory().oam[1].x, 1);
+}
