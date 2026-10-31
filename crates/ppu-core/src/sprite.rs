@@ -100,8 +100,8 @@ pub fn bin_line(mem: &Memory, y: usize) -> LineBin {
             continue;
         }
         let (_w, h) = sprite_dims(size_sel, o.large);
-        let top = o.y as i64;
-        if yi < top || yi >= top + h as i64 {
+        // Rows count mod 256: a sprite low on the screen wraps to the top, as on hardware.
+        if (yi - o.y as i64).rem_euclid(256) >= h as i64 {
             continue;
         }
         sprite_count += 1;
@@ -203,7 +203,7 @@ pub fn render_scanline_for_into(
     for &i in indices {
         let o = mem.oam[i];
         let (w, h) = sprite_dims(size_sel, o.large);
-        let row = (y as i64 - o.y as i64) as u32; // 0..h (binning guarantees in-range)
+        let row = (y as i64 - o.y as i64).rem_euclid(256) as u32; // 0..h (binning guarantees in-range)
         let pal_base = 128 + (o.pal as usize & 7) * 16;
         for sx in 0..w {
             let screen_x = o.x as i64 + sx as i64;
@@ -303,6 +303,17 @@ mod tests {
         assert_eq!(sprite_dims(7, false), (16, 32));
         assert_eq!(sprite_dims(7, true), (32, 32));
         assert_eq!(sprite_dims(8, false), (8, 8)); // size_sel masked to 3 bits
+    }
+
+    #[test]
+    fn sprites_wrap_from_the_bottom_to_the_top() {
+        let mut m = mem();
+        m.obsel.size_sel = 0;
+        m.oam[0] = Obj { y: 250, large: true, on: true, ..Obj::default() }; // 16x16: rows 250-255, 0-9
+        assert_eq!(sprites_on_line(&m, 255), vec![0]);
+        assert_eq!(sprites_on_line(&m, 0), vec![0]);
+        assert_eq!(sprites_on_line(&m, 9), vec![0]);
+        assert!(sprites_on_line(&m, 10).is_empty());
     }
 
     #[test]
