@@ -298,3 +298,16 @@ fn sample_source_round_trips_through_unpack_and_pack() {
         serde_json::from_str(&ppu_cli::pack(dir.path()).unwrap()).unwrap();
     assert_eq!(repacked, value);
 }
+
+#[test]
+fn target_hz_round_trips_through_unpack_and_pack() {
+    let mut value: serde_json::Value = serde_json::from_str(SAMPLE_PPU_JSON).unwrap();
+    value["targetHz"] = serde_json::json!(50);
+    let dir = tempfile::tempdir().unwrap();
+    ppu_cli::unpack(&serde_json::to_string(&value).unwrap(), dir.path()).unwrap();
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.path().join("ppu.json")).unwrap()).unwrap();
+    assert_eq!(manifest["targetHz"], 50);
+    let repacked: serde_json::Value = serde_json::from_str(&ppu_cli::pack(dir.path()).unwrap()).unwrap();
+    assert_eq!(repacked, value);
+}

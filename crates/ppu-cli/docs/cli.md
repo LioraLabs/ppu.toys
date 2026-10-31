@@ -146,6 +146,12 @@ scope. Include `main.lua`. Use an empty `sources` array for Lua-generated
 VRAM/CGRAM artwork. PNG paths are relative to the project directory and may
 not contain `..` or be absolute.
 
+An optional `"targetHz"` is the project's cartridge build setting: video region
+and update rate in one number, 60 or 30 for NTSC, 50 or 25 for PAL. It is a
+build setting, not source: the Studio's Cartridge settings edit it, `pack` and
+`unpack` carry it, and cartridge exports read it. Without it a project builds
+for NTSC.
+
 Source kinds: `bg` (tiled background), `sheet` (ordered tiles), `obj` (sprite
 cells), and `m7` (Mode 7 plane). Options use Studio's names: `bit_depth`,
 `tile_size`, `cell_size`, `extbg`, `dither`, `dither_strength`, and

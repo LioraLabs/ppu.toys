@@ -25,10 +25,9 @@ end
 
 function table.freeze(t) return t end
 
--- The frame rate is a cartridge requirement; the preview always runs at 60 Hz.
-function target(options)
-  assert(options.region == "ntsc" or options.region == "pal", "target region must be \"ntsc\" or \"pal\"")
-  assert(options.hz == 60 or options.hz == 30 or options.hz == 50 or options.hz == 25, "target hz must be 60, 30, 50 or 25")
+-- Region and update rate are project build settings (ppu.json `targetHz`), not source.
+function target()
+  error("region and update rate are build settings: set them in the Studio's Cartridge settings or ppu.json (\"targetHz\": 60, 30, 50 or 25)", 2)
 end
 
 -- Grid axes in callback parameter order; `names` is supplied by the Luau frontend.

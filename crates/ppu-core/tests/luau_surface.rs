@@ -119,3 +119,9 @@ function frame(t, f) lines(3.4) end"#;
     assert_eq!(lines.rows[0].bg[0].scroll_x, 3);
     assert_eq!(lines.rows[100].bg[0].scroll_x, 103);
 }
+
+#[test]
+fn target_is_a_build_setting_not_source() {
+    let main = "target({region = \"ntsc\", hz = 60})\nfunction frame(t, f) end";
+    assert!(error(&[("main.luau", main)], 1).contains("region and update rate are build settings"));
+}

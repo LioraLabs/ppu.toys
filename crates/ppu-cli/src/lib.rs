@@ -47,6 +47,10 @@ struct Manifest {
     sources: Vec<ManifestSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     origin: Option<Origin>,
+    /// Build setting for cartridge exports: video region and update rate in one number
+    /// (60 or 30 NTSC, 50 or 25 PAL). Absent leaves it to the exporter's default.
+    #[serde(default, rename = "targetHz", skip_serializing_if = "Option::is_none")]
+    target_hz: Option<u8>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -98,6 +102,10 @@ struct FileBody {
     sources: Vec<SourceEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     origin: Option<Origin>,
+    /// Build setting for cartridge exports: video region and update rate in one number
+    /// (60 or 30 NTSC, 50 or 25 PAL). Absent leaves it to the exporter's default.
+    #[serde(default, rename = "targetHz", skip_serializing_if = "Option::is_none")]
+    target_hz: Option<u8>,
 }
 
 fn read_manifest(dir: &Path) -> Result<Manifest> {
@@ -159,6 +167,7 @@ pub fn pack(dir: &Path) -> Result<String> {
         files,
         sources,
         origin: manifest.origin,
+        target_hz: manifest.target_hz,
     };
     Ok(serde_json::to_string_pretty(&body)?)
 }
@@ -223,6 +232,7 @@ pub fn unpack(text: &str, dir: &Path) -> Result<()> {
         files: body.files.iter().map(|f| f.name.clone()).collect(),
         sources,
         origin: body.origin,
+        target_hz: body.target_hz,
     };
     std::fs::write(
         dir.join(MANIFEST),
