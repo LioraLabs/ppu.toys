@@ -97,34 +97,34 @@ function bakeHdma(grid, first, last, line, names)
   end
 end
 
--- A spread routine: one cooperative invocation, resumed once per owner step.
+-- A routine: one cooperative invocation, resumed once per owner step.
 local __ppu_running = nil
 
 function yield(updates)
   local n = updates or 1
-  assert(__ppu_running ~= nil, "yield is only allowed inside a spread routine")
+  assert(__ppu_running ~= nil, "yield is only allowed inside a routine")
   assert(n >= 1 and n == math.floor(n), "yield needs a positive whole number of updates")
   coroutine.yield(n)
 end
 
-function spread(body)
-  local routine = {}
+function routine(body)
+  local handle = {}
   local thread, wait = nil, 0
-  function routine:start(...)
+  function handle:start(...)
     if thread ~= nil then return false end
     local args = table.pack(...)
     thread = coroutine.create(function() body(table.unpack(args, 1, args.n)) end)
     wait = 0
     return true
   end
-  function routine:step()
+  function handle:step()
     if thread == nil then return end
     if wait > 0 then
       wait = wait - 1
       return
     end
     local outer = __ppu_running
-    __ppu_running = routine
+    __ppu_running = handle
     local ok, result = coroutine.resume(thread)
     __ppu_running = outer
     if not ok then
@@ -137,13 +137,13 @@ function spread(body)
       wait = result - 1
     end
   end
-  function routine:cancel()
+  function handle:cancel()
     thread, wait = nil, 0
   end
-  function routine:running()
+  function handle:running()
     return thread ~= nil
   end
-  return routine
+  return handle
 end
 
 -- Modules: LuaEngine::set_sources registers each required file's chunk here.

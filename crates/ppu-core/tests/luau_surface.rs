@@ -40,7 +40,7 @@ end"#;
 fn routine_waits_resume_on_the_nth_following_step() {
     // Start before update 0's step; yield(2) resumes in update 2; the body ends there.
     let main = r#"local log = 0
-local r = spread(function(n: number)
+local r = routine(function(n: number)
   log = 1
   yield(2)
   log = n
@@ -63,7 +63,7 @@ end"#;
 fn routine_yields_inside_helpers_and_cancel_discards_it() {
     let main = r#"local count = 0
 local function wait_twice() yield() yield() end
-local r = spread(function()
+local r = routine(function()
   for i = 1, 3 do count += 1; wait_twice() end
 end)
 function frame(t, f)
@@ -74,7 +74,7 @@ function frame(t, f)
 end"#;
     assert_eq!(run(&[("main.luau", main)], 3, 1), [2]);
     assert_eq!(run(&[("main.luau", main)], 9, 1), [2]);
-    assert!(error(&[("main.luau", "function frame() yield() end")], 1).contains("spread routine"));
+    assert!(error(&[("main.luau", "function frame() yield() end")], 1).contains("inside a routine"));
 }
 
 #[test]
