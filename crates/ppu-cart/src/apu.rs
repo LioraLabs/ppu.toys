@@ -4,15 +4,16 @@
 //! Interface notes for `system`:
 //! - The ports are mailbox state at the time of access: call `run_until(now)` before every
 //!   `cpu_read_port`/`cpu_write_port`, or the 65816's handshake loops starve the SPC700.
-//! - Clock: SPC700 cycles = master clocks * 1.024 MHz / 21.477272 MHz. One stereo sample frame
-//!   is rendered every 32 SPC700 cycles (32 kHz), so ENVX/OUTX reads are current.
+//! - Clock: SPC700 cycles = master clocks * 1.02528 MHz / 21.477272 MHz. One stereo sample frame
+//!   is rendered every 32 SPC700 cycles (32.04 kHz), so ENVX/OUTX reads are current.
 //! - Additions to the skeleton: `ram`, `dsp` and `cycles` are public for tools and tests.
 //!
 //! Boot: the console's IPL ROM is not included. While $F1 bit 7 maps the IPL region and the PC
 //! is in $FFC0-$FFFF, `boot_step` performs the documented upload protocol instead of
 //! executing instructions: $AA/$BB on ports 0/1, wait for a $CC kick, then blocks of
 //! (index on port 0, data on port 1) echoed back, a kick ahead of the expected index ending
-//! a block, and port 1 = 0 jumping to the address on ports 2/3.
+//! a block, and port 1 = 0 jumping to the address on ports 2/3. Each port access happens at
+//! the SPC700 cycle the documented boot program makes it, so uploads take hardware's time.
 
 use ppu_core::Dsp;
 
@@ -25,7 +26,10 @@ const I: u8 = 0x04;
 const Z: u8 = 0x02;
 const C: u8 = 0x01;
 
-const SPC_HZ: u128 = 1_024_000;
+/// The APU's resonator is nominally 24.576 MHz (SPC700 1.024 MHz, 32000 Hz samples), but consoles
+/// measure about 0.13% fast, 32040 Hz samples: the rate bsnes and Snes9x run, and the one a
+/// cartridge that reads the envelopes live is timed against.
+const SPC_HZ: u128 = 1_025_280;
 const MASTER_HZ: u128 = 21_477_272;
 
 #[derive(Clone, Copy, Default)]
@@ -37,19 +41,27 @@ struct Timer {
     acc: u32,
 }
 
+/// Where the boot routine is, as the port access it makes next (see `boot_step`).
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Boot {
     /// Not inside the boot region yet: the next boot step resets and signals ready.
     Enter,
+    /// $AA/$BB go out on ports 0/1 when the zero-fill loop ends.
+    Ready,
+    /// `cmp $f4,#$cc` reads port 0.
     WaitKick,
-    /// A block starts only when port 0 reads exactly 0.
-    Start {
-        addr: u16,
-    },
-    Data {
-        addr: u16,
-        index: u8,
-    },
+    /// `movw ya,$f4` has read ports 0/1 (2/3 a few cycles before): the command.
+    Command,
+    /// `mov $f4,a` echoes the kick, then a block or the jump.
+    Echo { kick: u8, more: bool },
+    /// `mov y,$f4` reads port 0: a block starts at index 0.
+    BlockStart,
+    /// `cmp y,$f4` in the transfer loop reads port 0.
+    Data { index: u8 },
+    /// `mov a,$f5` read the byte; `mov $f4,y` echoes the index.
+    Store { index: u8 },
+    /// The second `cmp y,$f4` that confirms a kick ahead of the index.
+    Confirm { index: u8 },
 }
 
 pub struct Apu {
@@ -72,6 +84,8 @@ pub struct Apu {
     sample_acc: u32,
     samples: Vec<i16>,
     boot: Boot,
+    /// The SPC700 cycle of the boot routine's next port access.
+    boot_at: u64,
 }
 
 impl Default for Apu {
@@ -101,6 +115,7 @@ impl Apu {
             sample_acc: 0,
             samples: Vec::new(),
             boot: Boot::Enter,
+            boot_at: 0,
         }
     }
     /// $2140-$2143 as the 65816 reads them.
@@ -121,15 +136,25 @@ impl Apu {
                 self.tick(n);
                 continue;
             }
-            let n = if self.control & 0x80 != 0 && self.pc >= 0xffc0 {
-                self.boot_step()
-            } else {
-                self.exec()
-            };
+            if self.control & 0x80 != 0 && self.pc >= 0xffc0 {
+                // The boot routine acts at the exact cycle of each port access, so the 65816 sees
+                // an echo no earlier, and the routine sees a write no later, than hardware.
+                if self.boot == Boot::Enter {
+                    self.boot_at = self.cycles;
+                }
+                if self.boot_at > target {
+                    self.tick((target - self.cycles) as u32);
+                    break;
+                }
+                self.tick((self.boot_at - self.cycles) as u32);
+                self.boot_at += self.boot_step() as u64;
+                continue;
+            }
+            let n = self.exec();
             self.tick(n);
         }
     }
-    /// Stereo 32 kHz samples produced since the last call, interleaved L, R.
+    /// Stereo 32.04 kHz samples produced since the last call, interleaved L, R.
     pub fn take_samples(&mut self, out: &mut Vec<i16>) {
         out.append(&mut self.samples);
     }
@@ -161,68 +186,129 @@ impl Apu {
         }
     }
 
-    /// One step of the boot upload protocol; returns the SPC700 cycles it stands for.
+    /// The boot routine's port access due now; returns the SPC700 cycles to its next one.
+    ///
+    /// Timed as the documented IPL program runs (fullsnes "SNES APU Boot ROM"), counting each
+    /// instruction's documented SPC700 cycles to the cycle of its port access: a read in the last
+    /// cycle of `cmp y,dp` (3), `mov a,dp` (3), `mov y,dp` (3), `movw ya,dp` (5, high byte last),
+    /// the 4th of `cmp dp,#imm` (5), a write in the last cycle of `mov dp,y`/`mov dp,a` (4); taken
+    /// branches 4, untaken 2.
     fn boot_step(&mut self) -> u32 {
         match self.boot {
             Boot::Enter => {
+                // mov x,#$ef; mov sp,x; mov a,#0 (6), then mov (x),a; dec x; bne (10) for
+                // x = $EF..1, the last bne untaken: $01-$EF are zeroed, $00 is not.
                 self.sp = 0xef;
                 self.psw = 0;
-                self.ram[..0xf0].fill(0);
+                self.ram[1..0xf0].fill(0);
+                self.boot = Boot::Ready;
+                6 + 0xef * 10 - 2 + 5 + 5
+            }
+            Boot::Ready => {
+                // mov $f4,#$aa; mov $f5,#$bb (5 each), then cmp $f4,#$cc reads in its 4th cycle.
                 self.to_cpu[0] = 0xaa;
                 self.to_cpu[1] = 0xbb;
                 self.boot = Boot::WaitKick;
-                1200
+                4
             }
             Boot::WaitKick => {
-                if self.from_cpu[0] == 0xcc {
-                    self.boot_command()
+                if self.from_cpu[0] != 0xcc {
+                    return 1 + 4 + 4;
+                }
+                // The cmp's last cycle, bne untaken, bra main (4); main's movw ya,$f6 /
+                // movw $00,ya (10) and movw ya,$f4 (5).
+                self.boot = Boot::Command;
+                1 + 2 + 4 + 15
+            }
+            Boot::Command => {
+                // movw ya,$f6 stored ports 2/3 at $00/$01: the block address or the jump target.
+                // shortcut: ports 2/3 are taken here, 10-12 cycles after hardware reads them; the
+                // 65816 sets them before the kick and waits for the echo, so no host sees it.
+                self.ram[0] = self.from_cpu[2];
+                self.ram[1] = self.from_cpu[3];
+                self.boot = Boot::Echo {
+                    kick: self.from_cpu[0],
+                    more: self.from_cpu[1] != 0,
+                };
+                4
+            }
+            Boot::Echo { kick, more } => {
+                self.to_cpu[0] = kick;
+                if more {
+                    // mov a,y; mov x,a (4), bne taken (4), mov y,$f4 (3).
+                    self.boot = Boot::BlockStart;
+                    return 4 + 4 + 3;
+                }
+                // mov a,y; mov x,a; bne untaken; jmp [!$0000+x] (6): the program starts with
+                // A = the kick, X = Y = 0 (port 1), Z set by mov x,a.
+                self.a = kick;
+                self.x = 0;
+                self.y = 0;
+                self.psw = (self.psw & !N) | Z;
+                self.boot = Boot::Enter;
+                self.pc = u16::from_le_bytes([self.ram[0], self.ram[1]]);
+                // The program's first instruction starts 12 cycles on.
+                self.tick(4 + 2 + 6);
+                0
+            }
+            Boot::BlockStart => {
+                if self.from_cpu[0] != 0 {
+                    return 4 + 3;
+                }
+                // bne untaken, cmp y,$f4.
+                self.boot = Boot::Data { index: 0 };
+                2 + 3
+            }
+            Boot::Data { index } => {
+                let p = self.from_cpu[0];
+                if p == index {
+                    // bne untaken, mov a,$f5 (3), mov $f4,y (4).
+                    self.boot = Boot::Store { index };
+                    return 2 + 3 + 4;
+                }
+                // bne taken to `bpl`, which loops on cmp's N (index behind) or re-checks.
+                if (index.wrapping_sub(p) as i8) >= 0 {
+                    4 + 4 + 3
                 } else {
-                    6
+                    self.boot = Boot::Confirm { index };
+                    4 + 2 + 3
                 }
             }
-            Boot::Start { addr } => {
-                if self.from_cpu[0] == 0 {
-                    self.boot = Boot::Data { addr, index: 0 };
-                    self.boot_step()
+            Boot::Store { index } => {
+                // shortcut: port 1 is taken at the echo, 4 cycles after hardware's read; the 65816
+                // cannot change it in between, as it is waiting for this echo.
+                self.to_cpu[0] = index;
+                let addr =
+                    u16::from_le_bytes([self.ram[0], self.ram[1]]).wrapping_add(index as u16);
+                self.ram[addr as usize] = self.from_cpu[1];
+                let index = index.wrapping_add(1);
+                // mov [$00]+y,a (7), inc y (2), then bne taken (4) and cmp y,$f4 (3).
+                if index != 0 {
+                    self.boot = Boot::Data { index };
+                    return 7 + 2 + 4 + 3;
+                }
+                // bne untaken, inc $01 (4), then bpl on its N: taken back to cmp, else the
+                // second cmp.
+                self.ram[1] = self.ram[1].wrapping_add(1);
+                if self.ram[1] & 0x80 == 0 {
+                    self.boot = Boot::Data { index };
+                    7 + 2 + 2 + 4 + 4 + 3
                 } else {
-                    6
+                    self.boot = Boot::Confirm { index };
+                    7 + 2 + 2 + 4 + 2 + 3
                 }
             }
-            Boot::Data { addr, index } => {
-                let d = self.from_cpu[0].wrapping_sub(index) as i8;
-                if d == 0 {
-                    self.ram[addr as usize] = self.from_cpu[1];
-                    self.to_cpu[0] = index;
-                    self.boot = Boot::Data {
-                        addr: addr.wrapping_add(1),
-                        index: index.wrapping_add(1),
-                    };
-                    20
-                } else if d < 0 {
-                    6
-                } else {
-                    self.boot_command()
+            Boot::Confirm { index } => {
+                if (index.wrapping_sub(self.from_cpu[0]) as i8) >= 0 {
+                    // bpl taken back to the transfer loop's cmp.
+                    self.boot = Boot::Data { index };
+                    return 4 + 3;
                 }
+                // bpl untaken into main: movw ya,$f6 / movw $00,ya (10), movw ya,$f4 (5).
+                self.boot = Boot::Command;
+                2 + 15
             }
         }
-    }
-
-    /// A kick on port 0: address from ports 2/3, then another block (port 1 != 0) or a jump.
-    fn boot_command(&mut self) -> u32 {
-        let addr = u16::from_le_bytes([self.from_cpu[2], self.from_cpu[3]]);
-        self.ram[0] = addr as u8;
-        self.ram[1] = (addr >> 8) as u8;
-        self.to_cpu[0] = self.from_cpu[0];
-        if self.from_cpu[1] != 0 {
-            self.boot = Boot::Start { addr };
-        } else {
-            self.a = 0;
-            self.x = 0;
-            self.y = 0;
-            self.pc = addr;
-            self.boot = Boot::Enter;
-        }
-        30
     }
 
     // --- memory ---

@@ -275,12 +275,12 @@ fn control_clears_ports() {
 }
 
 #[test]
-fn one_second_is_32000_samples() {
+fn one_second_is_32040_samples() {
     let mut apu = Apu::new();
     apu.run_until(21_477_272);
     let mut out = Vec::new();
     apu.take_samples(&mut out);
-    assert!((out.len() / 2).abs_diff(32000) <= 1, "{}", out.len() / 2);
+    assert!((out.len() / 2).abs_diff(32040) <= 1, "{}", out.len() / 2);
 }
 
 /// The 65816 side of the upload, the way the cartridge runtime does it: wait for $BBAA,
@@ -382,6 +382,37 @@ fn upload_through_ports_then_drive_the_dsp() {
         0,
         "voice 0's envelope should be up"
     );
+}
+
+#[test]
+fn upload_takes_the_boot_loops_documented_cycles() {
+    // A host that answers each echo at once: the boot loop then sets the pace, 25 SPC700 cycles
+    // a byte (cmp y,$f4 to the echo in mov $f4,y: 9; back to the next cmp's read: 16) and 6 more
+    // where the index wraps (bne untaken, inc $01, bpl).
+    let mut apu = Apu::new();
+    let mut clock = 0u64;
+    let mut wait = |apu: &mut Apu, want: u8| loop {
+        clock += 21;
+        apu.run_until(clock);
+        if apu.cpu_read_port(0) == want {
+            return apu.cycles;
+        }
+    };
+    wait(&mut apu, 0xaa);
+    apu.cpu_write_port(1, 1);
+    apu.cpu_write_port(2, 0x00);
+    apu.cpu_write_port(3, 0x10);
+    apu.cpu_write_port(0, 0xcc);
+    wait(&mut apu, 0xcc);
+    let mut echoes = Vec::new();
+    for i in 0..=512u32 {
+        apu.cpu_write_port(1, i as u8);
+        apu.cpu_write_port(0, i as u8);
+        echoes.push(wait(&mut apu, i as u8));
+    }
+    let took = echoes[512] - echoes[0];
+    assert!(took.abs_diff(512 * 25 + 2 * 6) <= 2, "{took}");
+    assert_eq!(apu.ram[0x1000 + 300], 300u32 as u8);
 }
 
 #[test]
