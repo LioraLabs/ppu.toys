@@ -1,0 +1,11 @@
+[package]
+name = "ppu-cart"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "A SNES console that runs cartridge ROMs, written from hardware documentation, rendering through ppu-core"
+
+[dependencies]
+ppu-core = { path = "../ppu-core", default-features = false }

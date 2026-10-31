@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/ppu-core", "crates/ppu-cli", "vendor/piccolo"]
+members = ["crates/ppu-core", "crates/ppu-cli", "crates/ppu-cart", "vendor/piccolo"]
 resolver = "2"
 
 [workspace.package]
