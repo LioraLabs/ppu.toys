@@ -101,6 +101,10 @@ impl Cpu {
         if self.wait {
             if self.nmi_pending || self.irq_line {
                 self.wait = false;
+                // Waking takes two internal cycles: bsnes and Snes9x both resume about 12 master
+                // clocks after the interrupt line rises (ppu-cart tests/timing.rs).
+                bus.idle();
+                bus.idle();
             } else {
                 bus.idle();
                 return;
@@ -1074,7 +1078,8 @@ impl Cpu {
             0xcb => {
                 bus.idle();
                 bus.idle();
-                self.wait = true;
+                // An interrupt already pending ends WAI here; otherwise it waits (see `step`).
+                self.wait = !(self.nmi_pending || self.irq_line);
             }
             0xdb => {
                 bus.idle();

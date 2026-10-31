@@ -385,7 +385,8 @@ fn interrupt_lines_wai_stp_rti() {
     assert!(cpu.waiting());
     assert_eq!(step(&mut cpu, &mut ram), [Ev::I]);
     cpu.set_irq(true);
-    step(&mut cpu, &mut ram);
+    // Waking: two internal cycles, then the NOP (fetch + idle).
+    assert_eq!(step(&mut cpu, &mut ram), [Ev::I, Ev::I, Ev::R(0x8001), Ev::I]);
     assert!(!cpu.waiting());
     assert_eq!(cpu.pc, 0x8002);
     // STP stops for good; reset restarts through $FFFC.

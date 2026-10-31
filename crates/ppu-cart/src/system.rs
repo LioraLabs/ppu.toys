@@ -12,8 +12,10 @@
 //! - H=1104: HDMA (lines 0-224), its clocks also taken from the CPU.
 //!
 //! Simplifications (each documented where it lives): the multiply/divide results are ready at
-//! once instead of after 8/16 CPU cycles; general DMA aligns to 8 clocks before it starts and not
-//! after; ROM sizes that are not a power of two mirror by modulo.
+//! once instead of after 8/16 CPU cycles; DMA and HDMA charge a fixed CPU resync rather than
+//! modelling the CPU's cycle boundary (DMA within a few clocks of bsnes, HDMA exactly Snes9x's flat
+//! 18 a line); ROM sizes that are not a power of two mirror by modulo. `tests/timing.rs` holds
+//! the bsnes measurements these follow.
 mod ppu;
 
 use crate::{Apu, Bus, Cpu};
@@ -329,8 +331,18 @@ impl System {
         self.schedule(-1);
     }
 
+    /// The H counter: 4 clocks a dot, except dots 323 and 327 (6 clocks) on a full-length line.
     fn hdot(&self) -> u16 {
-        (self.h / 4).min(339) as u16
+        let h = self.h;
+        let d = match h {
+            _ if self.line_len != LINE_CLOCKS => h / 4,
+            0..1292 => h / 4,
+            1292..1298 => 323,
+            1298..1310 => 324 + (h - 1298) / 4,
+            1310..1316 => 327,
+            _ => 328 + (h - 1316) / 4,
+        };
+        d.min(339) as u16
     }
 
     // ---- memory map ----
@@ -499,6 +511,8 @@ impl System {
     // ---- $42xx ----
 
     fn write_cpu_reg(&mut self, off: u32, v: u8) {
+        let v_irq_line = |s: &Self| s.nmitimen & 0x30 == 0x20 && s.v == s.vtime;
+        let was_v_irq_line = v_irq_line(self);
         match off {
             0x4200 => {
                 let was = self.nmitimen;
@@ -550,6 +564,12 @@ impl System {
         }
         if (0x4207..=0x420a).contains(&off) {
             self.reschedule_irq();
+        }
+        // A V-only IRQ set up on its own line after its H=10 point fires at once (bsnes and Snes9x
+        // agree, tests/timing.rs), not a frame later.
+        if !was_v_irq_line && v_irq_line(self) && self.h >= 10 {
+            self.irq_flag = true;
+            self.cpu_irq = Some(true);
         }
     }
 
@@ -652,8 +672,9 @@ impl System {
         }
     }
 
-    /// General DMA ($420B): channels in order, 8 clocks per byte, 8 per channel, after an 8-clock
-    /// alignment. Events (HDMA, refresh, line ends) keep firing while it runs.
+    /// General DMA ($420B): an 8-clock alignment and 8 clocks, then channels in order, 8 clocks per
+    /// byte and 8 per channel, then 8 for the CPU to resume. Events (HDMA, refresh, line ends) keep
+    /// firing while it runs.
     fn run_dma(&mut self, mask: u8) {
         if mask == 0 {
             return;
@@ -686,6 +707,9 @@ impl System {
                 }
             }
         }
+        // The CPU's resync: 16-23 clocks of overhead in all (fullsnes: 12-24); bsnes and Snes9x
+        // agree with it on tests/timing.rs to a few clocks.
+        self.tick(8);
     }
 
     /// Frame start: reload every enabled channel's table. Returns the clocks it took.
@@ -701,13 +725,15 @@ impl System {
         cost
     }
 
-    /// Load the next line count (and indirect address); a zero count ends the table.
+    /// Load the next line count (and indirect address); a zero count ends the table. Returns the
+    /// clocks beyond the channel's 8: 16 for an indirect address, else none.
     fn hdma_reload(&mut self, i: usize) -> u32 {
         let c = self.dma[i];
         let bank = (c.a1b as u32) << 16;
         let n = self.peek(bank | c.a2a as u32);
         let mut a2a = c.a2a.wrapping_add(1);
-        let mut cost = 8;
+        // The count byte's read is the channel's own 8 clocks (charged by the caller, reload or not).
+        let mut cost = 0;
         let mut das = c.das;
         if c.dmap & 0x40 != 0 {
             let lo = self.peek(bank | a2a as u32);
