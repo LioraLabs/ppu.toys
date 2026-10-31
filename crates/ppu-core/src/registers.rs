@@ -366,29 +366,8 @@ pub struct RegRow {
 impl From<&LineTableRow> for RegRow {
     fn from(r: &LineTableRow) -> Self {
         let mode = quantize::mode(r.mode);
-        let bpp = crate::modes::mode_info(mode).map_or([0; 4], |m| m.bpp);
-        let mut bg = std::array::from_fn(|i| {
-            let mut b = RegBg::from(&r.bg[i]);
-            b.mode = mode;
-            b.layer = i as u8;
-            b.bpp = bpp[i];
-            b.direct_color = r.cgwsel & 1 != 0;
-            b.mosaic = if r.mosaic_enable[i] {
-                crate::quantize::mosaic_size(r.mosaic_size) + 1
-            } else {
-                1
-            };
-            b
-        });
-        let table = bg[2].clone();
-        for b in &mut bg {
-            b.offset_map_base = table.map_base;
-            b.offset_screen_size = table.screen_size;
-            b.offset_scroll_x = table.scroll_x;
-            b.offset_scroll_y = table.scroll_y;
-            b.offset_tile_size = table.tile_size;
-        }
-        RegRow {
+        let bg = std::array::from_fn(|i| RegBg::from(&r.bg[i]));
+        let mut row = RegRow {
             mode,
             brightness: quantize::brightness(r.brightness),
             bg,
@@ -415,11 +394,48 @@ impl From<&LineTableRow> for RegRow {
             setini: r.setini,
             force_blank: r.force_blank,
             cgram: r.cgram.iter().map(|&(i, c)| (i, c & 0x7fff)).collect(),
-        }
+        };
+        row.derive_layers();
+        row
     }
 }
 
 impl RegRow {
+    /// Fill each layer's fields that follow from the row's own registers: its mode, index and bits
+    /// per pixel (mode table), direct colour (CGWSEL.0), mosaic edge (MOSAIC) and the BG3
+    /// offset-per-tile table. Call after changing `mode`, `cgwsel`, the mosaic fields or BG3, as a
+    /// console that writes raw registers does before rendering a line. `mosaic_top` is left alone.
+    pub fn derive_layers(&mut self) {
+        let mode = self.mode;
+        let bpp = crate::modes::mode_info(mode).map_or([0; 4], |m| m.bpp);
+        let (table_map, table_size, table_x, table_y, table_tile) = {
+            let t = &self.bg[2];
+            (
+                t.map_base,
+                t.screen_size,
+                t.scroll_x,
+                t.scroll_y,
+                t.tile_size,
+            )
+        };
+        for (i, b) in self.bg.iter_mut().enumerate() {
+            b.mode = mode;
+            b.layer = i as u8;
+            b.bpp = bpp[i];
+            b.direct_color = self.cgwsel & 1 != 0;
+            b.mosaic = if self.mosaic_enable[i] {
+                quantize::mosaic_size(self.mosaic_size) + 1
+            } else {
+                1
+            };
+            b.offset_map_base = table_map;
+            b.offset_screen_size = table_size;
+            b.offset_scroll_x = table_x;
+            b.offset_scroll_y = table_y;
+            b.offset_tile_size = table_tile;
+        }
+    }
+
     /// The shared window ranges (WH0-3). Reused by the color window.
     pub fn window_ranges(&self) -> WindowRanges {
         WindowRanges {

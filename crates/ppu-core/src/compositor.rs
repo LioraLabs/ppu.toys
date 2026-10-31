@@ -520,21 +520,118 @@ pub struct FrameView {
     pub math_mask: Vec<u8>,
 }
 
+/// Renders one scanline at a time from a row and the PPU memory as they are at that line: the seam a
+/// console uses, changing registers and memory between lines (HDMA, raster writes) and rendering
+/// each line as the beam reaches it. Owns its scratch, so a frame allocates nothing.
+pub struct LineRenderer {
+    sc: Box<LineScratch>,
+    /// Main/sub composites of the last line, pre-color-math, pre-brightness (RGBA).
+    pub main: Vec<[u8; 4]>,
+    pub sub: Vec<[u8; 4]>,
+    src_main: Vec<PixelSource>,
+    src_sub: Vec<PixelSource>,
+    /// Per pixel of the last line: bit0 color math applied, bit1 clip-to-black, bit2 prevent-math.
+    pub math_mask: Vec<u8>,
+}
+
+impl Default for LineRenderer {
+    fn default() -> Self {
+        LineRenderer {
+            sc: Box::new(LineScratch::new()),
+            main: vec![[0; 4]; WIDTH],
+            sub: vec![[0; 4]; WIDTH],
+            src_main: vec![PixelSource::Backdrop; WIDTH],
+            src_sub: vec![PixelSource::Backdrop; WIDTH],
+            math_mask: vec![0; WIDTH],
+        }
+    }
+}
+
+impl LineRenderer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Composite screen row `y` (0-based: hardware line y + 1) of `row` over `mem` into `out`
+    /// (`WIDTH` RGBA pixels, post-math, post-brightness). Returns the line's OBJ evaluation (the
+    /// STAT77 range/time-over inputs); a force-blanked line is black and evaluates no OBJ.
+    /// `row.cgram` is not applied: the caller's `mem` is already the line's CGRAM.
+    pub fn render(&mut self, row: &RegRow, m: &Memory, y: usize, out: &mut [u8]) -> crate::LineBin {
+        if row.force_blank {
+            out[..WIDTH * 4]
+                .chunks_exact_mut(4)
+                .for_each(|p| p.copy_from_slice(&[0, 0, 0, 255]));
+            self.main.fill([0, 0, 0, 255]);
+            self.sub.fill([0, 0, 0, 255]);
+            self.math_mask.fill(0);
+            return crate::LineBin::default();
+        }
+        let sc = &mut *self.sc;
+        // Bin OBJ once per line; both screens reuse the identical capped set.
+        let bin = bin_line(m, y);
+        let ranges = row.window_ranges();
+        let ladder = ladder_for(row);
+        sample_line(row, m, y, &bin.sprites, &ladder, row.tm | row.ts, sc);
+        fill_hidden(row, &ranges, row.tmw | row.tsw, sc);
+        let backdrop = unpack_rgb15(m.cgram[0]);
+        resolve_screen(
+            row,
+            &ladder,
+            row.tm,
+            row.tmw,
+            sc,
+            backdrop,
+            &mut self.main,
+            &mut self.src_main,
+        );
+        resolve_screen(
+            row,
+            &ladder,
+            row.ts,
+            row.tsw,
+            sc,
+            backdrop,
+            &mut self.sub,
+            &mut self.src_sub,
+        );
+        let bri = row.brightness;
+        let cw_sel = row.color_window();
+        let clip_mode = row.clip_mode();
+        let prevent_mode = row.prevent_mode();
+        for x in 0..WIDTH {
+            let inside = in_window(&cw_sel, &ranges, x);
+            let clip = region_active(clip_mode, inside);
+            let prevent = region_active(prevent_mode, inside);
+            let (px, applied) = blend_pixel(
+                row,
+                self.main[x],
+                self.sub[x],
+                self.src_main[x],
+                self.src_sub[x],
+                clip,
+                prevent,
+            );
+            self.math_mask[x] = applied as u8 | ((clip as u8) << 1) | ((prevent as u8) << 2);
+            let o = x * 4;
+            out[o] = apply_brightness(px[0], bri);
+            out[o + 1] = apply_brightness(px[1], bri);
+            out[o + 2] = apply_brightness(px[2], bri);
+            out[o + 3] = 255;
+        }
+        bin
+    }
+}
+
 /// Compositor entry that ALSO returns the per-frame OBJ overflow diagnostic
 /// (`$213E` STAT77) and the pre-math/pre-brightness intermediates (M9 view
-/// seam). The per-line OBJ bin is computed ONCE here and shared by `sample_line`
-/// and both `resolve_screen` passes, so both screens composite the exact
-/// same deterministically-capped sprite set (no drift).
+/// seam). Each line goes through [`LineRenderer`], which bins OBJ once per line
+/// so both screens composite the exact same deterministically-capped sprite set.
 pub fn render_frame_view(lt: &LineTable, mem: &Memory) -> FrameView {
     let mut fb = vec![0u8; WIDTH * HEIGHT * 4];
     let mut vmain = vec![0u8; WIDTH * HEIGHT * 4];
     let mut vsub = vec![0u8; WIDTH * HEIGHT * 4];
     let mut vmask = vec![0u8; WIDTH * HEIGHT];
-    let mut main = vec![[0u8; 4]; WIDTH];
-    let mut sub = vec![[0u8; 4]; WIDTH];
-    let mut src_main = vec![PixelSource::Backdrop; WIDTH];
-    let mut src_sub = vec![PixelSource::Backdrop; WIDTH];
-    let mut sc = Box::new(LineScratch::new());
+    let mut lr = LineRenderer::new();
     let mut stats = ObjOverflow::default();
     let rows = lt.rows.len().min(HEIGHT);
     let mut scratch: Option<Memory> = lt
@@ -544,80 +641,30 @@ pub fn render_frame_view(lt: &LineTable, mem: &Memory) -> FrameView {
         .then(|| mem.clone());
     for y in 0..rows {
         let row = &lt.rows[y];
-        if row.force_blank {
-            // Forced blank: no rendering this line; output opaque black.
-            for x in 0..WIDTH {
-                let o = (y * WIDTH + x) * 4;
-                fb[o..o + 4].copy_from_slice(&[0, 0, 0, 255]);
-                vmain[o..o + 4].copy_from_slice(&[0, 0, 0, 255]);
-                vsub[o..o + 4].copy_from_slice(&[0, 0, 0, 255]);
-            }
-            continue;
-        }
         // HDMA to CGRAM: this line's palette pokes, on a scratch copy.
         let m: &Memory = match scratch.as_mut() {
-            Some(s) => {
+            Some(s) if !row.force_blank => {
                 for &(i, c) in &row.cgram {
                     s.cgram[i as usize] = c;
                 }
                 &*s
             }
-            None => mem,
+            _ => mem,
         };
-        // Bin OBJ once per line; both screens reuse the identical capped set.
-        let bin = bin_line(m, y);
+        let row_off = y * WIDTH * 4;
+        let bin = lr.render(row, m, y, &mut fb[row_off..row_off + WIDTH * 4]);
         stats.range_over |= bin.range_over;
         stats.time_over |= bin.time_over;
         stats.max_sprites = stats.max_sprites.max(bin.sprite_count);
         stats.max_tiles = stats.max_tiles.max(bin.tile_count);
-        let ranges = row.window_ranges();
-        let ladder = ladder_for(row);
-        sample_line(row, m, y, &bin.sprites, &ladder, row.tm | row.ts, &mut sc);
-        fill_hidden(row, &ranges, row.tmw | row.tsw, &mut sc);
-        let backdrop = unpack_rgb15(m.cgram[0]);
-        resolve_screen(
-            row,
-            &ladder,
-            row.tm,
-            row.tmw,
-            &sc,
-            backdrop,
-            &mut main,
-            &mut src_main,
-        );
-        resolve_screen(
-            row,
-            &ladder,
-            row.ts,
-            row.tsw,
-            &sc,
-            backdrop,
-            &mut sub,
-            &mut src_sub,
-        );
-        let row_off = y * WIDTH * 4;
         for x in 0..WIDTH {
-            vmain[row_off + x * 4..row_off + x * 4 + 4].copy_from_slice(&main[x]);
-            vsub[row_off + x * 4..row_off + x * 4 + 4].copy_from_slice(&sub[x]);
+            vmain[row_off + x * 4..row_off + x * 4 + 4].copy_from_slice(&lr.main[x]);
+            vsub[row_off + x * 4..row_off + x * 4 + 4].copy_from_slice(&lr.sub[x]);
         }
-        let bri = row.brightness;
-        let cw_sel = row.color_window();
-        let clip_mode = row.clip_mode();
-        let prevent_mode = row.prevent_mode();
-        for x in 0..WIDTH {
-            let inside = in_window(&cw_sel, &ranges, x);
-            let clip = region_active(clip_mode, inside);
-            let prevent = region_active(prevent_mode, inside);
-            let (px, applied) =
-                blend_pixel(row, main[x], sub[x], src_main[x], src_sub[x], clip, prevent);
-            vmask[y * WIDTH + x] = applied as u8 | ((clip as u8) << 1) | ((prevent as u8) << 2);
-            let o = (y * WIDTH + x) * 4;
-            fb[o] = apply_brightness(px[0], bri);
-            fb[o + 1] = apply_brightness(px[1], bri);
-            fb[o + 2] = apply_brightness(px[2], bri);
-            fb[o + 3] = 255;
+        if !row.force_blank {
+            vmask[y * WIDTH..(y + 1) * WIDTH].copy_from_slice(&lr.math_mask);
         }
-        if let Some(s) = scratch.as_mut() {
+        if let (Some(s), false) = (scratch.as_mut(), row.force_blank) {
             for &(i, _) in &row.cgram {
                 s.cgram[i as usize] = mem.cgram[i as usize];
             }
