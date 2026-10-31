@@ -4,7 +4,8 @@
 //! Timing is counted in master clocks (21.477 MHz NTSC). Every CPU access advances the clock by its
 //! region's speed (6, 8 or 12; FastROM via $420D), a scanline is 1364 clocks (1360 for line 240
 //! of every other non-interlaced frame), a frame 262 lines. Per line, in order:
-//! - H=0: line start (V=0: end of VBlank, HDMA init; V=225: VBlank, NMI, joypad auto-read);
+//! - H=0: line start (V=0: end of VBlank, HDMA init; V=225: VBlank, NMI);
+//! - H=130 of V=225: the joypad auto-read;
 //! - the H/V IRQ at HTIME*4+14 (V-only IRQs at H=10);
 //! - H=88: the line renders, whole, with the registers as they are then (lines 1-224);
 //! - H=538: DRAM refresh, 40 clocks the CPU loses;
@@ -25,7 +26,10 @@ const RENDER_H: u32 = 88;
 const REFRESH_H: u32 = 538;
 const HDMA_H: u32 = 1104;
 const VDISP: u16 = 225;
-/// Auto-read takes about 4224 master clocks from VBlank start ($4212 bit 0 busy).
+/// The joypad auto-read starts this far into the first VBlank line (after the frame boundary
+/// `run_frame` stops at, so pads set between frames are the ones read) and is busy ($4212 bit 0)
+/// for about 4224 master clocks.
+const AUTOJOY_H: u32 = 130;
 const AUTOJOY_CLOCKS: u64 = 4224;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -34,6 +38,7 @@ enum Ev {
     Render,
     Refresh,
     Hdma,
+    AutoJoy,
     LineEnd,
 }
 
@@ -91,7 +96,7 @@ pub struct System {
     h: u32,
     pub v: u16,
     line_len: u32,
-    evs: [(u32, Ev); 5],
+    evs: [(u32, Ev); 6],
     ev_n: usize,
     ev_i: usize,
     next_ev: u32,
@@ -173,7 +178,7 @@ impl System {
             h: 0,
             v: 0,
             line_len: LINE_CLOCKS,
-            evs: [(0, Ev::LineEnd); 5],
+            evs: [(0, Ev::LineEnd); 6],
             ev_n: 0,
             ev_i: 0,
             next_ev: 0,
@@ -211,13 +216,14 @@ impl System {
 
     /// Build this line's remaining events after position `from`.
     fn schedule(&mut self, from: i64) {
-        let mut evs = [(0, Ev::LineEnd); 5];
+        let mut evs = [(0, Ev::LineEnd); 6];
         let mut n = 0;
         let cands = [
             (self.irq_pos(), Ev::Irq),
             ((1..VDISP).contains(&self.v).then_some(RENDER_H), Ev::Render),
             (Some(REFRESH_H), Ev::Refresh),
             ((self.v < VDISP).then_some(HDMA_H), Ev::Hdma),
+            ((self.v == VDISP && self.nmitimen & 1 != 0).then_some(AUTOJOY_H), Ev::AutoJoy),
             (Some(self.line_len), Ev::LineEnd),
         ];
         for (pos, e) in cands {
@@ -276,6 +282,11 @@ impl System {
                     self.steal(c);
                 }
             }
+            Ev::AutoJoy => {
+                self.joy = [self.pads[0], self.pads[1], 0, 0];
+                self.serial = [0xffff; 2];
+                self.joy_busy_until = self.clock + AUTOJOY_CLOCKS;
+            }
             Ev::LineEnd => {
                 self.h -= pos;
                 self.line_start();
@@ -311,11 +322,6 @@ impl System {
             self.nmi_flag = true;
             if self.nmitimen & 0x80 != 0 {
                 self.cpu_nmi = true;
-            }
-            if self.nmitimen & 1 != 0 {
-                self.joy = [self.pads[0], self.pads[1], 0, 0];
-                self.serial = [0xffff; 2];
-                self.joy_busy_until = self.clock + AUTOJOY_CLOCKS;
             }
             self.frame_done = true;
             self.apu.run_until(self.clock);
