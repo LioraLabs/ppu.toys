@@ -373,7 +373,8 @@ fn upload_through_ports_then_drive_the_dsp() {
     // Voice 0: direct gain $7f, key on; ENVX comes back through port 1.
     dsp(&mut host, 0x07, 0x7f);
     dsp(&mut host, 0x4c, 0x01);
-    for _ in 0..4 {
+    // KON waits for the 16 kHz poll and 5 empty samples; then the gain holds ENVX steady.
+    for _ in 0..16 {
         dsp(&mut host, 0x0d, 0);
     }
     assert_eq!(host.apu.cpu_read_port(1), host.apu.dsp.read(0x08));

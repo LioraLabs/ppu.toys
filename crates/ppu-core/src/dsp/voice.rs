@@ -3,15 +3,9 @@
 // Per-voice state: BRR sample playback, 4-point Gaussian resampling, and the
 // register-mapped fields (VOL/PITCH/SRCN/ADSR/GAIN/ENVX/OUTX).
 //
-// KON deferral (forced by this crate's API split between `Dsp::write`, which
-// has no ARAM access, and `Dsp::render`, which does): a KON write only sets
-// `pending_kon`; the actual directory read + first BRR block decode (the
-// reference's `Voice::key_on`) is applied at the start of this voice's next
-// `render_sample` call, which is the first point ARAM is available. A KOF
-// written after a KON but before that `render_sample` call is itself
-// deferred (`pending_kof`) and applied right after the deferred KON, so the
-// order matches the reference's key_on-then-key_off: the voice restarts and
-// immediately releases from level 0, i.e. silence.
+// KON and KOFF reach a voice only when `Dsp` polls them, every other sample
+// (see mod.rs); a polled KON restarts the voice and then holds it silent for
+// `KON_DELAY` samples before its envelope and BRR decoding begin.
 
 use super::brr::BrrBlockDecoder;
 use super::envelope::Envelope;
@@ -19,6 +13,7 @@ use super::gaussian::{HALF_KERNEL, HALF_KERNEL_SIZE};
 use super::{clamp, multiply_volume};
 
 const RESAMPLE_BUFFER_LEN: usize = 4;
+const KON_DELAY: u8 = 5;
 
 pub(crate) struct VoiceOutput {
     pub(crate) left_out: i32,
@@ -38,8 +33,9 @@ pub(crate) struct Voice {
     pub(crate) noise_on: bool,
     pub(crate) echo_on: bool,
     pub(crate) outx: u8,
-    pending_kon: bool,
-    pending_kof: bool,
+    /// Samples left before a keyed-on voice starts (fullsnes, KON: "5 'empty' samples before
+    /// envelope updates and BRR decoding actually begin").
+    kon_delay: u8,
 
     sample_start_address: u16,
     loop_start_address: u16,
@@ -78,8 +74,7 @@ impl Voice {
             noise_on: false,
             echo_on: false,
             outx: 0,
-            pending_kon: false,
-            pending_kof: false,
+            kon_delay: 0,
 
             sample_start_address: 0,
             loop_start_address: 0,
@@ -100,13 +95,14 @@ impl Voice {
         last_voice_out: i32,
         noise: i32,
     ) -> VoiceOutput {
-        if self.pending_kon {
-            self.pending_kon = false;
-            self.key_on(aram, source_dir);
-        }
-        if self.pending_kof {
-            self.pending_kof = false;
-            self.envelope.key_off();
+        if self.kon_delay > 0 {
+            self.kon_delay -= 1;
+            self.outx = 0;
+            return VoiceOutput {
+                left_out: 0,
+                right_out: 0,
+                last_voice_out: 0,
+            };
         }
 
         let mut pitch = ((self.pitch_high as i32) << 8) | (self.pitch_low as i32);
@@ -180,33 +176,14 @@ impl Voice {
         self.pitch_high = value & 0x3f;
     }
 
-    /// In the reference, KON runs `key_on` synchronously, so a KOF written
-    /// after a KON but before the emulator's next tick lands on an
-    /// already-restarted envelope (Attack) and immediately releases it —
-    /// silence. Here KON is deferred (see `request_key_on`), so a KOF that
-    /// arrives while a KON is still pending must itself wait: it's recorded
-    /// and replayed right after the deferred `key_on` in `render_sample`,
-    /// reproducing the same restart-then-release order.
+    /// A polled KOFF: release from the current level.
     pub(crate) fn key_off(&mut self) {
-        if self.pending_kon {
-            self.pending_kof = true;
-        }
         self.envelope.key_off();
     }
 
-    /// Request a key-on. The reference's immediate directory read + first
-    /// block decode is deferred to this voice's next `render_sample`, since
-    /// `Dsp::write` (where KON arrives) has no ARAM access. Clears any KOF
-    /// that was pending behind a still-unapplied KON: `KON; KOF; KON` in the
-    /// reference plays (the second KON re-restarts the envelope after the
-    /// first's KOF took effect), so a fresh KON here must discard the queued
-    /// KOF rather than let it fire after this KON's deferred `key_on`.
-    pub(crate) fn request_key_on(&mut self) {
-        self.pending_kon = true;
-        self.pending_kof = false;
-    }
-
-    fn key_on(&mut self, aram: &[u8; 0x10000], source_dir: u8) {
+    /// A polled KON: restart from the sample's start with the envelope at 0, silent for
+    /// `KON_DELAY` samples.
+    pub(crate) fn key_on(&mut self, aram: &[u8; 0x10000], source_dir: u8) {
         self.read_entry(aram, source_dir);
         self.sample_address = self.sample_start_address;
         self.brr_block_decoder.reset(0, 0);
@@ -217,6 +194,7 @@ impl Voice {
         }
         self.read_next_sample();
         self.envelope.key_on();
+        self.kon_delay = KON_DELAY;
     }
 
     fn read_entry(&mut self, aram: &[u8; 0x10000], source_dir: u8) {

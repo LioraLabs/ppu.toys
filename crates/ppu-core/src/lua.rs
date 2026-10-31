@@ -2054,13 +2054,14 @@ impl LuaEngine {
                 .unwrap_or(&self.saved_mix)
                 .apply(&mut self.dsp);
 
-            // 3. Flush KOF then KON.
+            // 3. Flush KOF then KON. KOFF is a level the chip polls, so a voice keyed on this
+            // frame drops out of it: `koff(v); kon(v)` retriggers.
             let kof = ctx.get_global("__dsp_koff").to_int().unwrap_or(0) as u8;
-            self.dsp.write(0x5c, kof | self.mix_koff);
+            let kon = ctx.get_global("__dsp_kon").to_int().unwrap_or(0) as u8 | self.mix_kon;
+            self.dsp.write(0x5c, (kof | self.mix_koff) & !kon);
             self.mix_koff = 0;
             ctx.set_global("__dsp_koff", 0).unwrap();
-            let kon = ctx.get_global("__dsp_kon").to_int().unwrap_or(0) as u8;
-            self.dsp.write(0x4c, kon | self.mix_kon);
+            self.dsp.write(0x4c, kon);
             self.mix_kon = 0;
             ctx.set_global("__dsp_kon", 0).unwrap();
         });

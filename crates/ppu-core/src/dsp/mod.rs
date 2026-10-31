@@ -89,17 +89,24 @@
 //! voice is keyed on, whereas real hardware reset leaves FLG at 0xE0 (muted).
 //! The noise LFSR starts at 0x4000, the rate counter at 0.
 //!
-//! # KON deferral
+//! # KON and KOFF
 //!
-//! `write(0x4c, mask)` cannot itself read ARAM (this API's `write` doesn't
-//! take one), so it only clears the targeted voices' ENDX bits and marks
-//! them pending. KON is applied at the start of the voice's next `render`
-//! tick. A KOF written after a KON but before `render` is applied after that
-//! deferred KON (matching the reference's key_on-then-key_off: the voice
-//! restarts and immediately releases from level 0, i.e. silence). SRCN/DIR/
-//! PITCH/ADSR writes between KON and `render` are seen by the deferred
-//! KON — the binding should issue KON after all other register writes for
-//! the frame. See `voice.rs`.
+//! As on hardware (fullsnes, "SNES APU Low Level Timings" and the KON/KOFF
+//! notes), both are polled every other sample, at the end of the sample, and
+//! KOFF is a level: every voice whose KOFF bit is set at a poll goes to
+//! release, after that poll's KON (so a voice keyed on while its KOFF bit is
+//! still set stays silent). A keyed-on voice restarts with its envelope at 0
+//! and stays silent for 5 samples before its envelope and BRR decoding
+//! begin. SRCN/DIR/PITCH/ADSR writes before the poll are seen by the KON.
+//! The polls fall on the samples after which `clock` is even, measured against
+//! bsnes and Snes9x (ppu-cart's tests/apu_timing.rs).
+//!
+//! shortcut: hosts that write a whole tick at once (the Studio's song player,
+//! its frame flush) can write several KON/KOFF values within one poll, where
+//! hardware sees only the last; here every KON bit written since the poll
+//! keys on, and every KOFF bit written since the poll releases unless a later
+//! KON wrote it. A sound driver that spaces its writes a poll (64 SPC700
+//! cycles) apart, as drivers must, sees hardware's behaviour either way.
 //!
 //! # Mute / reset (FLG bits 6/7)
 //!
@@ -203,6 +210,16 @@ pub struct Dsp {
     /// ENDX update go through this field instead.
     endx: u8,
 
+    /// Each voice's ENVX and OUTX before the last sample, what `read_at` shows until the
+    /// voice's slot in the sample.
+    shown: [[u8; 2]; NUM_VOICES],
+    /// KON bits written since the previous poll.
+    kon: u8,
+    /// KOFF bits written since the previous poll, less any a later KON wrote.
+    koff: u8,
+    /// KON/KOFF writes made after this sample's poll read them (`write_at`), applied once the
+    /// sample is rendered.
+    late: Vec<(u8, u8)>,
     counter: i32,
     noise: i32,
     echo_pos: i32,
@@ -226,6 +243,10 @@ impl Dsp {
             left_filter: Filter::new(),
             right_filter: Filter::new(),
             endx: 0,
+            kon: 0,
+            koff: 0,
+            late: Vec::new(),
+            shown: [[0; 2]; NUM_VOICES],
             counter: 0,
             noise: 0x4000,
             echo_pos: 0,
@@ -241,20 +262,9 @@ impl Dsp {
     }
 
     fn set_kon(&mut self, voice_mask: u8) {
-        for i in 0..NUM_VOICES {
-            if (voice_mask & (1 << i)) != 0 {
-                self.voices[i].request_key_on();
-                self.endx &= !(1 << i);
-            }
-        }
-    }
-
-    fn set_kof(&mut self, voice_mask: u8) {
-        for i in 0..NUM_VOICES {
-            if (voice_mask & (1 << i)) != 0 {
-                self.voices[i].key_off();
-            }
-        }
+        self.kon |= voice_mask;
+        self.koff &= !voice_mask;
+        self.endx &= !voice_mask;
     }
 
     fn set_pmon(&mut self, voice_mask: u8) {
@@ -310,7 +320,7 @@ impl Dsp {
         } else {
             match reg {
                 0x4c => self.set_kon(val),
-                0x5c => self.set_kof(val),
+                0x5c => self.koff |= val,
                 0x7c => self.endx = 0,
                 0x2d => self.set_pmon(val),
                 0x3d => self.set_non(val),
@@ -339,14 +349,41 @@ impl Dsp {
         }
     }
 
+    /// `write` as the SPC700 makes it `cycle` (0..31) cycles into the sample period being
+    /// rendered next: the poll reads KON and KOFF in the sample's last cycle (fullsnes puts both
+    /// at T31; measured against bsnes and Snes9x in ppu-cart's tests/apu_timing.rs), so a write
+    /// in that cycle waits for the next poll.
+    pub fn write_at(&mut self, reg: u8, val: u8, cycle: u32) {
+        if matches!(reg & 0x7f, 0x4c | 0x5c) && cycle >= 31 {
+            self.late.push((reg, val));
+        } else {
+            self.write(reg, val);
+        }
+    }
+
+    /// `read` as the SPC700 sees it `cycle` (0..31) cycles into the sample period after the
+    /// last `render`d sample: each voice writes its ENVX and OUTX at its own slot of the 32-cycle
+    /// pipeline (fullsnes "SNES APU Low Level Timings": V0ENVX at T2, then every 3 cycles a voice),
+    /// so earlier reads still see the previous sample's. The slots' offset from the sample
+    /// boundary, 5 + 3 * voice, is measured against bsnes and Snes9x (ppu-cart's
+    /// tests/apu_timing.rs).
+    pub fn read_at(&self, reg: u8, cycle: u32) -> u8 {
+        let reg = reg & 0x7f;
+        let v = (reg >> 4) as usize;
+        match reg & 0x0f {
+            r @ (0x08 | 0x09) if cycle < 5 + 3 * v as u32 => self.shown[v][(r & 1) as usize],
+            _ => self.read(reg),
+        }
+    }
+
     /// Render `out.len() / 2` interleaved stereo frames at [`SAMPLE_RATE`].
     /// `out` holds `frames * 2` `i16`s (left, right per frame); an odd
     /// trailing element is left untouched. Reads and writes `aram` for BRR
     /// sample data, the sample directory, and the echo buffer.
     pub fn render(&mut self, aram: &mut [u8; 0x10000], out: &mut [i16]) {
         let num_frames = out.len() / 2;
-        self.clock += num_frames as u64;
         for frame in 0..num_frames {
+            self.clock += 1;
             let counter = self.counter;
             let noise_clock = (self.regs[0x6c] & 0x1f) as i32;
             if !read_counter(counter, noise_clock) {
@@ -363,6 +400,7 @@ impl Dsp {
             let mut end_flags = [false; NUM_VOICES];
             for i in 0..NUM_VOICES {
                 let voice = &mut self.voices[i];
+                self.shown[i] = [(voice.envelope.level >> 4) as u8, voice.outx];
                 let output =
                     voice.render_sample(aram, source_dir, counter, last_voice_out, self.noise);
 
@@ -439,6 +477,25 @@ impl Dsp {
             }
 
             self.counter = (self.counter + 1) % COUNTER_RANGE;
+
+            // KON/KOFF poll (every other sample).
+            if self.clock % 2 == 0 {
+                let kon = std::mem::take(&mut self.kon);
+                for i in 0..NUM_VOICES {
+                    if kon & (1 << i) != 0 {
+                        self.voices[i].key_on(aram, source_dir);
+                    }
+                }
+                let koff = std::mem::take(&mut self.koff) | self.regs[0x5c];
+                for i in 0..NUM_VOICES {
+                    if koff & (1 << i) != 0 {
+                        self.voices[i].key_off();
+                    }
+                }
+            }
+            for (reg, val) in std::mem::take(&mut self.late) {
+                self.write(reg, val);
+            }
         }
     }
 }

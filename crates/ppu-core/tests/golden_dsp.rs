@@ -298,16 +298,33 @@ fn kon_then_kof_before_render_is_silent() {
 }
 
 #[test]
-fn kon_kof_kon_before_render_plays() {
+fn kon_while_koff_is_set_stays_released() {
+    // KOFF is a level the chip polls (fullsnes, KON/KOFF): a voice keyed on while its KOFF
+    // bit is still set is released at the same poll.
     let mut aram = [0u8; 0x10000];
     let mut dsp = voice_fixture(&mut aram); // KON voice 0
     dsp.write(0x5c, 0x01); // KOF voice 0
+    dsp.write(0x4c, 0x01); // KON voice 0 again, KOFF still set
+
+    let out = render_frames(&mut dsp, &mut aram, 2);
+    assert!(
+        out.iter().all(|&s| s == 0),
+        "KON under a set KOFF should stay silent"
+    );
+}
+
+#[test]
+fn kon_after_koff_cleared_plays() {
+    let mut aram = [0u8; 0x10000];
+    let mut dsp = voice_fixture(&mut aram); // KON voice 0
+    dsp.write(0x5c, 0x01); // KOF voice 0
+    dsp.write(0x5c, 0x00); // KOFF cleared
     dsp.write(0x4c, 0x01); // KON voice 0 again, before any render
 
     let out = render_frames(&mut dsp, &mut aram, 2);
     assert!(
         out.iter().any(|&s| s != 0),
-        "KON;KOF;KON before render should play"
+        "KON;KOF;KOF=0;KON before render should play"
     );
 }
 

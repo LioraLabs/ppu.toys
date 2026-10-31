@@ -23,6 +23,9 @@ use ppu::Ppu;
 use std::collections::HashMap;
 
 pub const LINE_CLOCKS: u32 = 1364;
+/// Master clocks from power-on to the 65816's reset-vector fetch, measured against bsnes (any of
+/// 164-166 lands every probe on its dot; tests/reset.rs).
+const RESET_CLOCKS: u32 = 164;
 pub const LINES: u16 = 262;
 const RENDER_H: u32 = 88;
 const REFRESH_H: u32 = 538;
@@ -832,6 +835,9 @@ impl Snes {
             profile: false,
             pc_ticks: PcMap::default(),
         };
+        // The 65816 fetches its reset vector RESET_CLOCKS after power-on, where the APU and PPU
+        // start.
+        s.bus.tick(RESET_CLOCKS);
         s.cpu.reset(&mut s.bus);
         Ok(s)
     }

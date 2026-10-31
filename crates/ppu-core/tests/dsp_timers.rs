@@ -462,8 +462,9 @@ fn recompile_rephases_timers_to_the_current_position() {
 }
 
 /// 6b. Recompile drops the OLD program's timer hooks outright, not just their
-/// phase: program A's `timer(0, 1, ..)` hook keys voice 0 on every tick
-/// (period_h = 1*8 = 8, so it fires early and often); program B registers NO
+/// phase: program A's `timer(0, 8, ..)` hook keys voice 0 on every tick
+/// (period_h = 8*8 = 64, every 32 samples: often, yet past KON's 5 empty
+/// samples and the 2-sample poll, so the voice sounds); program B registers NO
 /// timers at all and keys the voice off in its first frame. If A's hook
 /// survived the recompile it would keep re-triggering `kon(0)` underneath
 /// B's `koff(0)`, and the voice would never fall silent.
@@ -472,7 +473,7 @@ fn recompile_drops_old_timer_hooks() {
     let mut e = LuaEngine::new();
     e.set_source(&format!(
         "{init}\
-         timer(0, 1, function(off) kon(0) end)\n\
+         timer(0, 8, function(off) kon(0) end)\n\
          function frame(t, f)\n\
          {setup}\
          end\n",

@@ -16,6 +16,25 @@
 //! the SPC700 cycle the documented boot program makes it, so uploads take hardware's time.
 
 use ppu_core::Dsp;
+use std::sync::OnceLock;
+
+/// Each opcode's fewest cycles (a branch not taken), taken from `exec` itself on scratch states.
+fn base_cycles() -> &'static [u8; 256] {
+    static T: OnceLock<[u8; 256]> = OnceLock::new();
+    T.get_or_init(|| {
+        std::array::from_fn(|op| {
+            let mut best = u32::MAX;
+            for (fill, psw) in [(0u8, 0u8), (1, 0xff), (0, 0xff), (1, 0)] {
+                let mut a = Apu::new();
+                a.ram[0x0200..0x0204].fill(fill);
+                a.ram[0x0200] = op as u8;
+                (a.pc, a.psw, a.a, a.y) = (0x0200, psw, fill, fill);
+                best = best.min(a.exec());
+            }
+            best as u8
+        })
+    })
+}
 
 const N: u8 = 0x80;
 const V: u8 = 0x40;
@@ -76,6 +95,9 @@ pub struct Apu {
     /// SPC700 cycles since power-on.
     pub cycles: u64,
     halted: bool,
+    /// While an instruction executes, the cycle of its I/O access ($F0-$FF): its last cycle
+    /// (`base_cycles`), where the documented single-access instructions read or write. 0 outside.
+    io_at: u64,
     from_cpu: [u8; 4],
     to_cpu: [u8; 4],
     control: u8,
@@ -107,6 +129,7 @@ impl Apu {
             psw: 0,
             cycles: 0,
             halted: false,
+            io_at: 0,
             from_cpu: [0; 4],
             to_cpu: [0; 4],
             control: 0x80,
@@ -150,8 +173,16 @@ impl Apu {
                 self.boot_at += self.boot_step() as u64;
                 continue;
             }
-            let n = self.exec();
-            self.tick(n);
+            let start = self.cycles;
+            let io_at = start + base_cycles()[self.ram[self.pc as usize] as usize] as u64 - 1;
+            if io_at > target {
+                // Its port or DSP access would come after the 65816's: wait for the next call.
+                break;
+            }
+            self.io_at = io_at;
+            let n = self.exec() as u64;
+            self.io_at = 0;
+            self.tick((start + n).saturating_sub(self.cycles) as u32);
         }
     }
     /// Stereo 32.04 kHz samples produced since the last call, interleaved L, R.
@@ -247,8 +278,9 @@ impl Apu {
                 self.psw = (self.psw & !N) | Z;
                 self.boot = Boot::Enter;
                 self.pc = u16::from_le_bytes([self.ram[0], self.ram[1]]);
-                // The program's first instruction starts 12 cycles on.
-                self.tick(4 + 2 + 6);
+                // The program's first instruction starts 13 cycles on: the last cycle of
+                // mov $f4,a after its write (the echo, as `exec` places an access), then 12.
+                self.tick(1 + 4 + 2 + 6);
                 0
             }
             Boot::BlockStart => {
@@ -313,7 +345,17 @@ impl Apu {
 
     // --- memory ---
 
+    /// Run the timers and DSP up to this instruction's I/O cycle before it touches them.
+    fn io_sync(&mut self) {
+        if self.cycles < self.io_at {
+            self.tick((self.io_at - self.cycles) as u32);
+        }
+    }
+
     fn read(&mut self, addr: u16) -> u8 {
+        if addr & 0xfff0 == 0x00f0 {
+            self.io_sync();
+        }
         if addr & 0xfff0 != 0x00f0 {
             // shortcut: reads of $FFC0-$FFFF see RAM even while the IPL region is mapped; no
             // ROM bytes exist here. Matters only for code that reads the IPL ROM itself.
@@ -321,7 +363,7 @@ impl Apu {
         }
         match addr {
             0xf2 => self.dsp_addr,
-            0xf3 => self.dsp.read(self.dsp_addr),
+            0xf3 => self.dsp.read_at(self.dsp_addr, self.sample_acc),
             0xf4..=0xf7 => self.from_cpu[(addr - 0xf4) as usize],
             0xf8 | 0xf9 => self.ram[addr as usize],
             0xfd..=0xff => {
@@ -337,6 +379,7 @@ impl Apu {
         if addr & 0xfff0 != 0x00f0 {
             return;
         }
+        self.io_sync();
         match addr {
             0xf1 => {
                 for (i, t) in self.timers.iter_mut().enumerate() {
@@ -358,7 +401,7 @@ impl Apu {
                 self.control = v;
             }
             0xf2 => self.dsp_addr = v,
-            0xf3 => self.dsp.write(self.dsp_addr, v),
+            0xf3 => self.dsp.write_at(self.dsp_addr, v, self.sample_acc),
             0xf4..=0xf7 => self.to_cpu[(addr - 0xf4) as usize] = v,
             0xfa..=0xfc => self.timers[(addr - 0xfa) as usize].target = v,
             _ => {}
