@@ -396,3 +396,46 @@ fn reupload_by_jumping_back_to_the_boot_region() {
     host.upload(0x0500, &[1, 2, 3], 0x0500);
     assert_eq!(&host.apu.ram[0x500..0x503], &[1, 2, 3]);
 }
+
+#[test]
+fn multi_block_upload_waits_for_index_zero() {
+    let mut host = Host {
+        apu: Apu::new(),
+        clock: 0,
+    };
+    host.wait(0, 0xaa);
+    host.write(1, 1);
+    host.write(2, 0x00);
+    host.write(3, 0x03);
+    host.write(0, 0xcc);
+    host.wait(0, 0xcc);
+    let mut block = |host: &mut Host, data: &[u8], last: bool, next: u16| {
+        for (i, &b) in data.iter().enumerate() {
+            host.write(1, b);
+            // Leave the boot code time to see port 1 before port 0 moves.
+            host.clock += 2000;
+            host.write(0, i as u8);
+            host.wait(0, i as u8);
+        }
+        let kick = (data.len() as u8).wrapping_add(2);
+        host.write(1, if last { 0 } else { 1 });
+        host.write(2, next as u8);
+        host.write(3, (next >> 8) as u8);
+        host.write(0, kick);
+        host.wait(0, kick);
+    };
+    block(&mut host, &[7, 8, 9], false, 0x0400);
+    block(&mut host, &[0, 5, 6], true, 0x0300);
+    assert_eq!(&host.apu.ram[0x300..0x303], &[7, 8, 9]);
+    assert_eq!(&host.apu.ram[0x400..0x403], &[0, 5, 6]);
+    assert_eq!(host.apu.pc, 0x0300);
+}
+
+#[test]
+fn every_opcode_executes() {
+    for op in 0..=255u8 {
+        let mut apu = run(&[op], 0);
+        let c = apu.exec();
+        assert!((2..=12).contains(&c), "opcode {op:#04x}: {c} cycles");
+    }
+}

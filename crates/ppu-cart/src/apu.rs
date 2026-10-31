@@ -42,6 +42,10 @@ enum Boot {
     /// Not inside the boot region yet: the next boot step resets and signals ready.
     Enter,
     WaitKick,
+    /// A block starts only when port 0 reads exactly 0.
+    Start {
+        addr: u16,
+    },
     Data {
         addr: u16,
         index: u8,
@@ -176,6 +180,14 @@ impl Apu {
                     6
                 }
             }
+            Boot::Start { addr } => {
+                if self.from_cpu[0] == 0 {
+                    self.boot = Boot::Data { addr, index: 0 };
+                    self.boot_step()
+                } else {
+                    6
+                }
+            }
             Boot::Data { addr, index } => {
                 let d = self.from_cpu[0].wrapping_sub(index) as i8;
                 if d == 0 {
@@ -202,7 +214,7 @@ impl Apu {
         self.ram[1] = (addr >> 8) as u8;
         self.to_cpu[0] = self.from_cpu[0];
         if self.from_cpu[1] != 0 {
-            self.boot = Boot::Data { addr, index: 0 };
+            self.boot = Boot::Start { addr };
         } else {
             self.a = 0;
             self.x = 0;
