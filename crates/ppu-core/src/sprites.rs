@@ -280,6 +280,8 @@ struct Walk<'a> {
     art_at: HashMap<Range<usize>, usize>,
     art_names: HashMap<String, usize>,
     art_tables: HashMap<String, ArtTable>,
+    /// Locals bound to art (`local a = ART[k]`): the art they can be, by name (the latest binding).
+    art_locals: HashMap<String, Vec<usize>>,
     /// File-level tables and their field counts (generic `for` trip counts).
     tables: HashMap<String, u64>,
     /// Groups so far (all files); this file's group names.
@@ -351,7 +353,10 @@ impl Walk<'_> {
     fn art_of(&self, e: &Expression) -> Option<Vec<usize>> {
         match e {
             Expression::Parentheses { expression, .. } => self.art_of(expression),
-            Expression::Var(ast::Var::Name(n)) => self.art_names.get(&text(n)).map(|a| vec![*a]),
+            Expression::Var(ast::Var::Name(n)) => match self.art_names.get(&text(n)) {
+                Some(a) => Some(vec![*a]),
+                None => self.art_locals.get(&text(n)).cloned(),
+            },
             Expression::Var(ast::Var::Expression(v)) => {
                 let ast::Prefix::Name(root) = v.prefix() else { return None };
                 let table = self.art_tables.get(&text(root))?;
@@ -575,6 +580,14 @@ impl Visitor for Walk<'_> {
         let exprs: Vec<_> = node.expressions().iter().collect();
         let names: Vec<_> = node.names().iter().map(text).collect();
         for (i, name) in names.into_iter().enumerate() {
+            match exprs.get(i).and_then(|e| self.art_of(e)) {
+                Some(arts) if !top => {
+                    self.art_locals.insert(name.clone(), arts);
+                }
+                _ => {
+                    self.art_locals.remove(&name);
+                }
+            }
             if let Some(e) = exprs.get(i) {
                 if let Some(&g) = match e {
                     Expression::FunctionCall(c) => self.group_at.get(&span(c)),
@@ -790,6 +803,7 @@ pub fn plan(files: &[(&str, &str)]) -> Result<Option<Plan>, Error> {
             art_at: HashMap::new(),
             art_names: HashMap::new(),
             art_tables: HashMap::new(),
+            art_locals: HashMap::new(),
             tables: HashMap::new(),
             groups: &mut groups,
             group_names: HashMap::new(),

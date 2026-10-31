@@ -19,6 +19,7 @@ local ARTS = {}
 -- The most cells each art shows, by its sprites.art call (the plan numbers them; the engine rewrites
 -- each call to pass its number).
 __ppu_sprites_cells = {}
+__ppu_sprites_arts = {}
 local held, drawn = false, false
 local CONFLICT = "sprites.draw and sprites.hold cannot both run in one frame"
 -- Flicker advances a group's rotation by this many sprites a frame, so the sprites a crowded scanline
@@ -60,7 +61,7 @@ end
 
 function __ppu_sprites_art(site, levels, sheet)
   local art = sprites.art(levels, sheet)
-  __ppu_sprites_cells[site] = art.cells
+  __ppu_sprites_cells[site], __ppu_sprites_arts[site] = art.cells, art
   return art
 end
 
