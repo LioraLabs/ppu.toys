@@ -7,8 +7,18 @@ repository.workspace = true
 homepage.workspace = true
 description = "A SNES console that runs cartridge ROMs, written from hardware documentation, rendering through ppu-core"
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# The web package: ppu-core's Studio bindings plus `CartSnes` (wasm32 only), built as one module.
+web = ["ppu-core/bindings"]
+
 [dependencies]
 ppu-core = { path = "../ppu-core", default-features = false }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
 
 [[example]]
 name = "ppu_cart_libretro"

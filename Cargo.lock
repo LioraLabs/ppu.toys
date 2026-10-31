@@ -552,6 +552,7 @@ name = "ppu-cart"
 version = "0.1.0"
 dependencies = [
  "ppu-core",
+ "wasm-bindgen",
 ]
 
 [[package]]

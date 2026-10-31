@@ -11,6 +11,8 @@
 pub mod apu;
 pub mod cpu;
 pub mod system;
+#[cfg(all(target_arch = "wasm32", feature = "web"))]
+mod wasm;
 
 pub use apu::Apu;
 pub use cpu::Cpu;
