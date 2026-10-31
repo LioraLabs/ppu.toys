@@ -13,3 +13,7 @@ ppu-core = { path = "../ppu-core", default-features = false }
 [[example]]
 name = "ppu_cart_libretro"
 crate-type = ["cdylib"]
+
+[[example]]
+name = "wasmbench"
+crate-type = ["cdylib"]

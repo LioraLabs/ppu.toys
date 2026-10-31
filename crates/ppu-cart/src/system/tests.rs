@@ -192,7 +192,7 @@ fn joypad_auto_read_and_serial() {
     let mut s = sys();
     s.pads[0] = crate::pad::B | crate::pad::A;
     s.write(0x4200, 0x01);
-    while s.v != VDISP {
+    while s.v != VDISP || s.h <= AUTOJOY_H {
         s.idle();
     }
     assert_eq!(s.read(0x4212) & 1, 1);
