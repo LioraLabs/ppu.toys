@@ -112,8 +112,9 @@ declare function scanline(first: number, last: number, line: (number) -> ()): ()
 
 -- Graphics sources: dma places a named source and returns where it went.
 type Placement = {char: number?, map: number?, pal: number?, addr: number?}
+type Cell = {tile: number, pal: number, flip_x: boolean, flip_y: boolean}
 type Graphics = {
-  char: number, map: number, pal: number, tile: number, cells: {{tile: number}},
+  char: number, map: number, pal: number, tile: number, cells: {Cell},
   tiles_w: number, tiles_h: number, next_char: number, next_map: number, next_pal: number,
   id: number, addr: number, next_addr: number,
 }
@@ -138,7 +139,7 @@ type SpriteGroup = {
   draw: (self: SpriteGroup, art: SpriteArt, x: number, y: number, options: SpriteOptions?) -> (),
   keep: (self: SpriteGroup, key: number) -> (),
 }
-type SpriteSheet = {tile: number, pal: number, cells: {{tile: number}}}
+type SpriteSheet = {tile: number, pal: number, cells: {Cell}}
 declare sprites: {
   flicker: boolean,
   art: (levels: {SpriteLevel}, sheet: SpriteSheet) -> SpriteArt,

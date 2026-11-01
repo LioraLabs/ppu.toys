@@ -206,7 +206,9 @@ fn group_rules_are_static_errors_on_their_line() {
     // SHEET is lines 1-3, KEYED 4-5: the program starts on line 6.
     plan_error("function frame(t, f)\n  local g = sprites.group()\n  g:draw(dot, 1, 1)\nend", 7, GROUP_PLACE);
     plan_error("local g = sprites.group()\nfunction frame(t, f)\n  while f > 0 do g:draw(dot, 1, 1) f = f - 1 end\nend", 8, UNSIZED);
-    plan_error("local g = sprites.group()\nfunction frame(t, f)\n  g:draw(f > 1 and dot or big, 1, 1)\nend", 8, UNSIZED);
+    // `c and a or b` (Luau's `if c then a else b` as the preview runs it) sizes for either art; a value
+    // that is not art does not.
+    plan_error("local g = sprites.group()\nlocal other = {}\nfunction frame(t, f)\n  g:draw(f > 1 and dot or other, 1, 1)\nend", 9, UNSIZED);
     plan_error("function frame(t, f, g)\n  g:draw(dot, 1, 1)\nend", 7, NO_GROUP);
     plan_error("function frame(t, f)\n  sprites.sort()\n  sprites.draw(dot, 1, 1)\nend", 7, NO_SORT);
     plan_error("function frame(t, f)\n  sprites.draw(dot, 1, 1, {layer = 2})\nend", 7, NO_LAYER);
@@ -217,4 +219,28 @@ fn group_rules_are_static_errors_on_their_line() {
     e.frame(0., 0).unwrap();
     let oam = &e.memory().oam;
     assert_eq!((oam[2].x, oam[3].x), (22, 83));
+}
+
+/// A group made and never drawn shows nothing and takes no slots (the cartridge keeps none either).
+#[test]
+fn a_group_never_drawn_is_inert() {
+    let e = run_as("main.luau", "local idle = sprites.group()\nfunction frame(t, f) obj[0].x = f end", 3);
+    assert_eq!(e.memory().oam[0].x, 2);
+}
+
+/// `group:draw(if c then a else b, ...)`: the group sizes for the larger of the two arts.
+#[test]
+fn an_if_expression_picks_the_art_of_a_draw() {
+    let program = r#"local dot = sprites.art({{size = 16, columns = 1, cells = {1}}}, sheet)
+local pair = sprites.art({{size = 16, columns = 2, cells = {2, 3}}}, sheet)
+local g = sprites.group()
+function frame(t, f)
+  g:draw(if f % 2 == 0 then dot else pair, 100, 100)
+end"#;
+    let e = run_as("main.luau", program, 2);
+    let on: Vec<u16> = e.memory().oam.iter().filter(|o| o.on).map(|o| o.tile).collect();
+    assert_eq!(on, vec![4, 6]);
+    let e = run_as("main.luau", program, 1);
+    let on: Vec<u16> = e.memory().oam.iter().filter(|o| o.on).map(|o| o.tile).collect();
+    assert_eq!(on, vec![2]);
 }

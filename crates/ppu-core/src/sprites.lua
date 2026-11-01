@@ -257,5 +257,7 @@ function __ppu_sprites_flush()
 end
 
 function sprites.group()
+  -- No plan: the program never draws, so the group shows nothing (as on the cartridge).
+  if __ppu_sprites_free == nil then return {} end
   error("sprites.group must be called at file level or in init(), where the plan numbers it", 2)
 end

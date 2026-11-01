@@ -353,6 +353,13 @@ impl Walk<'_> {
     fn art_of(&self, e: &Expression) -> Option<Vec<usize>> {
         match e {
             Expression::Parentheses { expression, .. } => self.art_of(expression),
+            // Luau's `if c then a else b`, as the preview runs it: `((c) and (a) or (b))`, either branch.
+            Expression::BinaryOperator { lhs, binop: ast::BinOp::And(_), rhs } if self.art_of(lhs).is_none() => self.art_of(rhs),
+            Expression::BinaryOperator { lhs, binop: ast::BinOp::Or(_), rhs } => {
+                let mut arts = self.art_of(lhs)?;
+                arts.extend(self.art_of(rhs)?);
+                Some(arts)
+            }
             Expression::Var(ast::Var::Name(n)) => match self.art_names.get(&text(n)) {
                 Some(a) => Some(vec![*a]),
                 None => self.art_locals.get(&text(n)).cloned(),

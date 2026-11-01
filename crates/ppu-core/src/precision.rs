@@ -1268,7 +1268,9 @@ impl Transform<'_> {
                 "Use direct obj/bg/m7/vram/cgram accesses, or a named numeric array.",
             ));
         };
-        if !matches!(
+        // A dma() placement (Kind::Other) reads like the hardware: its char, map, pal and cells are integers.
+        let placed = self.binding(&text(n)).is_some_and(|b| b.kind == Kind::Other);
+        if !placed && !matches!(
             text(n).as_str(),
             "obj"
                 | "bg"
@@ -1558,7 +1560,7 @@ impl Transform<'_> {
                 "floor"|"math.floor"=>Ok(Kind::Int),
                 "abs"|"math.abs"|"min"|"max"|"math.min"|"math.max"=>Ok(numeric()),
                 "rgb"|"rgb15"|"lobyte"|"hibyte"=>Ok(Kind::Int),
-                "error"|"assert"|"print"|"kon"|"koff"|"sfx"=>Ok(Kind::Other),
+                "error"|"assert"|"print"|"kon"|"koff"|"sfx"|"dma"|"bank"=>Ok(Kind::Other),
                 _=>binding.and_then(|b|b.returns).map(|r|r.first().copied().unwrap_or(Kind::Other)).ok_or_else(||self.error(&format!("Call {callee:?} is outside the precision preview surface."),"Use a previously defined named numeric helper or min/max/abs/floor. Keep nonlinear f64 math inside a pure ---@snes lookup helper.")),
             };
         }

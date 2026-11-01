@@ -1,3 +1,4 @@
+mod common;
 use ppu_core::LuaEngine;
 
 fn frame(source: &str) -> Vec<i16> {
@@ -515,4 +516,21 @@ fn precision_nil_initialized_bindings_take_the_representation_of_later_stores() 
     // .5 * (1+2+3+4) + .5 (count wraps at f=4, then is cleared) + 1.5 (f=5 restarts at speed 1.5) = 7
     assert_eq!(e.memory().oam[0].x, 112);
     assert_eq!(e.memory().oam[1].x, 1);
+}
+
+/// A file-level makeFixed binding keeps canonical precision, and a dma() placement beside it
+/// is read like the hardware (its fields are integers), as on the cartridge.
+#[test]
+fn a_fixed_binding_beside_a_dma_placement() {
+    let mut e = LuaEngine::new();
+    common::add_bg(&mut e, "green", vec![0, 255, 0, 255].repeat(64 * 64), 64, 64, 4);
+    e.set_sources(&[(
+        "main.lua",
+        "local g = dma(\"green\", {char = 0x2000, map = 0x1800, pal = 0})\nlocal px = makeFixed(128, 8, 248, 16)\nfunction frame(t, f)\n  px = math.max(8, px - 2.5)\n  obj[0].x = floor(px)\n  obj[1].x = g.char // 256\nend",
+    )])
+    .unwrap();
+    for f in 0..3 {
+        e.frame(f as f64 / 60., f).unwrap();
+    }
+    assert_eq!((e.memory().oam[0].x, e.memory().oam[1].x), (120, 32));
 }
