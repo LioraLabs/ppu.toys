@@ -53,6 +53,10 @@ struct Manifest {
     /// (60 or 30 NTSC, 50 or 25 PAL). Absent leaves it to the exporter's default.
     #[serde(default, rename = "targetHz", skip_serializing_if = "Option::is_none")]
     target_hz: Option<u8>,
+    /// Build setting for cartridge exports: the ROM size, `"auto"` or a size in KiB; carried
+    /// as written, for the exporter to read. Absent is auto.
+    #[serde(default, rename = "romSize", skip_serializing_if = "Option::is_none")]
+    rom_size: Option<serde_json::Value>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -108,6 +112,10 @@ struct FileBody {
     /// (60 or 30 NTSC, 50 or 25 PAL). Absent leaves it to the exporter's default.
     #[serde(default, rename = "targetHz", skip_serializing_if = "Option::is_none")]
     target_hz: Option<u8>,
+    /// Build setting for cartridge exports: the ROM size, `"auto"` or a size in KiB; carried
+    /// as written, for the exporter to read. Absent is auto.
+    #[serde(default, rename = "romSize", skip_serializing_if = "Option::is_none")]
+    rom_size: Option<serde_json::Value>,
 }
 
 fn read_manifest(dir: &Path) -> Result<Manifest> {
@@ -177,6 +185,7 @@ pub fn pack(dir: &Path) -> Result<String> {
         sources,
         origin: manifest.origin,
         target_hz: manifest.target_hz,
+        rom_size: manifest.rom_size,
     };
     Ok(serde_json::to_string_pretty(&body)?)
 }
@@ -246,6 +255,7 @@ pub fn unpack(text: &str, dir: &Path) -> Result<()> {
         sources,
         origin: body.origin,
         target_hz: body.target_hz,
+        rom_size: body.rom_size,
     };
     std::fs::write(
         dir.join(MANIFEST),
