@@ -227,6 +227,11 @@ impl Visitor for Lower {
 pub fn requires(source: &str) -> Vec<&str> {
     let mut paths = vec![];
     for (at, _) in source.match_indices("require(") {
+        // shortcut: only `--` line comments are skipped, not --[[ ]] blocks; parse if one bites.
+        let line = &source[source[..at].rfind('\n').map_or(0, |n| n + 1)..at];
+        if line.contains("--") {
+            continue;
+        }
         let rest = &source[at + "require(".len()..];
         let Some(quote) = rest.chars().next().filter(|c| *c == '"' || *c == '\'') else { continue };
         let Some(end) = rest[1..].find(quote) else { continue };
@@ -489,6 +494,12 @@ mod tests {
             "{normalized}"
         );
     }
+    #[test]
+    fn requires_in_comments_are_not_requires() {
+        let source = "-- main.luau loads it with require(\"./self\")\nlocal A = require(\"./a\") -- not require(\"./b\")\n";
+        assert_eq!(requires(source), ["a"]);
+    }
+
     #[test]
     fn unsupported_luau_does_not_fall_back_or_drop_code() {
         for source in [
