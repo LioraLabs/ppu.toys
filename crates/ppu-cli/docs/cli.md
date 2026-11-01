@@ -57,6 +57,10 @@ tile, and VRAM budgets. Quantization/cropping reports are informational and
 must be reviewed; sprite range or sliver overflow fails the check unless
 `--allow-overflow` is given for a deliberate effect.
 
+`check` and `render` take `--hold` to play a game: `--hold a@60-200,left@90-120`
+holds A on frames 60..199 and left on 90..119. Join buttons with `+`; a `2.`
+prefix presses the second controller, `a+2.left@60-200`.
+
 For seekable performances:
 
 ```sh

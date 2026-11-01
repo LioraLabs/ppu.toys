@@ -251,3 +251,17 @@ fn explicit_apply_pokes_call_with_no_controls_lua_errors_instead_of_silently_no_
         "error must name the caller's own file, not swallow it: {error}"
     );
 }
+
+#[test]
+fn holds_press_either_controller() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().to_str().unwrap();
+    // A frame that errors unless pad 1 holds A and pad 2 holds left, and only pad 2 holds left.
+    lua_project(
+        tmp.path(),
+        "function frame(t,f) if f==3 and not (pad.a and pad2.left and not pad.left and not pad2.a) then error('pads') end end",
+    );
+    success(&["check", path, "--duration", "0.1", "--hold", "a+2.left@2-5"]);
+    assert!(failure(&["check", path, "--duration", "0.1", "--hold", "a+left@2-5"]).contains("pads"));
+    assert!(failure(&["check", path, "--duration", "0.1", "--hold", "2.nope@2-5"]).contains("unknown button"));
+}

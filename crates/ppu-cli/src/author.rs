@@ -214,8 +214,9 @@ fn engine_on(body: &FileBody, slot: Option<&str>) -> Result<LuaEngine> {
     Ok(engine)
 }
 
-/// Buttons held on frames `[from, to)`: `r@450-460` or `a+l@600-610`, comma-separated.
-pub fn parse_holds(value: &str) -> Result<Vec<(u16, u32, u32)>> {
+/// Buttons held on frames `[from, to)`: `r@450-460` or `a+l@600-610`, comma-separated. A `2.` prefix names a
+/// button on the second controller (`2.a+2.left@600-610`); in the mask, pad 2 is the high 16 bits.
+pub fn parse_holds(value: &str) -> Result<Vec<(u32, u32, u32)>> {
     value
         .split(',')
         .map(|hold| {
@@ -223,20 +224,26 @@ pub fn parse_holds(value: &str) -> Result<Vec<(u16, u32, u32)>> {
             let (from, to) = frames.split_once('-').context("hold needs buttons@from-to")?;
             let mut mask = 0;
             for button in buttons.split('+') {
+                let (name, shift) = match button.strip_prefix("2.") {
+                    Some(name) => (name, 16),
+                    None => (button, 0),
+                };
                 let bit = ppu_core::PAD_NAMES
                     .iter()
-                    .position(|n| *n == button)
+                    .position(|n| *n == name)
                     .with_context(|| format!("unknown button {button:?}"))?;
-                mask |= 1 << bit;
+                mask |= 1 << (bit + shift);
             }
             Ok((mask, from.parse()?, to.parse()?))
         })
         .collect()
 }
 
-fn draw(engine: &mut LuaEngine, frame: u32, holds: &[(u16, u32, u32)]) -> Result<(Vec<u8>, ObjOverflow)> {
+fn draw(engine: &mut LuaEngine, frame: u32, holds: &[(u32, u32, u32)]) -> Result<(Vec<u8>, ObjOverflow)> {
     let held = holds.iter().filter(|(_, from, to)| (*from..*to).contains(&frame));
-    engine.set_pad(held.fold(0, |mask, (buttons, _, _)| mask | buttons));
+    let mask = held.fold(0, |mask, (buttons, _, _)| mask | buttons);
+    engine.set_pad(mask as u16);
+    engine.set_pad2((mask >> 16) as u16);
     let time = f64::from(frame) / 60.0;
     let lines = engine
         .frame(time, frame)
@@ -264,7 +271,7 @@ pub fn parse_times(value: &str) -> Result<Vec<u32>> {
 /// Render sequentially from zero, including intermediate frames for stateful toys.
 /// `srm`: a saveData record's battery RAM image, loaded first when the file exists and written back after the
 /// last frame (the cartridge's layout, so the file moves to and from emulators and flash carts).
-pub fn render(path: &Path, frames: &[u32], out: &Path, holds: &[(u16, u32, u32)], srm: Option<&Path>) -> Result<()> {
+pub fn render(path: &Path, frames: &[u32], out: &Path, holds: &[(u32, u32, u32)], srm: Option<&Path>) -> Result<()> {
     ensure!(!frames.is_empty(), "at least one sample time is required");
     let body = load_body(path)?;
     let mut slot = match srm.filter(|p| p.exists()) {
@@ -302,7 +309,7 @@ pub fn check(
     seeks: &[u32],
     loop_seconds: Option<f64>,
     allow_overflow: bool,
-    holds: &[(u16, u32, u32)],
+    holds: &[(u32, u32, u32)],
 ) -> Result<()> {
     let end = frame_number(duration)?;
     ensure!(end > 0, "duration must be at least one frame");

@@ -16,7 +16,7 @@ check defaults to 30 seconds; includes the endpoint. --seek compares direct
 and backward seeks with playback. --loop adds loop comparisons at sample times.
 render plays from zero to the last requested time and writes numbered PNGs;
 --srm loads a saveData record's battery RAM image first (when the file exists) and writes it back after.
-Times round to the nearest 60 Hz frame. --hold holds buttons on frames [from, to). PNG sources convert on every load.
+Times round to the nearest 60 Hz frame. --hold holds buttons on frames [from, to); a 2. prefix (2.a) is the second controller. PNG sources convert on every load.
 See ppu docs cli for manifests, examples, and supported features.";
 
 fn option(args: &mut Vec<String>, flag: &str) -> Result<Option<String>> {
