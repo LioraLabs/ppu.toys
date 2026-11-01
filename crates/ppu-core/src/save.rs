@@ -20,8 +20,8 @@ pub const HEADER_WORDS: usize = 3;
 pub const CHECKSUM_WORD: usize = 2;
 /// The smallest SRAM a cartridge header can declare that boards ship: 2 KiB.
 pub const MIN_BYTES: usize = 2048;
-/// One LoROM SRAM bank ($70:0000-$7FFF).
-pub const MAX_BYTES: usize = 32768;
+/// The largest save: 8 KiB, whose hex fits the preview's 32 KiB `sram` slot with room to spare.
+pub const MAX_BYTES: usize = 8192;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -133,7 +133,7 @@ pub fn layout(fields: &[(String, Kind)]) -> Result<Layout, String> {
     }
     let bytes = word * 2;
     if bytes > MAX_BYTES {
-        return Err(format!("saveData needs {bytes} bytes, more than the 32 KiB a cartridge's save RAM holds"));
+        return Err(format!("saveData needs {bytes} bytes, more than the 8 KiB a save may hold"));
     }
     let size = bytes.next_power_of_two().max(MIN_BYTES);
     Ok(Layout { fields: out, id, size })
@@ -246,6 +246,8 @@ mod tests {
     fn sizes_and_refusals() {
         let many: Vec<(String, Kind)> = (0..1100).map(|i| (format!("f{i:04}"), Kind::Boolean)).collect();
         assert_eq!(layout(&many).unwrap().size, 4096);
+        let too_many: Vec<(String, Kind)> = (0..4100).map(|i| (format!("f{i:04}"), Kind::Boolean)).collect();
+        assert!(layout(&too_many).unwrap_err().contains("8 KiB"));
         assert!(layout(&[("x".into(), Kind::Bounded { lo: 2, hi: 1 })]).is_err());
         assert!(layout(&[("x".into(), Kind::Bounded { lo: -(1 << 31), hi: 1 << 31 })]).is_err());
         assert!(layout(&[]).is_err());

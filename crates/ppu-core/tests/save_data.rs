@@ -97,3 +97,16 @@ fn fields_keep_their_contracts_and_the_declaration_is_checked() {
     let e = run("local save = saveData({speed = makeFixed(0, 0, 4)})\nfunction frame() end").unwrap_err();
     assert!(e.message.contains("saveData field speed"), "{}", e.message);
 }
+
+#[test]
+fn a_foreign_save_full_of_junk_resets_quickly() {
+    // Another game's 2 KiB: every word changes when the record starts over.
+    let junk: Vec<u8> = (0..2048).map(|i| ((i * 37 + 11) & 0xff) as u8).collect();
+    let mut e = LuaEngine::new();
+    e.set_sram(&format!("{{{}}}", ppu_core::save::slot_members(&junk)));
+    let start = std::time::Instant::now();
+    e.set_sources(&[("main.luau", MAIN)]).unwrap();
+    e.frame(0.0, 0).unwrap();
+    assert!(start.elapsed().as_millis() < 500, "{:?}", start.elapsed());
+    assert_eq!(slot(&mut e).unwrap(), hex(&fresh(&the_layout(), &[0, 0, 0])));
+}

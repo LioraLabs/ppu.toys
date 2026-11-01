@@ -251,18 +251,20 @@ for i = 1, 16 do
 end
 
 -- The host's save slot as SRAM words: image[i] is little-endian word i of `sram["ppu.save"]`, hex
--- whose missing tail is zeros, of `sram["ppu.save.size"]` bytes (save.rs `srm_from_slot`). The cartridge compiler's Lua reference program uses it for the cart's SRAM.
+-- whose missing tail is zeros, of `sram["ppu.save.size"]` bytes (save.rs `srm_from_slot`). Cart mode's
+-- program keeps its SRAM here too. A write edits the hex in place: one copy, not a rebuild.
 function __ppu_save_image(size)
   local slot = type(sram) == "table" and sram or {}
   if slot["ppu.save.size"] ~= size then slot["ppu.save.size"] = size end
   local bytes = {}
   local hex = slot["ppu.save"]
-  if type(hex) == "string" then
-    for i = 1, math.min(#hex // 2, size) do
-      local hi, lo = __ppu_nibble[string.sub(hex, i * 2 - 1, i * 2 - 1)], __ppu_nibble[string.sub(hex, i * 2, i * 2)]
-      bytes[i - 1] = hi and lo and hi * 16 + lo or 0
-    end
+  if type(hex) ~= "string" then hex = "" end
+  hex = string.sub(hex, 1, math.min(#hex // 2, size) * 2)
+  for i = 1, #hex // 2 do
+    local hi, lo = __ppu_nibble[string.sub(hex, i * 2 - 1, i * 2 - 1)], __ppu_nibble[string.sub(hex, i * 2, i * 2)]
+    bytes[i - 1] = hi and lo and hi * 16 + lo or 0
   end
+  local function digit(n) return string.sub(__ppu_hex, n + 1, n + 1) end
   return setmetatable({}, {
     __index = function(_, i)
       return (bytes[i * 2] or 0) | (bytes[i * 2 + 1] or 0) << 8
@@ -272,14 +274,11 @@ function __ppu_save_image(size)
       local lo, hi = w & 255, (w >> 8) & 255
       if (bytes[i * 2] or 0) == lo and (bytes[i * 2 + 1] or 0) == hi then return end
       bytes[i * 2], bytes[i * 2 + 1] = lo, hi
-      local last = -1
-      for k, b in pairs(bytes) do if b ~= 0 and k > last then last = k end end
-      local out = ""
-      for k = 0, last do
-        local b = bytes[k] or 0
-        out = out .. string.sub(__ppu_hex, b // 16 + 1, b // 16 + 1) .. string.sub(__ppu_hex, b % 16 + 1, b % 16 + 1)
-      end
-      slot["ppu.save"] = out
+      while #hex < i * 4 + 4 do hex = hex .. "00" end
+      hex = string.sub(hex, 1, i * 4) .. digit(lo // 16) .. digit(lo % 16) .. digit(hi // 16) .. digit(hi % 16)
+        .. string.sub(hex, i * 4 + 5, #hex)
+      while #hex >= 2 and string.sub(hex, #hex - 1, #hex) == "00" do hex = string.sub(hex, 1, #hex - 2) end
+      slot["ppu.save"] = hex
     end,
   })
 end
