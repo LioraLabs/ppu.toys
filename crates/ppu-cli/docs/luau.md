@@ -242,8 +242,11 @@ names it:
 - `+=` and the other compound assignments on an indexed target such as
   `bg[1].scroll.x += 2` or `obj[i].x += 1`. Bind the table to a local first:
   `local s = bg[1].scroll; s.x += 2`.
-- An `if` expression whose `then` value could be `false` or `nil`. Use an
-  `if` statement instead.
+- An `if` expression whose `then` value could be `false` or `nil`: `false`,
+  `nil`, `not`, a comparison, `and` or `or`. Use an `if` statement instead.
+  A name, field, index or call is accepted there
+  (`local t = if i == 1 then a[1] else a[2]`) and must not be `false` or
+  `nil` when chosen: if it is, the `else` value is used.
 
 Types are not checked when the toy runs. They document your intent and help
 an editor check it.

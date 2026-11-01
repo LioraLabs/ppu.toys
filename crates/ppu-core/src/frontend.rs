@@ -20,9 +20,12 @@ struct Lower {
     errors: Vec<(usize, Error)>,
 }
 
+// From the first token's start to the last token's end: `Node::range` can stop before a closing
+// bracket (`a[1]`), which put inserted parentheses inside it.
 fn range(node: &impl Node) -> Range<usize> {
-    let (first, last) = node.range().expect("parsed syntax has source positions");
-    first.bytes()..last.bytes()
+    let mut tokens = node.tokens().map(|t| t.token().start_position().bytes()..t.token().end_position().bytes());
+    let first = tokens.next().expect("parsed syntax has tokens");
+    tokens.fold(first, |a, b| a.start.min(b.start)..a.end.max(b.end))
 }
 
 impl Lower {
@@ -340,7 +343,7 @@ pub fn required_files(files: &[(&str, &str)]) -> std::collections::HashSet<Strin
         .collect()
 }
 
-// shortcut: names, fields and calls are assumed to hold non-false values; type-directed check if that bites.
+// shortcut: names, fields, indexes and calls are assumed to hold non-false values; type-directed check if that bites.
 fn may_be_false(value: &ast::Expression) -> bool {
     match value {
         ast::Expression::Symbol(t) => matches!(t.token().to_string().as_str(), "false" | "nil"),
@@ -596,6 +599,19 @@ mod tests {
         }
         let mut engine = crate::LuaEngine::new();
         assert_eq!(engine.set_source("-- ok\n\0").unwrap_err().line, Some(2));
+    }
+    #[test]
+    fn index_and_call_values_keep_their_closing_brackets() {
+        // The then-value may be an index or a call (taken as never false, like a name or field).
+        let source = "local a = {7, 9}\nlocal function f(n) return a[n] end\nlocal x = 2\nlocal n = 0\nfunction frame()\n  local t = if x == 1 then a[1] else a[2]\n  local u = if x == 2 then f(1) else f(2)\n  n += a[2]\n  obj[0].x = t\n  obj[1].x = u\n  obj[2].x = n\nend\n";
+        let mut engine = crate::LuaEngine::new();
+        engine.set_sources(&[("main.luau", source)]).unwrap();
+        engine.frame(0., 0).unwrap();
+        let oam = &engine.memory().oam;
+        assert_eq!((oam[0].x, oam[1].x, oam[2].x), (9, 7, 9));
+        // A literal false then-value still names the subset rule.
+        let error = prepare("local t = if x == 1 then false else a[2]").unwrap_err();
+        assert!(error.message.contains("then-value may be false or nil"), "{}", error.message);
     }
     #[test]
     fn nested_compounds_preserve_execution_and_rhs_precedence() {
