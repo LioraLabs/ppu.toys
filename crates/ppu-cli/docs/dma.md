@@ -142,7 +142,9 @@ The rules:
   the new graphics is the first unblanked one.
 - A load writes over whatever its addresses held, like hardware DMA: setup
   placements, earlier loads and earlier `vram[]`/`cgram[]` writes alike. Writes
-  made after the load win again.
+  made after the load win again. Cells drawn with `bg[n].map[col][row]` are kept
+  by the program and redrawn every frame, so a load does not clear them; don't
+  load over a tilemap you draw cell by cell.
 - The result table is the one a setup call returns (`char`, `next_char`, `tile`,
   `cells`, ...). A sprite source's `tile` counts from the sprite base the setup
   placements chose; with no sprite placed at setup, from the load's own `char`,
