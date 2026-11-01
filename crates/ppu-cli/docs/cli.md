@@ -28,7 +28,10 @@ ppu check my-demo.ppu.json --duration 8 --loop 8
 ```
 
 `new` creates an animated Mode 7 floor with HDMA perspective and an editable
-`assets/floor.png`. It refuses existing directories. Edit the Lua and PNG;
+`assets/floor.png`: a Luau toy, `main.luau`, with `ppu.d.luau` beside it (the
+API's declarations, for a Luau editor such as luau-lsp; `ppu unpack` writes it
+for a Luau toy too). `ppu new my-demo --lua` makes a Lua toy, `main.lua`,
+instead. It refuses existing directories. Edit the code and PNG;
 each subsequent load reconverts the image through Studio's importer.
 
 Open `my-demo.ppu.json` in ppu.toys Studio. The packed file contains all Lua
