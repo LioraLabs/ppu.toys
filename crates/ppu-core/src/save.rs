@@ -71,8 +71,8 @@ impl Layout {
         self.fields.last().map_or(HEADER_WORDS, |f| f.word + f.words)
     }
 
-    /// The literal the Luau frontend passes to luau.lua's `saveData` and the cartridge compiler
-    /// reads back: `{size = 2048, id = 4660, {"hiscore", 3, 2, 0, 999999, false}, ...}`.
+    /// The literal the Luau frontend passes to luau.lua's `saveData` (a cartridge build
+    /// reads it too): `{size = 2048, id = 4660, {"hiscore", 3, 2, 0, 999999, false}, ...}`.
     pub fn lua(&self) -> String {
         let mut out = format!("{{size = {}, id = {}", self.size, self.id);
         for f in &self.fields {
