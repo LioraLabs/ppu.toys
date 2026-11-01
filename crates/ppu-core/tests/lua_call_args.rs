@@ -138,3 +138,16 @@ function frame()
 end
 "#);
 }
+
+#[test]
+fn tail_call_short_stack() {
+    run(r#"
+local function g(a, b, c, d, e, h, i, j) return a, j end
+local function f() return g(1) end
+function frame()
+  do local d1, d2, d3, d4, d5 = "s1", "s2", "s3", "s4", "s5" end
+  local a, j = f()
+  assert(a == 1 and j == nil, "tail call")
+end
+"#);
+}

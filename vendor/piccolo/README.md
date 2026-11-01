@@ -191,3 +191,8 @@ followed by `{ g("hat") }` gave `g` the string `"C6"` as its second argument.
 every missing parameter is nil, as `tail_call_function` already guaranteed. The
 generic-`for`, metamethod and callback call paths were checked and needed no
 change. Regression coverage: `crates/ppu-core/tests/lua_call_args.rs`.
+`tail_call_function` filled its missing parameters in place, which indexed past
+the end of the stack (a Rust panic) when the callee had more parameters than the
+caller's frame had registers, as in `local function f() return g(1) end` with an
+eight-parameter `g`. It now truncates and resizes exactly as `call_function`
+does. Regression coverage: `tail_call_short_stack` in the same test file.
