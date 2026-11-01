@@ -55,7 +55,7 @@ fn first_boot_writes_the_defaults_then_writes_update_words_and_checksum() {
 
     // A reload (fresh engine on the saved slot) reads the record back.
     let mut e2 = LuaEngine::new();
-    e2.set_sram(&format!(r#"{{"ppu.save":"{saved}"}}"#));
+    e2.set_sram(&format!(r#"{{"ppu.save":"{saved}","ppu.save.size":2048}}"#));
     e2.set_sources(&[("main.luau", MAIN)]).unwrap();
     e2.set_pad(0);
     assert_eq!(e2.frame(0.0, 0).unwrap().rows[0].brightness, 3);
