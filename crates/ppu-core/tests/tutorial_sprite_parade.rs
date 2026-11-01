@@ -1,7 +1,6 @@
 //! sprite-parade tutorial toy (4/10): Rust mirror of
-//! web/src/studio/demos/tutorials/spriteParade.ts — the Lua is verbatim and the
-//! asset generators are byte-identical, so the golden PNG here is evidence
-//! about the toy the studio actually ships. Edit both files together.
+//! web/src/studio/demos/tutorials/spriteParade.ts — its Lua written in Luau
+//! (main.luau); the asset generators are byte-identical. Edit both files together.
 mod common;
 
 use ppu_core::{
@@ -12,7 +11,7 @@ use std::path::Path;
 
 const GOLDEN: &str = "tests/fixtures/golden_tutorial_sprite_parade.png";
 
-// ── the Lua (verbatim from spriteParade.ts MAIN_SRC) ─────────────────────────
+// ── the Luau (spriteParade.ts MAIN_SRC, written in Luau) ──────────────────────
 const MAIN_SRC: &str = r#"-- ppu.toys :: sprite-parade — tutorial 4/10: sprites (OBJ) and OAM
 --
 -- The SNES draws sprites out of OAM: 128 slots, each an x/y, a tile number,
@@ -39,9 +38,9 @@ const MAIN_SRC: &str = r#"-- ppu.toys :: sprite-parade — tutorial 4/10: sprite
 local street = dma("street", { char = 0x1000, map = 0x0000 })
 local sheet  = dma("parade", { char = 0x6000 })
 
-SPEED = 32           -- parade pace, pixels per second
+local SPEED: number = 32   -- parade pace, pixels per second
 
-function frame(t, f)
+function frame(t: number, f: number)
   mode = 1; brightness = 15
   cgram[0] = rgb(96, 64, 128)   -- backdrop = dusk sky (CGRAM entry 0)
 
@@ -73,12 +72,12 @@ function frame(t, f)
   -- shades of gold, so one marcher parades as a statue of itself.
   for i = 1, 15 do cgram[128 + 16 + i] = rgb(96 + i * 10, 72 + i * 9, 8 + i * 3) end
 
-  local function march(x0)      -- drift right, wrapping just off both edges
+  local function march(x0: number): number  -- drift right, wrapping just off both edges
     return ((x0 + t * SPEED) % 272) - 16
   end
-  local step = floor(t * 6)     -- walk cycle: poses 1 and 2 alternate
-  local function pose(i) return 1 + (step + i) % 2 end
-  local function bob(i) return -abs(sin(t * 6 + i)) * 2 end
+  local step = math.floor(t * 6)  -- walk cycle: poses 1 and 2 alternate
+  local function pose(i: number): number return 1 + (step + i) % 2 end
+  local function bob(i: number): number return -math.abs(math.sin(t * 6 + i)) * 2 end
 
   -- 3. PLACE THE PARADE. Feet on the kerb at y=180, so small 8x8 marchers
   -- stand at y 172 and large 16x16 ones at y 164. obj[i].on = true or the
@@ -124,11 +123,11 @@ function frame(t, f)
   end
   for k = 0, 2 do
     obj[17 + k].tile = 17 + k
-    obj[17 + k].x = 40 + k * 70; obj[17 + k].y = 36 + sin(t * 2 + k) * 12
+    obj[17 + k].x = 40 + k * 70; obj[17 + k].y = 36 + math.sin(t * 2 + k) * 12
     obj[17 + k].prio = 3; obj[17 + k].on = true
   end
   obj[20].tile = 16
-  obj[20].x = 30 + sin(t * 3) * 3; obj[20].y = 132 - t * 16
+  obj[20].x = 30 + math.sin(t * 3) * 3; obj[20].y = 132 - t * 16
   obj[20].prio = 2; obj[20].on = true
 
   -- Try: set obj.size_sel = 3 and watch every small marcher double in size;
@@ -503,7 +502,7 @@ fn engine() -> LuaEngine {
             common::add_obj(e, "parade", parade_sheet(), 128, 16);
             common::add_bg(e, "street", street(), 256, 224, 4);
         },
-        &[("main.lua", MAIN_SRC)],
+        &[("main.luau", MAIN_SRC)],
     )
 }
 

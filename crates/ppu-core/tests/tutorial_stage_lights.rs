@@ -1,6 +1,6 @@
 //! stage-lights tutorial toy (6/10): two hdma-driven window irises, XOR combine
-//! logic, and fixed-colour subtract outside the colour window. Lua + asset are
-//! byte-identical mirrors of web/src/studio/demos/tutorials/stageLights.ts.
+//! logic, and fixed-colour subtract outside the colour window. The asset mirrors
+//! web/src/studio/demos/tutorials/stageLights.ts; the source is its Lua in Luau.
 mod common;
 
 use ppu_core::{render_frame, LuaEngine, HEIGHT, WIDTH};
@@ -8,7 +8,7 @@ use std::path::Path;
 
 const GOLDEN: &str = "tests/fixtures/golden_tutorial_stage_lights.png";
 
-// Verbatim mirror of MAIN_SRC in stageLights.ts.
+// MAIN_SRC in stageLights.ts, written in Luau.
 const MAIN_SRC: &str = r#"-- ppu.toys :: stage-lights (6/10 · two hdma spotlights, window combine logic, colour math)
 -- Lesson 6 of the tutorial arc (after cavern-camera, before split-screen).
 --
@@ -26,7 +26,7 @@ const MAIN_SRC: &str = r#"-- ppu.toys :: stage-lights (6/10 · two hdma spotligh
 -- Setup stage: one dma copies the stage set into VRAM, once, at compile
 -- (parallax-skyline, lesson 2, tells the full story).
 local stage = dma("stage", { char = 0x1000, map = 0x0000 })
-function frame(t, f)
+function frame(t: number, f: number)
   mode = 1; brightness = 15
   bg[1].char_base = stage.char; bg[1].map_base = stage.map
   screen.main.bg1 = true    -- the stage, alone on the main screen
@@ -46,26 +46,26 @@ function frame(t, f)
   color.region = "outside"
 
   -- Two iris centres. Light 1 hovers near the performer; light 2 sweeps wide.
-  local r = 48
-  local cx1 = floor(128 + sin(t * 3.1) * 50)
-  local cx2 = floor(128 + sin(t * 1.35) * 64)
-  local cy1 = floor(134 + sin(t * 0.9) * 8)
-  local cy2 = floor(134 - sin(t * 0.9) * 8)
+  local r: number = 48
+  local cx1 = math.floor(128 + math.sin(t * 3.1) * 50)
+  local cx2 = math.floor(128 + math.sin(t * 1.35) * 64)
+  local cy1 = math.floor(134 + math.sin(t * 0.9) * 8)
+  local cy2 = math.floor(134 - math.sin(t * 0.9) * 8)
   -- hdma runs this per scanline: each window's span is its circle's chord at
   -- row y (an empty span is lo > hi — that is how a window says "nothing here").
-  hdma(0, 223, function(y)
+  hdma(0, 223, function(y: number)
     local d1 = r*r - (y - cy1) * (y - cy1)
     if d1 < 0 then
       win.w1.lo = 1; win.w1.hi = 0
     else
-      local hw = floor(sqrt(d1))
+      local hw = math.floor(math.sqrt(d1))
       win.w1.lo = cx1 - hw; win.w1.hi = cx1 + hw
     end
     local d2 = r*r - (y - cy2) * (y - cy2)
     if d2 < 0 then
       win.w2.lo = 1; win.w2.hi = 0
     else
-      local hw = floor(sqrt(d2))
+      local hw = math.floor(math.sqrt(d2))
       win.w2.lo = cx2 - hw; win.w2.hi = cx2 + hw
     end
   end)
@@ -142,7 +142,7 @@ fn stage_rgba() -> Vec<u8> {
 fn engine(src: &str) -> LuaEngine {
     common::engine_with(
         &mut |e| common::add_bg(e, "stage", stage_rgba(), WIDTH as u32, HEIGHT as u32, 4),
-        &[("main.lua", src)],
+        &[("main.luau", src)],
     )
 }
 

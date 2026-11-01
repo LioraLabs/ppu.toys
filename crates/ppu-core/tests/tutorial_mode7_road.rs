@@ -1,13 +1,13 @@
 //! Tutorial toy 3/10 :: mode7-road — the Rust mirror of
-//! web/src/studio/demos/tutorials/mode7Road.ts (the Lua is verbatim, road()
-//! generates the same pixels; the golden PNG proves the frame the studio
-//! ships).
+//! web/src/studio/demos/tutorials/mode7Road.ts (its Lua written in Luau,
+//! road() generates the same pixels; the golden PNG proves the frame the
+//! studio ships).
 mod common;
 
 use ppu_core::render_frame;
 use std::path::Path;
 
-/// Byte-identical to MAIN_SRC in web/src/studio/demos/tutorials/mode7Road.ts.
+/// The mode7Road.ts MAIN_SRC, written in Luau.
 const MAIN_SRC: &str = r#"-- ppu.toys tutorial 3/10 :: mode7-road — the affine matrix, the perspective
 -- divide, and a ground plane you can drop your own photo onto.
 --
@@ -33,13 +33,13 @@ const MAIN_SRC: &str = r#"-- ppu.toys tutorial 3/10 :: mode7-road — the affine
 -- at VRAM 0x0000 (palette at CGRAM 1), so there is nothing to choose.
 -- (parallax-skyline, lesson 2, tells the full setup-stage story.)
 dma("road")                        -- the ground image — swap in your own here
-function frame(t, f)
+function frame(t: number, f: number)
   mode = 7; brightness = 15        -- mode 7: BG1 is now the affine layer
   screen.main.bg1 = true           -- ...and BG1 is what you designate (TM)
 
-  local HORIZON = 96               -- screen row where ground meets sky
-  local SCALE   = 128              -- eye height, in effect: bigger = higher up
-  local SPEED   = 160              -- driving speed, ground texels per second
+  local HORIZON: number = 96       -- screen row where ground meets sky
+  local SCALE: number   = 128      -- eye height, in effect: bigger = higher up
+  local SPEED: number   = 160      -- driving speed, ground texels per second
 
   -- Sky. Above the horizon nothing should draw, so the backdrop (cgram[0])
   -- shows through: park the plane out of reach up there — wrap mode 2 makes
@@ -49,13 +49,13 @@ function frame(t, f)
   m7.wrap = 2                      -- off the 1024x1024 plane -> transparent
   bg[1].scroll.y = -4096           -- and above the horizon we ARE off it
   color.op = "add"; color.addend = "fixed"; color.on.backdrop = true
-  hdma(0, HORIZON, function(y)
+  hdma(0, HORIZON, function(y: number)
     local a = y / HORIZON                       -- 0 at the top .. 1 at the horizon
     color.fixed = rgb(a * 90, a * 70, a * 40)   -- warm haze builds downward
   end)
 
   -- The floor. Below the horizon, rebuild the camera on every single scanline.
-  hdma(HORIZON + 1, 223, function(y)
+  hdma(HORIZON + 1, 223, function(y: number)
     local d = SCALE / (y - HORIZON)  -- THE perspective divide: scale ~ 1/distance
     m7.a, m7.d = d, d                -- d texels per pixel, both axes (b, c stay 0)
     m7.cx, m7.cy = 128, 0            -- pin screen centre to texel column 128 —
@@ -110,7 +110,7 @@ fn road() -> Vec<u8> {
 fn render() -> Vec<u8> {
     let mut e = common::engine_with(
         &mut |e| common::add_m7(e, "road", road(), 1024, 1024),
-        &[("main.lua", MAIN_SRC)],
+        &[("main.luau", MAIN_SRC)],
     );
     let lt = e.frame(1.0, 60).unwrap();
     render_frame(&lt, e.memory())

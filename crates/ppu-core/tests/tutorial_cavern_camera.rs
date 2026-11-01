@@ -1,6 +1,6 @@
 //! cavern-camera (L1 tutorial toy 5/10): the tilesheet workflow, hand-authored.
 //! Rust mirror of web/src/studio/demos/tutorials/cavernCamera.ts — MAIN_SRC is
-//! byte-identical to the TS template literal (a plain string, not raw: the
+//! the TS template literal written in Luau (a plain string, not raw: the
 //! level rows put arbitrarily long `"###...` runs in the Lua, which no raw
 //! delimiter survives) and tiles() reproduces the TS generator pixel-exact.
 mod common;
@@ -11,7 +11,7 @@ use std::path::Path;
 
 const GOLDEN: &str = "tests/fixtures/golden_tutorial_cavern_camera.png";
 
-// ── Lua (byte-identical to cavernCamera.ts MAIN_SRC) ────────────────────────
+// ── Luau (cavernCamera.ts MAIN_SRC, written in Luau) ────────────────────────
 
 const MAIN_SRC: &str = "-- ppu.toys :: cavern-camera (lesson 5 of 10 — build a LEVEL out of tiles)
 --
@@ -32,7 +32,7 @@ local sheet = dma(\"cave_tiles\", { char = 0x1000 })
 --   =  wooden platform              *  crystal       ~  lava (animates itself)
 -- Keep every row the same length. Up to 64 characters wide fits the 64x32
 -- hardware tilemap whole, so the camera pans with NO streaming at all.
-local LEVEL = {
+local LEVEL: {string} = {
   \"################################################\",
   \"#######....#########....############....########\",
   \"###......*....####........####.........*....####\",
@@ -51,7 +51,7 @@ local LEVEL = {
 
 -- The legend: which sheet cell each character draws. A sheet reserves NO blank
 -- tile — cell 0 is blank only because the artist left cell 0 empty on purpose.
-local TILES = { [\".\"] = 0, [\"#\"] = 1, [\"%\"] = 2, [\"=\"] = 3, [\"~\"] = 4, [\"*\"] = 7 }
+local TILES: {[string]: number} = { [\".\"] = 0, [\"#\"] = 1, [\"%\"] = 2, [\"=\"] = 3, [\"~\"] = 4, [\"*\"] = 7 }
 local LAVA_FIRST, LAVA_FRAMES = 4, 3 -- lava's variants are consecutive cells 4..6
 local LEVEL_W = #LEVEL[1]            -- tiles across (48 here; 64 is the max)
 local LEVEL_PX = LEVEL_W * 8         -- 384 px of level over a 256 px screen
@@ -59,7 +59,7 @@ local MAP_TOP = 7                    -- screen tile row where LEVEL row 1 lands
 local SPEED = 48                     -- camera pixels per second
 local ANIM_HZ = 6                    -- lava steps per second
 
-function frame(t, f)
+function frame(t: number, f: number)
   mode = 1; brightness = 15
   screen.main.bg1 = true    -- the level, alone on the main screen (TM)
 
@@ -76,7 +76,7 @@ function frame(t, f)
   -- Step 3: parse the strings into map entries. VRAM is zeroed every frame
   -- before imports, so this loop runs EVERY frame — and that is also the
   -- animation mechanism: the same '~' gets a different tile as phase ticks.
-  local phase = floor(t * ANIM_HZ)
+  local phase = math.floor(t * ANIM_HZ)
   for col = 0, LEVEL_W - 1 do
     if bg[1].map[col] == nil then bg[1].map[col] = {} end
     for row = 1, #LEVEL do
@@ -103,7 +103,7 @@ end
 --
 -- Try:
 --   * type your own rows into LEVEL (same length each; '~' animates for free)
---   * change SPEED, or swap the ping-pong for a wobble: 64 + sin(t) * 64
+--   * change SPEED, or swap the ping-pong for a wobble: 64 + math.sin(t) * 64
 --   * add a tile type: draw a new 8x8 cell in the sheet, add one TILES entry
 ";
 
@@ -253,7 +253,7 @@ fn tiles() -> Vec<u8> {
 fn engine(src: &str) -> LuaEngine {
     engine_with(
         &mut |e| add_sheet(e, "cave_tiles", tiles(), 64, 8, 4),
-        &[("main.lua", src)],
+        &[("main.luau", src)],
     )
 }
 
@@ -271,7 +271,7 @@ fn shifted_left_by(a: &[u8], b: &[u8], dx: usize) -> bool {
 /// MAIN_SRC with its animation phase pinned, camera untouched.
 fn phase_pinned(phase: u32) -> String {
     let pin = format!("local phase = {phase}");
-    let s = MAIN_SRC.replace("local phase = floor(t * ANIM_HZ)", &pin);
+    let s = MAIN_SRC.replace("local phase = math.floor(t * ANIM_HZ)", &pin);
     assert!(s.contains(&pin), "phase pin did not apply");
     s
 }

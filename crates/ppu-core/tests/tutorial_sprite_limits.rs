@@ -1,12 +1,12 @@
 //! Tutorial toy 10/10 :: sprite-limits — the Rust mirror of
-//! web/src/studio/demos/tutorials/spriteLimits.ts (the Lua is verbatim; the
+//! web/src/studio/demos/tutorials/spriteLimits.ts (its Lua written in Luau; the
 //! golden PNG proves the frame the studio ships).
 mod common;
 
 use ppu_core::{render_frame, render_frame_stats};
 use std::path::Path;
 
-/// Byte-identical to MAIN_SRC in web/src/studio/demos/tutorials/spriteLimits.ts.
+/// The spriteLimits.ts MAIN_SRC, written in Luau.
 const MAIN_SRC: &str = r#"-- ppu.toys tutorial 10/10 :: sprite-limits — why 90s games flickered
 -- The PPU re-evaluates all 128 OAM sprites on EVERY scanline, under two
 -- hard budgets:
@@ -18,10 +18,10 @@ const MAIN_SRC: &str = r#"-- ppu.toys tutorial 10/10 :: sprite-limits — why 90
 -- The classic fix was never "use fewer sprites": rotate where evaluation
 -- STARTS (obj.first) each frame, so a DIFFERENT set pays the budget every
 -- frame — flicker, the fair alternative to permanent invisibility.
-function frame(t, f)
+function frame(t: number, f: number)
   mode = 1; brightness = 15
   screen.main.obj = true   -- sprites only: no BG is designated (TM)
-  local ROTATE = true   -- flip to false: the SAME sprites vanish forever
+  local ROTATE: boolean = true  -- flip to false: the SAME sprites vanish forever
   obj.char_base = 0x4000
   obj.size_sel = 1      -- OBSEL pair 1: small = 8x8, large = 32x32
   -- solid 4bpp tiles 0..63 (colour index 1) so every sprite is a filled square
@@ -74,7 +74,7 @@ function frame(t, f)
   -- sprites pays each frame. With ROTATE = false the gaps freeze: the same
   -- sprites are invisible on every frame, forever. With true the gaps crawl
   -- through the rows at 60Hz — flicker shares the pain.
-  if ROTATE then obj.first = f % 58 else obj.first = 0 end
+  obj.first = if ROTATE then f % 58 else 0
 end
 -- Try: flip ROTATE and watch the gaps freeze; widen ROW B's loop to 47 and
 -- more columns die; set large = true in ROW B too — 40 * 4 = 160 slivers
@@ -86,14 +86,14 @@ const GOLDEN: &str = "tests/fixtures/golden_tutorial_sprite_limits.png";
 /// Frame at `f` with per-frame OBJ overflow stats. Asset-free: the engine
 /// closure binds nothing.
 fn render_stats(f: u32) -> (Vec<u8>, ppu_core::ObjOverflow) {
-    let mut e = common::engine_with(&mut |_| {}, &[("main.lua", MAIN_SRC)]);
+    let mut e = common::engine_with(&mut |_| {}, &[("main.luau", MAIN_SRC)]);
     let lt = e.frame(1.0, f).unwrap();
     render_frame_stats(&lt, e.memory())
 }
 
 /// The shipped t=1.0 / f=60 frame through the plain render path (the golden).
 fn render() -> Vec<u8> {
-    let mut e = common::engine_with(&mut |_| {}, &[("main.lua", MAIN_SRC)]);
+    let mut e = common::engine_with(&mut |_| {}, &[("main.luau", MAIN_SRC)]);
     let lt = e.frame(1.0, 60).unwrap();
     render_frame(&lt, e.memory())
 }

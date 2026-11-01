@@ -1,5 +1,5 @@
 //! Tutorial toy 7/10 :: split-screen — the Rust mirror of
-//! web/src/studio/demos/tutorials/splitScreen.ts (the Lua is verbatim, the
+//! web/src/studio/demos/tutorials/splitScreen.ts (its Lua written in Luau, the
 //! city()/floor_tex() pixels are byte-identical; the golden PNG proves the
 //! frame the studio ships). One frame, two hardware modes: the frame-wide
 //! default is mode 1 (city), and `mode = 7` inside the hdma hook flips
@@ -11,7 +11,7 @@ mod common;
 use ppu_core::render_frame;
 use std::path::Path;
 
-/// Byte-identical to MAIN_SRC in web/src/studio/demos/tutorials/splitScreen.ts.
+/// The splitScreen.ts MAIN_SRC, written in Luau.
 const MAIN_SRC: &str = r#"-- ppu.toys tutorial 7/10 :: split-screen -- two hardware modes in ONE frame
 --
 -- A background MODE is the PPU's whole personality: how many layers you get
@@ -37,7 +37,7 @@ dma("floor")   -- m7: chars+map at 0x0000, its 3-colour palette at CGRAM 1..
 -- is deliberately painted with three colours the city already owns, so its
 -- palette lands on entries 1..3 holding the exact same values -- shared
 -- paint instead of a fight.
-function frame(t, f)
+function frame(t: number, f: number)
   mode = 1; brightness = 15    -- frame-wide default: every line starts in mode 1
 
   -- Top band: point BG1 at the city's VRAM home from the setup stage.
@@ -50,8 +50,8 @@ function frame(t, f)
 
   -- The split. The hook runs once per scanline y; every register assignment
   -- inside lands on that line ONLY.
-  local split = 112
-  hdma(split, 223, function(y)
+  local split: number = 112
+  hdma(split, 223, function(y: number)
     mode = 7                          -- THE line: mode 7 for scanlines 112..223
     local d = 64 / (y - (split - 1))  -- perspective divide: far rows step the
     m7.a, m7.d = d, d                 -- texture faster, near rows slower (mode7-road)
@@ -59,8 +59,8 @@ function frame(t, f)
     bg[1].scroll.y = t * 80 * d       -- drive forward; scaling by d keeps depth honest
   end)
 end
--- Try: move the split with 112 + floor(sin(t) * 16) (both uses of 'split' follow);
--- steer with m7.cx = 128 + sin(t) * 40; or swap the floor for mode7-road's
+-- Try: move the split with 112 + math.floor(math.sin(t) * 16) (both uses of 'split' follow);
+-- steer with m7.cx = 128 + math.sin(t) * 40; or swap the floor for mode7-road's
 -- ground: drag any image into assets as an m7 texture and change the name in
 -- dma("floor").
 "#;
@@ -156,7 +156,7 @@ fn engine() -> ppu_core::LuaEngine {
             common::add_bg(e, "city", city(), 256, 224, 4);
             common::add_m7(e, "floor", floor_tex(), 1024, 1024);
         },
-        &[("main.lua", MAIN_SRC)],
+        &[("main.luau", MAIN_SRC)],
     )
 }
 

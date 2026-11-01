@@ -1,12 +1,12 @@
 //! Tutorial toy 9/10 :: extbg-direct-color — the Rust mirror of
-//! web/src/studio/demos/tutorials/extbgDirectColor.ts (the Lua is verbatim;
+//! web/src/studio/demos/tutorials/extbgDirectColor.ts (its Lua written in Luau;
 //! the golden PNG proves the frame the studio ships).
 mod common;
 
 use ppu_core::render_frame;
 use std::path::Path;
 
-/// Byte-identical to MAIN_SRC in web/src/studio/demos/tutorials/extbgDirectColor.ts.
+/// The extbgDirectColor.ts MAIN_SRC, written in Luau.
 const MAIN_SRC: &str = r#"-- ppu.toys tutorial 9/10 :: extbg-direct-color — Mode 7's two deep cuts, together
 -- (1) EXTBG (SETINI.6): each Mode 7 pixel's bit 7 becomes a per-pixel PRIORITY.
 --     The single floor splits into two levels with sprites sandwiched between,
@@ -18,7 +18,7 @@ const MAIN_SRC: &str = r#"-- ppu.toys tutorial 9/10 :: extbg-direct-color — Mo
 -- Together: EXTBG steals bit 7, so the LOW 7 bits expand instead —
 -- 3 bits red, 3 bits green, 1 (dim) bit blue. Every byte poked below is
 -- simultaneously a colour and a priority. The pixel values ARE the lesson.
-function frame(t, f)
+function frame(t: number, f: number)
   mode = 7; brightness = 15
   -- EXTBG splits the ONE plane into two designatable halves: BG1 carries the
   -- low-priority pixels, BG2 the high ones — so both go on the main screen.
@@ -28,8 +28,8 @@ function frame(t, f)
   direct_color = true                    -- low 7 bits = colour (CGWSEL.0)
 
   -- Poke tile v solid with value v (tile number == pixel byte, once per value).
-  local done = {}
-  local function ink(v)
+  local done: {[number]: boolean} = {}
+  local function ink(v: number): number
     if not done[v] then
       done[v] = true
       for fy = 0, 7 do for fx = 0, 7 do m7pixel(v, fx, fy, v) end end
@@ -42,12 +42,12 @@ function frame(t, f)
   for ty = 0, 27 do
     m7.map[ty] = {}
     for tx = 0, 31 do
-      local r, g, b
+      local r: number, g: number, b: number
       if ty < 10 then                    -- dusk sky: blue base, red rising to the horizon
-        r, g, b = floor(ty / 3), 0, 1
+        r, g, b = math.floor(ty / 3), 0, 1
       else                               -- floor: red follows x, green follows depth
-        r = 1 + floor(tx * 6 / 31)
-        g = 2 + floor((ty - 10) * 5 / 17)
+        r = 1 + math.floor(tx * 6 / 31)
+        g = 2 + math.floor((ty - 10) * 5 / 17)
         b = 0
       end
       local idx = r + g * 8 + b * 64     -- BGR233 packing: r,g in 0..7, b in 0..1 (bit 7 is spoken for)
@@ -59,10 +59,10 @@ function frame(t, f)
   -- 2, so the sprite slides behind them — no windows, no second layer.
   local LIT, SHADE, BEAM = 0x80 + 47, 0x80 + 21, 0x80 + 29
   local cols = {4, 15, 26}
-  for i = 1, 3 do
+  for _, col in cols do
     for ty = 3, 15 do
-      m7.map[ty][cols[i]] = ink(LIT)     -- sunlit face (r=7 g=5)
-      m7.map[ty][cols[i] + 1] = ink(SHADE) -- shaded face (r=5 g=2)
+      m7.map[ty][col] = ink(LIT)         -- sunlit face (r=7 g=5)
+      m7.map[ty][col + 1] = ink(SHADE)   -- shaded face (r=5 g=2)
     end
   end
   for tx = 3, 28 do m7.map[2][tx] = ink(BEAM) end -- the lintel across the top
@@ -80,8 +80,8 @@ function frame(t, f)
   end
   obj[0].tile = 0; obj[0].pal = 0; obj[0].prio = 2
   obj[0].large = true
-  obj[0].x = 64 + floor(sin(t * 0.7) * 72)  -- drift through the colonnade...
-  obj[0].y = 84 + floor(sin(t * 3) * 4)     -- ...with a gentle bob
+  obj[0].x = 64 + math.floor(math.sin(t * 0.7) * 72)  -- drift through the colonnade...
+  obj[0].y = 84 + math.floor(math.sin(t * 3) * 4)     -- ...with a gentle bob
   obj[0].on = true
 end
 -- Try: LIT = 47 (clear its bit 7 — that pillar face drops below the sprite),
@@ -93,7 +93,7 @@ const GOLDEN: &str = "tests/fixtures/golden_tutorial_extbg_direct_color.png";
 
 /// The t=1.0 / f=60 frame — asset-free, so the engine closure binds nothing.
 fn render_src(src: &str) -> Vec<u8> {
-    let mut e = common::engine_with(&mut |_| {}, &[("main.lua", src)]);
+    let mut e = common::engine_with(&mut |_| {}, &[("main.luau", src)]);
     let lt = e.frame(1.0, 60).unwrap();
     render_frame(&lt, e.memory())
 }
@@ -141,7 +141,7 @@ fn floor_is_direct_colour_not_cgram() {
     // colour expands the low 7 bits: r5=8, g5=16 -> [66, 132, 0].
     assert_eq!(common::px(&fb, 60, 150), &[66, 132, 0, 255]);
     // CGRAM entry 34 was never written — the colour cannot have come from it.
-    let mut e = common::engine_with(&mut |_| {}, &[("main.lua", MAIN_SRC)]);
+    let mut e = common::engine_with(&mut |_| {}, &[("main.luau", MAIN_SRC)]);
     e.frame(1.0, 60).unwrap();
     assert_eq!(e.memory().cgram[34], 0, "BG CGRAM must stay untouched");
     // Direct colour off -> the same pixel reads empty CGRAM -> black.

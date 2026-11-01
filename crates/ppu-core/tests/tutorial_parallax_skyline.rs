@@ -1,9 +1,8 @@
 //! parallax-skyline (L1 tutorial toy 2 of 10) golden + behavior tests through
 //! the real Lua/importer/render pipeline.
 //!
-//! Lua sources and asset generators mirror
-//! web/src/studio/demos/tutorials/parallaxSkyline.ts byte-for-byte — these MUST
-//! agree or the golden proves nothing about the shipped toy. Edit both.
+//! Asset generators mirror web/src/studio/demos/tutorials/parallaxSkyline.ts;
+//! the sources are its Lua written in Luau (main.luau + skyline.luau).
 mod common;
 
 use ppu_core::{render_frame, ImportBudget, LuaEngine, HEIGHT, WIDTH};
@@ -33,9 +32,10 @@ local far  = dma("skyline_far",  { char = 0x4000, map = 0x0800 })
 -- addresses, so the registers wire from the placement instead of repeating it.
 --
 -- MULTI-FILE: this toy has two tabs. Chunks run in tab order into ONE shared
--- global scope (PICO-8 style), so FAR_SPEED and band_speed() from skyline.lua
--- are plain globals here. main.lua is a convention, not magic.
-function frame(t, f)
+-- global scope (PICO-8 style), so FAR_SPEED and band_speed() from skyline.luau
+-- are plain globals here; `local` keeps a name inside its own tab (near, far).
+-- main.luau is a convention, not magic.
+function frame(t: number, f: number)
   mode = 1; brightness = 15
 
   -- DESIGNATE THE LAYERS. Both screens power on EMPTY: TM (screen.main) says
@@ -57,18 +57,18 @@ function frame(t, f)
   -- ...and the near layer's speed depends on the SCANLINE. Register writes
   -- inside an hdma hook are per-scanline, so this gives bg1 a different scroll
   -- on every row — one layer, several depth bands.
-  hdma(0, 223, function(y)
+  hdma(0, 223, function(y: number)
     bg[1].scroll.x = t * band_speed(y)
   end)
 end
 -- Try: add { y = 208, speed = 140 } to BANDS (the street glow pulls ahead),
---      slow FAR_SPEED to 4 in skyline.lua,
---      or drift the sky: bg[2].scroll.y = sin(t) * 4
+--      slow FAR_SPEED to 4 in skyline.luau,
+--      or drift the sky: bg[2].scroll.y = math.sin(t) * 4
 "#;
 
-const SKYLINE_SRC: &str = r#"-- parallax-skyline :: skyline.lua — shared constants + the depth-band table.
+const SKYLINE_SRC: &str = r#"-- parallax-skyline :: skyline.luau — shared constants + the depth-band table.
 -- This chunk runs BEFORE frame() is ever called; everything here is a global,
--- visible from every other tab (one shared scope — see main.lua's header).
+-- visible from every other tab (one shared scope — see main.luau's header).
 
 FAR_SPEED = 12          -- px/sec for the far layer (bg2)
 
@@ -81,10 +81,11 @@ BANDS = {
 }
 
 -- Speed for scanline y: the last band starting at or above y.
-function band_speed(y)
+-- Luau loops over a table directly: `for _, band in BANDS do`.
+function band_speed(y: number): number
   local s = BANDS[1].speed
-  for i = 2, #BANDS do
-    if y >= BANDS[i].y then s = BANDS[i].speed end
+  for _, band in BANDS do
+    if y >= band.y then s = band.speed end
   end
   return s
 end
@@ -301,7 +302,7 @@ fn render_files(files: &[(&str, &str)]) -> (Vec<u8>, ppu_core::LineTable, LuaEng
 }
 
 fn render_toy() -> (Vec<u8>, ppu_core::LineTable, LuaEngine) {
-    render_files(&[("main.lua", MAIN_SRC), ("skyline.lua", SKYLINE_SRC)])
+    render_files(&[("main.luau", MAIN_SRC), ("skyline.luau", SKYLINE_SRC)])
 }
 
 #[test]
@@ -360,7 +361,7 @@ fn multi_file_tab_order_concat_is_equivalent() {
     // concatenated in tab order render the exact same frame.
     let (files_fb, _, _) = render_toy();
     let concat = skyline_concat();
-    let (concat_fb, _, _) = render_files(&[("source", &concat)]);
+    let (concat_fb, _, _) = render_files(&[("main.luau", &concat)]);
     assert_eq!(files_fb, concat_fb);
 }
 

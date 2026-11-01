@@ -1,12 +1,12 @@
 //! Tutorial toy 8/10 :: transitions — the Rust mirror of
-//! web/src/studio/demos/tutorials/transitions.ts (the Lua is verbatim; the
+//! web/src/studio/demos/tutorials/transitions.ts (its Lua written in Luau; the
 //! golden PNG proves the t=1.0 frame the studio ships: the scene mid-wipe).
 mod common;
 
 use ppu_core::{render_frame, HEIGHT, WIDTH};
 use std::path::Path;
 
-/// Byte-identical to MAIN_SRC in web/src/studio/demos/tutorials/transitions.ts.
+/// The transitions.ts MAIN_SRC, written in Luau.
 const MAIN_SRC: &str = r#"-- ppu.toys tutorial 8/10 :: transitions — the scene-change toolkit built into the chip
 -- Every SNES fade, flash, and level-exit is one of three registers plus a trick:
 --   brightness    INIDISP bits 0-3 — the master fade, 0 (black) .. 15 (full)
@@ -25,13 +25,13 @@ const MAIN_SRC: &str = r#"-- ppu.toys tutorial 8/10 :: transitions — the scene
 --   8-10   mosaic+fade  both at once — the classic SNES level-exit
 --   10-12  hold         ...cut by a force_blank blink at 11s; the loop's
 --                       wipe-in reopens from that black
-local CYCLE = 12
+local CYCLE: number = 12
 
 -- Setup stage: one dma copies the 8bpp scene into VRAM at compile — the
 -- loading screen (parallax-skyline, lesson 2, tells the full story).
 local vista = dma("vista", { char = 0x1000, map = 0x0000 })
 
-function frame(t, f)
+function frame(t: number, f: number)
   mode = 3                       -- 8bpp BG1: one full-colour scene to transition over
   screen.main.bg1 = true         -- ...designated onto the main screen (TM)
   bg[1].char_base = vista.char
@@ -41,27 +41,27 @@ function frame(t, f)
   mosaic = 0                     -- each phase only overrides what it needs
 
   local tc = t % CYCLE           -- t grows forever: schedule off the remainder
-  local phase = floor(tc / 2)    -- six 2-second phases
+  local phase = math.floor(tc / 2)  -- six 2-second phases
   local u = tc - phase * 2       -- 0..2 inside the current phase
 
   if phase == 0 then
     -- WIPE-IN. brightness written inside hdma() lands on ONE scanline, so a
     -- moving front with a short ramp reads as a curtain lifting down the frame.
     local edge = u * 144         -- the front's scanline, sweeping past 223
-    hdma(0, 223, function(y)
-      brightness = min(15, max(0, floor((edge - y) / 2)))  -- full 30px above the front, black below
+    hdma(0, 223, function(y: number)
+      brightness = math.clamp(math.floor((edge - y) / 2), 0, 15)  -- full 30px above the front, black below
     end)
   elseif phase == 2 then
     -- FADE. One register, out and back: 15 -> 0 -> 15 across the two seconds.
-    brightness = floor(15 * abs(u - 1))
+    brightness = math.floor(15 * math.abs(u - 1))
   elseif phase == 3 then
     -- MOSAIC. The same triangle on the block size; bg[1].mosaic opted BG1 in.
-    mosaic = floor(15 * (1 - abs(u - 1)))
+    mosaic = math.floor(15 * (1 - math.abs(u - 1)))
   elseif phase == 4 then
     -- BOTH. Chunk apart while dimming — the level-exit half the SNES library used.
-    local k = 1 - abs(u - 1)
-    mosaic = floor(15 * k)
-    brightness = 15 - floor(11 * k)   -- dim to 4, not 0: keep the chunks readable
+    local k = 1 - math.abs(u - 1)
+    mosaic = math.floor(15 * k)
+    brightness = 15 - math.floor(11 * k)   -- dim to 4, not 0: keep the chunks readable
   elseif phase == 5 and u >= 1 and u < 1.15 then
     -- THE CUT. force_blank blanks the frame no matter what brightness says.
     force_blank = true
@@ -126,7 +126,7 @@ fn vista() -> Vec<u8> {
 fn render_at(t: f64, f: u32) -> Vec<u8> {
     let mut e = common::engine_with(
         &mut |e| common::add_bg(e, "vista", vista(), WIDTH as u32, HEIGHT as u32, 8),
-        &[("main.lua", MAIN_SRC)],
+        &[("main.luau", MAIN_SRC)],
     );
     let lt = e.frame(t, f).unwrap();
     render_frame(&lt, e.memory())
