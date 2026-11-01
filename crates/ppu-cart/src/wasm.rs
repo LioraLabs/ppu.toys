@@ -31,6 +31,14 @@ impl CartSnes {
     pub fn wram(&self) -> Vec<u8> {
         self.0.wram().to_vec()
     }
+    /// The battery-backed RAM (empty without one), as an `.srm` file holds it.
+    pub fn sram(&self) -> Vec<u8> {
+        self.0.sram().to_vec()
+    }
+    /// Load an `.srm` image into the battery RAM before the first frame; throws when its size is not the header's.
+    pub fn set_sram(&mut self, image: &[u8]) -> Result<(), JsError> {
+        self.0.load_sram(image).map_err(|e| JsError::new(&e))
+    }
     /// Count master clocks per PC for `take_pc_ticks` (off at power-on: it costs a hash per instruction).
     pub fn set_profile(&mut self, on: bool) {
         self.0.profile = on;

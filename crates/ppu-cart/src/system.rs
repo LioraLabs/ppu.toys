@@ -887,6 +887,21 @@ impl Snes {
         &self.bus.wram
     }
 
+    /// The cartridge's battery-backed RAM as the header declares it (empty without one): an `.srm` image.
+    pub fn sram(&self) -> &[u8] {
+        &self.bus.sram
+    }
+
+    /// Put an `.srm` image in the battery RAM, as a charged battery holds it at power-on; it must be the size the
+    /// header declares.
+    pub fn load_sram(&mut self, image: &[u8]) -> Result<(), String> {
+        if image.len() != self.bus.sram.len() {
+            return Err(format!("ppu-cart: the save is {} bytes; this cartridge's battery RAM is {}", image.len(), self.bus.sram.len()));
+        }
+        self.bus.sram.copy_from_slice(image);
+        Ok(())
+    }
+
     /// Master clocks spent at each 24-bit PC since the last call, for native profiling; cleared
     /// on read. Counts only while `profile` is set; time the CPU spends halted in WAI is not
     /// counted (it is idle, not busy).

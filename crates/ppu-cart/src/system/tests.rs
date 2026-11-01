@@ -221,3 +221,20 @@ fn oam_double_write_and_high_table() {
     let o = s.ppu.mem.oam[0];
     assert_eq!((o.x, o.y, o.tile, o.pal, o.prio, o.large), (-16, 20, 0x105, 0, 3, true));
 }
+
+#[test]
+fn battery_ram_takes_an_srm_image_of_the_header_size() {
+    let mut rom = lorom(0x30);
+    rom[0x7fd6] = 0x02; // ROM + RAM + battery
+    rom[0x7fd8] = 0x01; // 2 KiB
+    let mut snes = Snes::new(&rom).unwrap();
+    assert_eq!(snes.sram().len(), 2048);
+    let image: Vec<u8> = (0..2048).map(|i| (i * 7) as u8).collect();
+    snes.load_sram(&image).unwrap();
+    assert_eq!(snes.sram(), &image[..]);
+    // The game reads it at $70:0000 (and the mirror $F0).
+    assert_eq!(snes.bus.peek(0x70_0003), image[3]);
+    assert_eq!(snes.bus.peek(0xf0_0800 + 5), image[5]);
+    assert!(snes.load_sram(&image[..1024]).is_err());
+    assert!(Snes::new(&lorom(0x30)).unwrap().sram().is_empty());
+}
