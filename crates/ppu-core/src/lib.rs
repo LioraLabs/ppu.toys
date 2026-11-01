@@ -36,6 +36,7 @@ mod quantize;
 pub use quantize::*;
 pub mod bounded;
 pub mod frontend;
+pub mod save;
 
 /// Luau type declarations for the authoring surface (`declare` statements), for editors and
 /// type checkers; `tests/luau_declarations.rs` holds them to the runtime's globals.

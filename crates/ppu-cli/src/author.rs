@@ -188,7 +188,15 @@ fn load_body(path: &Path) -> Result<FileBody> {
 }
 
 fn engine(body: &FileBody) -> Result<LuaEngine> {
+    engine_on(body, None)
+}
+
+/// The engine with its save slot (`sram`) bound to `slot` JSON before the program loads.
+fn engine_on(body: &FileBody, slot: Option<&str>) -> Result<LuaEngine> {
     let mut engine = LuaEngine::new();
+    if let Some(slot) = slot {
+        engine.set_sram(slot);
+    }
     for source in &body.sources {
         let bytes = BASE64
             .decode(&source.payload)
@@ -254,14 +262,23 @@ pub fn parse_times(value: &str) -> Result<Vec<u32>> {
 }
 
 /// Render sequentially from zero, including intermediate frames for stateful toys.
-pub fn render(path: &Path, frames: &[u32], out: &Path, holds: &[(u16, u32, u32)]) -> Result<()> {
+/// `srm`: a saveData record's battery RAM image, loaded first when the file exists and written back after the
+/// last frame (the cartridge's layout, so the file moves to and from emulators and flash carts).
+pub fn render(path: &Path, frames: &[u32], out: &Path, holds: &[(u16, u32, u32)], srm: Option<&Path>) -> Result<()> {
     ensure!(!frames.is_empty(), "at least one sample time is required");
     let body = load_body(path)?;
-    let mut engine = engine(&body)?;
+    let mut slot = match srm.filter(|p| p.exists()) {
+        Some(p) => format!("{{{}}}", ppu_core::save::slot_members(&fs::read(p).with_context(|| format!("cannot read {}", p.display()))?)),
+        None => "{}".into(),
+    };
+    let mut engine = engine_on(&body, Some(&slot))?;
     let wanted: std::collections::BTreeSet<_> = frames.iter().copied().collect();
     fs::create_dir_all(out)?;
     for f in 0..=*wanted.last().unwrap() {
         let (pixels, overflow) = draw(&mut engine, f, holds)?;
+        if let Some(json) = engine.take_sram() {
+            slot = json;
+        }
         if wanted.contains(&f) {
             let output = out.join(format!("frame-{f:08}.png"));
             write_png(&output, WIDTH as u32, HEIGHT as u32, &pixels)?;
@@ -270,6 +287,10 @@ pub fn render(path: &Path, frames: &[u32], out: &Path, holds: &[(u16, u32, u32)]
                 eprintln!("warning: sprite overflow at frame {f}");
             }
         }
+    }
+    if let Some(p) = srm {
+        let image = ppu_core::save::srm_from_slot(&slot).context("--srm: the program keeps no saveData record")?;
+        fs::write(p, image).with_context(|| format!("cannot write {}", p.display()))?;
     }
     Ok(())
 }

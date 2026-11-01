@@ -8,13 +8,14 @@ const HELP: &str = "ppu — standalone ppu.toys authoring (60 fps, 256×224)
   ppu unpack <file.ppu.json> <dir>
   ppu check <dir|file.ppu.json> [--duration seconds] [--seek seconds,...]
             [--loop seconds] [--allow-overflow] [--hold r@450-460[,a+l@600-610]]
-  ppu render <dir|file.ppu.json> --at seconds,... -o <directory> [--hold ...]
+  ppu render <dir|file.ppu.json> --at seconds,... -o <directory> [--hold ...] [--srm save.srm]
   ppu docs [topic|all]
   ppu --version
 
 check defaults to 30 seconds; includes the endpoint. --seek compares direct
 and backward seeks with playback. --loop adds loop comparisons at sample times.
-render plays from zero to the last requested time and writes numbered PNGs.
+render plays from zero to the last requested time and writes numbered PNGs;
+--srm loads a saveData record's battery RAM image first (when the file exists) and writes it back after.
 Times round to the nearest 60 Hz frame. --hold holds buttons on frames [from, to). PNG sources convert on every load.
 See ppu docs cli for manifests, examples, and supported features.";
 
@@ -104,8 +105,9 @@ fn main() -> Result<()> {
             let times = option(&mut args, "--at")?.context("render requires --at seconds,...")?;
             let output = option(&mut args, "-o")?.context("render requires -o <directory>")?;
             let holds = option(&mut args, "--hold")?.map(|h| ppu_cli::parse_holds(&h)).transpose()?.unwrap_or_default();
+            let srm = option(&mut args, "--srm")?.map(PathBuf::from);
             ensure!(args.is_empty(), "unknown render arguments: {args:?}");
-            ppu_cli::render(&input, &ppu_cli::parse_times(&times)?, Path::new(&output), &holds)?;
+            ppu_cli::render(&input, &ppu_cli::parse_times(&times)?, Path::new(&output), &holds, srm.as_deref())?;
         }
         _ => bail!("unknown command {command:?}; use ppu --help"),
     }

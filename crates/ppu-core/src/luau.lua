@@ -237,5 +237,112 @@ function __ppu_record(values, contracts)
       if contract ~= nil then value = __ppu_contract(name, contract, value) end
       values[name] = value
     end,
+    __ppu_values = values,
+  })
+end
+
+-- Save data (ppu-core save.rs): a record kept in battery-backed RAM, as bytes in the cartridge's layout.
+
+-- This VM has no tonumber or string.format: hex by table.
+local __ppu_hex = "0123456789abcdef"
+local __ppu_nibble = {}
+for i = 1, 16 do
+  __ppu_nibble[string.sub(__ppu_hex, i, i)] = i - 1
+end
+
+-- The host's save slot as SRAM words: image[i] is little-endian word i of `sram["ppu.save"]`, hex
+-- whose missing tail is zeros, of `sram["ppu.save.size"]` bytes (save.rs `srm_from_slot`). The cartridge compiler's Lua reference program uses it for the cart's SRAM.
+function __ppu_save_image(size)
+  local slot = type(sram) == "table" and sram or {}
+  if slot["ppu.save.size"] ~= size then slot["ppu.save.size"] = size end
+  local bytes = {}
+  local hex = slot["ppu.save"]
+  if type(hex) == "string" then
+    for i = 1, math.min(#hex // 2, size) do
+      local hi, lo = __ppu_nibble[string.sub(hex, i * 2 - 1, i * 2 - 1)], __ppu_nibble[string.sub(hex, i * 2, i * 2)]
+      bytes[i - 1] = hi and lo and hi * 16 + lo or 0
+    end
+  end
+  return setmetatable({}, {
+    __index = function(_, i)
+      return (bytes[i * 2] or 0) | (bytes[i * 2 + 1] or 0) << 8
+    end,
+    __newindex = function(_, i, w)
+      assert(i >= 0 and i < size // 2, "save RAM word out of range")
+      local lo, hi = w & 255, (w >> 8) & 255
+      if (bytes[i * 2] or 0) == lo and (bytes[i * 2 + 1] or 0) == hi then return end
+      bytes[i * 2], bytes[i * 2 + 1] = lo, hi
+      local last = -1
+      for k, b in pairs(bytes) do if b ~= 0 and k > last then last = k end end
+      local out = ""
+      for k = 0, last do
+        local b = bytes[k] or 0
+        out = out .. string.sub(__ppu_hex, b // 16 + 1, b // 16 + 1) .. string.sub(__ppu_hex, b % 16 + 1, b % 16 + 1)
+      end
+      slot["ppu.save"] = out
+    end,
+  })
+end
+
+-- The frontend passes `layout`: {size =, id =, {name, word, words, lo, hi, boolean}, ...}. Every step
+-- below is the cartridge's, word for word, so both leave the same bytes.
+function saveData(record, layout)
+  assert(type(layout) == "table", "saveData needs its table written inline in a Luau file: saveData({hiscore = makeBounded(0, 0, 999999)})")
+  local mt = getmetatable(record)
+  local values = mt and mt.__ppu_values or record
+  local image = __ppu_save_image(layout.size)
+  local function read(f)
+    local s = image[f[2]]
+    if f[3] == 2 then s = s | image[f[2] + 1] << 16 end
+    return s
+  end
+  local function stored(f, value)
+    if f[6] then return value and 1 or 0 end
+    return value - f[4]
+  end
+  local sum = 0
+  for i = 3, layout[#layout][2] + layout[#layout][3] - 1 do sum = sum ~ image[i] end
+  local ok = image[0] == 0x5350 and image[1] == layout.id and sum == image[2]
+  for i = 1, #layout do ok = ok and read(layout[i]) <= layout[i][5] - layout[i][4] end
+  if ok then
+    for i = 1, #layout do
+      local f = layout[i]
+      if f[6] then record[f[1]] = read(f) ~= 0 else record[f[1]] = read(f) + f[4] end
+    end
+  else
+    for i = 0, layout.size // 2 - 1 do image[i] = 0 end
+    image[0], image[1] = 0x5350, layout.id
+    local check = 0
+    for i = 1, #layout do
+      local f = layout[i]
+      local s = stored(f, values[f[1]])
+      for k = 0, f[3] - 1 do
+        image[f[2] + k] = (s >> (16 * k)) & 0xffff
+        check = check ~ ((s >> (16 * k)) & 0xffff)
+      end
+    end
+    image[2] = check
+  end
+  local fields = {}
+  for i = 1, #layout do fields[layout[i][1]] = layout[i] end
+  return setmetatable({}, {
+    __index = record,
+    __newindex = function(_, name, value)
+      local f = fields[name]
+      if f == nil then error("saveData has no field " .. tostring(name) .. "; declare it in the saveData table", 2) end
+      if f[6] then
+        if type(value) ~= "boolean" then error("saveData field " .. name .. " requires true or false; got " .. tostring(value), 2) end
+        values[name] = value
+      else
+        record[name] = value
+        value = values[name]
+      end
+      -- Each word, after the checksum by old XOR new.
+      local s = stored(f, value)
+      local check = image[2]
+      for k = 0, f[3] - 1 do check = check ~ image[f[2] + k] ~ ((s >> (16 * k)) & 0xffff) end
+      image[2] = check
+      for k = 0, f[3] - 1 do image[f[2] + k] = (s >> (16 * k)) & 0xffff end
+    end,
   })
 end

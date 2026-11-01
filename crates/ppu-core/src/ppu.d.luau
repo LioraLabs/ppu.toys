@@ -15,6 +15,11 @@
 declare function makeBounded(value: number, minimum: number, maximum: number): number
 declare function makeFixed(value: number, minimum: number, maximum: number, denominator: number?): number
 
+-- Save data: one record kept in battery-backed RAM. Fields are makeBounded(default, min, max) with
+-- literal bounds, or true/false; read and assign them as plain fields. A first power-on, a changed
+-- record or a damaged save starts from the defaults.
+declare function saveData<T>(fields: T): T
+
 -- Precomputed tables. A grid gives each parameter of the inline function {min, max, step?}; calls
 -- use the nearest grid point. lookup returns the function's results (1/1024 precision); bakeHdma
 -- runs line(y, ...) on each scanline from first to last, as hdma does.

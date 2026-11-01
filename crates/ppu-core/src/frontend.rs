@@ -57,6 +57,82 @@ macro_rules! reject {
     )*};
 }
 
+impl Lower {
+    // `saveData({hiscore = makeBounded(0, 0, 999999), seen = false})` gets its layout as a second argument
+    // (crate::save): field order and offsets are decided here, once, for the preview and the cartridge.
+    fn save_data(&mut self, node: &ast::FunctionCall) {
+        const HELP: &str = "saveData takes one table written inline whose fields are makeBounded(default, min, max) with whole-number literal bounds, or true/false: `saveData({hiscore = makeBounded(0, 0, 999999), seen_intro = false})`";
+        fn fail(this: &mut Lower, node: &impl Node, message: String) {
+            this.errors.push((
+                range(node).start,
+                Error { line: node.start_position().unwrap().line() as u32, message },
+            ));
+        }
+        let [ast::Suffix::Call(ast::Call::AnonymousCall(args))] = node.suffixes().collect::<Vec<_>>().as_slice() else {
+            return fail(self, node, HELP.into());
+        };
+        let ast::FunctionArgs::Parentheses { parentheses, arguments } = args.as_ref() else {
+            return fail(self, node, HELP.into());
+        };
+        let values: Vec<_> = arguments.iter().collect();
+        let [ast::Expression::TableConstructor(table)] = values.as_slice() else {
+            return fail(self, node, HELP.into());
+        };
+        let mut fields = vec![];
+        for field in table.fields() {
+            let ast::Field::NameKey { key, value, .. } = field else {
+                return fail(self, field, HELP.into());
+            };
+            let name = key.token().to_string();
+            let kind = match &**value {
+                ast::Expression::Symbol(t) if matches!(t.token().to_string().as_str(), "true" | "false") => {
+                    crate::save::Kind::Boolean
+                }
+                ast::Expression::FunctionCall(call)
+                    if matches!(call.prefix(), ast::Prefix::Name(n) if n.token().to_string() == "makeBounded") =>
+                {
+                    let bounds = match call.suffixes().collect::<Vec<_>>().as_slice() {
+                        [ast::Suffix::Call(ast::Call::AnonymousCall(a))] => match a.as_ref() {
+                            ast::FunctionArgs::Parentheses { arguments, .. } => {
+                                let a: Vec<_> = arguments.iter().collect();
+                                match a.as_slice() {
+                                    [_, lo, hi] => integer(lo).zip(integer(hi)),
+                                    _ => None,
+                                }
+                            }
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    let Some((lo, hi)) = bounds else {
+                        return fail(self, &**value, format!("saveData field {name}: {HELP}"));
+                    };
+                    crate::save::Kind::Bounded { lo, hi }
+                }
+                _ => return fail(self, &**value, format!("saveData field {name}: {HELP}")),
+            };
+            fields.push((name, kind));
+        }
+        match crate::save::layout(&fields) {
+            Ok(layout) => {
+                let close = range(parentheses.tokens().1).start;
+                self.edits.push((close, close..close, format!(", {}", layout.lua())));
+            }
+            Err(message) => fail(self, node, message),
+        }
+    }
+}
+
+/// A whole-number literal, negative or not.
+fn integer(e: &ast::Expression) -> Option<i64> {
+    match e {
+        ast::Expression::Number(n) => n.token().to_string().parse().ok(),
+        ast::Expression::UnaryOperator { unop: ast::UnOp::Minus(_), expression } => integer(expression).map(|n| -n),
+        ast::Expression::Parentheses { expression, .. } => integer(expression),
+        _ => None,
+    }
+}
+
 impl Visitor for Lower {
     erase! {
         visit_type_specifier: TypeSpecifier,
@@ -164,6 +240,9 @@ impl Visitor for Lower {
     // lookup/bakeHdma grids are keyed by parameter name, which Lua cannot read at run time.
     fn visit_function_call(&mut self, node: &ast::FunctionCall) {
         let ast::Prefix::Name(name) = node.prefix() else { return };
+        if name.token().to_string() == "saveData" {
+            return self.save_data(node);
+        }
         if !matches!(name.token().to_string().as_str(), "lookup" | "bakeHdma") {
             return;
         }
