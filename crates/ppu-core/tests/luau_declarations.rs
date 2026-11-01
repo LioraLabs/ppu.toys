@@ -15,6 +15,7 @@ const UNDECLARED: &[&str] = &[
     "pairs",
     "pcall",
     "print",
+    "require", // Luau's own: a checker resolves modules (and their types) itself
     "rawequal",
     "rawget",
     "rawlen",

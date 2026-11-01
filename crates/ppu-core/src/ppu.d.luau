@@ -5,7 +5,8 @@
 
 -- The program ------------------------------------------------------------------------------------
 -- A toy defines `init()` (once, optional) and `frame(t, f)` (every video frame: t in seconds, f the
--- frame index). A Luau toy's files load each other with `require("./name")`.
+-- frame index). A Luau toy's files load each other with `require("./name")` (Luau's own require,
+-- not declared here, so checkers resolve each module's type).
 
 -- Numbers with contracts. Each initializes a named binding or record field directly; later stores
 -- are checked against the bounds (ordered integer literals) without clamping. makeBounded keeps
@@ -30,8 +31,6 @@ type Routine<A...> = {
 }
 declare function routine<A...>(body: (A...) -> ()): Routine<A...>
 declare function yield(updates: number?): ()
-
-declare function require(path: string): any
 
 -- Display ----------------------------------------------------------------------------------------
 type Layers = {bg1: boolean, bg2: boolean, bg3: boolean, bg4: boolean, obj: boolean, backdrop: boolean}
