@@ -200,7 +200,7 @@ The engine runs a subset of Luau. Using one of these features is an error that
 names it:
 
 - `continue`, `const`, string interpolation (`` `x = {x}` ``), attributes, and
-  `if local` condition bindings.
+  condition bindings in `if`.
 - `+=` and the other compound assignments on an indexed target such as
   `bg[1].scroll.x += 2` or `obj[i].x += 1`. Bind the table to a local first:
   `local s = bg[1].scroll; s.x += 2`.
