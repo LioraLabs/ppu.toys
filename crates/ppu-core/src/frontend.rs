@@ -75,6 +75,11 @@ impl Lower {
             return fail(self, node, HELP.into());
         };
         let values: Vec<_> = arguments.iter().collect();
+        // Already prepared (a pass that prepares the prepared text again): the layout is the second argument.
+        // shortcut: a layout written by hand is trusted as this one; compare it to the record's if that bites.
+        if let [_, ast::Expression::TableConstructor(_)] = values.as_slice() {
+            return;
+        }
         let [ast::Expression::TableConstructor(table)] = values.as_slice() else {
             return fail(self, node, HELP.into());
         };

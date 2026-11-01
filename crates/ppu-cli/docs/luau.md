@@ -85,6 +85,44 @@ the way a cartridge computes. Fractional literals round to the nearest 1/1024.
 `*` and `/` round toward zero, to 1/1024. Each store rounds down to that
 field's step.
 
+## Saving · saveData
+
+`saveData({...})` makes the one record a toy keeps in battery-backed RAM, the
+save memory on a cartridge. Its fields are `makeBounded(default, min, max)`
+with whole-number literal bounds, or `true`/`false`. Read and assign them like
+any field: there is nothing to load, store or check.
+
+```luau
+local save = saveData({
+  hiscore = makeBounded(0, 0, 999999),
+  stage = makeBounded(1, 1, 8),
+  seen_intro = false,
+})
+local score = 0
+
+function frame(t, f)
+  if pad.a then score = math.min(999999, score + 10) end
+  if score > save.hiscore then save.hiscore = score end
+  if pad.start and not save.seen_intro then save.seen_intro = true end
+  brightness = save.stage + 7
+end
+```
+
+- The first time the toy runs, the fields take their defaults. After that, a
+  reload keeps what the toy last assigned, and so does a power cycle on a
+  cartridge.
+- A save the toy cannot use starts from the defaults: a damaged one, or one
+  written before the record changed (a field added, renamed or given new
+  bounds).
+- Fields keep their contracts: assigning outside `min..max` is an error.
+- Bind the record once, at file level, and use it by its fields:
+  `save.hiscore`, never `save` itself passed or aliased. A module can export
+  it, `return {save = save}`.
+- The preview keeps the save in this browser, one per toy. The Studio's
+  Cartridge panel clears it, exports it as a `.srm` file and imports one. The
+  file is the cartridge's own save memory, so it also works in emulators and
+  on flash carts.
+
 ## Work over several frames · routine
 
 `routine(body)` makes a handle for a function that can pause with `yield()`.
@@ -245,6 +283,9 @@ Each hint gives the compiler a fact it would otherwise have to guess:
   its range stops the program rather than wrapping on the console.
 - **`lookup`** and **`bakeHdma`** become tables in the cartridge ROM. A call
   reads a precomputed answer instead of computing sines on a 3.58 MHz CPU.
+- **`saveData`** puts the record in the cartridge's battery-backed RAM. Reading
+  a field costs what any variable does; assigning one also writes it to the
+  battery RAM.
 - **`routine`** is how to spread long work over several updates when one
   update cannot fit it.
 - **Types** are removed before compiling and do not change the game.

@@ -1,5 +1,10 @@
 # Save data
 
+A Luau toy that should also save on a cartridge declares its save with
+`saveData({...})`, a record kept in battery-backed RAM: see "Saving" on the
+Luau and Lua page. This page is about `sram`, the free-form table the preview
+keeps for any toy; a cartridge cannot hold it.
+
 `sram` is a table that survives reloads, like a cartridge's battery-backed
 RAM. Whatever the program leaves in it after a frame is saved automatically
 and handed back the next time the toy runs, so `init()` can read it.
