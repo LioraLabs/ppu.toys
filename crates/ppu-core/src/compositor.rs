@@ -294,6 +294,7 @@ impl LineScratch {
 
 /// Sample, once, every layer that either screen (`used` = TM | TS) can show on
 /// this line. Windows are not applied here; they hide per screen at resolve.
+#[allow(clippy::too_many_arguments)]
 fn sample_line(
     row: &RegRow,
     mem: &Memory,

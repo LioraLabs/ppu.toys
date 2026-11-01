@@ -544,7 +544,7 @@ impl SourcePayload {
                     0 => (r.u8()?, r.u8()?),
                     n => (n, n),
                 };
-                let side = |n: u8| n % 8 == 0 && (8..=128).contains(&n);
+                let side = |n: u8| n.is_multiple_of(8) && (8..=128).contains(&n);
                 if !side(cell_size) || !side(cell_height) {
                     return Err(PayloadError::BadParam("cell_size"));
                 }
@@ -864,7 +864,7 @@ pub fn convert_source_with_priority(
             let cell_size = opts.cell_size.unwrap_or(8);
             let cell_height = opts.cell_height.unwrap_or(cell_size);
             for (name, n) in [("cell_size", cell_size), ("cell_height", cell_height)] {
-                if n % 8 != 0 || !(8..=128).contains(&n) {
+                if !n.is_multiple_of(8) || !(8..=128).contains(&n) {
                     return Err(format!(
                         "obj {name} must be a multiple of 8 from 8 to 128 (got {n})"
                     ));
