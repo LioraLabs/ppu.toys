@@ -145,7 +145,8 @@ The rules:
   made after the load win again.
 - The result table is the one a setup call returns (`char`, `next_char`, `tile`,
   `cells`, ...). A sprite source's `tile` counts from the sprite base the setup
-  placements chose.
+  placements chose; with no sprite placed at setup, from the load's own `char`,
+  which must then align to `0x2000`.
 - Placement is checked as at setup (alignment, memory bounds), but a load may
   overlap anything: replacing memory is its purpose. Samples load only at setup.
 - The DMA panel's memory map shows the setup layout; loads are not part of it.
