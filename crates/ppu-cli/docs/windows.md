@@ -9,7 +9,7 @@ allowed to act.
 
 Each window covers an inclusive horizontal span from `lo` to `hi`.
 
-```lua
+```luau
 win.w1.lo = 48
 win.w1.hi = 208
 
@@ -19,7 +19,7 @@ win.w2.hi = 160
 
 The raw form writes the same four bytes directly:
 
-```lua
+```luau
 WH0, WH1 = 48, 208
 WH2, WH3 = 96, 160
 ```
@@ -29,7 +29,7 @@ WH2, WH3 = 96, 160
 Layers opt into window 1 or window 2. Inversion selects the area outside a
 window instead of inside it.
 
-```lua
+```luau
 win.bg1.w1 = true
 win.bg1.invert = false
 ```
@@ -43,7 +43,7 @@ The same shape works for `bg1` through `bg4`, `obj`, and `color`.
 
 When both windows are enabled for a layer, choose how their masks combine.
 
-```lua
+```luau
 win.bg1.w1 = true
 win.bg1.w2 = true
 win.bg1.combine = "XOR"
@@ -57,7 +57,7 @@ The choices are `"OR"`, `"AND"`, `"XOR"`, and `"XNOR"`.
 
 Enable the completed mask separately on the main or sub screen.
 
-```lua
+```luau
 win.bg1.main = true
 win.bg1.sub = false
 ```
@@ -71,7 +71,7 @@ This controls whether BG1 participates in that screen at each horizontal pixel.
 The color window does not hide a layer. It limits where [color math](color-math.md)
 or the main-screen result is allowed.
 
-```lua
+```luau
 win.w1.lo = 64
 win.w1.hi = 192
 win.color.w1 = true

@@ -22,7 +22,7 @@ read-only. Delete the line in `ppuglobals.lua` (or press ×) to unplace.
 
 Backgrounds need character tiles, a tilemap, and palettes.
 
-```lua
+```luau
 local sky = dma("sky", {
   char = 0x1000,
   map = 0x0000,
@@ -41,20 +41,16 @@ All VRAM addresses are word addresses. Background `char` placement aligns to
 The result also includes `bit_depth`, `screen_size`, and the next available
 aligned addresses.
 
-```lua
-sky.char
-sky.map
-sky.pal
-sky.next_char
-sky.next_map
-sky.next_pal
+```luau
+local sky = dma("sky", { char = 0x1000, map = 0x0000, pal = 0 })
+local next_free = { char = sky.next_char, map = sky.next_map, pal = sky.next_pal }
 ```
 
 ## Chain placements
 
 Use the returned `next_*` address instead of repeating size calculations.
 
-```lua
+```luau
 local sky = dma("sky", { char = 0x1000, map = 0x0000, pal = 0 })
 local hills = dma("hills", {
   char = sky.next_char,
@@ -72,7 +68,7 @@ every background mode.
 
 A tilesheet has no tilemap allocation, so it accepts only `char` and `pal`.
 
-```lua
+```luau
 local tiles = dma("tiles", { char = 0x1000, pal = 0 })
 ```
 
@@ -83,7 +79,7 @@ Its result has `char`, `pal`, `next_char`, `next_pal`, and `bit_depth`.
 All OBJ sources share the character base selected by **OBSEL**. The first
 source must align to `0x2000`; later sources can chain by tile.
 
-```lua
+```luau
 local hero = dma("hero", { char = 0x6000, pal = 0 })
 local foes = dma("foes", {
   char = hero.next_char,
@@ -107,8 +103,8 @@ palette at CGRAM 192, which can keep it clear of a small Mode 7 palette.
 
 Mode 7 has a fixed hardware layout, so it accepts no placement options.
 
-```lua
-local floor = dma("floor")
+```luau
+local plane = dma("floor")
 ```
 
 Its result is `char = 0`, `map = 0`, `pal = 1`, plus `tiles_w` and `tiles_h`.
@@ -122,9 +118,9 @@ share the same CGRAM base; later placements win, like hardware DMA writes.
 
 ## Direct memory writes
 
-Use direct writes when Lua generates the data itself.
+Use direct writes when your code generates the data itself.
 
-```lua
+```luau
 vram[0x0000] = 0x1234
 cgram[1] = rgb(255, 96, 32)
 ```
@@ -132,13 +128,13 @@ cgram[1] = rgb(255, 96, 32)
 `vr(addr, words)` writes a run of consecutive VRAM words in one call, so a
 tilemap row reads as a row:
 
-```lua
+```luau
 vr(0x4000, { 0x0001, 0x0002, 0x0003 })   -- same as vram[0x4000..0x4002]
 ```
 
 In a Studio-generated `ppuglobals.lua`, painted tiles live in `apply_vram()`.
 The engine evaluates it once when the file loads and overlays those words
-onto VRAM every frame, after all Lua has run, so painted tiles cost no frame
+onto VRAM every frame, after all of the toy's code has run, so painted tiles cost no frame
 time and still win over the program's own writes.
 
 VRAM spans word addresses `0x0000` through `0x7fff`. CGRAM has 256 colors.

@@ -3,6 +3,7 @@ use anyhow::{bail, Result};
 // Embed the maintained application docs: installed binaries need no checkout.
 const TOPICS: &[(&str, &str)] = &[
     ("cli", include_str!("../docs/cli.md")),
+    ("luau", include_str!("../docs/luau.md")),
     ("registers", include_str!("../docs/registers.md")),
     ("display", include_str!("../docs/display.md")),
     ("backgrounds", include_str!("../docs/backgrounds.md")),
@@ -15,6 +16,7 @@ const TOPICS: &[(&str, &str)] = &[
     ("pixel-art", include_str!("../docs/pixel-art.md")),
     ("dma", include_str!("../docs/dma.md")),
     ("pad", include_str!("../docs/pad.md")),
+    ("sram", include_str!("../docs/sram.md")),
     ("audio", include_str!("../docs/audio.md")),
 ];
 

@@ -62,16 +62,17 @@ Transparent pixels use entry 0. The remaining colors are converted from PNG
 RGB to the SNES's 15-bit BGR555 color format. If the image has too many colors,
 the importer reduces them and reports the overflow instead of hiding it.
 
-In Lua, `pal` selects a sub-palette. The actual colors live in CGRAM.
+In code, `pal` selects a sub-palette. The actual colors live in CGRAM.
 
-```lua
+```luau
+bg[1].map[0] = {}
 bg[1].map[0][0] = { tile = 3, pal = 2 }
 obj[0].pal = 4
 ```
 
 You can also write a CGRAM color directly.
 
-```lua
+```luau
 cgram[1] = rgb(255, 96, 32)
 cgram[2] = hsl(210, 0.7, 0.5)
 ```
@@ -93,7 +94,7 @@ lower it to keep them.
 
 ## Background sources
 
-```lua
+```luau
 local sky = dma("sky", { char = 0x1000, map = 0x0000, pal = 0 })
 
 function init()
@@ -105,7 +106,7 @@ end
 
 ## Tilesheet sources
 
-```lua
+```luau
 local tiles = dma("tiles", { char = 0x1000, pal = 0 })
 
 bg[1].char_base = tiles.char
@@ -119,7 +120,7 @@ bg[1].map[0][0] = { tile = 3, pal = 0 }
 Sprite sheets must be a uniform grid with no margins. Choose the cell size that
 matches one sprite; crop irregular downloaded sheets before importing them.
 
-```lua
+```luau
 local hero = dma("hero", { char = 0x6000, pal = 0 })
 
 obj.char_base = hero.char
@@ -130,8 +131,8 @@ obj[0].pal = hero.pal + cell.pal
 
 ## Mode 7 sources
 
-```lua
-local floor = dma("floor")
+```luau
+local plane = dma("floor")
 
 mode = 7
 screen.main.bg1 = true

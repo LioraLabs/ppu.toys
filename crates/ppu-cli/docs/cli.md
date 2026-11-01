@@ -67,61 +67,12 @@ for stateful games. Sprite overflow is checked on every continuous frame.
 the manifest and converts PNGs, but does not execute Lua. Check the final
 packed artifact as well as the source directory.
 
-## Lua and typed Luau
+## Luau and Lua
 
-Sources use the same frontend in the CLI and the WebAssembly engine. It tries
-Luau syntax first, erases type syntax, then runs the existing Lua VM. If Luau
-rejects the syntax, the existing Lua parser gets the original source. Existing
-Lua bitwise operators therefore keep working. No project dialect setting or
-source migration is required; `main.lua` can contain typed Luau.
-Selection is per file. Mixing Luau types with Lua-only bitwise syntax in the
-same file is not supported; separate files can use either dialect.
-
-Type annotations, aliases, generics and casts are erased without removing
-comments or changing line numbers. Compound assignments such as `score += 1`
-and `player.x += speed` are supported. Indexed/computed compound targets,
-`continue`, if expressions, interpolated strings, attributes, condition bindings
-and const declarations are rejected. Accepted Luau syntax with unsupported
-execution semantics produces an error rather than trying another dialect.
-
-This is a supported Luau syntax subset, not a Luau VM or type checker. Type
-annotations alone do not enforce runtime types, numeric bounds or SNES limits.
-Use an editor checker for types and `makeBounded` for checked numeric state.
-Ordinary relative `require` modules and Luau standard-library parity are not
-provided by this frontend. Files still execute in manifest order and share globals.
-
-## Checked numeric bindings
-
-`local health = makeBounded(100, 0, 100)` declares an ordinary integer with
-inclusive bounds checked on every later assignment. It never clamps. Bounds
-must be signed 32-bit integer literals; constructors initialize named bindings,
-not table fields or arbitrary expressions.
-
-`local x = makeFixed(0, -120, 120, 16)` chooses fractional arithmetic and a
-storage step of 1/16. Omit the last argument for 1/1024; allowed denominators
-are powers of two from 1 through 1024. Stores round down to the step (an
-arithmetic shift, as fixed point does on hardware), then check bounds. A coarse
-step can discard a small increment; keep accumulating clocks at a suitable accuracy.
-
-Using `makeFixed` opts the supported sketch into shared Q10 arithmetic. Numeric
-literals round to 1/1024; fractional products and quotients truncate toward zero.
-Only that binding's stores use its chosen denominator. Other fractional values
-keep Q10 arithmetic; bounds do not travel with a number copied into another field.
-
-Named records, nested lists and local aliases can hold numeric state. Representation
-inference considers later stores and helper calls: `{y = 0}` can acquire fractional
-motion without a `0.0` hint. A fractional binding uses Q10 throughout its lifetime.
-Helpers may reference globals initialized later, accept records and inferred
-fractional parameters, and return records or strings. Files still execute in their
-authored order; inference does not initialize a record before its assignment.
-Lexical shadows remain separate, and copying a number does not copy its bounds.
-
-Mixed tuples use literal positions; dynamic list indexes need a shared element
-type, and nested numeric lists may have different lengths. Explicit integer
-contracts continue to reject fractional assignments. Nonlinear runtime math,
-resource APIs and scanline callbacks are not fully integrated with this precision
-surface yet. Pure annotated lookup bodies retain their authored math. Unsupported
-precision code produces a source diagnostic before replacing the running program.
+Toys are written in Luau; Lua files keep working. The CLI and the Studio share
+one engine, so a project behaves the same in both. [Luau and Lua](luau.md)
+(`ppu docs luau`) covers the differences, `makeBounded`/`makeFixed`,
+`routine`, `lookup`, `bakeHdma` and modules.
 
 ## Project manifest
 
@@ -129,7 +80,7 @@ precision code produces a source diagnostic before replacing the running program
 {
   "title": "My demo",
   "description": "A PPU graphics performance.",
-  "files": ["ppuglobals.lua", "main.lua"],
+  "files": ["ppuglobals.lua", "main.luau"],
   "sources": [
     {
       "name": "floor",
@@ -141,8 +92,9 @@ precision code produces a source diagnostic before replacing the running program
 }
 ```
 
-Lua file names are flat and execute in the listed order in a shared global
-scope. Include `main.lua`. Use an empty `sources` array for Lua-generated
+File names are flat and execute in the listed order in a shared global
+scope; a file another file `require`s runs as a module instead. Include
+`main.luau` (or `main.lua`). Use an empty `sources` array for Lua-generated
 VRAM/CGRAM artwork. PNG paths are relative to the project directory and may
 not contain `..` or be absolute.
 
@@ -173,28 +125,26 @@ ppu pack editable-copy -o revised.ppu.json
 
 Unpack overwrites matching files: choose a fresh destination.
 
-## Lua surface and effects
+## Toy surface and effects
 
 `frame(t, f)` writes registers and memory; `init()` and top-level statements
 perform setup. `hdma(first, last, callback)` changes supported state per
 scanline. Use `ppu docs` for offline topics. Modes 0–4 and 7, tile layers,
 sprites, windows, mosaic, palette animation, color math, and main/sub screens
-can be combined. Register controls use friendly Lua fields, with raw aliases
+can be combined. Register controls use friendly fields, with raw aliases
 for screen/window/color-math registers. Direct `vram[]` and `cgram[]` writes
 allow generated graphics; `obj[]` controls OAM. `voice[]`, `dsp`, `timer()`,
 and the music kit drive the S-DSP (see `ppu docs audio`). This is a PPU
 playground, not a stock SNES CPU/DMA timing simulator. Modes 5/6, interlace,
 overscan, and read-only counter registers are not currently modelled.
 
-Use `makeBounded(initial, minimum, maximum)` to declare an ordinary integer
-binding whose later assignments must stay within inclusive bounds:
+Use `makeBounded(initial, minimum, maximum)` to declare an integer whose
+later assignments must stay within inclusive bounds:
 
-```lua
+```luau
 local health = makeBounded(100, 0, 100)
-health = max(0, health - 3)
+health = math.max(0, health - 3)
 ```
 
-Invalid values raise an error; this does not clamp. Bounds must be ordered
-signed 32-bit integer literals. Use a new local declaration, or a new
-unconditional file-level global. This constructor cannot be aliased, nested
-inside another expression, or used to declare a table field's contract.
+Invalid values raise an error; this does not clamp. See
+[Luau and Lua](luau.md#numbers-with-a-range-makebounded-and-makefixed).

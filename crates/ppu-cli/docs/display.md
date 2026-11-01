@@ -10,16 +10,16 @@ chooses how the background layers interpret VRAM.
 finished image, so backgrounds, sprites, and color math all fade together.
 It is the low nibble of INIDISP; `force_blank` is bit 7.
 
-```lua
+```luau
 function frame(t, f)
-  brightness = floor((sin(t) + 1) * 7.5)
+  brightness = math.floor((math.sin(t) + 1) * 7.5)
 end
 ```
 
 `force_blank` immediately blacks out the display. It exists mainly to match the
 hardware; normal toys can fade with `brightness`.
 
-```lua
+```luau
 force_blank = true
 ```
 
@@ -29,14 +29,14 @@ force_blank = true
 can use. Mode 1 is the everyday choice: two 4bpp layers and one 2bpp layer.
 It occupies BGMODE bits 0–2; each `tile_size` selects one of bits 4–7.
 
-```lua
+```luau
 mode = 1
 screen.main.bg1 = true
 ```
 
 Each background can independently use 8×8 or 16×16 tiles.
 
-```lua
+```luau
 bg[1].tile_size = 16
 ```
 
@@ -45,7 +45,7 @@ bg[1].tile_size = 16
 Mosaic holds one sampled pixel across a square block. `mosaic` sets the block
 size from 0 through 15 in MOSAIC bits 4–7; bits 0–3 enable BG1 through BG4.
 
-```lua
+```luau
 mosaic = 7
 bg[1].mosaic = true
 ```

@@ -3,7 +3,7 @@
 The SNES has a second machine for sound: the S-DSP, with its own 64 KB of
 sound RAM (ARAM), eight voices, BRR-compressed samples, ADSR envelopes, and
 an echo buffer. ppu.toys emulates that chip exactly and replaces its driver
-CPU with your Lua, the same way it replaces the main CPU for graphics.
+CPU with your code, the same way it replaces the main CPU for graphics.
 
 ## Two clocks
 
@@ -52,10 +52,10 @@ fire in time order, each hook's writes landing at its own offset; then
 - Both hooks and `frame()` read the **previous** frame's `envx`, `outx`, and
   `ended` — audio read-backs lag one frame behind the writes.
 
-```lua
+```luau
 beat = 0
 timer(0, 250, function(off, t)
-  beat = beat + 1
+  beat += 1
 end)
 
 function frame(t, f)
@@ -95,7 +95,7 @@ edge-triggered bitmask. Calling `kon` twice for the same voice in one frame
 has the same effect as calling it once. Calling `koff` then `kon` for the
 same voice within the same span restarts it — KON is flushed last.
 
-```lua
+```luau
 local was_a = false
 function frame(t, f)
   local pressed = pad.a and not was_a
@@ -122,7 +122,7 @@ Power-on `mvol` is `{ l = 0, r = 0 }` — nothing is audible until you set it,
 except that starting a `score{}` while it is still zero opens it to full,
 so a song is heard without a mixer line.
 
-```lua
+```luau
 function init()
   dsp.mvol = { l = 127, r = 127 }
 end
@@ -140,7 +140,7 @@ Place a sample with `dma()`, same call as backgrounds and sprites, but it
 takes only an `addr` option (default `0x0500`) and returns `{ id, addr,
 next_addr }`:
 
-```lua
+```luau
 local kick = dma("kick")
 voice[0].sample = kick.id
 ```
@@ -150,7 +150,7 @@ far, so a sequence of `dma()` calls never overlaps; pass `addr` to pin one.
 Here the same source twice, since this chapter has one sample; a second
 `.wav` in the Sources panel gets its own name and `id`:
 
-```lua
+```luau
 local kick = dma("kick")
 local kick2 = dma("kick")
 assert(kick2.addr == kick.next_addr)
@@ -176,7 +176,7 @@ The echo unit writes into sound RAM continuously while it is on, so a
 sample placed inside the echo region would be overwritten on hardware —
 the emulation refuses that placement for the same reason.
 
-```lua
+```luau
 function init()
   dsp.echo = { delay = 4, feedback = 64, fir = { 127, 0, 0, 0, 0, 0, 0, 0 } }
   dsp.evol = { l = 48, r = 48 }
@@ -216,7 +216,7 @@ become a [song source](#sequencer-songs), built in the sequencer grid or
 dropped in as a `.mid`, played with `score{ song = "<name>" }`. Instrument
 fields a row can't carry (`adsr`, `echo`) are set on the `BANK` presets
 before `score{}`. Read position from the handle's `tick` (250 a second)
-instead of `step` or `beat`, for example `floor(tune.tick / 31.25) % 16` for
+instead of `step` or `beat`, for example `math.floor(tune.tick / 31.25) % 16` for
 the sixteenth at 120 BPM.
 
 ## Built-in samples
@@ -242,7 +242,7 @@ Melodic samples loop and are recorded at C4, so `note()` and `score{}`
 rows pitch them correctly with the default `base`. Drums are recorded at 16 kHz
 like period games: play them at pitch `0x0800`, which `bank()` does for you.
 
-```lua
+```luau
 local piano = bank("piano")
 local kick = bank("kick")
 local hat = bank("hat", { vol = 70, pan = 0.4 })
@@ -279,7 +279,7 @@ plays on the first pass only: every wrap skips it.
 `score{ song = "beat1" }` plays the source named `"beat1"` on the shared
 8-voice pool, no Lua timer involved:
 
-```lua
+```luau
 local beat = score{ song = "beat1" }
 
 function frame(t, f)
@@ -385,7 +385,7 @@ C2, G2 and C3. In a one-bar pattern, put C2 on sixteenths 1 and 9, G2 on 4
 and 12, and C3 on 7 and 15, each note lasting until the next one. Name the
 song `bassline` and the toy finds it.
 
-```lua
+```luau
 -- ppu.toys tutorial :: first-note — a sample, a song, an sfx on A, and a light that follows the envelope
 -- The sound chip (S-DSP) is a second machine bolted onto the console: its
 -- own 64 KB of sound RAM (ARAM), its own clock, its own eight voices. dma()
@@ -407,12 +407,12 @@ function init()
 end
 
 local was_a = false
-function frame(t, f)
+function frame(t: number, f: number)
   local pressed = pad.a and not was_a             -- edge, not level: sfx() restarts the voice every call
   was_a = pad.a
   if pressed then sfx(hit, 1, "C4") end
-  brightness = floor(voice[0].envx / 8)           -- ENVX is 0..127; brightness is 0..15
-  local step = floor(tune.tick / 31.25) % 16      -- 250 ticks a second, a sixteenth every 31.25 at 120 BPM: 0..15
+  brightness = math.floor(voice[0].envx / 8)      -- ENVX is 0..127; brightness is 0..15
+  local step = math.floor(tune.tick / 31.25) % 16 -- 250 ticks a second, a sixteenth every 31.25 at 120 BPM: 0..15
   cgram[0] = hsl(200 + step * 12, 0.6, 0.3)       -- the backdrop hue drifts with the song's own step
 end
 -- Try: swap "C4" for a different sfx pitch, hold A twice fast to hear the retrigger, or drive brightness from voice[1].envx instead
@@ -494,7 +494,7 @@ selects direct S-DSP commands instead of the friendly voice/score/timer walker.
 The list is consumed once, in order, at sample offsets within that frame's
 533 or 534 stereo sample pairs. Each event has `at` (default 0) and one action:
 
-```lua
+```luau
 dsp.events = {
   {at=0, reset=true},
   {at=0, addr=0x8000, data="\000\129\000\129"}, -- ARAM upload

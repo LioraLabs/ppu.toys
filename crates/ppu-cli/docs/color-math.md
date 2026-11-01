@@ -11,7 +11,7 @@ fog effects—without alpha blending.
 
 Each screen independently chooses which backgrounds and sprites participate.
 
-```lua
+```luau
 screen.main.bg1 = true
 screen.main.obj = true
 
@@ -20,7 +20,7 @@ screen.sub.bg2 = true
 
 The same setup as raw register bytes is:
 
-```lua
+```luau
 TM = 0x11 -- BG1 + OBJ on main
 TS = 0x02 -- BG2 on sub
 ```
@@ -33,7 +33,7 @@ operand.
 
 Color math only runs when the main-screen winner belongs to an enabled layer.
 
-```lua
+```luau
 color.on.bg1 = true
 color.on.obj = true
 color.on.backdrop = true
@@ -49,7 +49,7 @@ is `backdrop`.
 
 Choose `"fixed"` to combine the main pixel with one constant RGB color.
 
-```lua
+```luau
 screen.main.bg1 = true
 color.on.bg1 = true
 color.addend = "fixed"
@@ -62,7 +62,7 @@ The engine's raw mirror for this setup is `CGWSEL = 0x00`,
 
 This adds blue to BG1. Change the operation to subtraction for shadows.
 
-```lua
+```luau
 color.fixed = rgb(64, 64, 64)
 color.op = "sub"
 ```
@@ -72,7 +72,7 @@ color.op = "sub"
 Choose `"sub"` to combine the main winner with the sub-screen winner at the
 same pixel.
 
-```lua
+```luau
 screen.main.bg1 = true
 screen.sub.bg2 = true
 
@@ -92,7 +92,7 @@ of **CGADSUB**.
 A [color window](windows.md#the-color-window) can restrict math to the inside
 or outside of a horizontal region.
 
-```lua
+```luau
 color.region = "inside"
 ```
 

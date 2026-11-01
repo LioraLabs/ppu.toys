@@ -1,12 +1,12 @@
 # Save data
 
-`sram` is a Lua table that survives reloads, like a cartridge's battery-backed
+`sram` is a table that survives reloads, like a cartridge's battery-backed
 RAM. Whatever the program leaves in it after a frame is saved automatically
 and handed back the next time the toy runs, so `init()` can read it.
 
 ## Keep a high score
 
-```lua
+```luau
 function init()
   sram.best = sram.best or 0
 end
@@ -14,7 +14,7 @@ end
 local score = 0
 
 function frame(t, f)
-  if pad.a then score = score + 1 end
+  if pad.a then score += 1 end
   if score > sram.best then sram.best = score end
 end
 ```

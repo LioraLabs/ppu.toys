@@ -5,19 +5,22 @@ held and refreshes before every `frame()`.
 
 ## Move something
 
-```lua
-local x, y = 128, 112
+```luau
+local hero = {x = makeBounded(128, 0, 240), y = makeBounded(112, 0, 208)}
 
 function frame(t, f)
-  if pad.left then x = x - 1 end
-  if pad.right then x = x + 1 end
-  if pad.up then y = y - 1 end
-  if pad.down then y = y + 1 end
+  local dx = (if pad.right then 1 else 0) - (if pad.left then 1 else 0)
+  local dy = (if pad.down then 1 else 0) - (if pad.up then 1 else 0)
+  hero.x = math.clamp(hero.x + dx, 0, 240)
+  hero.y = math.clamp(hero.y + dy, 0, 208)
 
-  obj[0].x = x
-  obj[0].y = y
+  obj[0].x = hero.x
+  obj[0].y = hero.y
 end
 ```
+
+[`makeBounded`](luau.md#numbers-with-a-range-makebounded-and-makefixed) states
+the range each coordinate must stay in; `math.clamp` keeps it there.
 
 Available fields are `up`, `down`, `left`, `right`, `a`, `b`, `x`, `y`, `l`,
 `r`, `start`, and `select`.
@@ -27,7 +30,7 @@ Available fields are `up`, `down`, `left`, `right`, `a`, `b`, `x`, `y`, `l`,
 Because `pad.a` stays true while held, remember the previous frame when an
 action should happen only once.
 
-```lua
+```luau
 local was_a = false
 
 function frame(t, f)
@@ -44,7 +47,7 @@ end
 
 `pad2` is the second controller, with the same fields as `pad`.
 
-```lua
+```luau
 function frame(t, f)
   if pad2.left then obj[1].x = obj[1].x - 1 end
 end

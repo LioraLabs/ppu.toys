@@ -8,8 +8,8 @@ matrix. **M7A–M7D** rotate, scale, and shear; **M7X/M7Y** choose the center;
 
 Mode 7 has a fixed memory layout, so its `dma()` call needs no addresses.
 
-```lua
-local floor = dma("floor")
+```luau
+local plane = dma("floor")
 
 function init()
   mode = 7
@@ -45,7 +45,7 @@ are always available in `main.lua`, without any generated file:
 Both return a table with `a`, `b`, `c`, `d`, `cx`, `cy`, `scroll_x`, `scroll_y`,
 and `visible`. They only calculate values; assignments make them take effect.
 
-```lua
+```luau
 function frame(t, f)
   mode = 7
   brightness = 15
@@ -77,15 +77,15 @@ otherwise the panel overrides still take precedence.
 
 The identity matrix is `a = 1`, `d = 1`, with `b` and `c` at zero. Rotation is
 the familiar cosine-and-sine matrix. The PPU stores M7A–M7D as signed 8.8
-fixed-point values; Lua lets you write the equivalent ordinary numbers.
+fixed-point values; you write the equivalent ordinary numbers.
 
-```lua
+```luau
 function frame(t, f)
   local angle = t * 0.25
-  m7.a = cos(angle)
-  m7.b = -sin(angle)
-  m7.c = sin(angle)
-  m7.d = cos(angle)
+  m7.a = math.cos(angle)
+  m7.b = -math.sin(angle)
+  m7.c = math.sin(angle)
+  m7.d = math.cos(angle)
 end
 ```
 
@@ -108,10 +108,39 @@ Smaller matrix coefficients enlarge the image. To center a texture point
 and source center for each scanline with `hdma()`; the `ppu new` starter
 contains a working floor projection.
 
-```lua
+```luau
 function frame(t, f)
   m7.a = 0.5
   m7.d = 0.5
+end
+```
+
+## A floor for the cartridge · bakeHdma
+
+`mode7_floor` runs in the preview only: a perspective floor recomputed every
+frame is too slow for the console's CPU. A floor that only turns can be baked
+instead. [`bakeHdma`](luau.md#precompute-math-lookup-and-bakehdma) samples
+the scanline program once for every heading, and each frame picks one:
+
+```luau
+local heading = makeBounded(0, 0, 63)
+
+local ground = bakeHdma({angle = {0, 63}}, 0, 223, function(y, angle)
+  if y < 96 then
+    mode = 1
+  else
+    mode = 7
+    local d = 64 / (y - 95)
+    local turn = angle * math.pi / 32
+    m7.a, m7.b = d * math.cos(turn), d * math.sin(turn)
+    m7.c, m7.d = -d * math.sin(turn), d * math.cos(turn)
+  end
+end)
+
+function frame(t, f)
+  if pad.left then heading = (heading + 63) % 64 end
+  if pad.right then heading = (heading + 1) % 64 end
+  ground(heading)
 end
 ```
 
@@ -121,7 +150,7 @@ end
 `m7.flip_y` reflect the plane. `m7.wrap` selects what appears outside it:
 wrapped pixels, transparency, or tile zero. These are M7SEL bits 0, 1, and 6–7.
 
-```lua
+```luau
 m7.cx = 128
 m7.cy = 112
 m7.wrap = 0
@@ -139,7 +168,7 @@ explicitly fill the Mode 7 tilemap when a repeating plane is wanted.
 EXTBG lets Mode 7 pixel bit 7 split the plane between BG1 and BG2 priorities.
 Enable both layers to show both parts of an imported EXTBG source.
 
-```lua
+```luau
 m7.extbg = true
 screen.main.bg1 = true
 screen.main.bg2 = true

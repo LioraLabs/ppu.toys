@@ -7,8 +7,12 @@ local sheet = {tile = 0, pal = 2, cells = cells}
 "#;
 
 fn run(program: &str, frames: u32) -> LuaEngine {
+    run_as("source", program, frames)
+}
+
+fn run_as(file: &str, program: &str, frames: u32) -> LuaEngine {
     let mut engine = LuaEngine::new();
-    engine.set_source(&format!("{SHEET}{program}")).unwrap();
+    engine.set_sources(&[(file, &format!("{SHEET}{program}"))]).unwrap();
     for f in 0..frames {
         engine.frame(f as f64 / 60., f).unwrap();
     }
@@ -76,16 +80,16 @@ fn the_sprites_chapter_snippets_run() {
     const CHAPTER: &str = include_str!("../../ppu-cli/docs/sprites.md");
     let snippet = |heading: &str| {
         let section = &CHAPTER[CHAPTER.find(heading).unwrap()..];
-        let start = section.find("```lua\n").unwrap() + "```lua\n".len();
+        let start = section.find("```luau\n").unwrap() + "```luau\n".len();
         // The chapter loads a sheet from a source; stand in a sheet of the same shape.
         section[start..start + section[start..].find("```").unwrap()]
             .replace(r#"dma("ship", {char = 0x4000, pal = 0})"#, "{tile = 0, pal = 0, cells = {{tile = 0}, {tile = 2}, {tile = 4}, {tile = 6}, {tile = 8}, {tile = 10}}}")
     };
-    let e = run(&snippet("## Draw sprites in groups"), 2);
+    let e = run_as("main.luau", &snippet("## Draw sprites in groups"), 2);
     let oam = &e.memory().oam;
     assert_eq!((oam[0].x, oam[1].x, oam[2].x, oam[6].x, oam[10].x, oam[11].x, oam[18].x), (8, 120, 174, 124, 82, 32, 12));
     assert!(oam[..12].iter().all(|o| o.on) && !oam[12].on && !oam[19].on);
-    let e = run(&snippet("## Keep sprites that did not move"), 9);
+    let e = run_as("main.luau", &snippet("## Keep sprites that did not move"), 9);
     let oam = &e.memory().oam;
     assert_eq!((oam[0].x, oam[1].x, oam[8].x), (120, 20, 216));
     assert!(oam[..9].iter().all(|o| o.on) && !oam[9].on);

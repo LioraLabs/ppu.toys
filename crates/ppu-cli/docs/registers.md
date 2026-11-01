@@ -4,11 +4,11 @@ The SNES PPU does not draw shapes. It reads tiles and sprites from memory,
 decides which pixel is in front, optionally combines two colors, and sends the
 result to the display. Registers control every step.
 
-In ppu.toys, those controls have friendly Lua names. Writing `brightness = 8`
+In ppu.toys, those controls have friendly names. Writing `brightness = 8`
 is writing **INIDISP**. Writing `screen.main.bg1 = true` is changing **TM**.
 The names are friendlier; the machine underneath is still the PPU.
 
-```lua
+```luau
 function frame(t, f)
   brightness = 15
   mode = 1
@@ -37,16 +37,16 @@ register inspector always shows the final value sent through the PPU.
 Registers normally apply to the whole frame. Put the same assignments inside
 an [`hdma()` hook](scanlines.md) and they can change on each scanline.
 
-## Lua rules
+## Luau rules
 
-Register values are numbers or booleans. Number writes floor fractional values
+Toys are written in [Luau](luau.md). Register values are numbers or booleans. Number writes floor fractional values
 and ignore high bits like the hardware. Scroll, sprite positions, and Mode 7
 matrix values keep fractions until rendering.
 
 Call `init()` for setup that only needs to happen once. Use `frame(t, f)` for
 animation; `t` is elapsed seconds and `f` is the frame number.
 
-```lua
+```luau
 function init()
   mode = 1
 end

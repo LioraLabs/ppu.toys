@@ -8,7 +8,7 @@ ppu.toys exposes the 128 OAM entries as `obj[0]` through `obj[127]`.
 
 ## Put a sprite on screen
 
-```lua
+```luau
 local hero = dma("hero", { char = 0x6000, pal = 0 })
 
 function init()
@@ -52,9 +52,9 @@ slivers. A 32-pixel-wide sprite uses four slivers on each covered line.
 `ppu check` reports actual range/sliver overflow; reducing total OAM usage
 alone may not fix a crowded line.
 
-```lua
+```luau
 function frame(t, f)
-  obj[0].x = 128 + sin(t) * 48
+  obj[0].x = 128 + math.sin(t) * 48
   obj[0].y = 104
   obj[0].prio = 3
   obj[0].flip_x = false
@@ -63,19 +63,23 @@ function frame(t, f)
 end
 ```
 
-Object indices must be integers. Use `obj[floor(i)]` when an index is computed.
+Object indices must be integers. Use `obj[math.floor(i)]` when an index is computed.
 
 ## Animation cells
 
 An imported sprite sheet exposes `cells`. Pick a cell, then apply its tile and
 flip information to an OAM entry.
 
-```lua
-local cell = hero.cells[floor(t * 8) % #hero.cells + 1]
-obj[0].tile = hero.tile + cell.tile
-obj[0].pal = hero.pal + cell.pal
-obj[0].flip_x = cell.flip_x
-obj[0].flip_y = cell.flip_y
+```luau
+local hero = dma("hero", { char = 0x6000, pal = 0 })
+
+function frame(t, f)
+  local cell = hero.cells[math.floor(t * 8) % #hero.cells + 1]
+  obj[0].tile = hero.tile + cell.tile
+  obj[0].pal = hero.pal + cell.pal
+  obj[0].flip_x = cell.flip_x
+  obj[0].flip_y = cell.flip_y
+end
 ```
 
 ## Draw sprites in groups · the sprites library
@@ -86,7 +90,7 @@ level is a grid of 16x16 sheet cells, `columns` wide, centered on the drawn
 point. Groups set what draws on top: make them at file level (or in
 `init()`), the first on top, and draw into them.
 
-```lua
+```luau
 local sheet = dma("ship", {char = 0x4000, pal = 0})
 local ship = sprites.art({
   {size = 16, columns = 1, cells = {0}},
@@ -143,13 +147,13 @@ can leave them as they are instead of drawing them again. Give each sprite
 that persists a key, an integer 0..127 (keys are the group's own), and keep
 the ones that did not move:
 
-```lua
+```luau
 local sheet = dma("ship", {char = 0x4000, pal = 0})
 local star = sprites.art({{size = 16, columns = 1, cells = {5}}}, sheet)
 local ship = sprites.group()
 local stars = sprites.group()
-local field = {}
-for i = 1, 8 do field[i] = {x = i * 28, y = -1} end
+local field: {{x: number, y: number}} = {}
+for i = 1, 8 do table.insert(field, {x = i * 28, y = -1}) end
 
 function frame(t, f)
   ship:draw(star, 128, 100 + f % 20)
@@ -189,7 +193,7 @@ end
 Normally lower OAM indices are considered first. `obj.first` starts evaluation
 at another sprite and enables priority rotation.
 
-```lua
+```luau
 obj.first = 32
 ```
 

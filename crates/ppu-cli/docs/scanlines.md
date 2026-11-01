@@ -9,7 +9,7 @@ moves down the screen.
 
 ## Change a register per line
 
-```lua
+```luau
 function init()
   mode = 1
   screen.main.bg1 = true
@@ -17,7 +17,7 @@ end
 
 function frame(t, f)
   hdma(0, 223, function(y)
-    brightness = floor(y / 14)
+    brightness = math.floor(y / 14)
   end)
 end
 ```
@@ -46,9 +46,9 @@ the same helpers when generating ramps.
 
 For a simple blend, no keyframe table is needed:
 
-```lua
-local progress = clamp(t / 2, 0, 1)
-bg[1].scroll.x = floor(lerp(20, 200, progress) + 0.5)
+```luau
+local progress = math.clamp(t / 2, 0, 1)
+bg[1].scroll.x = math.round(lerp(20, 200, progress))
 cgram[0] = lerp_color(rgb(255, 0, 0), rgb(0, 0, 255), progress)
 ```
 
@@ -60,7 +60,7 @@ sorted by position. Values hold before the first key and after the last.
 Each key's easing controls the segment to the next key: `"linear"` (default),
 `"smooth"`, `"ease-in"`, `"ease-out"`, or `"step"`.
 
-```lua
+```luau
 local fade = {{0, 0, "smooth"}, {2, 15}}
 local sky = {{0, rgb(16, 32, 96)}, {223, rgb(240, 128, 64)}}
 
@@ -82,21 +82,43 @@ edges; `ramp` preserves fractions for Mode 7 matrix fields. Color ramps take
 
 Offset each line differently for waves, perspective, or a split screen.
 
-```lua
+```luau
 hdma(96, 223, function(y)
-  bg[1].scroll.x = sin(y / 12) * 8
+  bg[1].scroll.x = math.sin(y / 12) * 8
 end)
 ```
 
 The callback can change display, background, Mode 7, screen, window, color-math,
 and CGRAM state. It cannot call `dma()` or rewrite frame-global OAM.
 
+## Bake an effect · bakeHdma
+
+An `hdma()` callback runs for every line of every frame. When the effect
+changes with one number from a known range, such as a phase, `bakeHdma`
+states that range. A cartridge then stores every version of the effect in
+ROM and picks one per frame instead of computing 224 lines. The preview runs
+the callback as an ordinary `hdma()` hook, with the input snapped to the
+grid.
+
+```luau
+local waves = bakeHdma({phase = {0, 63}}, 96, 223, function(y, phase)
+  bg[1].scroll.x = math.floor(math.sin(y / 12 + phase * math.pi / 32) * 8)
+end)
+
+function frame(t, f)
+  waves(f % 64)
+end
+```
+
+The grid, inputs and limits are the same as for
+[`lookup`](luau.md#precompute-math-lookup-and-bakehdma).
+
 ## Per-line palette writes
 
 A CGRAM assignment inside `hdma()` changes that palette entry for the current
 line only.
 
-```lua
+```luau
 hdma(0, 223, function(y)
   cgram[0] = hsl(y * 2, 0.7, 0.35)
 end)

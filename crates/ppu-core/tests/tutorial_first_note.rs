@@ -128,12 +128,12 @@ function init()
 end
 
 local was_a = false
-function frame(t, f)
+function frame(t: number, f: number)
   local pressed = pad.a and not was_a             -- edge, not level: sfx() restarts the voice every call
   was_a = pad.a
   if pressed then sfx(hit, 1, "C4") end
-  brightness = floor(voice[0].envx / 8)           -- ENVX is 0..127; brightness is 0..15
-  local step = floor(tune.tick / 31.25) % 16      -- 250 ticks a second, a sixteenth every 31.25 at 120 BPM: 0..15
+  brightness = math.floor(voice[0].envx / 8)      -- ENVX is 0..127; brightness is 0..15
+  local step = math.floor(tune.tick / 31.25) % 16 -- 250 ticks a second, a sixteenth every 31.25 at 120 BPM: 0..15
   cgram[0] = hsl(200 + step * 12, 0.6, 0.3)       -- the backdrop hue drifts with the song's own step
 end
 -- Try: swap "C4" for a different sfx pitch, hold A twice fast to hear the retrigger, or drive brightness from voice[1].envx instead
@@ -148,7 +148,7 @@ fn build_engine() -> LuaEngine {
             common::add_sample(e, "kick");
             common::add_song_source(e, "bassline", &bassline_song());
         },
-        &[("main.lua", MAIN_SRC)],
+        &[("main.luau", MAIN_SRC)],
     )
 }
 
@@ -323,34 +323,34 @@ const AUDIO_CHAPTER: &str = include_str!("../../ppu-cli/docs/audio.md");
 
 #[test]
 fn chapter_carries_the_toy_verbatim() {
-    let needle = format!("```lua\n{MAIN_SRC}```");
+    let needle = format!("```luau\n{MAIN_SRC}```");
     assert!(
         AUDIO_CHAPTER.contains(&needle),
-        "docs/audio.md should carry MAIN_SRC verbatim in a ```lua fence"
+        "docs/audio.md should carry MAIN_SRC verbatim in a ```luau fence"
     );
 }
 
-/// Split the chapter on ```lua fences and run every block through the same
+/// Split the chapter on ```luau fences and run every block through the same
 /// engine the toy itself uses (a `kick` sample source registered, pokes.lua
 /// present, pad released) for a few frames — the chapter's own harness, so
 /// a fact that no longer matches the engine breaks this test instead of
 /// quietly rotting in prose.
 #[test]
 fn every_lua_snippet_in_the_chapter_runs() {
-    let fence = "```lua\n";
+    let fence = "```luau\n";
     let mut blocks = Vec::new();
     let mut rest = AUDIO_CHAPTER;
     while let Some(start) = rest.find(fence) {
         let after = &rest[start + fence.len()..];
         let end = after
             .find("```")
-            .expect("unterminated ```lua fence in docs/audio.md");
+            .expect("unterminated ```luau fence in docs/audio.md");
         blocks.push(&after[..end]);
         rest = &after[end..];
     }
     assert!(
         !blocks.is_empty(),
-        "no ```lua blocks found in docs/audio.md"
+        "no ```luau blocks found in docs/audio.md"
     );
     for block in blocks {
         let first_line = block.lines().next().unwrap_or("");
@@ -362,7 +362,7 @@ fn every_lua_snippet_in_the_chapter_runs() {
                 common::add_song_source(e, "beat1", &beat1_song());
                 common::add_song_source(e, "bassline", &bassline_song());
             },
-            &[("main.lua", block)],
+            &[("main.luau", block)],
         );
         for f in 0..3u32 {
             // A is held on frame 1 only, so pad-gated branches run too.

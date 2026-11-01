@@ -12,7 +12,7 @@ depends on the active [background mode](display.md#background-mode-bgmode-2105).
 [`dma()`](dma.md) places an imported [source](sources.md) in PPU memory and returns the
 addresses its registers need.
 
-```lua
+```luau
 local sky = dma("sky", { char = 0x1000, map = 0x0000, pal = 0 })
 
 function init()
@@ -36,16 +36,16 @@ when the map wraps.
 As on hardware, whose first visible scanline is line 1, the top display line
 shows tilemap row `scroll.y + 1`. Set `scroll.y = -1` to put row 0 at the top.
 
-```lua
+```luau
 function frame(t, f)
   bg[1].scroll.x = t * 16
-  bg[1].scroll.y = sin(t) * 8
+  bg[1].scroll.y = math.sin(t) * 8
 end
 ```
 
 Different speeds create parallax: distant layers move less than nearby ones.
 
-```lua
+```luau
 bg[1].scroll.x = t * 4
 bg[2].scroll.x = t * 12
 ```
@@ -55,7 +55,7 @@ bg[2].scroll.x = t * 12
 For a tilesheet without an imported map, write cells directly. Tilemap entries
 select a tile, palette, priority, and optional flips.
 
-```lua
+```luau
 bg[1].map[0] = {}
 bg[1].map[0][0] = {
   tile = 3,
@@ -78,9 +78,9 @@ and [scanline scrolling](scanlines.md#raster-effects).
 are zero-based cells in a single 32-cell-stride background map. Load a font
 sheet whose tiles contain printable ASCII in order, with space at tile zero:
 
-```lua
-local font = dma("font", {char=0x6000, pal=112})
-local hud = {map=0x7000, width=32, height=4, palette=7, padding="0"}
+```luau
+local font = dma("font", {char = 0x6000, pal = 112})
+local hud = {map = 0x7000, width = 32, height = 4, palette = 7, padding = "0"}
 
 function init()
   bg[1].char_base, bg[1].map_base = font.char, hud.map
@@ -107,7 +107,7 @@ end
 Fields must fit the descriptor's 1..32-cell width and height. Invalid positions,
 fractional numbers, palettes, absent characters and VRAM extents raise errors.
 The descriptor names an existing VRAM area; these helpers do not allocate a
-font or map. The same Lua helpers run in preview and compile with the game.
+font or map. The same helpers run in preview and compile with the game.
 For sprites drawn without OAM bookkeeping, in draw order or sorted by layer
 and depth, see
 [the sprites library](sprites.md#draw-sprites-in-order--the-sprites-library).
