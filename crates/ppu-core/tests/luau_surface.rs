@@ -121,6 +121,29 @@ function frame(t, f) lines(3.4) end"#;
 }
 
 #[test]
+fn baked_scanline_programs_called_together_each_take_their_rows() {
+    let main = r#"local top = bakeHdma({p = {0, 7}}, 0, 111, function(y, p) bg[1].scroll.x = p end)
+local bottom = bakeHdma({q = {0, 7}}, 112, 223, function(y, q) bg[1].scroll.x = 10 + q end)
+local whole = bakeHdma({r = {0, 7}}, 0, 223, function(y, r) bg[1].scroll.x = 20 + r end)
+function frame(t, f)
+  bg[1].scroll.x = 99
+  if f == 0 then top(1) bottom(2) elseif f == 1 then whole(3) top(4) else bottom(5) end
+end"#;
+    let mut engine = LuaEngine::new();
+    engine.set_sources(&[("main.luau", main)]).unwrap();
+    let rows = |lines: &ppu_core::LineTable, y: usize| lines.rows[y].bg[0].scroll_x;
+    // Both programs called in one frame: each on its own rows.
+    let lines = engine.frame(0., 0).unwrap();
+    assert_eq!((rows(&lines, 0), rows(&lines, 111), rows(&lines, 112), rows(&lines, 223)), (1, 1, 12, 12));
+    // Where two calls cover a row, the later one wins.
+    let lines = engine.frame(1. / 60., 1).unwrap();
+    assert_eq!((rows(&lines, 111), rows(&lines, 112)), (4, 23));
+    // Rows no call covers keep the frame's value.
+    let lines = engine.frame(2. / 60., 2).unwrap();
+    assert_eq!((rows(&lines, 111), rows(&lines, 112)), (99, 15));
+}
+
+#[test]
 fn target_is_a_build_setting_not_source() {
     let main = "target({region = \"ntsc\", hz = 60})\nfunction frame(t, f) end";
     assert!(error(&[("main.luau", main)], 1).contains("region and update rate are build settings"));
