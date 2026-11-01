@@ -4,8 +4,9 @@ A [source](sources.md) owns graphics data but no hardware address. `dma()` place
 that data into VRAM and CGRAM, then returns the addresses that the display
 registers need.
 
-Call `dma()` at the top level or in `init()`. Placement is setup work, so it is
-not available from `frame()` or an `hdma()` callback.
+Call `dma()` at the top level or in `init()`. From `frame()` it is a
+[stage load](#load-a-stage), allowed only while the screen is blanked; it is
+never available from an `hdma()` callback or a `timer()` hook.
 
 ## Place from the Studio
 
@@ -112,6 +113,46 @@ local plane = dma("floor")
 
 Its result is `char = 0`, `map = 0`, `pal = 1`, plus `tiles_w` and `tiles_h`.
 Only one Mode 7 source can be placed.
+
+## Load a stage
+
+A game with several stages swaps graphics between them the way SNES games do:
+blank the screen, copy the next stage's graphics, show it again. Call `dma()`
+from `frame()` (or a helper it calls) with `force_blank = true`:
+
+```luau
+function frame(t, f)
+  if pad.a then
+    -- The next stage: blank, then load its graphics.
+    force_blank = true
+    dma("tiles", { char = 0x1000, pal = 0 })
+    dma("foes", { char = 0x4000, pal = 4 })
+  else
+    force_blank = false -- the update after the load shows the new stage
+  end
+end
+```
+
+The rules:
+
+- `force_blank` must be true when `dma()` runs and still true when `frame()`
+  returns; otherwise the update is an error. Unblank on a later update.
+- The data is in VRAM and CGRAM from that update on, and stays until another
+  load replaces it. The blanked update shows nothing, so the first picture with
+  the new graphics is the first unblanked one.
+- A load writes over whatever its addresses held, like hardware DMA: setup
+  placements, earlier loads and earlier `vram[]`/`cgram[]` writes alike. Writes
+  made after the load win again.
+- The result table is the one a setup call returns (`char`, `next_char`, `tile`,
+  `cells`, ...). A sprite source's `tile` counts from the sprite base the setup
+  placements chose.
+- Placement is checked as at setup (alignment, memory bounds), but a load may
+  overlap anything: replacing memory is its purpose. Samples load only at setup.
+- The DMA panel's memory map shows the setup layout; loads are not part of it.
+
+A real console copies about 21K words (42 KB) per blanked video frame, so a 16K-word
+Mode 7 ground takes most of a frame. The update that loads is simply longer; it
+stays blanked, so nothing shows while the copy runs.
 
 ## Placement errors
 

@@ -344,6 +344,36 @@ struct DmaPlacement {
     fields: Vec<(&'static str, i64)>,
 }
 
+impl DmaPlacement {
+    fn view(&self) -> PlacementView {
+        PlacementView {
+            name: self.name.clone(),
+            char: self.char_base,
+            map: self.map_base,
+            pal: self.cgram_base,
+            fields: self.fields.clone(),
+        }
+    }
+}
+
+/// A `dma()` made from frame() while blanked (a stage load): replayed after
+/// the setup placements, in call order, from the update that made it on.
+/// `vram`/`cgram` are the word and entry spans it writes (end exclusive).
+struct DmaLoad {
+    placement: DmaPlacement,
+    vram: Vec<(usize, usize)>,
+    cgram: (usize, usize),
+}
+
+/// One stage load as [`LuaEngine::loads`] reports it: the placement and the
+/// VRAM word spans and CGRAM entry span it writes (ends exclusive).
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct LoadView {
+    pub placement: PlacementView,
+    pub vram: Vec<(usize, usize)>,
+    pub cgram: (usize, usize),
+}
+
 /// The resolved result of one init-stage `dma(name, { addr })` call on a
 /// SAMPLE source. Written into ARAM + the sample directory ONCE at
 /// compile time (`set_sources`, after `init()` succeeds) — never replayed
@@ -479,6 +509,12 @@ struct DmaRecorder {
     raster: crate::lua_raster::Raster,
     active: Cell<bool>,
     placements: RefCell<Vec<DmaPlacement>>,
+    /// Stage loads (`dma()` from frame() under force_blank), in call order.
+    loads: RefCell<Vec<DmaLoad>>,
+    /// True while the program's own frame() body runs: the only place a load may be made.
+    in_frame: Cell<bool>,
+    /// This update made a load, so force_blank must still be true when it ends.
+    loaded: Cell<bool>,
     vram_ranges: RefCell<Vec<(String, usize, usize)>>,
     cgram_ranges: RefCell<Vec<(String, usize, usize)>>,
     obj_base: Cell<Option<u16>>,
@@ -759,15 +795,25 @@ impl LuaEngine {
                 .placements
                 .borrow()
                 .iter()
-                .map(|p| PlacementView {
-                    name: p.name.clone(),
-                    char: p.char_base,
-                    map: p.map_base,
-                    pal: p.cgram_base,
-                    fields: p.fields.clone(),
-                })
+                .map(DmaPlacement::view)
                 .collect(),
         }
+    }
+
+    /// The stage loads (`dma()` calls from frame() under force_blank) replayed
+    /// this frame, in call order; a load is dropped once a later one covers
+    /// every word and entry it wrote. Not part of [`Self::memory_map`], which
+    /// stays the setup layout.
+    pub fn loads(&self) -> Vec<LoadView> {
+        let loads = self.dma.loads.borrow();
+        loads
+            .iter()
+            .map(|l| LoadView {
+                placement: l.placement.view(),
+                vram: l.vram.clone(),
+                cgram: l.cgram,
+            })
+            .collect()
     }
 
     /// Mutable mirrored memory — used by the wasm shim (e.g. to clear OAM on-flags
@@ -1698,12 +1744,28 @@ impl LuaEngine {
             if self.controls_fn.is_some() {
                 call_controls_hook::<()>(&mut l, "__ppu_controls_begin");
             }
+            self.dma.loaded.set(false);
             if let Some(frame) = self.frame_fn.clone() {
                 let ex = l.enter(|ctx| {
                     let func = ctx.fetch(&frame);
                     ctx.stash(Executor::start(ctx, func, (t, f as i64)))
                 });
-                if let Err(e) = l.execute::<()>(&ex) {
+                self.dma.in_frame.set(true);
+                let done = l.execute::<()>(&ex);
+                self.dma.in_frame.set(false);
+                // A load lands while the update stays blanked: unblanking in the same update is an error.
+                let done = done.map_err(static_error_to_lua).and_then(|()| {
+                    if self.dma.loaded.get() && !l.enter(|ctx| ctx.get_global("force_blank").to_bool()) {
+                        Err(LuaError {
+                            message: "dma in frame() needs force_blank to stay true until frame() returns: unblank on a later update".into(),
+                            line: None,
+                            file: self.frame_file.clone(),
+                        })
+                    } else {
+                        Ok(())
+                    }
+                });
+                if let Err(mut err) = done {
                     // Restore here too (`l` is already borrowed, so not via
                     // `restore_controls`) — an explicit `apply_pokes()`
                     // call made before this error would otherwise stay
@@ -1711,7 +1773,6 @@ impl LuaEngine {
                     if self.controls_fn.is_some() {
                         call_controls_hook::<()>(&mut l, "__ppu_controls_restore");
                     }
-                    let mut err = static_error_to_lua(e);
                     err.file = err.file.or_else(|| self.frame_file.clone());
                     return Err(err);
                 }
@@ -1744,7 +1805,11 @@ impl LuaEngine {
                 self.memory.cgram = [0u16; 256];
                 self.reports.clear();
                 replay_dma(
-                    &self.dma.placements.borrow(),
+                    self.dma
+                        .placements
+                        .borrow()
+                        .iter()
+                        .chain(self.dma.loads.borrow().iter().map(|l| &l.placement)),
                     &self.source_store.borrow(),
                     &mut self.reports,
                     &mut self.memory,
@@ -3559,10 +3624,18 @@ fn install_dma(
     let song_store = store.clone();
     let song_rec = rec.clone();
     let dma = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
-        if !rec.active.get() {
+        // A call outside setup is a stage load: only from frame(), only blanked.
+        let runtime = !rec.active.get();
+        if runtime && !rec.in_frame.get() {
             return Err(lua_err(
                 ctx,
-                "dma runs during setup — call it from top-level code, not frame() or hooks",
+                "dma runs during setup — call it from top-level code, init() or frame(), not hooks",
+            ));
+        }
+        if runtime && !ctx.get_global("force_blank").to_bool() {
+            return Err(lua_err(
+                ctx,
+                "dma runs during setup, or in frame() while force_blank is true — set force_blank = true before loading",
             ));
         }
         let name = match stack.get(0) {
@@ -3693,7 +3766,10 @@ fn install_dma(
                         if char_base & 0x1fff != 0 {
                             return Err(lua_err(ctx, "dma: first obj char must align to 0x2000"));
                         }
-                        rec.obj_base.set(Some(char_base as u16));
+                        // A load is measured from the setup's base; with none, from its own char.
+                        if !runtime {
+                            rec.obj_base.set(Some(char_base as u16));
+                        }
                         char_base as u16
                     }
                 };
@@ -3764,6 +3840,12 @@ fn install_dma(
             // `addr` opt instead and are recorded into `rec.samples` (never
             // `rec.placements` — samples are placed once at compile time in
             // `set_sources`, not replayed per frame).
+            crate::source::SourcePayload::Sample(_) if runtime => {
+                return Err(lua_err(
+                    ctx,
+                    &format!("dma runs during setup for samples: '{name}' goes to sound RAM in setup only"),
+                ))
+            }
             crate::source::SourcePayload::Sample(src) => {
                 let recorded = rec.samples.borrow().len();
                 if recorded >= 256 {
@@ -3884,6 +3966,72 @@ fn install_dma(
                 &format!("dma: '{name}' placement exceeds PPU memory"),
             ));
         }
+        let fields = [
+            "next_char",
+            "next_map",
+            "next_pal",
+            "bit_depth",
+            "screen_size",
+            "tile",
+            "cell_size",
+        ]
+        .into_iter()
+        .filter_map(|k| match ret.get(ctx, k) {
+            Value::Integer(v) => Some((k, v)),
+            _ => None,
+        })
+        .collect();
+        let placement = DmaPlacement {
+            name: name.clone(),
+            char_base: char_base as u16,
+            map_base: map_base as u16,
+            cgram_base: cgram_base as u8,
+            fields,
+        };
+        if runtime {
+            // Like hardware DMA, a load overwrites what its spans held, earlier
+            // vram[]/cgram[] writes included (later writes win again). The m7
+            // plane writes CGRAM from entry 1.
+            let cgram = if matches!(source, crate::source::SourcePayload::M7(_)) {
+                (1, cgram.1)
+            } else {
+                cgram
+            };
+            for (global, spans) in [("vram", vram.clone()), ("cgram", vec![cgram])] {
+                if let Value::Table(t) = ctx.get_global(global) {
+                    let keys: Vec<Value> = t
+                        .iter()
+                        .filter(|(k, _)| {
+                            k.to_int().is_some_and(|k| {
+                                spans
+                                    .iter()
+                                    .any(|&(s, e)| (s as i64..e as i64).contains(&k))
+                            })
+                        })
+                        .map(|(k, _)| k)
+                        .collect();
+                    for k in keys {
+                        t.set(ctx, k, Value::Nil).unwrap();
+                    }
+                }
+            }
+            let inside = |(s, e): (usize, usize), spans: &[(usize, usize)]| {
+                s >= e || spans.iter().any(|&(a, b)| a <= s && e <= b)
+            };
+            let mut loads = rec.loads.borrow_mut();
+            loads.retain(|l| {
+                !(l.vram.iter().all(|&r| inside(r, &vram)) && inside(l.cgram, &[cgram]))
+            });
+            loads.push(DmaLoad {
+                placement,
+                vram,
+                cgram,
+            });
+            rec.loaded.set(true);
+            stack.clear();
+            stack.replace(ctx, ret);
+            return Ok(CallbackReturn::Return);
+        }
         for (i, &(s, e)) in vram.iter().enumerate() {
             if vram[..i].iter().any(|&(a, b)| s < b && a < e)
                 || rec
@@ -3915,28 +4063,7 @@ fn install_dma(
         rec.cgram_ranges
             .borrow_mut()
             .push((name.clone(), cgram.0, cgram.1));
-        let fields = [
-            "next_char",
-            "next_map",
-            "next_pal",
-            "bit_depth",
-            "screen_size",
-            "tile",
-            "cell_size",
-        ]
-        .into_iter()
-        .filter_map(|k| match ret.get(ctx, k) {
-            Value::Integer(v) => Some((k, v)),
-            _ => None,
-        })
-        .collect();
-        rec.placements.borrow_mut().push(DmaPlacement {
-            name,
-            char_base: char_base as u16,
-            map_base: map_base as u16,
-            cgram_base: cgram_base as u8,
-            fields,
-        });
+        rec.placements.borrow_mut().push(placement);
         stack.clear();
         stack.replace(ctx, ret);
         Ok(CallbackReturn::Return)
@@ -4187,8 +4314,8 @@ fn install_song_natives(
 /// `add_source` under a placed name flows in next frame; a removed one
 /// degrades to a Mismatch report (mirrors the old binding-path UX) and places
 /// nothing.
-fn replay_dma(
-    placements: &[DmaPlacement],
+fn replay_dma<'a>(
+    placements: impl Iterator<Item = &'a DmaPlacement>,
     store: &HashMap<String, crate::source::SourcePayload>,
     reports: &mut Vec<ImportBudget>,
     mem: &mut Memory,
