@@ -185,7 +185,12 @@ fn new_project_scaffolds_controls_lua_and_it_round_trips_through_check_and_rende
             .unwrap();
     assert_eq!(
         manifest["files"],
-        serde_json::json!(["ppuglobals.lua", "main.lua"])
+        serde_json::json!(["ppuglobals.lua", "main.luau"])
+    );
+    assert_eq!(
+        fs::read_to_string(Path::new(project).join("ppu.d.luau")).unwrap(),
+        ppu_core::LUAU_DECLARATIONS,
+        "a Luau project carries the API declarations for editors"
     );
 
     let controls = fs::read_to_string(Path::new(project).join("ppuglobals.lua")).unwrap();
@@ -201,7 +206,7 @@ scanlines = {\n}\n\
 function apply_pokes()\nend\n"
     );
 
-    // Real round trip: starter.lua's `markers.loop_end` must actually
+    // Real round trip: the starter's `markers.loop_end` must actually
     // resolve, and the toy must render two visibly different frames.
     let out = tmp.path().join("frames");
     let out = out.to_str().unwrap();
@@ -210,6 +215,20 @@ function apply_pokes()\nend\n"
     let first = fs::read(Path::new(out).join("frame-00000000.png")).unwrap();
     let next = fs::read(Path::new(out).join("frame-00000015.png")).unwrap();
     assert_ne!(first, next, "the flight starter still animates");
+}
+
+#[test]
+fn new_project_with_lua_scaffolds_main_lua_and_no_declarations() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("demo");
+    let project = project.to_str().unwrap();
+    success(&["new", project, "--lua"]);
+    let manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(Path::new(project).join("ppu.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest["files"], serde_json::json!(["ppuglobals.lua", "main.lua"]));
+    assert!(!Path::new(project).join("ppu.d.luau").exists());
+    success(&["check", project, "--duration", "0.1"]);
 }
 
 /// The CLI used to inject a `function apply_pokes() end` no-op stub as an

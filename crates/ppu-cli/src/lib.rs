@@ -10,6 +10,8 @@ pub use docs::docs;
 
 const MANIFEST: &str = "ppu.json";
 const VERSION: &str = "ppu.toys/1";
+/// The Luau declarations written beside a Luau toy for editors; never one of its files.
+pub const LUAU_DECLARATIONS_FILE: &str = "ppu.d.luau";
 
 fn valid_file_name(name: &str) -> bool {
     !name.is_empty()
@@ -128,6 +130,13 @@ pub fn pack(dir: &Path) -> Result<String> {
         );
     }
 
+    if manifest.files.iter().any(|name| name == LUAU_DECLARATIONS_FILE) {
+        bail!(
+            "{} lists {LUAU_DECLARATIONS_FILE} in \"files\": it declares the API for editors and is not toy code",
+            dir.join(MANIFEST).display()
+        );
+    }
+
     let files = manifest
         .files
         .iter()
@@ -173,8 +182,8 @@ pub fn pack(dir: &Path) -> Result<String> {
 }
 
 /// Parse `ppu.toys/1` file text and write it out as a project directory:
-/// manifest `ppu.json`, Lua files in order, and `.bin` payloads under
-/// `.ppu/sources/`. Validates every file name and decodes every payload
+/// manifest `ppu.json`, Lua files in order, `.bin` payloads under
+/// `.ppu/sources/`, and for a Luau toy the `ppu.d.luau` declarations. Validates every file name and decodes every payload
 /// before writing anything.
 pub fn unpack(text: &str, dir: &Path) -> Result<()> {
     let value: serde_json::Value = serde_json::from_str(text).context("not valid JSON")?;
@@ -205,6 +214,10 @@ pub fn unpack(text: &str, dir: &Path) -> Result<()> {
     for file in &body.files {
         std::fs::write(dir.join(&file.name), &file.source)
             .with_context(|| format!("cannot write {}", file.name))?;
+    }
+    if body.files.iter().any(|f| f.name.ends_with(".luau")) {
+        std::fs::write(dir.join(LUAU_DECLARATIONS_FILE), ppu_core::LUAU_DECLARATIONS)
+            .with_context(|| format!("cannot write {LUAU_DECLARATIONS_FILE}"))?;
     }
 
     let source_dir = dir.join(".ppu/sources");

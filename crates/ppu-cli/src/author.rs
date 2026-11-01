@@ -88,14 +88,17 @@ fn write_png(path: &Path, width: u32, height: u32, pixels: &[u8]) -> Result<()> 
 }
 
 /// Create a complete animated project, including an editable PNG source.
-pub fn new_project(dir: &Path) -> Result<()> {
+/// Scaffold a project: a Luau toy (`main.luau` and the `ppu.d.luau` declarations), or with
+/// `lua` a Lua one (`main.lua`).
+pub fn new_project(dir: &Path, lua: bool) -> Result<()> {
+    let main = if lua { "main.lua" } else { "main.luau" };
     // create_dir deliberately refuses existing directories: never clobber a project.
     fs::create_dir(dir).with_context(|| format!("cannot create new project {}", dir.display()))?;
     fs::create_dir(dir.join("assets"))?;
     let manifest = serde_json::json!({
         "title": dir.file_name().and_then(|n| n.to_str()).unwrap_or("My demo"),
         "description": "Mode 7 flight with per-scanline perspective and palette lighting.",
-        "files": [ppu_core::CONTROLS_FILE, "main.lua"],
+        "files": [ppu_core::CONTROLS_FILE, main],
         "sources": [{"name": "floor", "kind": "m7", "file": "assets/floor.png", "options": {}}]
     });
     fs::write(
@@ -117,7 +120,12 @@ pub fn new_project(dir: &Path) -> Result<()> {
         dir.join(ppu_core::CONTROLS_FILE),
         include_str!("scaffold_controls.lua"),
     )?;
-    fs::write(dir.join("main.lua"), include_str!("starter.lua"))?;
+    if lua {
+        fs::write(dir.join(main), include_str!("starter.lua"))?;
+    } else {
+        fs::write(dir.join(main), include_str!("starter.luau"))?;
+        fs::write(dir.join(crate::LUAU_DECLARATIONS_FILE), ppu_core::LUAU_DECLARATIONS)?;
+    }
     let mut pixels = Vec::with_capacity(128 * 128 * 4);
     for y in 0..128 {
         for x in 0..128 {

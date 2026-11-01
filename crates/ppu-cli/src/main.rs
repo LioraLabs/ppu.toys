@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 const HELP: &str = "ppu — standalone ppu.toys authoring (60 fps, 256×224)
 
-  ppu new <dir>
+  ppu new <dir> [--lua]
   ppu pack <dir> [-o out.ppu.json]
   ppu unpack <file.ppu.json> <dir>
   ppu check <dir|file.ppu.json> [--duration seconds] [--seek seconds,...]
@@ -51,9 +51,12 @@ fn main() -> Result<()> {
     let input = PathBuf::from(args.remove(0));
     match command.as_str() {
         "new" => {
-            ensure!(args.is_empty(), "usage: ppu new <dir>");
-            ppu_cli::new_project(&input)?;
-            println!("Created {}. Edit main.lua and assets/floor.png; run ppu docs cli for the authoring loop.", input.display());
+            let lua = args.iter().any(|a| a == "--lua");
+            args.retain(|a| a != "--lua");
+            ensure!(args.is_empty(), "usage: ppu new <dir> [--lua]");
+            ppu_cli::new_project(&input, lua)?;
+            let main = if lua { "main.lua" } else { "main.luau (ppu.d.luau declares the API for Luau editors)" };
+            println!("Created {}. Edit {main} and assets/floor.png; run ppu docs cli for the authoring loop.", input.display());
         }
         "pack" => {
             let output = option(&mut args, "-o")?.unwrap_or_else(|| {

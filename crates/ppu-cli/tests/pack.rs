@@ -131,6 +131,34 @@ fn unpack_then_pack_round_trips_byte_for_byte() {
 }
 
 #[test]
+fn unpack_writes_the_luau_declarations_beside_a_luau_toy_and_pack_leaves_them_out() {
+    let text = SAMPLE_PPU_JSON.replace("\"main.lua\"", "\"main.luau\"");
+    let dir = tempfile::tempdir().unwrap();
+    ppu_cli::unpack(&text, dir.path()).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("ppu.d.luau")).unwrap(),
+        ppu_core::LUAU_DECLARATIONS
+    );
+    assert_eq!(ppu_cli::pack(dir.path()).unwrap(), text);
+
+    let lua = tempfile::tempdir().unwrap();
+    ppu_cli::unpack(SAMPLE_PPU_JSON, lua.path()).unwrap();
+    assert!(!lua.path().join("ppu.d.luau").exists(), "a Lua toy gets no Luau declarations");
+}
+
+#[test]
+fn pack_rejects_the_declarations_listed_as_a_toy_file() {
+    let dir = tempfile::tempdir().unwrap();
+    ppu_cli::unpack(SAMPLE_PPU_JSON, dir.path()).unwrap();
+    let manifest = dir.path().join("ppu.json");
+    let text = std::fs::read_to_string(&manifest).unwrap().replacen("\"main.lua\"", "\"main.lua\", \"ppu.d.luau\"", 1);
+    std::fs::write(&manifest, text).unwrap();
+    std::fs::write(dir.path().join("ppu.d.luau"), ppu_core::LUAU_DECLARATIONS).unwrap();
+    let error = ppu_cli::pack(dir.path()).unwrap_err().to_string();
+    assert!(error.contains("ppu.d.luau"), "{error}");
+}
+
+#[test]
 fn unpack_rejects_unknown_version() {
     let text = SAMPLE_PPU_JSON.replacen("\"ppu.toys/1\"", "\"ppu.toys/0\"", 1);
     let dir = tempfile::tempdir().unwrap();
