@@ -45,6 +45,11 @@ through the last sample, preserving stateful animation, and writes native
 matching output PNGs are replaced. Inspect the images; successful execution
 alone cannot tell whether a composition looks right.
 
+`render --srm save.srm` plays a toy's `saveData` record on that battery RAM
+image: it loads the file first when it exists and writes the save back after
+the last frame, in the cartridge's layout, so the file moves to and from
+emulators and flash carts.
+
 `check` compiles and renders at 60 fps, including the endpoint. The default
 duration is 30 seconds; set it to cover the entire performance. Lua errors
 include file/line and runtime frame/time. Source metadata reports palette,
