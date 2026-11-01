@@ -66,6 +66,8 @@ pub struct Call {
     pub keep: bool,
     pub args: Vec<Range<usize>>,
     pub options: Vec<(String, Range<usize>)>,
+    /// A draw's art numbers (from 1), `None` when the analysis cannot tell (or a keep).
+    pub arts: Option<Vec<usize>>,
 }
 
 /// A program that draws with the sprites library.
@@ -880,7 +882,7 @@ pub fn plan(files: &[(&str, &str)]) -> Result<Option<Plan>, Error> {
                     walk.groups[group].draws.push(need);
                 }
             }
-            calls.push(Call { file: file.to_string(), line: f.line, call: f.call, group, keep: f.keep, args: f.args, options: f.options });
+            calls.push(Call { file: file.to_string(), line: f.line, call: f.call, group, keep: f.keep, args: f.args, options: f.options, arts: f.arts });
         }
         if let Some(e) = walk.error {
             first_error.get_or_insert(e);

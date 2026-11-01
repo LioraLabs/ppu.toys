@@ -5,8 +5,8 @@
 --
 -- Sizes: a level's cells are its sheet's (dma() cell_w x cell_h). Once the file-level code has run,
 -- __ppu_sprites_finish picks the OBJSEL size pair (obj.size_sel): the program's own constant, else
--- the lowest-numbered pair that holds every hardware-sized cell (8, 16, 32, 64 square, 16x32,
--- 32x64) and builds the other cells from the fewest sprites. Each art level becomes pieces, one
+-- of the pairs that hold every hardware-sized cell (8, 16, 32, 64 square, 16x32, 32x64) the one that
+-- builds the other cells from the fewest sprites, the lowest-numbered on a tie. Each art level becomes pieces, one
 -- hardware sprite each (a cell of another size is several, its blank ones left out), placed
 -- around the drawn point; a flipped draw mirrors the pieces' positions and flips each piece.
 --

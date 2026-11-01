@@ -230,9 +230,9 @@ end
 
 - **The size pair.** OBSEL shows two sprite sizes at once (`obj.size_sel`).
   When the program never sets `obj.size_sel`, the library sets it once, as
-  the program loads: the lowest-numbered pair that holds every hardware-sized
-  cell the art uses (8, 16, 32 or 64 square, 16×32, 32×64), and among those
-  the one that draws the other cells with the fewest sprites. Above, 8×8 and
+  the program loads: of the pairs that hold every hardware-sized cell the art
+  uses (8, 16, 32 or 64 square, 16×32, 32×64), the one that draws the other
+  cells with the fewest sprites, the lowest-numbered on a tie. Above, 8×8 and
   32×32 make pair 1. Art in three hardware sizes is an error on the art that
   adds the third: set `obj.size_sel` to the pair to draw with, a constant
   (the art in other sizes is then built from that pair's sprites), or
