@@ -1222,8 +1222,27 @@ impl LuaEngine {
                 .map_err(|e| static_error_to_lua(e).in_file(name))?;
         }
 
-        // The groups' slots, now that every art has run: the plan's layout by each art's cells.
+        // The groups' slots, now that every art has run: the size pair and each art's pieces, then the
+        // plan's layout by each art's pieces.
         if let Some(plan) = &sprite_plan {
+            lua.try_enter(|ctx| {
+                let Value::Function(finish) = ctx.get_global("__ppu_sprites_finish") else {
+                    unreachable!("sprites.lua defines the finish")
+                };
+                let pin = plan.size_sel.map_or(Value::Nil, |p| Value::Integer(p as i64));
+                Ok(ctx.stash(Executor::start(ctx, finish, (pin, plan.arts.len() as i64))))
+            })
+            .and_then(|ex| lua.execute::<()>(&ex))
+            .map_err(static_error_to_lua)?;
+            let failed: Option<(i64, String)> = lua.enter(|ctx| match (ctx.get_global("__ppu_sprites_fail_site"), ctx.get_global("__ppu_sprites_fail")) {
+                (Value::Integer(site), Value::String(m)) => Some((site, m.to_str().unwrap_or("").to_string())),
+                _ => None,
+            });
+            if let Some((site, message)) = failed {
+                let at = &plan.arts[(site.max(1) - 1) as usize];
+                let help = "re-import a sheet at another cell_size, or set obj.size_sel to the pair to draw with (cells of other sizes are drawn as several sprites)";
+                return Err(LuaError { file: Some(at.file.clone()), line: Some(at.line), message: format!("{message}: {help}") });
+            }
             let cells: Vec<u64> = lua.enter(|ctx| {
                 let Value::Table(t) = ctx.get_global("__ppu_sprites_cells") else { unreachable!("sprites.lua defines the cells") };
                 (1..=plan.arts.len())
@@ -3700,6 +3719,10 @@ fn install_dma(
                     .unwrap();
                 ret.set(ctx, "next_pal", pal_end as i64).unwrap();
                 ret.set(ctx, "cell_size", src.cell_size as i64).unwrap();
+                ret.set(ctx, "cell_w", src.cell_size as i64).unwrap();
+                ret.set(ctx, "cell_h", src.cell_height as i64).unwrap();
+                let blocks = (src.cell_size, src.cell_height) != (8, 8);
+                let opaque = |t: usize| src.char_words.get(t * 16..t * 16 + 16).is_some_and(|w| w.iter().any(|&w| w != 0));
                 let cells = Table::new(&ctx);
                 for (i, cell) in src.cells.iter().enumerate() {
                     let t = Table::new(&ctx);
@@ -3707,6 +3730,18 @@ fn install_dma(
                     t.set(ctx, "pal", cell.pal as i64).unwrap();
                     t.set(ctx, "flip_x", cell.flip_x).unwrap();
                     t.set(ctx, "flip_y", cell.flip_y).unwrap();
+                    // A block cell's drawn 8x8 tiles, per tile row a bit per column: the sprites library skips
+                    // the pieces of a composite cell that show nothing.
+                    if blocks {
+                        let rows = Table::new(&ctx);
+                        for sy in 0..src.cell_height as usize / 8 {
+                            let bits = (0..src.cell_size as usize / 8)
+                                .filter(|sx| opaque(cell.tile as usize + sy * 16 + sx))
+                                .fold(0i64, |m, sx| m | 1 << sx);
+                            rows.set(ctx, sy as i64 + 1, bits).unwrap();
+                        }
+                        t.set(ctx, "opaque", rows).unwrap();
+                    }
                     cells.set(ctx, i as i64 + 1, t).unwrap();
                 }
                 ret.set(ctx, "cells", cells).unwrap();

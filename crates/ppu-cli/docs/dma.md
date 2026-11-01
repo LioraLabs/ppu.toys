@@ -90,7 +90,10 @@ obj.char_base = hero.char
 ```
 
 Each result includes `tile`, its offset from the shared OBJ base, plus
-`cell_size` and `cells` for animation.
+`cell_w`, `cell_h` (`cell_size` is the width) and `cells` for animation.
+Cells wider than 8 pixels fill whole 16-tile rows: place the next sheet at a
+char address that starts a row (a multiple of 0x100 words from
+`obj.char_base`), as the sprites library requires.
 
 For **OBJ only**, placement `pal` and returned `pal`/`next_pal` are sprite
 palette slots (0–7), not absolute CGRAM entries. Slot `p` starts at CGRAM

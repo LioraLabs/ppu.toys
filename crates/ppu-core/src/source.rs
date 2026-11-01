@@ -16,7 +16,7 @@
 //!          u8 pal_len + pal_len*u16 BGR555 (flat, CGRAM 0 implicit transparent)
 //!          u16 tile_count (<=256), tile_count*64 chunky 8bpp bytes
 //!          u8 tiles_w (<=128) | u8 tiles_h (<=128), tiles_w*tiles_h map bytes
-//! obj:     u8 cell_size (8|16|32|64)
+//! obj:     u8 cell_size (8|16|32|64), or 0 then u8 cell width, u8 cell height (multiples of 8 up to 128)
 //!          u8 pal_count, per palette: u8 len + len*u16 BGR555
 //!          u16 tile_count, tile_count*16 u16 char words (4bpp fixed)
 //!          u16 cell_count, cell_count*(u16 tile|u8 pal|u8 flip flags)
@@ -113,7 +113,9 @@ pub struct M7Source {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ObjSource {
+    /// The cell's width and height in pixels.
     pub cell_size: u8,
+    pub cell_height: u8,
     pub palettes: Vec<Vec<u16>>,
     /// 4bpp char words, 16/tile, OBJ name-table order.
     pub char_words: Vec<u16>,
@@ -379,7 +381,11 @@ impl SourcePayload {
                 );
                 debug_assert!(s.char_words.len() / 16 <= 512, "obj: more than 512 tiles");
                 b.push(2);
-                b.push(s.cell_size);
+                if s.cell_size == s.cell_height && matches!(s.cell_size, 8 | 16 | 32 | 64) {
+                    b.push(s.cell_size);
+                } else {
+                    b.extend([0, s.cell_size, s.cell_height]);
+                }
                 push_palettes(&mut b, &s.palettes);
                 push_u16(&mut b, (s.char_words.len() / 16) as u16);
                 for &w in &s.char_words {
@@ -534,8 +540,12 @@ impl SourcePayload {
                 })
             }
             2 => {
-                let cell_size = r.u8()?;
-                if !matches!(cell_size, 8 | 16 | 32 | 64) {
+                let (cell_size, cell_height) = match r.u8()? {
+                    0 => (r.u8()?, r.u8()?),
+                    n => (n, n),
+                };
+                let side = |n: u8| n % 8 == 0 && (8..=128).contains(&n);
+                if !side(cell_size) || !side(cell_height) {
                     return Err(PayloadError::BadParam("cell_size"));
                 }
                 // OBJ palettes are always 4bpp: 8 sub-palettes, 15 colors each.
@@ -565,6 +575,7 @@ impl SourcePayload {
                 };
                 SourcePayload::Obj(ObjSource {
                     cell_size,
+                    cell_height,
                     palettes,
                     char_words,
                     cells,
@@ -755,6 +766,8 @@ pub struct ConvertOptions {
     pub bit_depth: Option<u8>,
     pub tile_size: Option<u8>,
     pub cell_size: Option<u8>,
+    /// obj: the cell's height when it is not `cell_size` (a rectangular cell).
+    pub cell_height: Option<u8>,
     /// Mode 7: reserve pixel bit 7 for an external black/white priority mask.
     pub extbg: Option<bool>,
     /// "none" (default) | "bayer" | "diffusion". bg + obj; ignored for m7.
@@ -849,16 +862,19 @@ pub fn convert_source_with_priority(
         }
         SourceKind::Obj => {
             let cell_size = opts.cell_size.unwrap_or(8);
-            if !matches!(cell_size, 8 | 16 | 32 | 64) {
-                return Err(format!(
-                    "obj cell_size must be 8, 16, 32 or 64 (got {cell_size})"
-                ));
+            let cell_height = opts.cell_height.unwrap_or(cell_size);
+            for (name, n) in [("cell_size", cell_size), ("cell_height", cell_height)] {
+                if n % 8 != 0 || !(8..=128).contains(&n) {
+                    return Err(format!(
+                        "obj {name} must be a multiple of 8 from 8 to 128 (got {n})"
+                    ));
+                }
             }
-            let (src, meta) = crate::import::obj::import_obj_sheet(
+            let (src, meta) = crate::import::obj::import_obj_sheet_cells(
                 rgba,
                 width,
                 height,
-                cell_size,
+                (cell_size, cell_height),
                 &remap_options(opts)?,
             );
             Ok((SourcePayload::Obj(src), meta))
@@ -1036,6 +1052,7 @@ mod tests {
     fn sample_obj() -> ObjSource {
         ObjSource {
             cell_size: 8,
+            cell_height: 8,
             palettes: vec![vec![0x001f]],
             char_words: vec![0x00ffu16; 2 * 16],
             cells: vec![crate::import::obj::ObjCell {
@@ -1484,11 +1501,23 @@ mod tests {
             ..Default::default()
         };
         assert!(convert_source(SourceKind::Bg, &bad_bd, &rgba, 1, 1).is_err());
-        let bad_cs = ConvertOptions {
-            cell_size: Some(24),
+        for (w, h) in [(Some(20), None), (Some(136), None), (Some(16), Some(4))] {
+            let bad_cs = ConvertOptions {
+                cell_size: w,
+                cell_height: h,
+                ..Default::default()
+            };
+            assert!(convert_source(SourceKind::Obj, &bad_cs, &rgba, 1, 1).is_err());
+        }
+        let rect = ConvertOptions {
+            cell_size: Some(48),
+            cell_height: Some(32),
             ..Default::default()
         };
-        assert!(convert_source(SourceKind::Obj, &bad_cs, &rgba, 1, 1).is_err());
+        let (p, _) = convert_source(SourceKind::Obj, &rect, &rgba, 1, 1).unwrap();
+        let bytes = p.encode();
+        assert_eq!(&bytes[2..5], &[0, 48, 32]);
+        assert_eq!(SourcePayload::decode(&bytes), Ok(p));
     }
 
     #[test]

@@ -62,6 +62,9 @@ pub(crate) fn sprite_dims(size_sel: u8, large: bool) -> (u32, u32) {
 pub struct LineBin {
     /// Kept + rendered sprites, in evaluation order.
     pub sprites: Vec<usize>,
+    /// Per kept sprite, the 8-pixel slivers (screen columns from its left edge) whose tiles loaded: [from, to).
+    #[serde(skip)]
+    pub clip: Vec<(u8, u8)>,
     /// Total in-range sprites (Y test) this line, before the 32 cap (diagnostic).
     pub sprite_count: u16,
     /// Attempted tile-slivers among the range-kept (<=32) sprites (diagnostic).
@@ -76,11 +79,14 @@ pub struct LineBin {
 /// per-line caps, returning the kept set plus the STAT77 diagnostic counts.
 ///
 /// Two-pass, matching the hardware pipeline:
-///   1. Range: scan all 128 sprites in eval order, Y-test; count in-range and
-///      keep the first 32. `range_over` when more than 32 were in range.
-///   2. Time: walk the range-kept in eval order summing `w/8` slivers; keep the
-///      eval-order prefix that fits within 34 (whole-sprite drop). `time_over`
-///      when the range-kept attempted more than 34 slivers.
+///   1. Range: scan all 128 sprites in eval order; a sprite is in range when the
+///      line crosses it and some of it is on screen horizontally (x > -w), or
+///      its x is -256, which the hardware counts too. Keep the first 32;
+///      `range_over` when more than 32 were in range.
+///   2. Time: load the range-kept sprites' tiles from the LAST to the first,
+///      each sprite's 8-pixel slivers left to right, only those on screen (all
+///      of an x = -256 sprite's), at most 34. A crowded line so loses slivers
+///      of its first sprites. `time_over` when more than 34 were to load.
 pub fn bin_line(mem: &Memory, y: usize) -> LineBin {
     let yi = y as i64;
     let size_sel = mem.obsel.size_sel;
@@ -99,9 +105,13 @@ pub fn bin_line(mem: &Memory, y: usize) -> LineBin {
         if !o.on {
             continue;
         }
-        let (_w, h) = sprite_dims(size_sel, o.large);
+        let (w, h) = sprite_dims(size_sel, o.large);
         // Rows count mod 256: a sprite low on the screen wraps to the top, as on hardware.
         if (yi - o.y as i64).rem_euclid(256) >= h as i64 {
+            continue;
+        }
+        let x = obj_x(o.x);
+        if x <= -(w as i64) && x != -256 {
             continue;
         }
         sprite_count += 1;
@@ -111,28 +121,30 @@ pub fn bin_line(mem: &Memory, y: usize) -> LineBin {
     }
     let range_over = sprite_count as usize > MAX_SPRITES_PER_LINE;
 
-    // Pass 2 — time (tile-fetch), eval order, keep prefix fitting in 34 slivers.
-    let mut sprites: Vec<usize> = Vec::with_capacity(in_range.len());
+    // Pass 2 — time (tile fetch): last range-kept sprite first, slivers left to right, 34 at most.
+    let mut clips: Vec<Option<(u8, u8)>> = vec![None; in_range.len()];
     let mut tile_count = 0u16;
-    let mut kept_tiles = 0usize;
-    let mut budget_hit = false;
-    for &i in &in_range {
+    for (n, &i) in in_range.iter().enumerate().rev() {
         let (w, _h) = sprite_dims(size_sel, mem.oam[i].large);
-        let slivers = (w / 8) as usize;
-        tile_count += slivers as u16;
-        if !budget_hit {
-            if kept_tiles + slivers > MAX_TILES_PER_LINE {
-                budget_hit = true; // this sprite + all after are time-dropped
-            } else {
-                kept_tiles += slivers;
-                sprites.push(i);
+        let x = obj_x(mem.oam[i].x);
+        for k in 0..(w / 8) as u8 {
+            let sx = x + 8 * k as i64;
+            if x != -256 && (sx <= -8 || sx >= 256) {
+                continue;
+            }
+            tile_count += 1;
+            if tile_count as usize <= MAX_TILES_PER_LINE {
+                let c = clips[n].get_or_insert((k, k));
+                c.1 = k + 1;
             }
         }
     }
     let time_over = tile_count as usize > MAX_TILES_PER_LINE;
+    let (sprites, clip) = in_range.iter().zip(clips).filter_map(|(&i, c)| Some((i, c?))).unzip();
 
     LineBin {
         sprites,
+        clip,
         sprite_count,
         tile_count,
         range_over,
@@ -144,6 +156,11 @@ pub fn bin_line(mem: &Memory, y: usize) -> LineBin {
 /// order. Thin wrapper over [`bin_line`] for callers that only need the set.
 pub fn sprites_on_line(mem: &Memory, y: usize) -> Vec<usize> {
     bin_line(mem, y).sprites
+}
+
+/// A sprite's x as the PPU reads its 9 bits: -256..255.
+fn obj_x(x: i16) -> i64 {
+    ((x as i64 + 256).rem_euclid(512)) - 256
 }
 
 /// One OBJ tile is 4bpp: 16 VRAM words. Name-table addressing (16-wide row wrap,
@@ -183,15 +200,17 @@ pub fn render_scanline_for(
     width: usize,
 ) -> Vec<Option<SpritePixel>> {
     let mut out = vec![None; width];
-    render_scanline_for_into(mem, indices, y, &mut out);
+    render_scanline_for_into(mem, indices, &[], y, &mut out);
     out
 }
 
 /// [`render_scanline_for`] into a caller-owned buffer (`out.len()` is the
 /// width). Starts from all-`None`: eval-order priority relies on `is_some()`.
+/// `clip`: per index the slivers whose tiles loaded ([`LineBin::clip`]); empty draws every sliver.
 pub fn render_scanline_for_into(
     mem: &Memory,
     indices: &[usize],
+    clip: &[(u8, u8)],
     y: usize,
     out: &mut [Option<SpritePixel>],
 ) {
@@ -200,12 +219,13 @@ pub fn render_scanline_for_into(
     let char_base = mem.obsel.char_base as u32;
     let size_sel = mem.obsel.size_sel;
     let name_select = mem.obsel.name_select as u32;
-    for &i in indices {
+    for (n, &i) in indices.iter().enumerate() {
         let o = mem.oam[i];
         let (w, h) = sprite_dims(size_sel, o.large);
+        let (from, to) = clip.get(n).map_or((0, w), |c| (c.0 as u32 * 8, c.1 as u32 * 8));
         let row = (y as i64 - o.y as i64).rem_euclid(256) as u32; // 0..h (binning guarantees in-range)
         let pal_base = 128 + (o.pal as usize & 7) * 16;
-        for sx in 0..w {
+        for sx in from..to {
             let screen_x = o.x as i64 + sx as i64;
             if screen_x < 0 || screen_x >= width as i64 {
                 continue;
@@ -215,7 +235,12 @@ pub fn render_scanline_for_into(
                 continue; // a lower OAM index already painted this pixel
             }
             let px = if o.flip_x { w - 1 - sx } else { sx };
-            let py = if o.flip_y { h - 1 - row } else { row };
+            // A rectangular sprite (16x32, 32x64) flips vertically as two squares, each in place.
+            let py = match (o.flip_y, h == 2 * w) {
+                (false, _) => row,
+                (true, false) => h - 1 - row,
+                (true, true) => row / w * w + (w - 1 - row % w),
+            };
             let addr = obj_tile_addr(char_base, name_select, o.tile, px / 8, py / 8);
             let index = char_pixel_index(mem, addr, 4, px % 8, py % 8);
             if index == 0 {
@@ -236,7 +261,10 @@ pub fn render_scanline_for_into(
 /// flip/size, decode the palette index, map index 0 = transparent / else
 /// `cgram[128 + pal*16 + index]`. `SpritePixel.prio` carries the sprite priority.
 pub fn render_scanline(mem: &Memory, y: usize, width: usize) -> Vec<Option<SpritePixel>> {
-    render_scanline_for(mem, &bin_line(mem, y).sprites, y, width)
+    let bin = bin_line(mem, y);
+    let mut out = vec![None; width];
+    render_scanline_for_into(mem, &bin.sprites, &bin.clip, y, &mut out);
+    out
 }
 
 /// Full-frame sprite raster over the CGRAM backdrop (`cgram[0]`), for sprite
@@ -385,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn bin_line_time_cap_drops_whole_sprites_and_flags_over() {
+    fn bin_line_time_cap_loads_the_last_sprites_first_and_flags_over() {
         // Size sel 2 large = 64x64 -> 8 slivers each. 5 sprites = 40 slivers > 34.
         let mut mem = mem();
         mem.obsel.size_sel = 2;
@@ -399,12 +427,40 @@ mod tests {
             };
         }
         let bin = bin_line(&mem, 0);
-        // 4 sprites * 8 = 32 tiles fit; the 5th (would be 40) is dropped whole.
-        assert_eq!(bin.sprites, vec![0, 1, 2, 3]);
+        // Sprites 4, 3, 2, 1 load 32 slivers, sprite 0 its first two; it loses the other six.
+        assert_eq!(bin.sprites, vec![0, 1, 2, 3, 4]);
+        assert_eq!(bin.clip, vec![(0, 2), (0, 8), (0, 8), (0, 8), (0, 8)]);
         assert_eq!(bin.sprite_count, 5); // range-side: all 5 are in range
         assert_eq!(bin.tile_count, 40); // attempted slivers among the range-kept
         assert!(bin.time_over);
         assert!(!bin.range_over);
+    }
+
+    #[test]
+    fn only_slivers_on_screen_load_and_a_sprite_off_screen_is_out_of_range() {
+        let mut mem = mem();
+        mem.obsel.size_sel = 2;
+        for (i, x) in [-60i16, 250, -64, -256].into_iter().enumerate() {
+            mem.oam[i] = Obj { on: true, x, y: 0, large: true, ..Obj::default() };
+        }
+        let bin = bin_line(&mem, 0);
+        // -64 is wholly off screen: out of range. -256 counts, and loads all of its (unseen) slivers.
+        assert_eq!(bin.sprites, vec![0, 1, 3]);
+        assert_eq!(bin.clip, vec![(7, 8), (0, 1), (0, 8)]);
+        assert_eq!((bin.sprite_count, bin.tile_count), (3, 10));
+    }
+
+    #[test]
+    fn a_rectangular_sprite_flips_vertically_as_two_squares() {
+        // Size sel 6 small = 16x32; a sprite flipped vertically shows its top square's last row on line 0.
+        let mut mem = mem();
+        mem.obsel.size_sel = 6;
+        mem.oam[0] = Obj { on: true, x: 0, y: 0, flip_y: true, ..Obj::default() };
+        // Tile 16 (the top square's second tile row) gets colour 1 at x = 7 in its last line: pixel row 15.
+        mem.vram[16 * 16 + 7] = 0x0001;
+        mem.cgram[129] = 0x7fff;
+        assert!(render_scanline(&mem, 0, crate::WIDTH)[7].is_some());
+        assert!(render_scanline(&mem, 16, crate::WIDTH)[7].is_none());
     }
 
     #[test]
@@ -437,29 +493,16 @@ mod tests {
     }
 
     #[test]
-    fn bin_line_offscreen_x_sprite_still_counts_toward_caps() {
-        // Documented rule (fullsnes): the range/time test is Y-ONLY. A sprite that
-        // is fully off-screen horizontally (X < -w or X >= 256) but whose Y covers
-        // the line still consumes a range slot and its tile-slivers.
+    fn bin_line_offscreen_x_sprite_takes_no_slot_but_x_minus_256_does() {
+        // bsnes and Snes9x agree (tests/fixtures/snes-sprites-timeover): a sprite wholly off screen horizontally
+        // is not in range, except at X = -256, which takes a range slot and loads its slivers.
         let mut mem = mem();
-        mem.oam[0] = Obj {
-            on: true,
-            x: 300,
-            y: 0,
-            large: false,
-            ..Obj::default()
-        }; // off right
-        mem.oam[1] = Obj {
-            on: true,
-            x: -300,
-            y: 0,
-            large: false,
-            ..Obj::default()
-        }; // off left
+        for (i, x) in [-8i16, -256, 0].into_iter().enumerate() {
+            mem.oam[i] = Obj { on: true, x, y: 0, large: false, ..Obj::default() };
+        }
         let bin = bin_line(&mem, 0);
-        assert_eq!(bin.sprite_count, 2);
-        assert_eq!(bin.tile_count, 2);
-        assert_eq!(bin.sprites, vec![0, 1]); // both kept in the set (renderer clips X)
+        assert_eq!((bin.sprite_count, bin.tile_count), (2, 2));
+        assert_eq!(bin.sprites, vec![1, 2]);
     }
 
     /// Write a 4bpp OBJ char (16 words) at OBJ char base 0x2000, tile `n`,

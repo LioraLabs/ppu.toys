@@ -14,7 +14,7 @@ use crate::linetable::LineTable;
 use crate::memory::{unpack_rgb15, Memory};
 use crate::mode7::{mode7_sample, render_mode7_scanline, render_mode7_scanline_px};
 use crate::registers::{RegBg, RegRow};
-use crate::sprite::{bin_line, obj_tile_addr, render_scanline_for, sprite_dims};
+use crate::sprite::{bin_line, obj_tile_addr, sprite_dims};
 use crate::{OamSprite, HEIGHT, WIDTH};
 
 /// Resolved inspector state for one scanline. OAM/VRAM remain frame-global.
@@ -437,10 +437,9 @@ pub fn render_layer_view(lt: &LineTable, mem: &Memory, plane: u8) -> Vec<u8> {
         match plane {
             4 => {
                 let bin = bin_line(mem, y);
-                for (x, sp) in render_scanline_for(mem, &bin.sprites, y, WIDTH)
-                    .into_iter()
-                    .enumerate()
-                {
+                let mut line = vec![None; WIDTH];
+                crate::sprite::render_scanline_for_into(mem, &bin.sprites, &bin.clip, y, &mut line);
+                for (x, sp) in line.into_iter().enumerate() {
                     if let Some(s) = sp {
                         let o = row_off + x * 4;
                         fb[o..o + 4].copy_from_slice(&s.rgba);

@@ -10,7 +10,8 @@ use std::path::Path;
 const MAIN_SRC: &str = r#"-- ppu.toys tutorial 10/10 :: sprite-limits — why 90s games flickered
 -- The PPU re-evaluates all 128 OAM sprites on EVERY scanline, under two
 -- hard budgets:
---   RANGE: only the first 32 sprites whose Y covers the line are kept
+--   RANGE: only the first 32 sprites whose Y covers the line (and that show
+--          on it horizontally) are kept
 --   TIME:  the kept sprites may fetch at most 34 8px-wide tile slivers
 -- Anything past a budget simply does not draw on that line. Both events
 -- latch into STAT77 ($213E) — open the Sprites inspector and watch the
@@ -57,10 +58,11 @@ function frame(t: number, f: number)
 
   -- ROW C, sprites 48..57 — the TIME overflow, a different budget entirely.
   -- Only ten sprites, nowhere near the 32 cap — but each large 32x32 sprite
-  -- spans 4 tile slivers per line, so 10 * 4 = 40 slivers > 34. The PPU keeps
-  -- the evaluation-order prefix that fits (8 sprites = 32 slivers; a 9th
-  -- would need 36) and the last two big squares vanish with the sprite
-  -- budget barely touched. Big sprites are cheap in OAM, expensive in fetch.
+  -- spans 4 tile slivers per line, so 10 * 4 = 40 slivers > 34. The PPU
+  -- fetches tiles from the LAST kept sprite back to the first and stops at
+  -- 34: the last eight big squares draw whole, the one before them keeps its
+  -- left half, and the first vanishes, with the sprite budget barely touched.
+  -- Big sprites are cheap in OAM, expensive in fetch.
   for i = 0, 9 do
     local s = 48 + i
     obj[s].tile = 0; obj[s].pal = 3
@@ -141,18 +143,15 @@ fn range_cap_drops_the_band_tail_but_keeps_the_head() {
 }
 
 #[test]
-fn time_cap_drops_the_last_two_big_sprites() {
-    // Row C keeps 8 * 4 = 32 slivers; sprites 56 (x 196..228) and 57
-    // (x 220..252) are time-dropped.
+fn time_cap_drops_the_first_big_sprites() {
+    // Row C loads 57 back to 50 (32 slivers), then 49's left half: 48 (x 4..36) is time-dropped,
+    // 49 (x 28..60) keeps x 28..44, and 57 (x 220..252) draws.
     let fb = render_stats(60).0;
-    let kept = common::px(&fb, 100, 160);
-    assert!(kept[2] > 180, "big-row kept pixel missing: {kept:?}");
-    let dropped = common::px(&fb, 240, 160);
-    assert_eq!(
-        &dropped[..3],
-        common::px(&fb, 250, 20).get(..3).unwrap(),
-        "time-dropped region should show the backdrop"
-    );
+    let backdrop = common::px(&fb, 250, 20);
+    for (x, drawn) in [(10, false), (34, true), (48, false), (240, true)] {
+        let p = common::px(&fb, x, 160);
+        assert_eq!(p[..3] != backdrop[..3], drawn, "row C at x {x}: {p:?}");
+    }
 }
 
 #[test]

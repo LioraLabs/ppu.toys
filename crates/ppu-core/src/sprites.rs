@@ -24,6 +24,8 @@ pub const NO_GROUP: &str = "can't tell which sprites group this is: call draw an
 pub const GROUP_PLACE: &str = "make sprites groups at file level or in init(), outside loops: each sprites.group call is one group";
 pub const NO_SORT: &str = "sprites.sort() is gone: draw what sorts by depth into a group made with sprites.group({sort = true})";
 pub const NO_LAYER: &str = "sprites.draw takes no layer: draw into groups, which draw in the order they are made";
+pub const SIZE_SEL: &str = "with the sprites library, set obj.size_sel to one constant 0..7 (or leave it out: the library picks the size pair from the art)";
+const DRAW_OPTIONS: &str = "draw takes (art, x, y) and an optional literal options table {size = , prio = , key = , depth = , flip_x = , flip_y = , pal = }";
 
 /// Where the analysis rejects a program.
 #[derive(Debug, Clone, PartialEq)]
@@ -77,6 +79,9 @@ pub struct Plan {
     /// slots the others leave.
     pub groups: Vec<Group>,
     pub calls: Vec<Call>,
+    /// The OBJSEL size pair the program sets itself (`obj.size_sel = n`, one constant), which the library then
+    /// draws with; `None` lets the library choose it from the art.
+    pub size_sel: Option<u8>,
 }
 
 impl Plan {
@@ -299,6 +304,8 @@ struct Walk<'a> {
     found: Vec<Found>,
     /// `name = sprites.group(...)`: the call's span and the name it is assigned to.
     pending_group: Option<(Range<usize>, String)>,
+    /// The values `obj.size_sel` is set to (None: one that is not a constant 0..7), with their lines.
+    size_sel: Vec<(u32, Option<u8>)>,
 }
 
 fn span(node: &impl Node) -> Range<usize> {
@@ -438,9 +445,9 @@ impl Walk<'_> {
             }
         } else {
             let options = fields(args.get(3));
-            let ok = options.as_ref().is_some_and(|o| o.iter().all(|(k, _)| matches!(k.as_str(), "depth" | "size" | "prio" | "key" | "layer")));
+            let ok = options.as_ref().is_some_and(|o| o.iter().all(|(k, _)| matches!(k.as_str(), "depth" | "size" | "prio" | "key" | "layer" | "flip_x" | "flip_y" | "pal")));
             if !(3..=4).contains(&args.len()) || !ok {
-                self.fail(call, "draw takes (art, x, y) and an optional literal options table {size = , prio = , key = , depth = }");
+                self.fail(call, DRAW_OPTIONS);
                 return;
             }
             let options = options.unwrap();
@@ -578,6 +585,16 @@ impl Visitor for Walk<'_> {
         if let ([ast::Var::Name(n)], [Expression::FunctionCall(c)]) = (&vars[..], &exprs[..]) {
             if path(c).is_some_and(|(p, _)| p == "sprites.group") {
                 self.pending_group = Some((span(c), text(n)));
+            }
+        }
+        // `obj.size_sel = n`: the program's own size pair.
+        for (i, v) in vars.iter().enumerate() {
+            let ast::Var::Expression(v) = v else { continue };
+            let is_size_sel = matches!(v.prefix(), ast::Prefix::Name(r) if text(r) == "obj")
+                && matches!(v.suffixes().collect::<Vec<_>>()[..], [ast::Suffix::Index(ast::Index::Dot { name, .. })] if text(name) == "size_sel");
+            if is_size_sel {
+                let value = exprs.get(i).and_then(|e| self.values(e)).filter(|s| s.len() == 1).and_then(|s| s.first().copied());
+                self.size_sel.push((line(node), value.filter(|n| (0..8).contains(n)).map(|n| n as u8)));
             }
         }
     }
@@ -793,6 +810,7 @@ pub fn plan(files: &[(&str, &str)]) -> Result<Option<Plan>, Error> {
     // The default group's draws, and every call with its group (`usize::MAX`: the default).
     let mut default = vec![];
     let mut calls = vec![];
+    let mut size_sels = vec![];
     for (file, ast) in &parsed {
         let mut walk = Walk {
             file,
@@ -822,6 +840,7 @@ pub fn plan(files: &[(&str, &str)]) -> Result<Option<Plan>, Error> {
             called: vec![],
             found: vec![],
             pending_group: None,
+            size_sel: vec![],
         };
         walk.visit_ast(ast);
         // How many times a function runs a frame: once when the file never calls it by name (an entry,
@@ -867,6 +886,7 @@ pub fn plan(files: &[(&str, &str)]) -> Result<Option<Plan>, Error> {
             first_error.get_or_insert(e);
         }
         draws |= walk.draws;
+        size_sels.extend(walk.size_sel.into_iter().map(|(l, v)| (file.to_string(), l, v)));
         slots.extend(walk.slots.into_iter().map(|(l, s)| (file.to_string(), l, s)));
     }
     if let Some(e) = first_error {
@@ -898,7 +918,15 @@ pub fn plan(files: &[(&str, &str)]) -> Result<Option<Plan>, Error> {
             }
         }
     }
-    Ok(Some(Plan { reserved: reserved.into_iter().collect(), arts, groups, calls }))
+    let mut size_sel = None;
+    for (file, line, v) in size_sels {
+        match (v, size_sel) {
+            (Some(v), None) => size_sel = Some(v),
+            (Some(v), Some(w)) if v == w => {}
+            _ => return Err(Error { file, line, message: SIZE_SEL.into() }),
+        }
+    }
+    Ok(Some(Plan { reserved: reserved.into_iter().collect(), arts, groups, calls, size_sel }))
 }
 
 #[cfg(test)]
@@ -938,5 +966,20 @@ end"#;
         assert_eq!(plan(&[("main.lua", main)]).unwrap_err().line, 5);
         let main = "function init() A = sprites.art({}, nil) end\nfunction frame() sprites.draw(A, 0, 0) end";
         assert!(plan(&[("main.lua", main)]).unwrap_err().message.contains("file level"));
+    }
+
+    #[test]
+    fn a_constant_size_sel_pins_the_pair() {
+        let size_sel = |main: &str| plan(&[("main.lua", main)]).map(|p| p.unwrap().size_sel);
+        assert_eq!(size_sel("function frame() sprites.draw(A, 0, 0) end"), Ok(None));
+        let main = "local P = 3\nfunction init() obj.char_base, obj.size_sel = 0, P end\nfunction frame() obj.size_sel = 3 sprites.draw(A, 0, 0) end";
+        assert_eq!(size_sel(main), Ok(Some(3)));
+        for main in [
+            "function init() obj.size_sel = 1 end\nfunction frame() obj.size_sel = 2 sprites.draw(A, 0, 0) end",
+            "function frame(t, f) obj.size_sel = f % 2 sprites.draw(A, 0, 0) end",
+            "function frame() obj.size_sel = 9 sprites.draw(A, 0, 0) end",
+        ] {
+            assert_eq!(plan(&[("main.lua", main)]).unwrap_err().message, SIZE_SEL, "{main}");
+        }
     }
 }

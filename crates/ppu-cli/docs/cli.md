@@ -116,7 +116,7 @@ KiB (256, 512, 1024, 2048 or 4096).
 
 Source kinds: `bg` (tiled background), `sheet` (ordered tiles), `obj` (sprite
 cells), and `m7` (Mode 7 plane). Options use Studio's names: `bit_depth`,
-`tile_size`, `cell_size`, `extbg`, `dither`, `dither_strength`, and
+`tile_size`, `cell_size`, `cell_height`, `extbg`, `dither`, `dither_strength`, and
 `alpha_threshold`. Defaults come from the shared importer. For Mode 7 EXTBG,
 add `priority_file` pointing to a same-sized black-and-white PNG and set
 `options.extbg` to true. Read `ppu docs sources` and `ppu docs dma` before

@@ -25,7 +25,10 @@ optional black-and-white EXTBG image supplies per-pixel priority.
 ## Source dimensions and tile budgets
 
 Use image dimensions divisible by 8 for tile art, and divisible by
-`cell_size` for OBJ sheets. Pixel dimensions and unique-tile counts are
+the cell size for OBJ sheets. A hardware sprite size (8, 16, 32 or 64
+square, 16×32, 32×64) is one sprite per cell; the
+[sprites library](sprites.md#sizes-flips-and-palettes) draws a cell of any
+other size as several. Pixel dimensions and unique-tile counts are
 separate constraints: a large repeating image can cost fewer tiles than a
 small detailed image.
 
@@ -33,7 +36,7 @@ small detailed image.
 | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `bg`    | Up to 512×512 pixels (64×64 map cells), cropped with a report beyond that; at most 1024 addressable character tiles, including the reserved transparent tile |
 | `sheet` | 8×8 cells in row order, at most 1024 tiles; no deduplication or reserved blank tile                                                                          |
-| `obj`   | Square cells of 8, 16, 32, or 64 pixels, default 8; the character name table holds at most 512 8×8 tiles                                                     |
+| `obj`   | Cells `cell_size` wide (default 8) and `cell_height` tall (default square), multiples of 8 up to 128; the character name table holds at most 512 8×8 tiles |
 | `m7`    | Up to a 1024×1024 plane, at most 256 distinct 8×8 tiles after deduplication; excess unique tiles fall back to tile zero and are reported                     |
 
 For Mode 7, a 128×128 image contains at most 256 cells, but covers only the

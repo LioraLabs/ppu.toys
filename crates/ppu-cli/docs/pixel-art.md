@@ -40,8 +40,10 @@ Pick the palettes before drawing anything.
   squash (body dips on the contact frame). Idle animation (blinking,
   breathing, an ear twitch) brings a still character to life cheaply.
 - **Cell sizes are what the hardware has:** a toy picks two sprite sizes with
-  `obj.size_sel` (8 and 16, 8 and 32, 16 and 32, …). Design characters to fit
-  one cell; build anything bigger from several sprites.
+  `obj.size_sel` (8 and 16, 8 and 32, 16 and 32, …). A character that fits
+  one hardware cell costs one sprite; the sprites library draws a 24×24 or
+  48×32 cell as several, so each one costs more of the 128 sprites and of a
+  line's 34 slivers.
 
 ## Backgrounds and tiles
 

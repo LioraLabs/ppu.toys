@@ -299,6 +299,7 @@ fn sample_line(
     mem: &Memory,
     y: usize,
     obj: &[usize],
+    clip: &[(u8, u8)],
     ladder: &Ladder,
     used: u8,
     sc: &mut LineScratch,
@@ -320,7 +321,7 @@ fn sample_line(
         }
     }
     if used & (1 << 4) != 0 {
-        render_scanline_for_into(mem, obj, y, &mut sc.obj);
+        render_scanline_for_into(mem, obj, clip, y, &mut sc.obj);
     }
 }
 
@@ -440,7 +441,7 @@ pub(crate) fn composite_screen(
 ) {
     let mut sc = Box::new(LineScratch::new());
     let ladder = ladder_for(row);
-    sample_line(row, mem, y, obj, &ladder, mask, &mut sc);
+    sample_line(row, mem, y, obj, &[], &ladder, mask, &mut sc);
     fill_hidden(row, &row.window_ranges(), wmask, &mut sc);
     let backdrop = unpack_rgb15(mem.cgram[0]);
     resolve_screen(row, &ladder, mask, wmask, &sc, backdrop, line, src);
@@ -571,7 +572,7 @@ impl LineRenderer {
         let bin = bin_line(m, y);
         let ranges = row.window_ranges();
         let ladder = ladder_for(row);
-        sample_line(row, m, y, &bin.sprites, &ladder, row.tm | row.ts, sc);
+        sample_line(row, m, y, &bin.sprites, &bin.clip, &ladder, row.tm | row.ts, sc);
         fill_hidden(row, &ranges, row.tmw | row.tsw, sc);
         let backdrop = unpack_rgb15(m.cgram[0]);
         resolve_screen(

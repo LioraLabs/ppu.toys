@@ -29,12 +29,13 @@ pub struct ObjCell {
 }
 
 /// Convert an RGBA sprite sheet into 4bpp OBJ char + OBJ CGRAM palettes.
-/// Pure and deterministic. `cell_size` picks the layout: 8 runs the classic
-/// per-tile pipeline (flip-aware dedup, reserved blank tile 0); 16/32/64 run
-/// the block layout, where each NxN-tile cell is a straight raster copy into
-/// contiguous name-table slots so ONE `obj[i].tile` (the block's base)
-/// addresses the whole cell via the renderer's `obj_tile_addr` stride
-/// (right +1 within the 16-wide band, down +16).
+/// Pure and deterministic. The cell size (width, height; multiples of 8 up to
+/// 128) picks the layout: 8x8 runs the classic per-tile pipeline (flip-aware
+/// dedup, reserved blank tile 0); any other runs the block layout, where each
+/// cell is a straight raster copy into contiguous name-table slots so ONE
+/// `obj[i].tile` (the block's base) addresses the whole cell, or any piece of
+/// it, via the renderer's `obj_tile_addr` stride (right +1 within the 16-wide
+/// band, down +16).
 pub fn import_obj_sheet(
     rgba: &[u8],
     width: u32,
@@ -42,10 +43,37 @@ pub fn import_obj_sheet(
     cell_size: u8,
     remap: &RemapOptions,
 ) -> (crate::source::ObjSource, crate::source::SourceMeta) {
-    match cell_size {
-        16 | 32 | 64 => import_obj_blocks(rgba, width, height, cell_size, remap),
-        _ => import_obj_cells8(rgba, width, height, remap),
+    import_obj_sheet_cells(rgba, width, height, (cell_size, cell_size), remap)
+}
+
+/// [`import_obj_sheet`] with a rectangular cell (width, height).
+pub fn import_obj_sheet_cells(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    cell: (u8, u8),
+    remap: &RemapOptions,
+) -> (crate::source::ObjSource, crate::source::SourceMeta) {
+    if cell == (8, 8) {
+        import_obj_cells8(rgba, width, height, remap)
+    } else {
+        import_obj_blocks(rgba, width, height, cell, remap)
     }
+}
+
+/// The first 8x8 tile row of each of `bands` bands of cells `nh` tiles tall: one after another, except that a
+/// band never crosses tile row 16, the seam between the two name tables (`obj.name_select` can move the second).
+fn band_rows(nh: usize, bands: usize) -> Vec<usize> {
+    let mut rows = Vec::with_capacity(bands);
+    let mut at = 0;
+    for _ in 0..bands {
+        if at < 16 && at + nh > 16 && nh <= 16 {
+            at = 16;
+        }
+        rows.push(at);
+        at += nh;
+    }
+    rows
 }
 
 /// Global color budget over all source tiles: returns a remap closure that
@@ -171,6 +199,7 @@ fn import_obj_cells8(
     (
         crate::source::ObjSource {
             cell_size: 8,
+            cell_height: 8,
             palettes: fit.palettes,
             char_words,
             cells: cells.clone(),
@@ -184,29 +213,30 @@ fn import_obj_cells8(
     )
 }
 
-/// 16/32/64 block layout: each cell is an NxN block of 8x8 subtiles copied
+/// Block layout: each cell is an nw x nh block of 8x8 subtiles copied
 /// raster-order into contiguous name-table slots (`base + sy*16 + sx`,
-/// matching `sprite::obj_tile_addr`). One palette per CELL (one OAM entry =
-/// one palette), no dedup, no flips (an OAM flip flips the whole sprite).
+/// matching `sprite::obj_tile_addr`), never across the 16-wide band's edge.
+/// One palette per CELL (one OAM entry = one palette), no dedup, no flips
+/// (an OAM flip flips the whole sprite).
 fn import_obj_blocks(
     rgba: &[u8],
     width: u32,
     height: u32,
-    cell_size: u8,
+    (cell_w, cell_h): (u8, u8),
     remap: &RemapOptions,
 ) -> (crate::source::ObjSource, crate::source::SourceMeta) {
     let mut overflows = Vec::new();
-    let n = (cell_size / 8) as usize; // tiles per cell edge: 2/4/8
-    let per_row = 16 / n; // cells per 16-wide name-table band: 8/4/2
+    let (nw, nh) = ((cell_w / 8) as usize, (cell_h / 8) as usize); // tiles per cell edge
+    let per_row = 16 / nw; // cells per 16-wide name-table band
     let (ptiles, cols, rows) =
         split_tiles_at(rgba, width as usize, height as usize, remap.alpha_threshold);
-    let big_cols = cols.div_ceil(n);
-    let big_rows = rows.div_ceil(n);
+    let big_cols = cols.div_ceil(nw);
+    let big_rows = rows.div_ceil(nh);
     let ncells = big_cols * big_rows;
 
     // Subtile (sy, sx) of cell (cy, cx); None = off-sheet (fully transparent).
     let subtile = |cy: usize, cx: usize, sy: usize, sx: usize| -> Option<&PixelTile> {
-        let (gy, gx) = (cy * n + sy, cx * n + sx);
+        let (gy, gx) = (cy * nh + sy, cx * nw + sx);
         (gy < rows && gx < cols).then(|| &ptiles[gy * cols + gx])
     };
 
@@ -219,8 +249,8 @@ fn import_obj_blocks(
         .map(|k| {
             let (cy, cx) = (k / big_cols, k % big_cols);
             let mut m: BTreeMap<u16, u32> = BTreeMap::new();
-            for sy in 0..n {
-                for sx in 0..n {
+            for sy in 0..nh {
+                for sx in 0..nw {
                     if let Some(t) = subtile(cy, cx, sy, sx) {
                         for c in t.iter().flatten() {
                             *m.entry(map_color(*c)).or_default() += 1;
@@ -255,7 +285,7 @@ fn import_obj_blocks(
     let tile_assignment: Vec<u8> = (0..rows * cols)
         .map(|t| {
             let (gy, gx) = (t / cols, t % cols);
-            fit.assignment[(gy / n) * big_cols + gx / n]
+            fit.assignment[(gy / nh) * big_cols + gx / nw]
         })
         .collect();
     let grids = remap_image(
@@ -269,31 +299,32 @@ fn import_obj_blocks(
         remap,
     );
 
-    // Name table = 512 8x8 tiles; each cell consumes n*n of them.
-    let max_cells = 512 / (n * n);
+    // Name table = 512 8x8 tiles in 32 rows of 16; cells pack per_row per
+    // 16-wide band, each band nh tile rows tall.
+    let bands = band_rows(nh, ncells.div_ceil(per_row));
+    let max_cells = bands.iter().take_while(|r| *r + nh <= 32).count() * per_row;
     let kept_cells = ncells.min(max_cells);
     if ncells > max_cells {
         overflows.push(Overflow::Tiles {
-            unique: ncells * n * n,
-            kept: kept_cells * n * n,
+            unique: ncells * nw * nh,
+            kept: kept_cells * nw * nh,
         });
     }
 
-    // Base tile of kept cell k: cells pack per_row per 16-wide band; each
-    // band-row of cells spans n tile rows.
+    // Base tile of kept cell k.
     let base_of = |k: usize| -> u16 {
-        let gx = (k % per_row) * n;
-        let gy = (k / per_row) * n;
+        let gx = (k % per_row) * nw;
+        let gy = bands[k / per_row];
         (gy * 16 + gx) as u16
     };
-    let tile_rows = kept_cells.div_ceil(per_row) * n; // 8x8 name-table rows used
+    let tile_rows = if kept_cells == 0 { 0 } else { bands[(kept_cells - 1) / per_row] + nh }; // 8x8 name-table rows used
     let mut char_words = vec![0u16; tile_rows * 16 * WORDS_PER_TILE];
     for k in 0..kept_cells {
         let (cy, cx) = (k / big_cols, k % big_cols);
         let base = base_of(k) as usize;
-        for sy in 0..n {
-            for sx in 0..n {
-                let (gy, gx) = (cy * n + sy, cx * n + sx);
+        for sy in 0..nh {
+            for sx in 0..nw {
+                let (gy, gx) = (cy * nh + sy, cx * nw + sx);
                 let grid: IndexTile = if gy < rows && gx < cols {
                     grids[gy * cols + gx]
                 } else {
@@ -320,13 +351,14 @@ fn import_obj_blocks(
         colors_used: fit.palettes.iter().map(|p| p.len()).sum(),
         palettes_used: fit.palettes.len(),
         tile_cells: ncells,
-        unique_tiles: kept_cells * n * n,
+        unique_tiles: kept_cells * nw * nh,
         vram_words: char_words.len(),
         overflows,
     };
     (
         crate::source::ObjSource {
-            cell_size,
+            cell_size: cell_w,
+            cell_height: cell_h,
             palettes: fit.palettes,
             char_words,
             cells: cells.clone(),
@@ -516,6 +548,26 @@ mod tests {
         assert_eq!(cells.len(), 2);
         assert_eq!(cells[0].tile, 0);
         assert_eq!(cells[1].tile, 2); // two 8x8 tiles right of cell 0's base
+    }
+
+    #[test]
+    fn odd_and_rectangular_cells_stay_inside_their_band() {
+        // 24x24 cells: five per band (3 tiles each), bands 3 rows tall; the sixth band would cross tile row 16.
+        let rgba = vec![255u8; 120 * 144 * 4];
+        let (src, meta) = import_obj_sheet_cells(&rgba, 120, 144, (24, 24), &RemapOptions::default());
+        assert_eq!((src.cell_size, src.cell_height), (24, 24));
+        let tiles: Vec<u16> = meta.cells.as_ref().unwrap().iter().map(|c| c.tile).collect();
+        assert_eq!(&tiles[..6], &[0, 3, 6, 9, 12, 48]);
+        assert_eq!(tiles[25], 256); // band 6 starts at row 16, not 15
+        for t in &tiles {
+            assert!(t % 16 + 3 <= 16 && (t / 16 < 16) == ((t / 16 + 2) < 16));
+        }
+        // 48x32: two per band.
+        let rgba = vec![255u8; 96 * 32 * 4];
+        let (src, meta) = import_obj_sheet_cells(&rgba, 96, 32, (48, 32), &RemapOptions::default());
+        assert_eq!((src.cell_size, src.cell_height), (48, 32));
+        let tiles: Vec<u16> = meta.cells.as_ref().unwrap().iter().map(|c| c.tile).collect();
+        assert_eq!(tiles, vec![0, 6]);
     }
 
     #[test]

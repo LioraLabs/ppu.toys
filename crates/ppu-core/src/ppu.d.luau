@@ -121,7 +121,7 @@ type Cell = {tile: number, pal: number, flip_x: boolean, flip_y: boolean}
 type Graphics = {
   char: number, map: number, pal: number, tile: number, cells: {Cell},
   tiles_w: number, tiles_h: number, next_char: number, next_map: number, next_pal: number,
-  id: number, addr: number, next_addr: number,
+  id: number, addr: number, next_addr: number, cell_w: number?, cell_h: number?,
 }
 declare function dma(source: string, placement: Placement?): Graphics
 declare function m7pixel(tile: number, x: number, y: number, index: number): ()
@@ -136,15 +136,16 @@ type Mode7View = {
 declare function mode7_transform(angle: number, zoom: number, x: number, y: number): Mode7View
 declare function mode7_floor(y: number, horizon: number, height: number, heading: number, x: number, z: number): Mode7View
 
--- The sprites library: art made of a sheet's 16x16 cells, drawn in groups (the first made on top).
-type SpriteLevel = {size: number, columns: number, cells: {number}}
+-- The sprites library: art made of a sheet's cells, drawn in groups (the first made on top). A level may take its
+-- cells from a sheet of its own; a draw may flip the art and pick one palette for all of it.
+type SpriteLevel = {size: number, columns: number, cells: {number}, sheet: SpriteSheet?}
 type SpriteArt = {}
-type SpriteOptions = {size: number?, prio: number?, key: number?, depth: number?}
+type SpriteOptions = {size: number?, prio: number?, key: number?, depth: number?, flip_x: boolean?, flip_y: boolean?, pal: number?}
 type SpriteGroup = {
   draw: (self: SpriteGroup, art: SpriteArt, x: number, y: number, options: SpriteOptions?) -> (),
   keep: (self: SpriteGroup, key: number) -> (),
 }
-type SpriteSheet = {tile: number, pal: number, cells: {Cell}}
+type SpriteSheet = {tile: number, pal: number, cells: {Cell}, cell_w: number?, cell_h: number?}
 declare sprites: {
   flicker: boolean,
   art: (levels: {SpriteLevel}, sheet: SpriteSheet) -> SpriteArt,

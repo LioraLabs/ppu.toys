@@ -84,7 +84,18 @@ fn the_sprites_chapter_snippets_run() {
         // The chapter loads a sheet from a source; stand in a sheet of the same shape.
         section[start..start + section[start..].find("```").unwrap()]
             .replace(r#"dma("ship", {char = 0x4000, pal = 0})"#, "{tile = 0, pal = 0, cells = {{tile = 0}, {tile = 2}, {tile = 4}, {tile = 6}, {tile = 8}, {tile = 10}}}")
+            .replace(r#"dma("shots", {char = 0x4000, pal = 0})"#, "{tile = 0, pal = 0, cell_w = 8, cell_h = 8, cells = {{tile = 1, pal = 0}, {tile = 2, pal = 0}}}")
+            .replace(r#"dma("planes", {char = 0x4800, pal = 1})"#, "{tile = 128, pal = 1, cell_w = 32, cell_h = 32, cells = {{tile = 0, pal = 0}, {tile = 4, pal = 0}}}")
+            .replace(r#"dma("barges", {char = 0x5000, pal = 2})"#, "{tile = 256, pal = 2, cell_w = 64, cell_h = 32, cells = {{tile = 0, pal = 0}}}")
     };
+    let e = run_as("main.luau", &snippet("## Sizes, flips and palettes"), 2);
+    let m = e.memory();
+    assert_eq!(m.obsel.size_sel, 1, "8x8 and 32x32 art: pair 1");
+    let s = |i: usize| (m.oam[i].x, m.oam[i].y, m.oam[i].tile, m.oam[i].pal, m.oam[i].large);
+    assert_eq!((s(0), s(1), s(2)), ((112, 84, 132, 1, true), (28, 144, 256, 2, true), (60, 144, 260, 2, true)));
+    assert_eq!((s(3), s(4), s(6)), ((36, 56, 1, 3, false), (56, 56, 1, 4, false), (96, 56, 1, 4, false)));
+    let e = run_as("main.luau", &snippet("## Sizes, flips and palettes"), 17);
+    assert!(e.memory().oam[0].flip_x && e.memory().oam[0].flip_y, "heading 2 flips both ways");
     let e = run_as("main.luau", &snippet("## Draw sprites in groups"), 2);
     let oam = &e.memory().oam;
     assert_eq!((oam[0].x, oam[1].x, oam[2].x, oam[6].x, oam[10].x, oam[11].x, oam[18].x), (8, 120, 174, 124, 82, 32, 12));
@@ -243,4 +254,139 @@ end"#;
     let e = run_as("main.luau", program, 1);
     let on: Vec<u16> = e.memory().oam.iter().filter(|o| o.on).map(|o| o.tile).collect();
     assert_eq!(on, vec![2]);
+}
+
+/// Block sheets as dma() returns them: `name` with n cells of w x h, every tile drawn (`opaque`).
+const BLOCKS: &str = r#"local function blocks(w, h, n, pal)
+  local cells = {}
+  for i = 1, n do
+    local rows = {}
+    for r = 1, h // 8 do rows[r] = 2 ^ (w // 8) - 1 end
+    cells[i] = {tile = (i - 1) * (w // 8), pal = 0, opaque = rows}
+  end
+  return {tile = 0, pal = pal, cell_w = w, cell_h = h, cells = cells}
+end
+"#;
+
+fn sized(program: &str, frames: u32) -> Result<LuaEngine, ppu_core::LuaError> {
+    let mut engine = LuaEngine::new();
+    engine.set_sources(&[("main.luau", &format!("{BLOCKS}{program}"))])?;
+    for f in 0..frames {
+        engine.frame(f as f64 / 60., f)?;
+    }
+    Ok(engine)
+}
+
+fn sprite(e: &LuaEngine, i: usize) -> (i32, i32, u16, u8, bool, bool, bool, bool) {
+    let o = &e.memory().oam[i];
+    (o.x.into(), o.y.into(), o.tile, o.pal, o.large, o.flip_x, o.flip_y, o.on)
+}
+
+#[test]
+fn the_size_pair_holds_the_arts_sizes_and_draws_flip_and_recolour() {
+    let e = sized(
+        r#"local small = {tile = 100, pal = 1, cell_w = 8, cell_h = 8, cells = {{tile = 0, pal = 0}, {tile = 1, pal = 2, flip_x = true}}}
+local shot = sprites.art({{size = 8, columns = 1, cells = {1}}}, small)
+local plane = sprites.art({{size = 32, columns = 1, cells = {1}}}, blocks(32, 32, 2, 4))
+function frame()
+  sprites.draw(shot, 100, 100)
+  sprites.draw(shot, 100, 100, {flip_x = true, flip_y = true})
+  sprites.draw(plane, 50, 60, {pal = 6, flip_y = true, prio = 1})
+  sprites.draw(plane, 50, 60)
+end"#,
+        1,
+    )
+    .unwrap();
+    // 8x8 and 32x32 cells: OBJSEL pair 1.
+    assert_eq!(e.memory().obsel.size_sel, 1);
+    // Cell 1's own palette (the sheet's 1 + its 2) and its importer flip, which a draw's flip undoes.
+    assert_eq!(sprite(&e, 0), (96, 96, 101, 3, false, true, false, true));
+    assert_eq!(sprite(&e, 1), (96, 96, 101, 3, false, false, true, true));
+    assert_eq!(sprite(&e, 2), (34, 44, 4, 6, true, false, true, true));
+    assert_eq!(sprite(&e, 3), (34, 44, 4, 4, true, false, false, true));
+    assert_eq!(e.memory().oam[2].prio, 1);
+}
+
+#[test]
+fn a_composite_cell_is_its_fewest_pieces_mirrored_as_one() {
+    // 16x16 art fixes pair 0, 3 or 4; only pair 0 builds 24x24 (one 16x16 and five 8x8); its last tile is blank.
+    let program = r#"local dot = sprites.art({{size = 16, columns = 1, cells = {0}}}, blocks(16, 16, 1, 0))
+local s = blocks(24, 24, 2, 0)
+s.cells[1].opaque[3] = 3
+local ship = sprites.art({{size = 24, columns = 1, cells = {0}}}, s)
+local g = sprites.group()
+function frame(t, f)
+  g:draw(ship, 100, 100, {flip_x = f == 1, key = 1})
+  sprites.draw(dot, 8, 8)
+end"#;
+    let e = sized(program, 1).unwrap();
+    assert_eq!(e.memory().obsel.size_sel, 0);
+    let pieces: Vec<_> = (0..6).map(|i| sprite(&e, i)).collect();
+    assert_eq!(
+        pieces,
+        vec![
+            (88, 88, 0, 0, true, false, false, true),
+            (104, 88, 2, 0, false, false, false, true),
+            (104, 96, 18, 0, false, false, false, true),
+            (88, 104, 32, 0, false, false, false, true),
+            (96, 104, 33, 0, false, false, false, true),
+            (0, 0, 0, 0, true, false, false, true),
+        ]
+    );
+    // The keyed draw flipped: each piece in its slot, mirrored around x = 100 and flipped.
+    let e = sized(program, 2).unwrap();
+    let pieces: Vec<_> = (0..5).map(|i| sprite(&e, i)).collect();
+    assert_eq!(
+        pieces,
+        vec![
+            (96, 88, 0, 0, true, true, false, true),
+            (88, 88, 2, 0, false, true, false, true),
+            (88, 96, 18, 0, false, true, false, true),
+            (104, 104, 32, 0, false, true, false, true),
+            (96, 104, 33, 0, false, true, false, true),
+        ]
+    );
+}
+
+#[test]
+fn a_pinned_pair_builds_the_rest_and_too_many_sizes_is_an_error() {
+    // The program's own pair: 16x32 cells are its small sprites, 32x32 cells two of them.
+    let e = sized(
+        r#"local tall = sprites.art({{size = 32, columns = 1, cells = {0}}}, blocks(16, 32, 1, 0))
+local wide = sprites.art({{size = 32, columns = 1, cells = {0}}}, blocks(32, 64, 1, 0))
+function init() obj.size_sel = 7 end
+function frame()
+  sprites.draw(tall, 100, 100)
+  sprites.draw(wide, 100, 100)
+end"#,
+        1,
+    )
+    .unwrap();
+    assert_eq!(e.memory().obsel.size_sel, 7);
+    assert_eq!(sprite(&e, 0), (92, 84, 0, 0, false, false, false, true));
+    assert_eq!((sprite(&e, 1), sprite(&e, 2)), ((84, 68, 0, 0, true, false, false, true), (84, 100, 64, 0, true, false, false, true)));
+    let three = r#"local a = sprites.art({{size = 8, columns = 1, cells = {0}}}, blocks(8, 8, 1, 0))
+local b = sprites.art({{size = 16, columns = 1, cells = {0}}}, blocks(16, 16, 1, 0))
+local c = sprites.art({{size = 32, columns = 1, cells = {0}}}, blocks(32, 32, 1, 0))
+function frame() sprites.draw(a, 100, 100) sprites.draw(b, 100, 100) sprites.draw(c, 100, 100) end"#;
+    let err = sized(three, 1).err().unwrap();
+    assert_eq!(err.line, Some(BLOCKS.lines().count() as u32 + 3));
+    assert!(err.message.contains("8x8, 16x16, 32x32") && err.message.contains("obj.size_sel"), "{}", err.message);
+    // Pinned to pair 1, the 16x16 art is four 8x8 sprites.
+    let e = sized(&format!("{three}\nfunction init() obj.size_sel = 1 end"), 1).unwrap();
+    assert_eq!((sprite(&e, 1).4, sprite(&e, 4).4, sprite(&e, 5).4), (false, false, true));
+    // Pair 3 has no 8x8 sprite.
+    let err = sized(&format!("{three}\nfunction init() obj.size_sel = 3 end"), 1).err().unwrap();
+    assert!(err.message.contains("8x8 can't be built"), "{}", err.message);
+}
+
+#[test]
+fn a_64_pixel_tall_sprite_shows_only_where_it_cannot_wrap() {
+    // Drawn at its center: the piece's y is 32 above. It shows from -32 (y 0) to 192 (y 224).
+    for (y, on) in [(0, true), (-1, false), (224, true), (225, false)] {
+        let program = format!(
+            "local big = sprites.art({{{{size = 64, columns = 1, cells = {{0}}}}}}, blocks(64, 64, 1, 0))\nfunction frame() sprites.draw(big, 100, {y}) end"
+        );
+        assert_eq!(sprite(&sized(&program, 1).unwrap(), 0).7, on, "y {y}");
+    }
 }

@@ -63,14 +63,19 @@ fn examples_are_luau_and_lua_appears_only_on_the_luau_page() {
 
 /// A distinct 16x16 cell per index, so the OBJ importer keeps every cell.
 fn cells(columns: u32, rows: u32) -> (Vec<u8>, u32, u32) {
-    let (w, h) = (columns * 16, rows * 16);
+    sized_cells(columns, rows, 16, 16)
+}
+
+/// A distinct cw x ch cell per index.
+fn sized_cells(columns: u32, rows: u32, cw: u32, ch: u32) -> (Vec<u8>, u32, u32) {
+    let (w, h) = (columns * cw, rows * ch);
     let mut rgba = vec![0u8; (w * h * 4) as usize];
     for y in 0..h {
         for x in 0..w {
-            let cell = (y / 16) * columns + x / 16;
-            let (cx, cy) = (x % 16, y % 16);
+            let cell = (y / ch) * columns + x / cw;
+            let (cx, cy) = (x % cw, y % ch);
             // A border plus the cell number in binary along the top row.
-            let on = cx == 0 || cy == 15 || (cy == 1 && cx >= 2 && cx < 10 && (cell >> (cx - 2)) & 1 == 1);
+            let on = cx == 0 || cy == ch - 1 || (cy == 1 && cx >= 2 && cx < 10 && (cell >> (cx - 2)) & 1 == 1);
             let i = ((y * w + x) * 4) as usize;
             if on {
                 rgba[i..i + 4].copy_from_slice(&[240, 200, 64, 255]);
@@ -107,6 +112,12 @@ fn engine() -> LuaEngine {
     let (sheet, w, h) = cells(8, 2);
     for name in ["hero", "foes", "ship"] {
         let opts = ConvertOptions { cell_size: Some(16), ..Default::default() };
+        add(&mut e, name, SourceKind::Obj, &sheet, w, h, opts);
+    }
+    // The sprites chapter's sizes: 8x8, 32x32 and 64x32 cells.
+    for (name, columns, cw, ch) in [("shots", 4, 8, 8), ("planes", 2, 32, 32), ("barges", 1, 64, 32)] {
+        let (sheet, w, h) = sized_cells(columns, 1, cw, ch);
+        let opts = ConvertOptions { cell_size: Some(cw as u8), cell_height: Some(ch as u8), ..Default::default() };
         add(&mut e, name, SourceKind::Obj, &sheet, w, h, opts);
     }
     add(&mut e, "floor", SourceKind::M7, &picture(128, 128), 128, 128, ConvertOptions::default());
