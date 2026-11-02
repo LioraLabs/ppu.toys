@@ -168,28 +168,41 @@ impl Visitor for Lower {
                 .flatten()
                 .map(|e| (e.binding(), e.expression())),
         );
+        let conditions: Vec<&ast::Expression> = std::iter::once(node.condition())
+            .chain(node.else_if_expressions().into_iter().flatten().map(|e| e.condition()))
+            .collect();
+        let mut paired = false;
         for (binding, value) in branches {
             if binding.is_some() {
                 return self.reject(node, "condition bindings");
             }
-            // `c and a or b` picks `b` when `a` is false or nil.
-            if may_be_false(value) {
-                return self.reject(value, "if expressions whose then-value may be false or nil; use an if statement");
+            paired |= may_be_false(value);
+        }
+        // `c and a or b` picks `b` when `a` is false or nil. A then-value that may be false takes
+        // `c and a or not c and b`, which tests each condition twice: only conditions without calls (and on one line,
+        // so the copy keeps the line numbers). A then-value that is nil comes out false.
+        if paired {
+            if let Some(c) = conditions.iter().find(|c| has_call(c) || c.to_string().contains('\n')) {
+                return self.reject(*c, "if expressions whose then-value may be false or nil and whose condition calls a function; use an if statement");
             }
         }
-        let mut swap = |token: &full_moon::tokenizer::TokenReference, text: &str| {
+        let text = |c: &ast::Expression| c.to_string().trim().to_string();
+        let mut inserted = String::new();
+        let mut swap = |token: &full_moon::tokenizer::TokenReference, text: String| {
             let span = range(token);
-            self.edits.push((span.start, span, text.into()));
+            inserted.push_str(&text);
+            self.edits.push((span.start, span, text));
         };
-        swap(node.if_token(), "((");
-        swap(node.then_token(), ") and (");
-        let mut closers = 2;
-        for e in node.else_if_expressions().into_iter().flatten() {
-            swap(e.else_if_token(), ") or ((");
-            swap(e.then_token(), ") and (");
-            closers += 1;
+        swap(node.if_token(), "((".into());
+        swap(node.then_token(), ") and (".into());
+        for (k, e) in node.else_if_expressions().into_iter().flatten().enumerate() {
+            let otherwise = if paired { format!(") or (not ({})) and ((", text(conditions[k])) } else { ") or ((".into() };
+            swap(e.else_if_token(), otherwise);
+            swap(e.then_token(), ") and (".into());
         }
-        swap(node.else_token(), ") or (");
+        let last = if paired { format!(") or (not ({})) and (", text(conditions[conditions.len() - 1])) } else { ") or (".into() };
+        swap(node.else_token(), last);
+        let closers = inserted.matches('(').count() - inserted.matches(')').count();
         let span = range(node);
         self.edits.push((span.start, span.end..span.end, ")".repeat(closers)));
     }
@@ -344,6 +357,24 @@ pub fn required_files(files: &[(&str, &str)]) -> std::collections::HashSet<Strin
 }
 
 // shortcut: names, fields, indexes and calls are assumed to hold non-false values; type-directed check if that bites.
+/// Whether evaluating `e` may call a function (so it must run once).
+fn has_call(e: &ast::Expression) -> bool {
+    match e {
+        ast::Expression::FunctionCall(_) | ast::Expression::IfExpression(_) | ast::Expression::Function(_) => true,
+        ast::Expression::Parentheses { expression, .. } => has_call(expression),
+        ast::Expression::UnaryOperator { expression, .. } => has_call(expression),
+        ast::Expression::BinaryOperator { lhs, rhs, .. } => has_call(lhs) || has_call(rhs),
+        ast::Expression::Var(ast::Var::Name(_)) => false,
+        ast::Expression::Var(ast::Var::Expression(v)) => v.suffixes().any(|s| match s {
+            ast::Suffix::Call(_) => true,
+            ast::Suffix::Index(ast::Index::Brackets { expression, .. }) => has_call(expression),
+            _ => false,
+        }) || matches!(v.prefix(), ast::Prefix::Expression(inner) if has_call(inner)),
+        ast::Expression::Symbol(_) | ast::Expression::Number(_) | ast::Expression::String(_) => false,
+        _ => true,
+    }
+}
+
 fn may_be_false(value: &ast::Expression) -> bool {
     match value {
         ast::Expression::Symbol(t) => matches!(t.token().to_string().as_str(), "false" | "nil"),
@@ -590,7 +621,7 @@ mod tests {
     #[test]
     fn unsupported_luau_does_not_fall_back_or_drop_code() {
         for source in [
-            "local n=if true then false else 2",
+            "local n=if f() then false else 2",
             "local s=`hello`",
             "while true do continue end",
             "local a={{x=1}} a[1].x += 1",
@@ -609,9 +640,27 @@ mod tests {
         engine.frame(0., 0).unwrap();
         let oam = &engine.memory().oam;
         assert_eq!((oam[0].x, oam[1].x, oam[2].x), (9, 7, 9));
-        // A literal false then-value still names the subset rule.
-        let error = prepare("local t = if x == 1 then false else a[2]").unwrap_err();
+        // A then-value that may be false needs a condition without calls (it is tested twice).
+        let error = prepare("local t = if f(1) == 1 then false else a[2]").unwrap_err();
         assert!(error.message.contains("then-value may be false or nil"), "{}", error.message);
+    }
+    #[test]
+    fn if_expressions_whose_then_value_may_be_false_pick_it() {
+        // `c and a or b` would pick b when a is false; the paired form tests the condition again.
+        let source = "local n = 0\nlocal hits = 0\nlocal function near(d) return d < 3 end\nfunction frame(t, f)\n  local owner = f % 3\n  local hit = if owner == 1 then false elseif owner == 2 then near(f % 5) else not near(f % 5)\n  if hit then hits += 1 end\n  local tally = if f % 2 == 0 then hits > 2 else n == 0\n  obj[0].x = hits\n  obj[1].x = if tally then 1 else 0\nend\n";
+        let mut engine = crate::LuaEngine::new();
+        engine.set_sources(&[("main.luau", source)]).unwrap();
+        let mut hits = 0;
+        for f in 0..12 {
+            engine.frame(f as f64 / 60., f).unwrap();
+            let owner = f % 3;
+            let near = (f % 5) < 3;
+            let hit = match owner { 1 => false, 2 => near, _ => !near };
+            if hit { hits += 1 }
+            let tally = if f % 2 == 0 { hits > 2 } else { true };
+            let oam = &engine.memory().oam;
+            assert_eq!((oam[0].x as i32, oam[1].x), (hits, tally as i16), "frame {f}");
+        }
     }
     #[test]
     fn nested_compounds_preserve_execution_and_rhs_precedence() {
