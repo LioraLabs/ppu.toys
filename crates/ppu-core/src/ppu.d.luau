@@ -240,7 +240,14 @@ type ppu_blink = {
   on: (f: number, half: number) -> boolean,
 }
 
--- @ppu/hud
+-- @ppu/hud: a retained background HUD; static text is written once, a field or line redraws only what changed.
+type ppu_hud = {
+  text: (map: Hud, x: number, y: number, text: string, palette: number?) -> (),
+  field: (map: Hud, x: number, y: number, width: number, palette: number?) -> HudField,
+  line: (map: Hud, x: number, y: number, width: number, palette: number?) -> HudLine,
+}
+type HudField = {set: (self: HudField, value: number) -> ()}
+type HudLine = {set: (self: HudLine, text: string) -> ()}
 
 -- @ppu/pools
 
