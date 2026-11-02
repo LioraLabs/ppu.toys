@@ -22,6 +22,8 @@ pub struct Ppu {
     m7hofs: u16,
     m7vofs: u16,
     bgofs_latch: u8,
+    /// The byte last written to any BGnHOFS: its low 3 bits are the fine scroll of the next HOFS write.
+    hofs_latch: u8,
     m7_latch: u8,
     /// OAMADD as written (9-bit word address) and the internal byte address (10 bits).
     oamadd: u16,
@@ -118,6 +120,7 @@ impl Default for Ppu {
             m7hofs: 0,
             m7vofs: 0,
             bgofs_latch: 0,
+            hofs_latch: 0,
             m7_latch: 0,
             oamadd: 0,
             oam_addr: 0,
@@ -158,6 +161,10 @@ impl Ppu {
     #[cfg(test)]
     pub fn row_wh0(&self) -> u8 {
         self.row.wh0
+    }
+    #[cfg(test)]
+    pub fn hofs(&self, i: usize) -> u16 {
+        self.hofs[i]
     }
 
     pub fn force_blank(&self) -> bool {
@@ -293,8 +300,10 @@ impl Ppu {
             0x0d..=0x14 => {
                 let i = ((reg - 0x0d) / 2) as usize;
                 if reg & 1 == 1 {
-                    // BGnHOFS: (cur << 8) | (prev & ~7) | (old HOFS bits 8-10 & 7)
-                    self.hofs[i] = ((v as u16) << 8 | (self.bgofs_latch as u16 & !7) | ((self.hofs[i] >> 8) & 7)) & 0x3ff;
+                    // BGnHOFS: (cur << 8) | (prev & ~7) | (last HOFS byte & 7), as bsnes models it. The
+                    // fine bits come from a latch of their own: the 10-bit register cannot hold them.
+                    self.hofs[i] = ((v as u16) << 8 | (self.bgofs_latch as u16 & !7) | (self.hofs_latch as u16 & 7)) & 0x3ff;
+                    self.hofs_latch = v;
                 } else {
                     self.vofs[i] = ((v as u16) << 8 | self.bgofs_latch as u16) & 0x3ff;
                 }
