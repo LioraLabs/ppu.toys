@@ -148,6 +148,20 @@ fn raw_registers_render_like_the_line_table() {
 }
 
 #[test]
+fn bg_hofs_keeps_all_three_fine_bits() {
+    // Every value with bit 2 set lost it (scroll.x = 4 drew at 0): the fine bits came from the
+    // 10-bit register's bits 8-10. bsnes keeps them in a latch of their own, and so does ppu-cart now.
+    let mut s = sys();
+    for v in [4u16, 5, 7, 0x3fc, 0x3ff, 0x123] {
+        s.write(0x210d, v as u8);
+        s.write(0x210d, (v >> 8) as u8);
+        s.write(0x210e, 9); // a VOFS write between HOFS pairs moves the shared latch, not the fine one
+        s.write(0x210e, 0);
+        assert_eq!(s.ppu.hofs(0), v);
+    }
+}
+
+#[test]
 fn hdma_direct_and_indirect_set_registers_per_line() {
     let mut s = sys();
     // Direct, mode 0 to COLDATA ($2132): 3 lines of $21, then 2 lines repeat-mode $22/$23.
