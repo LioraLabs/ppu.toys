@@ -261,5 +261,3 @@ type ppu_pool<T> = {
 type ppu_pools = {
   new: <T>(n: number, factory: () -> T) -> ppu_pool<T>,
 }
-
--- @ppu/sprites

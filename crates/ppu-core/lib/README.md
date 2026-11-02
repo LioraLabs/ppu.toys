@@ -32,16 +32,8 @@ The preview runs it, and the SNES compiler builds it into the cartridge, from th
 - A `makeFixed` anywhere in a library turns on fixed-point arithmetic for every toy that
   requires it. Use whole numbers unless the library needs fractions.
 
-## Adding a library without touching another's lines
+## Types for the editor
 
-Several libraries are written at the same time, so each one owns its own lines:
-
-1. `lib/<name>.luau`: the new file. This is the only file that is new for each library.
-2. `src/ppu.d.luau`: the Libraries section at its end already has a `-- @ppu/<name>` header
-   line for each planned library. Write your block directly below your own header: a
-   `type ppu_<name> = {` record with one field per line, closed by `}` at the start of a line.
-   The Studio's completion reads `name.` members from this block. Do not edit another
-   library's block. For a library with no header yet, add one in alphabetical order.
-3. The SNES guide's "Engine libraries" section has a `<!-- @ppu/<name> -->` line for each
-   planned library. Write your section directly below your own marker.
-4. Tests go in a new test file of your own, not at the end of a shared one.
+Add the library's type to the Libraries section at the end of `src/ppu.d.luau`, under a
+`-- @ppu/<name>` header: a `type ppu_<name> = {` record with one field per line, closed by
+`}` at the start of a line. The Studio completes a library local's `name.` members from it.
