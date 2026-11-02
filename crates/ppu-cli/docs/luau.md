@@ -239,9 +239,10 @@ names it:
 
 - `continue`, `const`, string interpolation (`` `x = {x}` ``), attributes, and
   condition bindings in `if`.
-- `+=` and the other compound assignments on an indexed target such as
-  `bg[1].scroll.x += 2` or `obj[i].x += 1`. Bind the table to a local first:
-  `local s = bg[1].scroll; s.x += 2`.
+- `+=` and the other compound assignments on a target that calls a
+  function, such as `t[next()] += 1` or `pick().x += 1`. Bind the called part
+  to a local first:
+  `local i = next(); t[i] += 1`.
 - An `if` expression whose `then` value could be `false` or `nil`: `false`,
   `nil`, `not`, a comparison, `and` or `or`. Use an `if` statement instead.
   A name, field, index or call is accepted there
