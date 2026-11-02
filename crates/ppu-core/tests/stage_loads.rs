@@ -176,3 +176,58 @@ fn a_load_from_a_hook_or_of_a_sample_is_refused() {
         .message
         .contains("setup for samples"));
 }
+
+/// An 8x8 Mode 7 picture in two colours, left half `a`, right half `b`.
+fn m7_picture(a: [u8; 3], b: [u8; 3]) -> Vec<u8> {
+    (0..8 * 8)
+        .flat_map(|i| {
+            let c = if i % 8 < 4 { a } else { b };
+            [c[0], c[1], c[2], 255]
+        })
+        .collect()
+}
+
+fn m7_engine(main: &str) -> Result<LuaEngine, String> {
+    let mut e = LuaEngine::new();
+    common::add_m7(&mut e, "ocean", m7_picture([0, 0, 255], [0, 255, 255]), 8, 8);
+    common::add_m7(&mut e, "lair", m7_picture([255, 0, 0], [255, 255, 0]), 8, 8);
+    e.set_sources(&[("main.lua", main)]).map_err(|err| err.message)?;
+    Ok(e)
+}
+
+/// Setup holds one Mode 7 picture (all of them live at 0x0000); a stage load
+/// puts another in its place, as the setup placement of that one would.
+#[test]
+fn a_stage_load_replaces_the_mode_7_picture() {
+    let two_at_setup = m7_engine("dma('ocean')\ndma('lair')\nfunction frame(t, f) end")
+        .and_then(|mut e| e.frame(0.0, 0).map_err(|err| err.message));
+    assert!(two_at_setup.is_err(), "a second Mode 7 picture at setup was accepted");
+    let placed = |name: &str| {
+        let mut e = m7_engine(&format!("dma('{name}')\nfunction frame(t, f) end")).unwrap();
+        e.frame(0.0, 0).unwrap();
+        (e.memory().vram[..64].to_vec(), e.memory().cgram[..3].to_vec())
+    };
+    let (ocean, lair) = (placed("ocean"), placed("lair"));
+    assert_ne!(ocean, lair);
+    let mut e = m7_engine(
+        r#"
+dma("ocean")
+function frame(t, f)
+  if f == 2 then
+    force_blank = true
+    local plane = dma("lair")
+    assert(plane.char == 0 and plane.map == 0 and plane.pal == 1 and plane.tiles_w == 1)
+  else
+    force_blank = false
+  end
+end
+"#,
+    )
+    .unwrap();
+    for f in 0..5u32 {
+        e.frame(f as f64 / 60.0, f).unwrap();
+        let (vram, cgram) = if f < 2 { &ocean } else { &lair };
+        assert_eq!(&e.memory().vram[..64], &vram[..], "vram at {f}");
+        assert_eq!(&e.memory().cgram[..3], &cgram[..], "cgram at {f}");
+    }
+}

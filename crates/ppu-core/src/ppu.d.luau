@@ -138,7 +138,8 @@ declare function mode7_floor(y: number, horizon: number, height: number, heading
 
 -- The sprites library: art made of a sheet's cells, drawn in groups (the first made on top). A level may take its
 -- cells from a sheet of its own; a draw may flip the art and pick one palette for all of it.
-type SpriteLevel = {size: number, columns: number, cells: {number}, sheet: SpriteSheet?}
+-- SpriteLevel is exported, so a module that keeps a table of levels can type it as {SpriteLevel}.
+export type SpriteLevel = {size: number, columns: number, cells: {number}, sheet: SpriteSheet?}
 type SpriteArt = {}
 type SpriteOptions = {size: number?, prio: number?, key: number?, depth: number?, flip_x: boolean?, flip_y: boolean?, pal: number?}
 type SpriteGroup = {

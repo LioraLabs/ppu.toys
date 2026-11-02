@@ -112,7 +112,9 @@ local plane = dma("floor")
 ```
 
 Its result is `char = 0`, `map = 0`, `pal = 1`, plus `tiles_w` and `tiles_h`.
-Only one Mode 7 source can be placed.
+Every Mode 7 picture lives at that one address, so setup places only one; a
+[stage load](#load-a-stage) can put another in its place, the way a game
+swaps its ground between stages.
 
 ## Load a stage
 
