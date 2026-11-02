@@ -112,4 +112,9 @@ For sprites drawn without OAM bookkeeping, in draw order or sorted by layer
 and depth, see
 [the sprites library](sprites.md#draw-sprites-in-order--the-sprites-library).
 Bounded writes participate in automatic VBlank planning. Calls still cost CPU
-time; clear static labels once in `init()` or when the screen changes.
+time: draw static labels once in `init()` or when the screen changes, and in
+`frame()` draw only values and messages. Give a message that comes and goes its
+own row, cleared with a rectangle `hud_clear` before it is drawn; clearing the
+whole map every frame makes a changing message redraw every label after it.
+On a cartridge that took a whole video frame where the separate row took a
+third of one.
