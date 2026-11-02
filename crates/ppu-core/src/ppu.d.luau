@@ -249,6 +249,15 @@ type ppu_hud = {
 type HudField = {set: (self: HudField, value: number) -> ()}
 type HudLine = {set: (self: HudLine, text: string) -> ()}
 
--- @ppu/pools
+-- @ppu/pools: fixed pools of records; spawn returns a free record (nil when all are live), free releases it.
+type ppu_pool<T> = {
+  items: {T},
+  spawn: (self: ppu_pool<T>) -> T?,
+  free: (self: ppu_pool<T>, x: T) -> (),
+  live: (self: ppu_pool<T>) -> () -> T?,
+}
+type ppu_pools = {
+  new: <T>(n: number, factory: () -> T) -> ppu_pool<T>,
+}
 
 -- @ppu/sprites

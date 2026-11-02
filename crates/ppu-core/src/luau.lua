@@ -25,6 +25,16 @@ end
 
 function table.freeze(t) return t end
 
+-- Luau's coroutine.wrap, which the VM lacks: a generator loops as `for x in g() do`.
+function coroutine.wrap(f)
+  local thread = coroutine.create(f)
+  return function(...)
+    local result = table.pack(coroutine.resume(thread, ...))
+    if not result[1] then error(result[2], 0) end
+    return table.unpack(result, 2, result.n)
+  end
+end
+
 -- Region and update rate are project build settings (ppu.json `targetHz`), not source.
 function target()
   error("region and update rate are build settings: set them in the Studio's Cartridge settings or ppu.json (\"targetHz\": 60, 30, 50 or 25)", 2)
