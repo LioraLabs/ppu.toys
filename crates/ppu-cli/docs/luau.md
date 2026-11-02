@@ -232,6 +232,12 @@ end
 Files a toy lists but no file requires still run in the listed order and share
 globals, as Lua toys always have.
 
+`require("@ppu/name")` loads a library the engine ships instead of a file of
+the toy's. There is one copy, built into the engine, so every toy uses the same
+version, and the SNES compiler builds it into a cartridge from the same source.
+`ppu.d.luau` types each library as `ppu_<name>`, for example
+`local blink: ppu_blink = require("@ppu/blink")`.
+
 ## What Luau code cannot use yet
 
 The engine runs a subset of Luau. Using one of these features is an error that

@@ -6,7 +6,8 @@
 -- The program ------------------------------------------------------------------------------------
 -- A toy defines `init()` (once, optional) and `frame(t, f)` (every video frame: t in seconds, f the
 -- frame index). A Luau toy's files load each other with `require("./name")` (Luau's own require,
--- not declared here, so checkers resolve each module's type).
+-- not declared here, so checkers resolve each module's type). `require("@ppu/name")` loads a
+-- library the engine ships; see Libraries at the end.
 
 -- Numbers with contracts. Each initializes a named binding or record field directly; later stores
 -- are checked against the bounds (ordered integer literals) without clamping. makeBounded keeps
@@ -226,3 +227,21 @@ declare function ease(progress: number, easing: Easing?): number
 declare function ramp(keys: RampKeys, position: number): number
 declare function ramp_int(keys: RampKeys, position: number): number
 declare function ramp_color(keys: RampKeys, position: number): number
+
+-- Libraries --------------------------------------------------------------------------------------
+-- require("@ppu/name") returns the engine library lib/name.luau: one copy shipped with the engine,
+-- the same for every toy, built into the cartridge from the same source. Each library's value is
+-- typed `ppu_<name>` in its own block below (a checker without the engine's aliases can annotate:
+-- local blink: ppu_blink = require("@ppu/blink")). The Studio completes `name.` from these blocks:
+-- keep one field per line.
+
+-- @ppu/blink: on/off timing for flashing text and invulnerable sprites.
+type ppu_blink = {
+  on: (f: number, half: number) -> boolean,
+}
+
+-- @ppu/hud
+
+-- @ppu/pools
+
+-- @ppu/sprites

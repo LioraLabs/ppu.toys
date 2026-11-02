@@ -962,8 +962,12 @@ impl LuaEngine {
     /// name as chunk name. `frame`/`init` are resolved only after every chunk
     /// has run (`main.lua` is convention, not special-cased); `init()` runs
     /// once if present. Errors carry `{file, line?, message}`.
-    /// A file named by `require("./name")` in any file runs as a module (see `luau.lua`).
+    /// A file named by `require("./name")` in any file runs as a module (see `luau.lua`), and so
+    /// does an engine library named by `require("@ppu/name")` (lib/name.luau).
     pub fn set_sources(&mut self, files: &[(&str, &str)]) -> Result<(), LuaError> {
+        let libraries = crate::frontend::with_libraries(files)
+            .map_err(|(file, message)| LuaError { file: Some(file), line: None, message })?;
+        let files = libraries.as_slice();
         let fixed_point = self.fixed_point
             || files.iter().any(|(name, source)| {
                 *name != AUDIO_MIX_FILE && crate::frontend::fixed_contracts(source)

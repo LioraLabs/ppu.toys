@@ -149,13 +149,17 @@ end
 __ppu_modules = {}
 local __ppu_loaded, __ppu_loading = {}, {}
 
+-- An engine library, require("@ppu/name"), is registered as the file @ppu/name.luau.
 function require(path)
-  assert(type(path) == "string" and string.sub(path, 1, 2) == "./",
-    "require needs a relative path such as \"./state\"")
-  local name = string.sub(path, 3)
+  local library = type(path) == "string" and string.sub(path, 1, 5) == "@ppu/"
+  assert(library or type(path) == "string" and string.sub(path, 1, 2) == "./",
+    "require needs a relative path such as \"./state\" or an engine library such as \"@ppu/blink\"")
+  local name = library and path or string.sub(path, 3)
   local file = name .. ".luau"
-  if __ppu_modules[file] == nil then file = name .. ".lua" end
+  if __ppu_modules[file] == nil and not library then file = name .. ".lua" end
   local chunk = __ppu_modules[file]
+  assert(chunk ~= nil or not library, "require: library " .. path
+    .. " is not loaded; require an engine library by its literal name, require(\"" .. path .. "\")")
   assert(chunk ~= nil, "require: no file named " .. name .. ".luau or " .. name .. ".lua")
   if __ppu_loaded[file] ~= nil then return __ppu_loaded[file] end
   assert(not __ppu_loading[file], "require cycle through " .. file)
