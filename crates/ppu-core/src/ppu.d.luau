@@ -157,6 +157,8 @@ declare sprites: {
 }
 
 -- HUD text on a tile map: zero-based cells, font tiles from the space character at tile zero.
+-- hud_text, hud_number and hud_clear are deprecated: use @ppu/hud (hud.text, hud.field, hud.line). They run in
+-- the preview only; a cartridge build refuses them.
 -- palette (a number), padding (" " or "0") and wrap (a boolean) are optional: typed `any` so a
 -- descriptor table fits with or without them (table fields are invariant in Luau).
 type Hud = {map: number, width: number, height: number, palette: any, padding: any, wrap: any}

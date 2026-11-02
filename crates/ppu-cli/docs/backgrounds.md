@@ -74,42 +74,56 @@ and [scanline scrolling](scanlines.md#raster-effects).
 
 ## Draw a HUD
 
-`hud_text`, `hud_number` and `hud_clear` share a map descriptor. Coordinates
-are zero-based cells in a single 32-cell-stride background map. Load a font
-sheet whose tiles contain printable ASCII in order, with space at tile zero:
+The `@ppu/hud` library draws text and numbers on a background map. Its calls
+share a map descriptor. Coordinates are zero-based cells in a single
+32-cell-stride background map. Load a font sheet whose tiles contain printable
+ASCII in order, with space at tile zero:
 
 ```luau
+local hud = require("@ppu/hud")
 local font = dma("font", {char = 0x6000, pal = 112})
-local hud = {map = 0x7000, width = 32, height = 4, palette = 7, padding = "0"}
+local HUD = {map = 0x7000, width = 32, height = 4, palette = 7, padding = "0"}
+local score, message
 
 function init()
-  bg[1].char_base, bg[1].map_base = font.char, hud.map
+  bg[1].char_base, bg[1].map_base = font.char, HUD.map
   screen.main.bg1 = true
-  hud_clear(hud)
-  hud_text(hud, 1, 1, "SCORE")
+  hud.text(HUD, 1, 1, "SCORE")
+  score = hud.field(HUD, 7, 1, 6)
+  message = hud.line(HUD, 1, 2, 12)
 end
 
 function frame(t, f)
-  hud_number(hud, 7, 1, f % 10000, 6)
+  score:set(f % 10000)
+  message:set(if f % 120 < 60 then "GET READY" else "")
 end
 ```
 
-- `hud_text(map, x, y, label, palette)` writes a string. The palette override
-  is optional; otherwise it uses `map.palette` (0..7).
-- `hud_number(map, x, y, value, width, palette)` writes a right-aligned
-  nonnegative integer up to 2,147,483,647 in 1..10 cells. Padding defaults to
-  spaces; `map.padding="0"` selects leading zeroes. A value that does not fit
-  displays `#` in every field cell. Set `map.wrap=true` to deliberately keep
-  only the last digits instead.
-- `hud_clear(map, x, y, width, height)` clears a rectangle to tile zero. Omit
-  the rectangle to clear the descriptor's whole map.
+The HUD is retained: write a label once, and keep the fields and lines a screen
+shows. Setting one to the value it already shows only compares.
+
+- `hud.text(map, x, y, label, palette)` writes a string once. The palette
+  override is optional; otherwise it uses `map.palette` (0..7). Writing spaces
+  blanks cells.
+- `hud.field(map, x, y, width, palette)` draws a right-aligned number field of
+  1..9 cells showing 0, and returns it. `field:set(value)` shows a nonnegative
+  integer that fits the width, rewriting only the digits that changed. Padding
+  is spaces; `map.padding="0"` selects leading zeroes.
+- `hud.line(map, x, y, width, palette)` returns a line of up to `width` cells,
+  blank until set. `line:set(text)` writes the new text and blanks the cells the
+  previous text covered beyond it; `line:set("")` clears it.
 
 Fields must fit the descriptor's 1..32-cell width and height. Invalid positions,
-fractional numbers, palettes, absent characters and VRAM extents raise errors.
-The descriptor names an existing VRAM area; these helpers do not allocate a
-font or map. The same helpers run in preview and compile with the game.
+fractional or oversized numbers, palettes, absent characters and VRAM extents
+raise errors. The descriptor names an existing VRAM area; the library does not
+allocate a font or map. The same library runs in preview and compiles with the
+game. Making a field draws its cells, so make it again after something else
+overwrote them. Bounded writes participate in automatic VBlank planning.
+
+The built-in `hud_text`, `hud_number` and `hud_clear` are deprecated in favour
+of `@ppu/hud`. They still run in the preview, so older toys keep working, but a
+cartridge build refuses them.
+
 For sprites drawn without OAM bookkeeping, in draw order or sorted by layer
 and depth, see
 [the sprites library](sprites.md#draw-sprites-in-order--the-sprites-library).
-Bounded writes participate in automatic VBlank planning. Calls still cost CPU
-time; clear static labels once in `init()` or when the screen changes.
