@@ -6,7 +6,8 @@
 -- The program ------------------------------------------------------------------------------------
 -- A toy defines `init()` (once, optional) and `frame(t, f)` (every video frame: t in seconds, f the
 -- frame index). A Luau toy's files load each other with `require("./name")` (Luau's own require,
--- not declared here, so checkers resolve each module's type).
+-- not declared here, so checkers resolve each module's type). `require("@ppu/name")` loads a
+-- library the engine ships; see Libraries at the end.
 
 -- Numbers with contracts. Each initializes a named binding or record field directly; later stores
 -- are checked against the bounds (ordered integer literals) without clamping. makeBounded keeps
@@ -157,6 +158,8 @@ declare sprites: {
 }
 
 -- HUD text on a tile map: zero-based cells, font tiles from the space character at tile zero.
+-- hud_text, hud_number and hud_clear are deprecated: use @ppu/hud (hud.text, hud.field, hud.line). They run in
+-- the preview only; a cartridge build refuses them.
 -- palette (a number), padding (" " or "0") and wrap (a boolean) are optional: typed `any` so a
 -- descriptor table fits with or without them (table fields are invariant in Luau).
 type Hud = {map: number, width: number, height: number, palette: any, padding: any, wrap: any}
@@ -227,3 +230,35 @@ declare function ease(progress: number, easing: Easing?): number
 declare function ramp(keys: RampKeys, position: number): number
 declare function ramp_int(keys: RampKeys, position: number): number
 declare function ramp_color(keys: RampKeys, position: number): number
+
+-- Libraries --------------------------------------------------------------------------------------
+-- require("@ppu/name") returns the engine library lib/name.luau: one copy shipped with the engine,
+-- the same for every toy, built into the cartridge from the same source. Each library's value is
+-- typed `ppu_<name>` in its own block below (a checker without the engine's aliases can annotate:
+-- local blink: ppu_blink = require("@ppu/blink")). The Studio completes `name.` from these blocks:
+-- keep one field per line.
+
+-- @ppu/blink: on/off timing for flashing text and invulnerable sprites.
+type ppu_blink = {
+  on: (f: number, half: number) -> boolean,
+}
+
+-- @ppu/hud: a retained background HUD; static text is written once, a field or line redraws only what changed.
+type ppu_hud = {
+  text: (map: Hud, x: number, y: number, text: string, palette: number?) -> (),
+  field: (map: Hud, x: number, y: number, width: number, palette: number?) -> HudField,
+  line: (map: Hud, x: number, y: number, width: number, palette: number?) -> HudLine,
+}
+type HudField = {set: (self: HudField, value: number) -> ()}
+type HudLine = {set: (self: HudLine, text: string) -> ()}
+
+-- @ppu/pools: fixed pools of records; spawn returns a free record (nil when all are live), free releases it.
+type ppu_pool<T> = {
+  items: {T},
+  spawn: (self: ppu_pool<T>) -> T?,
+  free: (self: ppu_pool<T>, x: T) -> (),
+  live: (self: ppu_pool<T>) -> () -> T?,
+}
+type ppu_pools = {
+  new: <T>(n: number, factory: () -> T) -> ppu_pool<T>,
+}

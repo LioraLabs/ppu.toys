@@ -37,6 +37,21 @@ end"#;
 }
 
 #[test]
+fn engine_libraries_load_by_require_from_the_engine() {
+    let main = r#"local blink = require("@ppu/blink")
+function frame(t, f)
+  obj[0].x = if blink.on(f, 2) then 10 else 20
+end"#;
+    let state = "local blink = require(\"@ppu/blink\")\nreturn {blink = blink}";
+    let both = "local blink = require(\"@ppu/blink\")\nlocal S = require(\"./state\")\nfunction frame(t, f) obj[0].x = if S.blink == blink then 1 else 0 end";
+    assert_eq!(run(&[("main.luau", main)], 2, 1), [10]);
+    assert_eq!(run(&[("main.luau", main)], 3, 1), [20]);
+    assert_eq!(run(&[("main.luau", both), ("state.luau", state)], 1, 1), [1]);
+    let refused = error(&[("main.luau", "local x = require(\"@ppu/nope\")")], 1);
+    assert!(refused.contains("no such library; it ships @ppu/blink"), "{refused}");
+}
+
+#[test]
 fn routine_waits_resume_on_the_nth_following_step() {
     // Start before update 0's step; yield(2) resumes in update 2; the body ends there.
     let main = r#"local log = 0

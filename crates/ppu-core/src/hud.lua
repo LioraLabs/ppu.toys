@@ -1,3 +1,4 @@
+-- Deprecated: @ppu/hud (lib/hud.luau) replaces these; they stay so older preview toys keep running.
 -- Printable ASCII tiles, starting with space at tile zero.
 local HUD_GLYPHS = {
   [" "]=0, ["!"]=1, ["\""]=2, ["#"]=3, ["$"]=4, ["%"]=5, ["&"]=6, ["'"]=7,

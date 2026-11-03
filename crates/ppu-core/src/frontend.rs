@@ -294,22 +294,27 @@ impl Visitor for Lower {
         }
     }
     fn visit_compound_assignment(&mut self, node: &CompoundAssignment) {
+        // The target is read and written, so it is written out twice: every index must be call-free.
         let simple = match node.lhs() {
             ast::Var::Name(_) => true,
             ast::Var::Expression(v) => {
                 matches!(v.prefix(), ast::Prefix::Name(_))
-                    && matches!(
-                        v.suffixes().collect::<Vec<_>>().as_slice(),
-                        [ast::Suffix::Index(ast::Index::Dot { .. })]
-                    )
+                    && v.suffixes().all(|s| match s {
+                        ast::Suffix::Index(ast::Index::Dot { .. }) => true,
+                        ast::Suffix::Index(ast::Index::Brackets { expression, .. }) => !has_call(expression),
+                        _ => false,
+                    })
             }
             _ => false,
         };
         if !simple {
-            self.reject(node, "compound assignment to indexed or computed targets; bind the record to a local first");
+            self.reject(node, "compound assignment to a target that calls a function; bind the called part to a local first");
             return;
         }
-        let lhs: String = node.lhs().tokens().map(|t| t.token().to_string()).collect();
+        // Node::tokens visits a bracketed span's delimiters before its contents: order by position.
+        let mut tokens: Vec<_> = node.lhs().tokens().map(|t| (t.token().start_position().bytes(), t.token().to_string())).collect();
+        tokens.sort_by_key(|(at, _)| *at);
+        let lhs = tokens.into_iter().map(|(_, t)| t).collect::<Vec<_>>().join(" ");
         let operator = node.compound_operator().token().token().to_string();
         let operator = operator.strip_suffix('=').unwrap();
         let operator_span = range(node.compound_operator());
@@ -323,7 +328,8 @@ impl Visitor for Lower {
     }
 }
 
-/// The `require("./name")` paths in `source`, in order of appearance.
+/// The `require("./name")` paths in `source`, in order of appearance (`./` dropped); an
+/// engine library's path keeps its prefix: `require("@ppu/blink")` gives `@ppu/blink`.
 pub fn requires(source: &str) -> Vec<&str> {
     let mut paths = vec![];
     for (at, _) in source.match_indices("require(") {
@@ -335,11 +341,42 @@ pub fn requires(source: &str) -> Vec<&str> {
         let rest = &source[at + "require(".len()..];
         let Some(quote) = rest.chars().next().filter(|c| *c == '"' || *c == '\'') else { continue };
         let Some(end) = rest[1..].find(quote) else { continue };
-        if let Some(path) = rest[1..1 + end].strip_prefix("./") {
+        let path = &rest[1..1 + end];
+        if let Some(path) = path.strip_prefix("./") {
+            paths.push(path);
+        } else if path.starts_with(LIBRARY) {
             paths.push(path);
         }
     }
     paths
+}
+
+/// The prefix of an engine library's require path.
+pub const LIBRARY: &str = "@ppu/";
+
+/// The engine's Luau libraries as files: (`@ppu/<name>.luau`, source), from lib/ (see build.rs).
+pub const LIBRARIES: &[(&str, &str)] = include!(concat!(env!("OUT_DIR"), "/libraries.rs"));
+
+/// `files` plus the engine libraries they require, directly or through each other, as files
+/// named `@ppu/<name>.luau`; an unknown library is refused as (file, message).
+pub fn with_libraries<'a>(files: &[(&'a str, &'a str)]) -> Result<Vec<(&'a str, &'a str)>, (String, String)> {
+    let mut out = files.to_vec();
+    let mut at = 0;
+    while at < out.len() {
+        for path in requires(out[at].1).into_iter().filter(|p| p.starts_with(LIBRARY)) {
+            let file = format!("{path}.luau");
+            if out.iter().any(|(n, _)| *n == file) {
+                continue;
+            }
+            let Some(library) = LIBRARIES.iter().find(|(n, _)| *n == file) else {
+                let shipped: Vec<&str> = LIBRARIES.iter().map(|(n, _)| n.trim_end_matches(".luau")).collect();
+                return Err((out[at].0.into(), format!("require(\"{path}\"): the engine has no such library; it ships {}", shipped.join(", "))));
+            };
+            out.push(*library);
+        }
+        at += 1;
+    }
+    Ok(out)
 }
 
 /// The listed files some file requires: `./state` names `state.luau`, else `state.lua`.
@@ -613,6 +650,19 @@ mod tests {
         );
     }
     #[test]
+    fn engine_libraries_join_the_files_that_require_them() {
+        let main = "local blink = require(\"@ppu/blink\")\nlocal state = require(\"./state\")\n";
+        assert_eq!(requires(main), ["@ppu/blink", "state"]);
+        let files = with_libraries(&[("main.luau", main), ("state.luau", "require(\"@ppu/blink\")")]).unwrap();
+        let names: Vec<&str> = files.iter().map(|(n, _)| *n).collect();
+        assert_eq!(names, ["main.luau", "state.luau", "@ppu/blink.luau"]);
+        assert_eq!(with_libraries(&[("main.luau", "")]).unwrap().len(), 1);
+        let (file, message) = with_libraries(&[("main.luau", "local x = require(\"@ppu/nope\")")]).unwrap_err();
+        assert_eq!(file, "main.luau");
+        assert!(message.contains("no such library; it ships @ppu/blink"), "{message}");
+    }
+
+    #[test]
     fn requires_in_comments_are_not_requires() {
         let source = "-- main.luau loads it with require(\"./self\")\nlocal A = require(\"./a\") -- not require(\"./b\")\n";
         assert_eq!(requires(source), ["a"]);
@@ -624,7 +674,8 @@ mod tests {
             "local n=if f() then false else 2",
             "local s=`hello`",
             "while true do continue end",
-            "local a={{x=1}} a[1].x += 1",
+            "local a={{x=1}} a[f()].x += 1",
+            "local a={{x=1}} a[1].x += 1 g().x += 1",
         ] {
             assert!(prepare(source).is_err(), "{source}");
         }
@@ -669,6 +720,23 @@ mod tests {
         engine.set_source(source).unwrap();
         engine.frame(0., 0).unwrap();
         assert_eq!(engine.memory().oam[0].x, 4);
+    }
+    #[test]
+    fn indexed_compound_targets_read_and_write_one_element() {
+        let source = "local t = {0, 0, 0}\nlocal r = {a = {1, 2}}\nlocal i = 1\nfunction frame(_, f)\n  i = f % 3 + 1\n  t[i] += 2\n  t[i] *= 3\n  r.a[i % 2 + 1] -= 1\n  t[i == 2 and 3 or 1] += 0\n  obj[0].x = t[1] + t[2] * 4 + t[3] * 16\n  obj[1].x = r.a[1] + 100\n  obj[2].x = r.a[2] + 100\nend\n";
+        let mut engine = crate::LuaEngine::new();
+        engine.set_sources(&[("main.luau", source)]).unwrap();
+        let (mut t, mut a) = ([0i32; 3], [1i32, 2]);
+        for f in 0..6u32 {
+            engine.frame(f as f64 / 60., f).unwrap();
+            let i = (f % 3) as usize;
+            t[i] = (t[i] + 2) * 3;
+            a[(i + 1) % 2] -= 1;
+            let oam = &engine.memory().oam;
+            assert_eq!((oam[0].x as i32, oam[1].x as i32, oam[2].x as i32), (t[0] + t[1] * 4 + t[2] * 16, a[0] + 100, a[1] + 100), "frame {f}");
+        }
+        let error = prepare("local a={0} local function f() return 1 end a[f()] += 1").unwrap_err();
+        assert!(error.message.contains("target that calls a function"), "{}", error.message);
     }
     #[test]
     fn preview_uses_shared_frontend_and_keeps_runtime_locations() {
