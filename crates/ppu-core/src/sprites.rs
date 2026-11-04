@@ -122,12 +122,11 @@ impl Plan {
                 Some(n) => n as u64,
                 // The default group takes the slots the others leave.
                 None if g.site.is_none() && self.scenes.is_empty() => free.saturating_sub(at),
-                // shortcut: in a program of scenes the default group takes only what every scene leaves past all of
-                // them (none when nothing draws into it); per-scene default groups if a scene draws with sprites.draw.
+                // In a program of scenes the default group takes what its scenes (the one its draws are in, else
+                // every scene) leave past their groups, none when nothing draws into it.
                 None if g.site.is_none() => {
-                    at = ends.iter().copied().max().unwrap_or(0);
-                    let room = |k: usize| taken[k].iter().copied().filter(|&p| p >= at).min().unwrap_or(free) - at;
-                    if g.draws.is_empty() { 0 } else { (0..n).map(room).min().unwrap_or(0) }
+                    let room = |&k: &usize| taken[k].iter().copied().filter(|&p| p >= at).min().unwrap_or(free) - at;
+                    if g.draws.is_empty() { 0 } else { live.iter().map(room).min().unwrap_or(0) }
                 }
                 None => g
                     .draws
@@ -983,9 +982,11 @@ pub fn plan(files: &[(&str, &str)]) -> Result<Option<Plan>, Error> {
         };
         reserved[owner(&file)].extend(set.into_iter().filter(|s| (0..128).contains(s)).map(|s| s as u8));
     }
-    // The default group draws behind the others.
+    // The default group draws behind the others, in the scene all its draws are in (else the program's).
     let index = groups.len();
-    groups.push(Group { site: None, sort: false, slots: None, draws: default, scene: 0 });
+    let mut draw_owners = default.iter().map(|(f, ..)| owner(f));
+    let scene = draw_owners.next().filter(|&k| draw_owners.all(|o| o == k)).unwrap_or(0);
+    groups.push(Group { site: None, sort: false, slots: None, draws: default, scene });
     for c in &mut calls {
         if c.group == usize::MAX {
             c.group = index;
@@ -999,8 +1000,10 @@ pub fn plan(files: &[(&str, &str)]) -> Result<Option<Plan>, Error> {
             }
         }
     }
+    // A scene that draws nothing with the library sets OBJSEL for itself alone: its writes pin no pair.
+    let drawing: BTreeSet<usize> = calls.iter().map(|c| owner(&c.file)).collect();
     let mut size_sel = None;
-    for (file, line, v) in size_sels {
+    for (file, line, v) in size_sels.into_iter().filter(|(f, ..)| drawing.contains(&0) || drawing.contains(&owner(f)) || owner(f) == 0) {
         match (v, size_sel) {
             (Some(v), None) => size_sel = Some(v),
             (Some(v), Some(w)) if v == w => {}
@@ -1086,5 +1089,17 @@ end"#;
         // The program's own obj slot counts against every scene.
         let shared = format!("{main}function init() obj[127].on = true end\n");
         assert_eq!(layout(&files(&shared)).unwrap_err().message, "sprites groups need 128 slots; 127 are free");
+    }
+
+    #[test]
+    fn a_scene_drawing_with_sprites_draw_owns_the_default_group() {
+        // The hosted ident's shape: one scene sets OBJSEL and writes every obj slot; the game draws plain sprites.draw.
+        let main = "IDENT = scenes.add(require(\"./ident\"))\nGAME = scenes.add(require(\"./game\"))\n";
+        let ident = "local function init() obj.size_sel = 0 end\nlocal function frame() for i = 0, 127 do obj[i].on = true end end\nreturn {init = init, frame = frame}";
+        let game = "local A = sprites.art({{size = 32, cells = {0}}})\nlocal function frame() sprites.draw(A, 0, 0) end\nreturn {frame = frame}";
+        let p = plan(&[("main.luau", main), ("ident.luau", ident), ("game.luau", game)]).unwrap().unwrap();
+        assert_eq!(p.groups.iter().map(|g| g.scene).collect::<Vec<_>>(), [2]);
+        assert_eq!(p.layout(&[4]), Ok(vec![(0, 128)]));
+        assert_eq!(p.size_sel, None, "the ident's own OBJSEL pins nothing for the game's art");
     }
 }
