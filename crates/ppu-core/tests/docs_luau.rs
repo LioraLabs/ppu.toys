@@ -21,6 +21,7 @@ const CHAPTERS: &[(&str, &str)] = &[
     ("dma", include_str!("../../ppu-cli/docs/dma.md")),
     ("pad", include_str!("../../ppu-cli/docs/pad.md")),
     ("sram", include_str!("../../ppu-cli/docs/sram.md")),
+    ("scenes", include_str!("../../ppu-cli/docs/scenes.md")),
     ("audio", include_str!("../../ppu-cli/docs/audio.md")),
 ];
 
@@ -127,10 +128,14 @@ fn engine() -> LuaEngine {
 
 /// Run `program` as main.luau beside `modules`, the chapter's earlier fences that name
 /// their file on the first line (`-- state.luau`), so `require("./state")` finds them.
+/// Only the modules it requires go along.
 fn runs(program: &str, modules: &[(String, &str)]) -> Result<(), String> {
     let mut e = engine();
     let mut files: Vec<(&str, &str)> = modules.iter().map(|(n, s)| (n.as_str(), *s)).collect();
     files.push(("main.luau", program));
+    // A module the program does not require would run as a file of its own.
+    let required = ppu_core::frontend::required_files(&files);
+    files.retain(|(n, _)| *n == "main.luau" || required.contains(*n));
     e.set_sources(&files).map_err(|e| format!("{e:?}"))?;
     for f in 0..3u32 {
         // A is held on frame 1, so pad-gated branches run too.

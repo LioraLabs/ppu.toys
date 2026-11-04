@@ -157,6 +157,15 @@ declare sprites: {
   hold: () -> (),
 }
 
+-- Scenes: a module returning {init, frame}, registered at file level with scenes.add(require("./title")).
+-- scenes.go(scene) enters it with a cold boot on the next update; its t and f count from 0 there.
+export type SceneModule = {init: (() -> ())?, frame: (t: number, f: number) -> ()}
+type Scene = number
+declare scenes: {
+  add: (scene: SceneModule) -> Scene,
+  go: (scene: Scene) -> (),
+}
+
 -- HUD text on a tile map: zero-based cells, font tiles from the space character at tile zero.
 -- hud_text, hud_number and hud_clear are deprecated: use @ppu/hud (hud.text, hud.field, hud.line). They run in
 -- the preview only; a cartridge build refuses them.

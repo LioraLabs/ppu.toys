@@ -17,6 +17,7 @@ const TOPICS: &[(&str, &str)] = &[
     ("dma", include_str!("../docs/dma.md")),
     ("pad", include_str!("../docs/pad.md")),
     ("sram", include_str!("../docs/sram.md")),
+    ("scenes", include_str!("../docs/scenes.md")),
     ("audio", include_str!("../docs/audio.md")),
 ];
 

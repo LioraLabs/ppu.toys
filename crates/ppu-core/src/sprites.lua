@@ -442,6 +442,12 @@ function __ppu_sprites_flush()
   end
 end
 
+-- A scene's cold boot: no group holds a sprite, and OBJSEL is the pair the art was built for.
+function __ppu_sprites_reset()
+  groups, held, drawn = {}, false, false
+  if pair ~= nil then obj.size_sel = pair end
+end
+
 function sprites.group()
   -- No plan: the program never draws, so the group shows nothing (as on the cartridge).
   if __ppu_sprites_free == nil then return {} end

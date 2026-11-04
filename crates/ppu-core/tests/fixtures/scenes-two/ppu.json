@@ -1,0 +1,10 @@
+{
+  "title": "Two scenes",
+  "description": "A title scene and a game scene: A on the title enters the game with a cold boot. Both place their pictures at the same VRAM and CGRAM addresses.",
+  "files": ["main.luau", "title.luau", "game.luau"],
+  "sources": [
+    { "name": "title", "kind": "bg", "options": { "bit_depth": 4 }, "file": "assets/title.png" },
+    { "name": "game", "kind": "bg", "options": { "bit_depth": 4 }, "file": "assets/game.png" },
+    { "name": "hero", "kind": "obj", "options": { "cell_size": 16 }, "file": "assets/hero.png" }
+  ]
+}

@@ -393,6 +393,32 @@ pub fn required_files(files: &[(&str, &str)]) -> std::collections::HashSet<Strin
         .collect()
 }
 
+/// The scene modules, each `scenes.add(require("./title"))` in any file, as listed files in order
+/// of first mention. A scene owns what its module's load records (placements, timers, songs).
+/// Empty for a program of one implied scene.
+pub fn scene_files(files: &[(&str, &str)]) -> Vec<String> {
+    let names: std::collections::HashSet<&str> = files.iter().map(|(n, _)| *n).collect();
+    let mut out: Vec<String> = vec![];
+    for (_, source) in files {
+        for (at, _) in source.match_indices("scenes.add(") {
+            // shortcut: only `--` line comments are skipped, as in `requires`.
+            if source[source[..at].rfind('\n').map_or(0, |n| n + 1)..at].contains("--") {
+                continue;
+            }
+            let rest = source[at + "scenes.add(".len()..].trim_start();
+            if !(rest.starts_with("require(\"./") || rest.starts_with("require('./")) {
+                continue;
+            }
+            let Some(path) = requires(rest).into_iter().next() else { continue };
+            let file = [format!("{path}.luau"), format!("{path}.lua")].into_iter().find(|f| names.contains(f.as_str()));
+            if let Some(file) = file.filter(|f| !out.contains(f)) {
+                out.push(file);
+            }
+        }
+    }
+    out
+}
+
 // shortcut: names, fields, indexes and calls are assumed to hold non-false values; type-directed check if that bites.
 /// Whether evaluating `e` may call a function (so it must run once).
 fn has_call(e: &ast::Expression) -> bool {

@@ -294,6 +294,35 @@ pub struct LuaEngine {
     unmixed_dsp: Option<DspView>,
     mix_kon: u8,
     mix_koff: u8,
+    /// The program's scenes (`scenes.add`), or `None` for one implied scene.
+    scenes: Option<Scenes>,
+}
+
+/// One `scenes.add(require("./x"))`: its module file and the functions the module returned.
+struct Scene {
+    file: String,
+    init: Option<StashedFunction>,
+    frame: StashedFunction,
+    frame_file: Option<String>,
+}
+
+/// A program of scenes. Entering one is a cold boot (see [`LuaEngine::enter_scene`]): its frame()
+/// and the audio timeline count from the update it was entered on, `f0`.
+struct Scenes {
+    list: Vec<Scene>,
+    /// The scene the program boots into: the first added, or one a file-level `scenes.go` chose.
+    boot: usize,
+    current: usize,
+    f0: u32,
+    t0: f64,
+    /// What the program's load recorded, every scene's (each entry names its owner).
+    placements: Vec<DmaPlacement>,
+    timers: Vec<TimerReg>,
+    /// The recorder's lengths after the load: an entry's init records past them.
+    ranges: (usize, usize),
+    obj_bases: usize,
+    samples: usize,
+    songs: usize,
 }
 
 /// What a registered timer slot fires: a Lua closure (`timer(n, div, fn)`),
@@ -306,6 +335,24 @@ enum Hook {
     Lua(StashedFunction),
     /// Index into `DmaRecorder::songs`.
     Song(usize),
+}
+
+/// A recorded `timer(n, div, fn)` (or song) registration: timer, div, hook, defining chunk, and
+/// the scene module whose load or init made it (`None`: the whole program's).
+type TimerReg = (u8, u8, Hook, Option<String>, Option<String>);
+
+/// Recorded registrations as hooks, each first due one period from t = 0 (see `realign`).
+fn timer_hooks(regs: impl Iterator<Item = TimerReg>) -> Vec<TimerHook> {
+    regs.map(|(n, div, hook, file, _)| {
+        let period_h = div as u64 * if n == 2 { 1 } else { 8 };
+        TimerHook {
+            period_h,
+            due_h: period_h,
+            hook,
+            file,
+        }
+    })
+    .collect()
 }
 
 /// One `timer(n, div, fn)` registration, resolved to half-sample (`h`) units
@@ -335,8 +382,11 @@ const SRAM_MAX_DEPTH: usize = 32;
 /// `add_source` under the same name flows into the placement without a
 /// recompile, and a `remove_source` degrades to a Mismatch report (same UX
 /// as the old binding path) instead of a stale copy.
+#[derive(Clone)]
 struct DmaPlacement {
     name: String,
+    /// The scene module whose load (or init) made it; `None` is the whole program's.
+    owner: Option<String>,
     char_base: u16,
     map_base: u16,
     cgram_base: u8,
@@ -404,6 +454,8 @@ struct SongPlayer {
     playing: bool,
     /// Where the song sits on the timeline — see [`Anchor`].
     anchor: Anchor,
+    /// The anchor setup declared (`score{ at = }`): a scene's cold boot puts it back.
+    declared: Anchor,
     /// Whole-tick anchor shift (half-samples) live reloads applied since the
     /// anchor was last set: `anchor - shift_h` is the declared (or
     /// `play()`) one a jump goes back to.
@@ -515,9 +567,11 @@ struct DmaRecorder {
     in_frame: Cell<bool>,
     /// This update made a load, so force_blank must still be true when it ends.
     loaded: Cell<bool>,
-    vram_ranges: RefCell<Vec<(String, usize, usize)>>,
-    cgram_ranges: RefCell<Vec<(String, usize, usize)>>,
-    obj_base: Cell<Option<u16>>,
+    /// Setup spans `(name, start, end, owner)`: placements conflict only within one scene.
+    vram_ranges: RefCell<Vec<(String, usize, usize, Option<String>)>>,
+    cgram_ranges: RefCell<Vec<(String, usize, usize, Option<String>)>>,
+    /// The OBJ base each scene's first sprite placement chose (`None`: the whole program's).
+    obj_base: RefCell<Vec<(Option<String>, u16)>>,
     /// Sample placements recorded during the init window, in call order.
     /// Never replayed — `replay_dma`'s `Sample(_) => {}` arm is a deliberate
     /// no-op: samples are written once by `LuaEngine::set_sources` after
@@ -528,7 +582,7 @@ struct DmaRecorder {
     /// div 1..=255, hook, defining chunk — `None` for a song hook, which
     /// can't error). Moved into `LuaEngine::timers` (with computed
     /// period_h/due_h) once `set_sources` confirms `init()` succeeded.
-    timers: RefCell<Vec<(u8, u8, Hook, Option<String>)>>,
+    timers: RefCell<Vec<TimerReg>>,
     /// Native `score{ song = }` players, indexed by [`Hook::Song`] and by
     /// the id `__song_load`/`__song_start`/`__song_get`/`__song_play`/
     /// `__song_stop` pass across the Lua boundary. Survives across the init
@@ -603,6 +657,7 @@ impl LuaEngine {
             unmixed_dsp: None,
             mix_kon: 0,
             mix_koff: 0,
+            scenes: None,
         }
     }
 
@@ -782,7 +837,7 @@ impl LuaEngine {
     /// Every VRAM/CGRAM span and placement the last recompile's `dma()`
     /// calls recorded (samples excluded — they live in ARAM).
     pub fn memory_map(&self) -> MemoryMap {
-        let range = |(name, start, end): &(String, usize, usize)| MemoryRange {
+        let range = |(name, start, end, _): &(String, usize, usize, Option<String>)| MemoryRange {
             name: name.clone(),
             start: *start,
             end: *end,
@@ -925,7 +980,7 @@ impl LuaEngine {
                 slot,
                 step,
                 anchor: match p.anchor {
-                    Anchor::At(a) => Some((a - p.shift_h) as f64 / 64000.0),
+                    Anchor::At(a) => Some((a - p.shift_h) as f64 / 64000.0 + self.scenes.as_ref().map_or(0.0, |s| s.t0)),
                     _ => None,
                 },
                 loop_tick: p.looping.then_some(p.timing.loop_tick),
@@ -1224,6 +1279,15 @@ impl LuaEngine {
         };
 
         run_chunk(&mut lua, "luau", include_str!("luau.lua"))?;
+        let scene_files = crate::frontend::scene_files(&precision_files);
+        lua.enter(|ctx| {
+            let Value::Table(t) = ctx.get_global("__ppu_scene_files") else {
+                unreachable!("luau.lua defines the scene files")
+            };
+            for file in &scene_files {
+                t.set(ctx, ctx.intern(file.as_bytes()), true).unwrap();
+            }
+        });
 
         // A file another file requires is a module: it runs on its first require, not in tab order.
         let modules = crate::frontend::required_files(&precision_files);
@@ -1327,8 +1391,66 @@ impl LuaEngine {
             };
             (frame_fn, frame_file, init_fn, init_file)
         });
+        let scenes = lua.enter(|ctx| {
+            ctx.set_global("__ppu_scenes_open", false).unwrap();
+            let Value::Table(list) = ctx.get_global("__ppu_scenes") else { return None };
+            let list: Vec<Scene> = (1..=list.length())
+                .filter_map(|i| match list.get(ctx, i) {
+                    Value::Table(s) => Some(s),
+                    _ => None,
+                })
+                .filter_map(|s| {
+                    let Value::Function(frame) = s.get(ctx, "frame") else { return None };
+                    Some(Scene {
+                        file: s.get(ctx, "file").to_string(),
+                        init: match s.get(ctx, "init") {
+                            Value::Function(f) => Some(ctx.stash(f)),
+                            _ => None,
+                        },
+                        frame: ctx.stash(frame),
+                        frame_file: function_chunk_name(&frame),
+                    })
+                })
+                .collect();
+            let boot = match ctx.get_global("__ppu_scene_next").to_int() {
+                Some(n) if n >= 1 && (n as usize) <= list.len() => n as usize - 1,
+                _ => 0,
+            };
+            ctx.set_global("__ppu_scene_next", Value::Nil).unwrap();
+            (!list.is_empty()).then_some(Scenes {
+                list,
+                boot,
+                current: boot,
+                f0: 0,
+                t0: 0.0,
+                placements: vec![],
+                timers: vec![],
+                ranges: (0, 0),
+                obj_bases: 0,
+                samples: 0,
+                songs: 0,
+            })
+        });
+        if scenes.is_some() {
+            if let Some(err) = [(&frame_fn, &frame_file, "frame"), (&init_fn, &init_file, "init")]
+                .into_iter()
+                .find_map(|(f, file, name)| f.as_ref().map(|_| (file.clone(), name)))
+                .map(|(file, name)| LuaError {
+                    file,
+                    line: None,
+                    message: format!("a program of scenes runs each scene's own {name}(): make this {name}() local to a scene module and return it, return {{init = init, frame = frame}}"),
+                })
+            {
+                return Err(err);
+            }
+        }
 
         let prev_score = self.lua.borrow_mut().enter(score_id);
+        // The audio timeline counted from the scene's entry: back to program time.
+        if let Some(old) = &self.scenes {
+            self.last_f = self.last_f.map(|f| f + old.f0);
+        }
+        self.scenes = scenes;
         self.lua = Rc::new(RefCell::new(lua));
         self.keys = keys;
         *self.mirror.borrow_mut() = Mirror::default();
@@ -1383,6 +1505,17 @@ impl LuaEngine {
                 res = Err(err);
                 break;
             }
+        }
+        // A program of scenes boots into its first: the load's records are every scene's.
+        if let (Ok(()), Some(sc)) = (&res, self.scenes.as_mut()) {
+            sc.placements = rec.placements.borrow().clone();
+            sc.timers = rec.timers.borrow().clone();
+            sc.ranges = (rec.vram_ranges.borrow().len(), rec.cgram_ranges.borrow().len());
+            sc.obj_bases = rec.obj_base.borrow().len();
+            sc.samples = rec.samples.borrow().len();
+            sc.songs = rec.songs.borrow().len();
+            let boot = sc.boot;
+            res = self.enter_scene(boot, None);
         }
         rec.active.set(false); // init window closes even on error
         res.map_err(|e| {
@@ -1456,40 +1589,10 @@ impl LuaEngine {
         // earlier program's placed samples stay put underneath these.
         // The name was already validated against the store at `dma()` call
         // time, moments ago, so it's expected to still resolve.
-        for sp in rec.samples.borrow().iter() {
-            let payload = self
-                .source_store
-                .borrow()
-                .get(&sp.name)
-                .cloned()
-                .or_else(|| crate::bank::get(&sp.name));
-            if let Some(crate::source::SourcePayload::Sample(src)) = payload {
-                let addr = sp.addr as usize;
-                let end = sp.end as usize;
-                self.aram[addr..end].copy_from_slice(&src.brr);
-                let dir = SAMPLE_DIR as usize + 4 * sp.id as usize;
-                self.aram[dir] = (sp.addr & 0xff) as u8;
-                self.aram[dir + 1] = (sp.addr >> 8) as u8;
-                self.aram[dir + 2] = (sp.loop_addr & 0xff) as u8;
-                self.aram[dir + 3] = (sp.loop_addr >> 8) as u8;
-            }
-        }
+        self.place_samples();
         // Recompile == drop + re-register, then re-phase onto the timeline
         // at the current position (not at compile time).
-        self.timers = rec
-            .timers
-            .borrow_mut()
-            .drain(..)
-            .map(|(n, div, hook, file)| {
-                let period_h = div as u64 * if n == 2 { 1 } else { 8 };
-                TimerHook {
-                    period_h,
-                    due_h: period_h,
-                    hook,
-                    file,
-                }
-            })
-            .collect();
+        self.timers = timer_hooks(rec.timers.borrow_mut().drain(..));
         self.carry_songs(&prev_dma, prev_score);
         self.realign(self.last_f.map_or(0, |f| 2 * audio_start_s(f as u64 + 1)));
         self.program_sources = files
@@ -1585,6 +1688,148 @@ impl LuaEngine {
             }
             out
         })
+    }
+
+    /// Write the recorded sample placements into ARAM and the sample directory.
+    /// The names were validated against the store at `dma()` call time.
+    fn place_samples(&mut self) {
+        for sp in self.dma.samples.borrow().iter() {
+            let payload = self
+                .source_store
+                .borrow()
+                .get(&sp.name)
+                .cloned()
+                .or_else(|| crate::bank::get(&sp.name));
+            if let Some(crate::source::SourcePayload::Sample(src)) = payload {
+                let addr = sp.addr as usize;
+                let end = sp.end as usize;
+                self.aram[addr..end].copy_from_slice(&src.brr);
+                let dir = SAMPLE_DIR as usize + 4 * sp.id as usize;
+                self.aram[dir] = (sp.addr & 0xff) as u8;
+                self.aram[dir + 1] = (sp.addr >> 8) as u8;
+                self.aram[dir + 2] = (sp.loop_addr & 0xff) as u8;
+                self.aram[dir + 3] = (sp.loop_addr >> 8) as u8;
+            }
+        }
+    }
+
+    /// Enter scene `k` with a cold boot, as a cartridge does: the PPU at power-on (registers, OAM,
+    /// the poke tables) showing the scene's placements and the program's, no sprite group holding
+    /// a sprite, then the scene's init() in a setup window of its own, its records replacing the
+    /// previous entry's. At load (`at` is `None`) set_sources finishes the boot. Entered on update
+    /// `at`, the sound chip power-cycles too: ARAM holds the samples again, and the scene's timers
+    /// and songs start over on an audio timeline that, like its `t` and `f`, counts from `at`.
+    fn enter_scene(&mut self, k: usize, at: Option<(f64, u32)>) -> Result<(), LuaError> {
+        let sc = self.scenes.as_mut().expect("a program of scenes");
+        sc.current = k;
+        if let Some((t, f)) = at {
+            (sc.t0, sc.f0) = (t, f);
+        }
+        let scene = &sc.list[k];
+        let file = scene.file.clone();
+        let mine = |o: &Option<String>| o.as_ref().is_none_or(|o| *o == file);
+        let rec = self.dma.clone();
+        *rec.placements.borrow_mut() = sc.placements.iter().filter(|p| mine(&p.owner)).cloned().collect();
+        *rec.timers.borrow_mut() = sc.timers.iter().filter(|t| mine(&t.4)).cloned().collect();
+        rec.loads.borrow_mut().clear();
+        rec.vram_ranges.borrow_mut().truncate(sc.ranges.0);
+        rec.cgram_ranges.borrow_mut().truncate(sc.ranges.1);
+        rec.obj_base.borrow_mut().truncate(sc.obj_bases);
+        rec.samples.borrow_mut().truncate(sc.samples);
+        {
+            let mut songs = rec.songs.borrow_mut();
+            songs.truncate(sc.songs);
+            for p in songs.iter_mut() {
+                p.set_anchor(p.declared);
+                p.playing = p.declared != Anchor::Stopped;
+                p.at_false = p.declared == Anchor::Stopped;
+                p.rewind();
+            }
+        }
+        let init = scene.init.clone();
+        self.frame_fn = Some(scene.frame.clone());
+        self.frame_file = scene.frame_file.clone();
+        *self.mirror.borrow_mut() = Mirror::default();
+        if at.is_some() {
+            // The sound chip's power cycle, before init() sets up the scene's voices.
+            self.unmixed_dsp = None;
+            self.mix_kon = 0;
+            self.mix_koff = 0;
+            self.dsp = power_on_dsp();
+            self.aram.fill(0);
+            self.audio.clear();
+            self.last_f = None;
+            self.recompiled = false;
+            let dsp = &self.dsp;
+            self.lua.borrow_mut().enter(|ctx| {
+                // shortcut: voice[]/dsp are rebuilt as at a recompile, not reset in place.
+                seed_dsp_tables(ctx, dsp, None);
+                reg_table(ctx, ctx.globals(), "aram", true);
+                ctx.set_global("__dsp_kon", 0).unwrap();
+                ctx.set_global("__dsp_koff", 0).unwrap();
+            });
+        }
+        let res = {
+            let mut l = self.lua.borrow_mut();
+            let keys = &self.keys;
+            l.enter(|ctx| {
+                power_on(ctx, &keys.fetch(ctx));
+                ctx.set_global("__ppu_scene_next", Value::Nil).unwrap();
+                // What the scene records from here on, init or a stage load, is its own.
+                ctx.set_global("__ppu_scene_file", ctx.intern(file.as_bytes())).unwrap();
+            });
+            rec.active.set(true);
+            let mut res = Ok(());
+            for func in [l.enter(|ctx| match ctx.get_global("__ppu_sprites_reset") {
+                Value::Function(f) => Some(ctx.stash(f)),
+                _ => None,
+            }), init]
+            .into_iter()
+            .flatten()
+            {
+                let ex = l.enter(|ctx| {
+                    let f = ctx.fetch(&func);
+                    ctx.stash(Executor::start(ctx, f, ()))
+                });
+                if let Err(e) = l.execute::<()>(&ex) {
+                    let mut err = static_error_to_lua(e);
+                    err.file = err.file.or(Some(file.clone()));
+                    res = Err(err);
+                    break;
+                }
+            }
+            res
+        };
+        if at.is_none() {
+            return res;
+        }
+        rec.active.set(false);
+        res?;
+        // shortcut: the echo region is checked against the samples at load only, not per scene.
+        self.place_samples();
+        // A score{} at the scene's file level opened the master volume at load, which the power
+        // cycle closed: open it again, as score{} does, unless the scene's init set a level.
+        let songs = self.dma.songs.borrow();
+        let scored = self.dma.timers.borrow().iter().any(|t| matches!(t.2, Hook::Song(id) if songs.get(id).is_some_and(|p| p.declared != Anchor::Stopped)));
+        drop(songs);
+        if scored {
+            self.lua.borrow_mut().enter(|ctx| {
+                if let Value::Table(d) = ctx.get_global("dsp") {
+                    let silent = match d.get(ctx, "mvol") {
+                        Value::Table(m) => m.get(ctx, "l").to_int().unwrap_or(0) == 0 && m.get(ctx, "r").to_int().unwrap_or(0) == 0,
+                        _ => true,
+                    };
+                    if silent {
+                        let m = Table::new(&ctx);
+                        m.set(ctx, "l", 127).unwrap();
+                        m.set(ctx, "r", 127).unwrap();
+                        d.set(ctx, "mvol", m).unwrap();
+                    }
+                }
+            });
+        }
+        self.timers = timer_hooks(rec.timers.borrow_mut().drain(..));
+        Ok(())
     }
 
     /// Recompile the cached program sources (`frame()`'s dirty-source path and `reset()`).
@@ -1728,6 +1973,25 @@ impl LuaEngine {
         if self.source_dirty {
             self.recompile()?;
         }
+        // A program of scenes: `scenes.go` lands on the next new update, a cold boot there (a
+        // paused repeat never switches); a jump to before the scene's entry boots the first scene.
+        if let Some(sc) = &self.scenes {
+            let repeat = !self.recompiled && self.last_f.map(|l| l + sc.f0) == Some(f);
+            let (boot, f0, count) = (sc.boot, sc.f0, sc.list.len());
+            if f < f0 {
+                self.enter_scene(boot, Some((0.0, 0)))?;
+            } else if !repeat {
+                let next = self.lua.borrow_mut().enter(|ctx| ctx.get_global("__ppu_scene_next").to_int());
+                if let Some(n) = next.filter(|n| (1..=count as i64).contains(n)) {
+                    self.enter_scene(n as usize - 1, Some((t, f)))?;
+                }
+            }
+        }
+        // The scene sees its own t and f, counted from its entry.
+        let (t, f) = match &self.scenes {
+            Some(sc) => (t - sc.t0, f - sc.f0),
+            None => (t, f),
+        };
         self.dma.raster.borrow_mut().take();
         // Reset the per-frame hook registry, then run frame(t,f) once.
         {
@@ -2928,15 +3192,33 @@ fn set_pad_table(ctx: piccolo::Context<'_>, global: &'static str, mask: u16) {
     ctx.set_global(global, pad).unwrap();
 }
 
-fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
-    crate::lua_buffer::install(ctx);
+/// `parent[key]` as a table, created when absent and emptied when `empty`: power-on reuses the
+/// register tables in place, so a module that kept `local layer = bg[1]` still sees the live one.
+fn reg_table<'gc>(ctx: piccolo::Context<'gc>, parent: Table<'gc>, key: impl piccolo::IntoValue<'gc>, empty: bool) -> Table<'gc> {
+    let key = key.into_value(ctx);
+    let t = match parent.get(ctx, key) {
+        Value::Table(t) => t,
+        _ => {
+            let t = Table::new(&ctx);
+            parent.set(ctx, key, t).unwrap();
+            t
+        }
+    };
+    if empty {
+        let keys: Vec<Value> = t.iter().map(|(k, _)| k).collect();
+        for k in keys {
+            t.set(ctx, k, Value::Nil).unwrap();
+        }
+    }
+    t
+}
+
+/// The PPU's power-on state: every register global, OAM, and the VRAM/CGRAM/tilemap poke tables
+/// empty. Run once per VM by `install_bindings`, and again by a scene's cold boot.
+fn power_on<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
     // Throwaway: an empty mirror makes every sync_* write unconditional; the engine's own mirror starts empty too.
     let m = &mut Mirror::default();
-    // controller: all released until the host sets a mask; init() may read it.
-    set_pad_table(ctx, "pad", 0);
-    set_pad_table(ctx, "pad2", 0);
-    // battery-backed save data; set_sources overwrites it from the host blob.
-    ctx.set_global("sram", Table::new(&ctx)).unwrap();
+    let g = ctx.globals();
     // scalar registers
     ctx.set_global("mode", 1).unwrap();
     ctx.set_global("bg3_priority", false).unwrap();
@@ -2961,13 +3243,12 @@ fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
     }
 
     // bg[1..4] = { scroll = {x,y}, visible=true }
-    let bg = Table::new(&ctx);
+    let bg = reg_table(ctx, g, "bg", false);
     for i in 1..=4i64 {
-        let layer = Table::new(&ctx);
-        let scroll = Table::new(&ctx);
+        let layer = reg_table(ctx, bg, i, false);
+        let scroll = reg_table(ctx, layer, "scroll", false);
         scroll.set(ctx, "x", 0.0).unwrap();
         scroll.set(ctx, "y", 0.0).unwrap();
-        layer.set(ctx, "scroll", scroll).unwrap();
         layer.set(ctx, "visible", true).unwrap();
         // Binding registers (BGMODE tile-size / BGnSC / BGnNBA), quantize-on-write.
         layer.set(ctx, "tile_size", 8).unwrap();
@@ -2976,13 +3257,11 @@ fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
         layer.set(ctx, "char_base", 0).unwrap();
         layer.set(ctx, "mosaic", false).unwrap();
         // Per-cell tilemap poke surface: map[col][row] = {tile,pal,prio,flip_x,flip_y}.
-        layer.set(ctx, "map", Table::new(&ctx)).unwrap();
-        bg.set(ctx, i, layer).unwrap();
+        reg_table(ctx, layer, "map", true);
     }
-    ctx.set_global("bg", bg).unwrap();
 
     // m7
-    let m7 = Table::new(&ctx);
+    let m7 = reg_table(ctx, g, "m7", false);
     for (k, v) in [
         ("a", 1.0),
         ("b", 0.0),
@@ -3000,12 +3279,81 @@ fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
     m7.set(ctx, "flip_y", false).unwrap();
     m7.set(ctx, "extbg", false).unwrap();
     // Mode 7 tilemap poke: m7.map[ty][tx] = tile# (low byte of the interleaved word).
-    m7.set(ctx, "map", Table::new(&ctx)).unwrap();
-    ctx.set_global("m7", m7).unwrap();
+    reg_table(ctx, m7, "map", true);
 
     // Hidden Mode 7 char buffer, keyed `__m7char[tile][fy*8+fx] = index`, filled
     // by `m7pixel` and flushed into the high byte lane at frame time.
-    ctx.set_global("__m7char", Table::new(&ctx)).unwrap();
+    reg_table(ctx, g, "__m7char", true);
+
+    // cgram (scalar table, written by user)
+    reg_table(ctx, g, "cgram", true);
+
+    // vram (raw 16-bit word poke table: vram[addr] = word, 0..0x7FFF)
+    reg_table(ctx, g, "vram", true);
+
+    // obj[0..127]; OBSEL (`size_sel`, `char_base`, `name_select`) unset reads as zero.
+    let obj = reg_table(ctx, g, "obj", false);
+    for i in 0..128i64 {
+        let o = reg_table(ctx, obj, i, false);
+        for (k, v) in [("x", 0.0), ("y", 0.0)] {
+            o.set(ctx, k, v).unwrap();
+        }
+        for k in ["tile", "pal", "prio"] {
+            o.set(ctx, k, 0).unwrap();
+        }
+        for k in ["flip_x", "flip_y", "on", "large"] {
+            o.set(ctx, k, false).unwrap();
+        }
+    }
+    for k in ["size_sel", "char_base", "name_select"] {
+        obj.set(ctx, k, Value::Nil).unwrap();
+    }
+    obj.set(ctx, "priority_rotate", false).unwrap();
+    obj.set(ctx, "oam_addr", 0).unwrap();
+    // Friendly color-math namespace over CGWSEL/CGADSUB/COLDATA.
+    // `__color_base` records the packed bytes at each (re-)baseline so
+    // read_state can tell WHICH side (friendly field vs raw mnemonic) the
+    // user moved — see the fold in read_state.
+    let color = reg_table(ctx, g, "color", false);
+    reg_table(ctx, color, "on", false);
+    reg_table(ctx, g, "__color_base", true);
+    sync_color(ctx, k, m, 0, 0, 0); // power-on defaults = decode of zeroed registers
+
+    // Friendly screen-designation namespace over TM/TS ($212C/$212D). Same
+    // baseline change-detection pattern as `color` above; `__screen_base`
+    // records the bytes at each (re-)baseline.
+    let screen = reg_table(ctx, g, "screen", false);
+    reg_table(ctx, screen, "main", false);
+    reg_table(ctx, screen, "sub", false);
+    reg_table(ctx, g, "__screen_base", true);
+    sync_screen(ctx, k, m, 0x00, 0x00); // decode of the power-on TM/TS (both empty)
+
+    // Friendly window namespace over WH0-3, W12SEL/W34SEL, WOBJSEL, WBGLOG/
+    // WOBJLOG, TMW/TSW. Same baseline change-detection pattern as `color`/
+    // `screen` above; `__win_base` records the eleven bytes at each
+    // (re-)baseline. Overlap with `color`: win.color.* selects
+    // WHICH pixels form the color window (WOBJSEL high nibble + a WOBJLOG
+    // slot); WHERE color math is prevented (CGWSEL bits 4-5) stays owned by
+    // color.region. `win` never writes CGWSEL, and the color window has no
+    // TMW/TSW bit.
+    let win = reg_table(ctx, g, "win", false);
+    reg_table(ctx, win, "w1", false);
+    reg_table(ctx, win, "w2", false);
+    for l in &WIN_LAYERS {
+        reg_table(ctx, win, k.win_names()[l.name], false);
+    }
+    reg_table(ctx, g, "__win_base", true);
+    sync_win(ctx, k, m, &[0u8; 11]); // power-on: every window register is zero
+}
+
+fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
+    crate::lua_buffer::install(ctx);
+    // controller: all released until the host sets a mask; init() may read it.
+    set_pad_table(ctx, "pad", 0);
+    set_pad_table(ctx, "pad2", 0);
+    // battery-backed save data; set_sources overwrites it from the host blob.
+    ctx.set_global("sram", Table::new(&ctx)).unwrap();
+    power_on(ctx, k);
 
     // m7pixel(tile, x, y, index): stage a Mode 7 char pixel (8bpp linear). The
     // flush masks the high VRAM byte lane, leaving the tilemap low byte intact
@@ -3030,31 +3378,6 @@ fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
         Ok(CallbackReturn::Return)
     });
     ctx.set_global("m7pixel", m7pixel).unwrap();
-
-    // cgram (scalar table, written by user)
-    ctx.set_global("cgram", Table::new(&ctx)).unwrap();
-
-    // vram (raw 16-bit word poke table: vram[addr] = word, 0..0x7FFF)
-    ctx.set_global("vram", Table::new(&ctx)).unwrap();
-
-    // obj[0..127]
-    let obj = Table::new(&ctx);
-    for i in 0..128i64 {
-        let o = Table::new(&ctx);
-        for (k, v) in [("x", 0.0), ("y", 0.0)] {
-            o.set(ctx, k, v).unwrap();
-        }
-        for k in ["tile", "pal", "prio"] {
-            o.set(ctx, k, 0).unwrap();
-        }
-        for k in ["flip_x", "flip_y", "on", "large"] {
-            o.set(ctx, k, false).unwrap();
-        }
-        obj.set(ctx, i, o).unwrap();
-    }
-    obj.set(ctx, "priority_rotate", false).unwrap();
-    obj.set(ctx, "oam_addr", 0).unwrap();
-    ctx.set_global("obj", obj).unwrap();
 
     // hidden hook registry
     ctx.set_global("__ppu_hooks", Table::new(&ctx)).unwrap();
@@ -3235,45 +3558,6 @@ fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
     });
     ctx.set_global("hdma", hdma).unwrap();
     ctx.set_global("scanline", hdma).unwrap();
-
-    // Friendly color-math namespace over CGWSEL/CGADSUB/COLDATA.
-    // `__color_base` records the packed bytes at each (re-)baseline so
-    // read_state can tell WHICH side (friendly field vs raw mnemonic) the
-    // user moved — see the fold in read_state.
-    let color = Table::new(&ctx);
-    color.set(ctx, "on", Table::new(&ctx)).unwrap();
-    ctx.set_global("color", color).unwrap();
-    ctx.set_global("__color_base", Table::new(&ctx)).unwrap();
-    sync_color(ctx, k, m, 0, 0, 0); // power-on defaults = decode of zeroed registers
-
-    // Friendly screen-designation namespace over TM/TS ($212C/$212D). Same
-    // baseline change-detection pattern as `color` above; `__screen_base`
-    // records the bytes at each (re-)baseline.
-    let screen = Table::new(&ctx);
-    screen.set(ctx, "main", Table::new(&ctx)).unwrap();
-    screen.set(ctx, "sub", Table::new(&ctx)).unwrap();
-    ctx.set_global("screen", screen).unwrap();
-    ctx.set_global("__screen_base", Table::new(&ctx)).unwrap();
-    sync_screen(ctx, k, m, 0x00, 0x00); // decode of the power-on TM/TS (both empty)
-
-    // Friendly window namespace over WH0-3, W12SEL/W34SEL/WOBJSEL, WBGLOG/
-    // WOBJLOG, TMW/TSW. Same baseline change-detection pattern as `color`/
-    // `screen` above; `__win_base` records the eleven bytes at each
-    // (re-)baseline. Overlap with `color`: win.color.* selects
-    // WHICH pixels form the color window (WOBJSEL high nibble + a WOBJLOG
-    // slot); WHERE color math is prevented (CGWSEL bits 4-5) stays owned by
-    // color.region. `win` never writes CGWSEL, and the color window has no
-    // TMW/TSW bit.
-    let win = Table::new(&ctx);
-    win.set(ctx, "w1", Table::new(&ctx)).unwrap();
-    win.set(ctx, "w2", Table::new(&ctx)).unwrap();
-    for l in &WIN_LAYERS {
-        win.set(ctx, k.win_names()[l.name], Table::new(&ctx))
-            .unwrap();
-    }
-    ctx.set_global("win", win).unwrap();
-    ctx.set_global("__win_base", Table::new(&ctx)).unwrap();
-    sync_win(ctx, k, m, &[0u8; 11]); // power-on: every window register is zero
 
     // M12/audio: `aram[addr] = byte` poke surface, drained (once) at the
     // start of `render_frame_audio` — never rebuilt, so echo-unit writes
@@ -3602,6 +3886,15 @@ impl ToInt for Value<'_> {
 
 /// A string Lua runtime error raised from a native callback (piccolo has no
 /// tracebacks; per-file attribution happens at the chunk/frame/hook seam).
+/// The scene module loading (or entering) right now, which owns what `dma()`/`timer()`/`score{}`
+/// record: luau.lua's `require` sets it. `None` outside every scene module.
+fn scene_owner(ctx: piccolo::Context<'_>) -> Option<String> {
+    match ctx.get_global("__ppu_scene_file") {
+        Value::String(s) => Some(String::from_utf8_lossy(s.as_bytes()).into_owned()),
+        _ => None,
+    }
+}
+
 fn lua_err<'gc>(ctx: piccolo::Context<'gc>, msg: &str) -> piccolo::Error<'gc> {
     Value::String(ctx.intern(msg.as_bytes())).into()
 }
@@ -3630,6 +3923,9 @@ fn install_dma(
     let dma = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
         // A call outside setup is a stage load: only from frame(), only blanked.
         let runtime = !rec.active.get();
+        let owner = scene_owner(ctx);
+        // Two scenes never run together, so their setups never conflict.
+        let shared = |other: &Option<String>| owner.is_none() || other.is_none() || *other == owner;
         if runtime && !rec.in_frame.get() {
             return Err(lua_err(
                 ctx,
@@ -3764,7 +4060,12 @@ fn install_dma(
                 ret.set(ctx, "bit_depth", src.bit_depth as i64).unwrap();
             }
             crate::source::SourcePayload::Obj(src) => {
-                let base = match rec.obj_base.get() {
+                let known = {
+                    let bases = rec.obj_base.borrow();
+                    let find = |o: &Option<String>| bases.iter().find(|(b, _)| b == o).map(|(_, base)| *base);
+                    find(&owner).or_else(|| find(&None))
+                };
+                let base = match known {
                     Some(base) => base,
                     None => {
                         if char_base & 0x1fff != 0 {
@@ -3772,7 +4073,7 @@ fn install_dma(
                         }
                         // A load is measured from the setup's base; with none, from its own char.
                         if !runtime {
-                            rec.obj_base.set(Some(char_base as u16));
+                            rec.obj_base.borrow_mut().push((owner.clone(), char_base as u16));
                         }
                         char_base as u16
                     }
@@ -3987,6 +4288,7 @@ fn install_dma(
         .collect();
         let placement = DmaPlacement {
             name: name.clone(),
+            owner: owner.clone(),
             char_base: char_base as u16,
             map_base: map_base as u16,
             cgram_base: cgram_base as u8,
@@ -4042,7 +4344,7 @@ fn install_dma(
                     .vram_ranges
                     .borrow()
                     .iter()
-                    .any(|(_, a, b)| s < *b && *a < e)
+                    .any(|(_, a, b, o)| s < *b && *a < e && shared(o))
             {
                 return Err(lua_err(
                     ctx,
@@ -4054,7 +4356,7 @@ fn install_dma(
             .cgram_ranges
             .borrow()
             .iter()
-            .any(|(_, start, end)| cgram.0 != *start && cgram.0 < *end && *start < cgram.1)
+            .any(|(_, start, end, o)| cgram.0 != *start && cgram.0 < *end && *start < cgram.1 && shared(o))
         {
             return Err(lua_err(
                 ctx,
@@ -4063,10 +4365,10 @@ fn install_dma(
         }
         rec.vram_ranges
             .borrow_mut()
-            .extend(vram.into_iter().map(|(s, e)| (name.clone(), s, e)));
+            .extend(vram.into_iter().map(|(s, e)| (name.clone(), s, e, owner.clone())));
         rec.cgram_ranges
             .borrow_mut()
-            .push((name.clone(), cgram.0, cgram.1));
+            .push((name.clone(), cgram.0, cgram.1, owner.clone()));
         rec.placements.borrow_mut().push(placement);
         stack.clear();
         stack.replace(ctx, ret);
@@ -4104,7 +4406,7 @@ fn install_dma(
         timer_rec
             .timers
             .borrow_mut()
-            .push((n, div, Hook::Lua(ctx.stash(f)), file));
+            .push((n, div, Hook::Lua(ctx.stash(f)), file, scene_owner(ctx)));
         Ok(CallbackReturn::Return)
     });
     ctx.set_global("timer", timer).unwrap();
@@ -4174,6 +4476,7 @@ fn install_song_natives(
             looping: false,
             playing: false,
             anchor: Anchor::Stopped,
+            declared: Anchor::Stopped,
             shift_h: 0,
             at_false: false,
             tick: 0,
@@ -4239,13 +4542,14 @@ fn install_song_natives(
             p.looping = looping;
             p.playing = anchor != Anchor::Stopped;
             p.set_anchor(anchor);
+            p.declared = anchor;
             p.at_false = anchor == Anchor::Stopped;
             p.rewind();
         }
         start_rec
             .timers
             .borrow_mut()
-            .push((0u8, 32u8, Hook::Song(id), None));
+            .push((0u8, 32u8, Hook::Song(id), None, scene_owner(ctx)));
         stack.clear();
         Ok(CallbackReturn::Return)
     });

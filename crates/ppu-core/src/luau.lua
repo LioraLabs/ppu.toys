@@ -174,11 +174,49 @@ function require(path)
   if __ppu_loaded[file] ~= nil then return __ppu_loaded[file] end
   assert(not __ppu_loading[file], "require cycle through " .. file)
   __ppu_loading[file] = true
+  local scene = __ppu_scene_file
+  if __ppu_scene_files[file] then __ppu_scene_file = file end
   local value = chunk()
+  __ppu_scene_file = scene
   __ppu_loading[file] = nil
   if value == nil then value = true end
   __ppu_loaded[file] = value
   return value
+end
+
+-- Scenes (docs/scenes.md). LuaEngine::set_sources lists the scene modules (frontend::scene_files)
+-- in __ppu_scene_files before any file runs; while one loads, __ppu_scene_file names it, so what
+-- its load records (placements, timers, songs) is the scene's. The engine reads __ppu_scenes after
+-- the files run and __ppu_scene_next whenever an update starts.
+__ppu_scene_files = {}
+__ppu_scene_file = nil
+__ppu_scenes = {}
+__ppu_scenes_open = true
+__ppu_scene_next = nil
+
+scenes = {}
+
+function scenes.add(scene)
+  assert(__ppu_scenes_open, "scenes.add runs at file level, while the program loads")
+  local file = nil
+  for name in pairs(__ppu_scene_files) do
+    if __ppu_loaded[name] == scene then file = name end
+  end
+  assert(file ~= nil, "scenes.add needs its module written inline: scenes.add(require(\"./title\"))")
+  assert(type(scene) == "table" and type(scene.frame) == "function"
+    and (scene.init == nil or type(scene.init) == "function"),
+    "scenes.add: " .. file .. " must return {init = init, frame = frame}")
+  for _, s in ipairs(__ppu_scenes) do
+    assert(s.file ~= file, "scenes.add: " .. file .. " is already a scene")
+  end
+  __ppu_scenes[#__ppu_scenes + 1] = {file = file, init = scene.init, frame = scene.frame}
+  return #__ppu_scenes
+end
+
+function scenes.go(scene)
+  assert(type(scene) == "number" and scene == math.floor(scene) and scene >= 1 and scene <= #__ppu_scenes,
+    "scenes.go needs a scene from scenes.add")
+  __ppu_scene_next = scene
 end
 
 -- Record fields declared with makeFixed/makeBounded (the Luau frontend writes these calls).
