@@ -119,6 +119,11 @@ belongs to the scene that loads it first: require shared graphics from
   overlap.
 - **Sprite groups** start empty in each scene: a sprite drawn in the title
   never shows in the game.
+- **Every scene has all 128 sprite slots.** The `obj[...]` slots and sprite
+  groups of a scene's modules count only in that scene, so the title can
+  write every slot through `obj[...]` and the game can fill every slot with
+  groups. Slots and groups used outside every scene (in `main.luau`) count in
+  all of them.
 - **Samples** are the program's: sound RAM holds every scene's samples, each
   at its own address.
 

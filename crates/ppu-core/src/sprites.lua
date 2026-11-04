@@ -392,8 +392,9 @@ function __ppu_sprites_flush()
     local s = group(g)
     local touched = s.touched
     s.touched = {}
-    if was then
-      -- A held frame keeps every group as it was.
+    local scene = __ppu_sprites_layout[g].scene
+    if was or (scene ~= nil and scene ~= __ppu_sprites_scene) then
+      -- A held frame keeps every group as it was; another scene's group shows nothing.
     elseif s.sort then
       -- Stable insertion sort by depth: equal depths keep call order.
       local records = s.records

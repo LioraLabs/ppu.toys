@@ -1375,6 +1375,10 @@ impl LuaEngine {
                     g.set(ctx, "first", *first as i64).unwrap();
                     g.set(ctx, "size", *size as i64).unwrap();
                     g.set(ctx, "sort", plan.groups[i].sort).unwrap();
+                    // A scene's group shows only while its scene runs (another scene's may share its slots).
+                    if let Some((file, _)) = plan.groups[i].scene.checked_sub(1).map(|k| &plan.scenes[k]) {
+                        g.set(ctx, "scene", ctx.intern(file.as_bytes())).unwrap();
+                    }
                     t.set(ctx, i as i64 + 1, g).unwrap();
                 }
                 ctx.set_global("__ppu_sprites_layout", t).unwrap();
@@ -1777,6 +1781,7 @@ impl LuaEngine {
                 ctx.set_global("__ppu_scene_next", Value::Nil).unwrap();
                 // What the scene records from here on, init or a stage load, is its own.
                 ctx.set_global("__ppu_scene_file", ctx.intern(file.as_bytes())).unwrap();
+                ctx.set_global("__ppu_sprites_scene", ctx.intern(file.as_bytes())).unwrap();
             });
             rec.active.set(true);
             let mut res = Ok(());

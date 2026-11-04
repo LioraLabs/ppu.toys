@@ -53,6 +53,8 @@ pub struct Group {
     pub sort: bool,
     pub slots: Option<u32>,
     pub draws: Vec<(String, u32, Option<u64>, Option<Vec<usize>>)>,
+    /// The scene whose module made it (from 1, as `Plan::scenes`), or 0: the program's, in every scene.
+    pub scene: usize,
 }
 
 /// A `draw` or `keep` on a group (`sprites.draw`/`sprites.keep` on the default group): the call,
@@ -73,8 +75,11 @@ pub struct Call {
 /// A program that draws with the sprites library.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Plan {
-    /// Slots the program indexes through `obj[...]`, ascending; the library never assigns them.
+    /// Slots the program indexes through `obj[...]` outside every scene, ascending; the library never assigns them.
     pub reserved: Vec<u8>,
+    /// A program of scenes: each scene's module file (in `scenes.add` order) and the slots its own modules index
+    /// through `obj[...]`. Two scenes never run together, so each lays its groups out over the whole OAM.
+    pub scenes: Vec<(String, Vec<u8>)>,
     /// `sprites.art` calls in source order: art n is `arts[n - 1]`.
     pub arts: Vec<Site>,
     /// The groups in draw order (the first on top), the default group last, which takes the free
@@ -95,15 +100,35 @@ impl Plan {
     /// Each group's first free position (from 0) and slot count, given the most cells each art
     /// (by number, from 1) shows: its `slots`, or the sum over its draws of times by cells. Groups
     /// take the free slots in order; past them is an error at the first group that does not fit.
+    /// In a program of scenes each scene starts over past the program's groups (a scene's groups
+    /// share positions with other scenes'), skipping the slots its own `obj[...]` writes take.
     pub fn layout(&self, cells: &[u64]) -> Result<Vec<(u32, u32)>, Error> {
-        let free = self.free().len() as u64;
+        let free_slots = self.free();
+        let free = free_slots.len() as u64;
+        // Per scene (one for a program without scenes): where its groups end, and its own obj slots' positions.
+        let n = self.scenes.len().max(1);
+        let mut ends = vec![0u64; n];
+        let taken: Vec<Vec<u64>> = (0..n)
+            .map(|k| {
+                let own = self.scenes.get(k).map_or(&[][..], |(_, r)| r.as_slice());
+                (0..free).filter(|&p| own.contains(&free_slots[p as usize])).collect()
+            })
+            .collect();
         let mut out = vec![];
-        let mut at = 0u64;
         for g in &self.groups {
+            let live: Vec<usize> = if g.scene == 0 { (0..n).collect() } else { vec![g.scene - 1] };
+            let mut at = live.iter().map(|&k| ends[k]).max().unwrap_or(0);
             let size = match g.slots {
                 Some(n) => n as u64,
                 // The default group takes the slots the others leave.
-                None if g.site.is_none() => free.saturating_sub(at),
+                None if g.site.is_none() && self.scenes.is_empty() => free.saturating_sub(at),
+                // shortcut: in a program of scenes the default group takes only what every scene leaves past all of
+                // them (none when nothing draws into it); per-scene default groups if a scene draws with sprites.draw.
+                None if g.site.is_none() => {
+                    at = ends.iter().copied().max().unwrap_or(0);
+                    let room = |k: usize| taken[k].iter().copied().filter(|&p| p >= at).min().unwrap_or(free) - at;
+                    if g.draws.is_empty() { 0 } else { (0..n).map(room).min().unwrap_or(0) }
+                }
                 None => g
                     .draws
                     .iter()
@@ -113,6 +138,10 @@ impl Plan {
                     })
                     .sum(),
             };
+            // Past the scene's own obj slots: a group is one run of positions.
+            while let Some(&p) = live.iter().flat_map(|&k| &taken[k]).filter(|&&p| p >= at && p < at + size).max() {
+                at = p + 1;
+            }
             if at + size > free {
                 let (file, line) = match (&g.site, g.draws.first()) {
                     (Some(s), _) => (s.file.clone(), s.line),
@@ -120,10 +149,14 @@ impl Plan {
                     _ => (String::new(), 0),
                 };
                 let need: u64 = at + size;
+                let free = free - live.iter().map(|&k| taken[k].len() as u64).max().unwrap_or(0);
+                let need = need - live.iter().map(|&k| taken[k].iter().filter(|&&p| p < at).count() as u64).max().unwrap_or(0);
                 return Err(Error { file, line, message: format!("sprites groups need {need} slots; {free} are free") });
             }
             out.push((at as u32, size as u32));
-            at += size;
+            for &k in &live {
+                ends[k] = at + size;
+            }
         }
         Ok(out)
     }
@@ -409,6 +442,7 @@ impl Walk<'_> {
             sort: false,
             slots: None,
             draws: vec![],
+            scene: 0,
         };
         for (k, v) in options {
             match (k.as_str(), v) {
@@ -783,6 +817,41 @@ pub fn number_sites(plan: &Plan, file: &str, source: &str) -> String {
     out
 }
 
+/// Each file a scene owns, by the scene's number (from 1, in `scenes.add` order): its module and the modules it
+/// requires, transitively, unless the program's own files (those no scene reaches) require them too; a module two
+/// scenes require is the first's. Every other file is the program's.
+fn scene_owners(files: &[(&str, &str)]) -> HashMap<String, usize> {
+    let scenes = crate::frontend::scene_files(files);
+    let source = |f: &str| files.iter().find(|(n, _)| *n == f).map(|(_, s)| *s);
+    let resolve = |path: &str| [format!("{path}.luau"), format!("{path}.lua")].into_iter().find(|f| source(f).is_some());
+    // Every file reached from `roots`, never entering a scene module other than a root.
+    let reach = |roots: Vec<String>| {
+        let mut seen: Vec<String> = vec![];
+        let mut todo = roots.clone();
+        while let Some(f) = todo.pop() {
+            if seen.contains(&f) || (scenes.contains(&f) && !roots.contains(&f)) {
+                continue;
+            }
+            todo.extend(crate::frontend::requires(source(&f).unwrap_or("")).into_iter().filter_map(|p| resolve(p)));
+            seen.push(f);
+        }
+        seen
+    };
+    let mut owners = HashMap::new();
+    for (k, scene) in scenes.iter().enumerate() {
+        for f in reach(vec![scene.clone()]) {
+            owners.entry(f).or_insert(k + 1);
+        }
+    }
+    let program: Vec<String> = files.iter().map(|(f, _)| f.to_string()).filter(|f| !owners.contains_key(f)).collect();
+    for f in reach(program) {
+        if !scenes.contains(&f) {
+            owners.remove(&f);
+        }
+    }
+    owners
+}
+
 /// The sprite plan of `files` (prepared sources, as the preview runs them): `None` for a program
 /// that never draws with the library. Files that do not parse as Luau are skipped; they cannot
 /// reach the library through this syntax.
@@ -897,16 +966,23 @@ pub fn plan(files: &[(&str, &str)]) -> Result<Option<Plan>, Error> {
     if !draws {
         return Ok(None);
     }
-    let mut reserved = BTreeSet::new();
+    let owners = scene_owners(files);
+    let scene_list = crate::frontend::scene_files(files);
+    let owner = |file: &str| owners.get(file).copied().unwrap_or(0);
+    // Per owner (0: the program, k: scene k) the slots its obj writes take.
+    let mut reserved = vec![BTreeSet::new(); scene_list.len() + 1];
     for (file, line, set) in slots {
         let Some(set) = set else {
             return Err(Error { file, line, message: UNPROVABLE_SLOT.into() });
         };
-        reserved.extend(set.into_iter().filter(|s| (0..128).contains(s)).map(|s| s as u8));
+        reserved[owner(&file)].extend(set.into_iter().filter(|s| (0..128).contains(s)).map(|s| s as u8));
+    }
+    for g in &mut groups {
+        g.scene = g.site.as_ref().map_or(0, |s| owner(&s.file));
     }
     // The default group draws behind the others.
     let index = groups.len();
-    groups.push(Group { site: None, sort: false, slots: None, draws: default });
+    groups.push(Group { site: None, sort: false, slots: None, draws: default, scene: 0 });
     for c in &mut calls {
         if c.group == usize::MAX {
             c.group = index;
@@ -928,7 +1004,8 @@ pub fn plan(files: &[(&str, &str)]) -> Result<Option<Plan>, Error> {
             _ => return Err(Error { file, line, message: SIZE_SEL.into() }),
         }
     }
-    Ok(Some(Plan { reserved: reserved.into_iter().collect(), arts, groups, calls, size_sel }))
+    let scenes = scene_list.into_iter().zip(reserved.drain(1..)).map(|(f, r)| (f, r.into_iter().collect())).collect();
+    Ok(Some(Plan { reserved: reserved.remove(0).into_iter().collect(), scenes, arts, groups, calls, size_sel }))
 }
 
 #[cfg(test)]
@@ -983,5 +1060,28 @@ end"#;
         ] {
             assert_eq!(plan(&[("main.lua", main)]).unwrap_err().message, SIZE_SEL, "{main}");
         }
+    }
+
+    #[test]
+    fn each_scene_lays_out_the_whole_oam() {
+        let main = "SWARM = scenes.add(require(\"./swarm\"))\nFLEET = scenes.add(require(\"./fleet\"))\n";
+        // The swarm's obj slots are its own; the fleet's groups are in a module only it requires.
+        let swarm = "local function frame() for i = 0, 127 do obj[i].on = true end end\nreturn {frame = frame}";
+        let fleet = "local Ships = require(\"./ships\")\nlocal function frame() Ships.draw() end\nreturn {frame = frame}";
+        let ships = "local A = sprites.art({{size = 16, cells = {0}}})\nlocal g = sprites.group()\nlocal h = sprites.group()\nlocal function draw()\n  for i = 1, 100 do g:draw(A, 0, 0) end\n  for i = 1, 28 do h:draw(A, 0, 0) end\nend\nreturn {draw = draw}";
+        let files = |main: &str| vec![("main.luau", main.to_string()), ("swarm.luau", swarm.into()), ("fleet.luau", fleet.into()), ("ships.luau", ships.into())];
+        let plan_of = |files: &[(&str, String)]| {
+            let refs: Vec<(&str, &str)> = files.iter().map(|(n, s)| (*n, s.as_str())).collect();
+            plan(&refs).unwrap().unwrap()
+        };
+        let layout = |files: &[(&str, String)]| plan_of(files).layout(&[1]);
+        let p = plan_of(&files(main));
+        assert_eq!(p.reserved, Vec::<u8>::new());
+        assert_eq!(p.scenes[0].1.len(), 128);
+        assert_eq!(p.groups.iter().map(|g| g.scene).collect::<Vec<_>>(), [2, 2, 0]);
+        assert_eq!(layout(&files(main)), Ok(vec![(0, 100), (100, 28), (128, 0)]));
+        // The program's own obj slot counts against every scene.
+        let shared = format!("{main}function init() obj[127].on = true end\n");
+        assert_eq!(layout(&files(&shared)).unwrap_err().message, "sprites groups need 128 slots; 127 are free");
     }
 }
