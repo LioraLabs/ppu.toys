@@ -105,15 +105,16 @@ best = math.max(best or 0, 120) -- in a scene's frame(): still set in the next s
 
 File-level `voice[]` and `dsp` writes are undone the same way; a `score{}`
 at file level still plays after a switch. A module two scenes require
-belongs to the scene that loads it first: require shared graphics from
-`main.luau` instead, so they are the program's.
+belongs to the first scene added that requires it: require shared graphics
+from `main.luau` instead, so they are the program's.
 
 ## What a scene owns
 
 - **Placements, timers and songs** made while a scene's module loads belong
-  to that scene, and so do those of the modules it requires first. Those
-  made anywhere else, such as `main.luau`'s file level, belong to the whole
-  program and load in every scene.
+  to that scene, and so do those of the modules it requires (unless an
+  earlier scene requires them too). Those made anywhere else, such as
+  `main.luau`'s file level or a module `main.luau` requires anywhere in the
+  file, belong to the whole program and load in every scene.
 - **Placements conflict only within a scene.** Two scenes may place at the
   same VRAM and CGRAM addresses; two placements of one scene still may not
   overlap.

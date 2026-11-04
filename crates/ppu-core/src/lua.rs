@@ -1287,6 +1287,12 @@ impl LuaEngine {
             for file in &scene_files {
                 t.set(ctx, ctx.intern(file.as_bytes()), true).unwrap();
             }
+            let Value::Table(o) = ctx.get_global("__ppu_scene_owners") else {
+                unreachable!("luau.lua defines the scene owners")
+            };
+            for (file, k) in crate::sprites::scene_owners(&precision_files) {
+                o.set(ctx, ctx.intern(file.as_bytes()), ctx.intern(scene_files[k - 1].as_bytes())).unwrap();
+            }
         });
 
         // A file another file requires is a module: it runs on its first require, not in tab order.

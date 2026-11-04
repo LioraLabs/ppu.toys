@@ -175,7 +175,7 @@ function require(path)
   assert(not __ppu_loading[file], "require cycle through " .. file)
   __ppu_loading[file] = true
   local scene = __ppu_scene_file
-  if __ppu_scene_files[file] then __ppu_scene_file = file end
+  if not library then __ppu_scene_file = __ppu_scene_owners[file] end
   local value = chunk()
   __ppu_scene_file = scene
   __ppu_loading[file] = nil
@@ -189,6 +189,9 @@ end
 -- its load records (placements, timers, songs) is the scene's. The engine reads __ppu_scenes after
 -- the files run and __ppu_scene_next whenever an update starts.
 __ppu_scene_files = {}
+-- Each file a scene owns, to its scene module (sprites::scene_owners): what main.luau requires is
+-- the program's wherever the require sits, else the first scene to require a module owns it.
+__ppu_scene_owners = {}
 __ppu_scene_file = nil
 __ppu_scenes = {}
 __ppu_scenes_open = true
