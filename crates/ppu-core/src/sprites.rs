@@ -820,7 +820,7 @@ pub fn number_sites(plan: &Plan, file: &str, source: &str) -> String {
 /// Each file a scene owns, by the scene's number (from 1, in `scenes.add` order): its module and the modules it
 /// requires, transitively, unless the program's own files (those no scene reaches) require them too; a module two
 /// scenes require is the first's. Every other file is the program's.
-fn scene_owners(files: &[(&str, &str)]) -> HashMap<String, usize> {
+pub fn scene_owners(files: &[(&str, &str)]) -> HashMap<String, usize> {
     let scenes = crate::frontend::scene_files(files);
     let source = |f: &str| files.iter().find(|(n, _)| *n == f).map(|(_, s)| *s);
     let resolve = |path: &str| [format!("{path}.luau"), format!("{path}.lua")].into_iter().find(|f| source(f).is_some());
@@ -971,14 +971,17 @@ pub fn plan(files: &[(&str, &str)]) -> Result<Option<Plan>, Error> {
     let owner = |file: &str| owners.get(file).copied().unwrap_or(0);
     // Per owner (0: the program, k: scene k) the slots its obj writes take.
     let mut reserved = vec![BTreeSet::new(); scene_list.len() + 1];
-    for (file, line, set) in slots {
-        let Some(set) = set else {
-            return Err(Error { file, line, message: UNPROVABLE_SLOT.into() });
-        };
-        reserved[owner(&file)].extend(set.into_iter().filter(|s| (0..128).contains(s)).map(|s| s as u8));
-    }
     for g in &mut groups {
         g.scene = g.site.as_ref().map_or(0, |s| owner(&s.file));
+    }
+    for (file, line, set) in slots {
+        // A scene that makes no group of its own may write any slot: nothing of its own competes for them.
+        let set = match set {
+            Some(set) => set,
+            None if owner(&file) != 0 && !groups.iter().any(|g| g.scene == owner(&file)) => (0..128).collect(),
+            None => return Err(Error { file, line, message: UNPROVABLE_SLOT.into() }),
+        };
+        reserved[owner(&file)].extend(set.into_iter().filter(|s| (0..128).contains(s)).map(|s| s as u8));
     }
     // The default group draws behind the others.
     let index = groups.len();
