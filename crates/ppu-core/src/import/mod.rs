@@ -496,6 +496,7 @@ pub fn sheet_from_indexed(
             bit_depth: bpp,
             palettes,
             char_words,
+            pals: cells[..kept].iter().map(|c| c.pal).collect(),
         },
         crate::source::SourceMeta {
             width,

@@ -14,6 +14,7 @@ fn sheet() -> (SheetSource, Vec<u8>) {
         bit_depth: 4,
         palettes: vec![vec![0x7fff]; 3],
         char_words: vec![0; 16 * 16],
+        pals: vec![],
     };
     (s, (0..16).map(|c| (c % 3) as u8).collect())
 }

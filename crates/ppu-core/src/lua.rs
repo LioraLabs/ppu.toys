@@ -1411,7 +1411,7 @@ end
                         if w.map.layers[li].mode7 {
                             m7_layer(placements, w, li, &w.owner)?;
                             let words = w.words[li].clone().unwrap_or_default();
-                            return Ok(WorldLayerView { words, char_base: 0, palettes: 0, extbg: w.extbg[li], char_words: 0, pal: 0 });
+                            return Ok(WorldLayerView { words, char_base: 0, palettes: 0, tile_palettes: true, extbg: w.extbg[li], char_words: 0, pal: 0 });
                         }
                         let (char_base, pal) = sheet_layer(placements, w, li, &w.owner)?;
                         // A whole-program world bound in a scene draws with that scene's latest placement, which
@@ -1426,11 +1426,14 @@ end
                             }
                         }
                         let words = w.words[li].iter().flatten().map(|&word| word + (pal << 10)).collect();
-                        let char_words = w.map.layers[li].source.as_ref().and_then(|s| match self.source_store.borrow().get(s) {
-                            Some(crate::source::SourcePayload::Sheet(sheet)) => Some(sheet.bit_depth as usize * 4),
+                        let (char_words, tile_palettes) = w.map.layers[li].source.as_ref().and_then(|s| match self.source_store.borrow().get(s) {
+                            Some(crate::source::SourcePayload::Sheet(sheet)) => Some((
+                                sheet.bit_depth as usize * 4,
+                                sheet.palettes.len() <= 1 || !char_pals(sheet, self.sheet_pals.borrow().get(s)).is_empty(),
+                            )),
                             _ => None,
-                        }).unwrap_or(0);
-                        Ok(WorldLayerView { words, char_base, palettes: w.palettes[li], extbg: false, char_words, pal })
+                        }).unwrap_or((0, true));
+                        Ok(WorldLayerView { words, char_base, palettes: w.palettes[li], tile_palettes, extbg: false, char_words, pal })
                     })
                     .collect(),
             })
@@ -5050,6 +5053,9 @@ pub struct WorldLayerView {
     pub char_base: u16,
     /// The sheet's palette count.
     pub palettes: usize,
+    /// `words` give each tile its own char's palette: false only for a sheet of several palettes
+    /// whose chars' palettes neither its payload (v4) nor `setSheetPalettes` carried (all palette 0).
+    pub tile_palettes: bool,
     /// A Mode 7 layer from an EXTBG source: binding it turns on `m7.extbg`.
     pub extbg: bool,
     /// The background palette the sheet's first palette lands on, already in `words` (0 for Mode 7).
@@ -5057,6 +5063,16 @@ pub struct WorldLayerView {
     /// The words of one of the sheet's chars (its bit depth x 4; 0 for a Mode 7 layer): where a tile animation's
     /// chars lie in VRAM from `char_base`.
     pub char_words: usize,
+}
+
+/// The palette of each char of a sheet: its payload's own (v4), else what `setSheetPalettes` gave
+/// (empty: palette 0 everywhere).
+fn char_pals<'a>(sheet: &'a crate::source::SheetSource, given: Option<&'a Vec<u8>>) -> &'a [u8] {
+    if sheet.pals.is_empty() {
+        given.map_or(&[], |p| p.as_slice())
+    } else {
+        &sheet.pals
+    }
 }
 
 /// A Tiled property value as Lua: class properties become tables.
@@ -5264,7 +5280,7 @@ fn install_world(
             |source| match sources.get(source) {
                 Some(SourcePayload::Sheet(sheet)) => Some(Binding::Sheet {
                     source: sheet,
-                    pals: pals.get(source).map_or(&[], |p| p.as_slice()),
+                    pals: char_pals(sheet, pals.get(source)),
                 }),
                 Some(SourcePayload::M7(m7)) => Some(Binding::M7(m7)),
                 _ => None,
@@ -5359,7 +5375,7 @@ fn install_world(
                 (Some(source), false) => {
                     let Some(SourcePayload::Sheet(sheet)) = sources.get(source) else { unreachable!("read_map bound it") };
                     palettes.push(sheet.palettes.len());
-                    if sheet.palettes.len() > 1 && !pals.contains_key(source) {
+                    if sheet.palettes.len() > 1 && sheet.pals.is_empty() && !pals.contains_key(source) {
                         return Err(fail(format!(
                             "sheet {source} has {} palettes but the engine was not given which palette each tile uses: \
                              pass its cells' palettes with setSheetPalettes",

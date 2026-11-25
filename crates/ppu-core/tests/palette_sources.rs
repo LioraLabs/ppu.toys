@@ -42,7 +42,7 @@ fn payload_round_trips_and_decode_is_strict() {
     for (cols, text) in [(4, FOUR), (16, FIFTEEN)] {
         let p = gpl::parse(&format!("GIMP Palette\nColumns: {cols}\n{text}")).unwrap();
         let bytes = SourcePayload::Palette(p.clone()).encode();
-        assert_eq!(&bytes[..4], [3, 6, cols as u8, p.rows.len() as u8]);
+        assert_eq!(&bytes[..4], [ppu_core::PAYLOAD_VERSION, 6, cols as u8, p.rows.len() as u8]);
         assert_eq!(SourcePayload::decode(&bytes), Ok(SourcePayload::Palette(p)));
     }
     // The 256 block is stored at its real colour count (count - 1 in the row-count byte).
@@ -50,7 +50,7 @@ fn payload_round_trips_and_decode_is_strict() {
     for (text, n) in [("1 2 3\n4 5 6\n".to_string(), 1u8), (full, 255)] {
         let wide = gpl::parse(&format!("GIMP Palette\nColumns: 256\n{text}")).unwrap();
         let bytes = SourcePayload::Palette(wide.clone()).encode();
-        assert_eq!(&bytes[..4], [3, 6, 0, n]);
+        assert_eq!(&bytes[..4], [ppu_core::PAYLOAD_VERSION, 6, 0, n]);
         assert_eq!(bytes.len(), 4 + 2 * (n as usize + 1));
         assert_eq!(
             SourcePayload::decode(&bytes),

@@ -7,7 +7,7 @@
 //! Byte layout v1 (little-endian):
 //!
 //! ```text
-//! common:  u8 version=3 | u8 kind (0=bg 1=m7 2=obj 3=sheet 4=sample 5=song 6=palette)
+//! common:  u8 version=4 | u8 kind (0=bg 1=m7 2=obj 3=sheet 4=sample 5=song 6=palette)
 //! bg:      u8 bit_depth (2|4|8) | u8 tile_size (8)
 //!          u8 pal_count, per palette: u8 len + len*u16 BGR555
 //!          u16 tile_count, tile_count*(bit_depth*4)*u16 char words (bitplane-packed, tile 0 blank)
@@ -26,6 +26,8 @@
 //!          u16 tile_count, tile_count*(bit_depth*4)*u16 char words (sheet order,
 //!          NO reserved blank tile). No screen_size, no tilemap: map geometry is
 //!          the author's, not the payload's.
+//!          v4: u8 has_pals (0|1), then (if 1) tile_count u8 palette rows, char k's
+//!          palette (each below pal_count): what a Tiled map drawn from it colours by.
 //! sample:  u8 has_loop (0|1), [u16 loop_block, only if has_loop]
 //!          u16 block_count (1..=MAX_SAMPLE_BLOCKS), block_count*9 raw BRR
 //!          bytes (9 bytes per 16-sample block). PCM, not an image: no
@@ -52,7 +54,7 @@ use crate::import_m7::Mode7ImportReport;
 use crate::memory::Memory;
 use serde::{Deserialize, Serialize};
 
-pub const PAYLOAD_VERSION: u8 = 3;
+pub const PAYLOAD_VERSION: u8 = 4;
 
 /// Max BRR blocks a sample payload can carry: 64 KB of sound RAM / 9-byte
 /// BRR blocks.
@@ -163,6 +165,9 @@ pub struct SheetSource {
     pub palettes: Vec<Vec<u16>>,
     /// Bitplane-packed char words, bit_depth*4 words/tile, sheet order.
     pub char_words: Vec<u16>,
+    /// The palette row of each char, sheet order (the import's cell assignment); empty when
+    /// the payload predates v4 or the sheet is generated, and `setSheetPalettes` says instead.
+    pub pals: Vec<u8>,
 }
 
 /// A BRR-encoded PCM sample. Unlike the image-derived kinds, this is not
@@ -606,6 +611,12 @@ impl SourcePayload {
                 for &w in &s.char_words {
                     push_u16(&mut b, w);
                 }
+                debug_assert!(
+                    s.pals.is_empty() || s.pals.len() == s.char_words.len() / wpt,
+                    "sheet: pals is not one per char"
+                );
+                b.push(!s.pals.is_empty() as u8);
+                b.extend(&s.pals);
             }
             SourcePayload::Sample(s) => {
                 debug_assert!(
@@ -811,10 +822,19 @@ impl SourcePayload {
                     return Err(PayloadError::BadParam("tile_count"));
                 }
                 let char_words = r.u16s(tile_count * bit_depth as usize * 4)?;
+                let pals = match if version >= 4 { r.u8()? } else { 0 } {
+                    0 => vec![],
+                    1 => r.bytes(tile_count)?.to_vec(),
+                    _ => return Err(PayloadError::BadParam("has_pals")),
+                };
+                if pals.iter().any(|&p| p as usize >= palettes.len().max(1)) {
+                    return Err(PayloadError::BadParam("pals"));
+                }
                 SourcePayload::Sheet(SheetSource {
                     bit_depth,
                     palettes,
                     char_words,
+                    pals,
                 })
             }
             4 => {
@@ -1255,6 +1275,7 @@ pub fn generated_source(
             bit_depth,
             palettes: vec![],
             char_words: char_words.to_vec(),
+            pals: vec![],
         });
         return Ok((
             payload,
@@ -1391,6 +1412,7 @@ mod tests {
             bit_depth: 2,
             palettes: vec![vec![0x001f, 0x7c00], vec![0x03e0]],
             char_words: vec![0xbeefu16; 2 * 8], // 2 tiles at 2bpp
+            pals: vec![0, 1],
         }
     }
 
@@ -1407,18 +1429,23 @@ mod tests {
         }
     }
 
-    // PPU-93: sheet payload is bit depth + palettes + char words, nothing else.
+    // PPU-93: sheet payload is bit depth + palettes + char words + each char's palette, nothing else.
     #[test]
     fn sheet_roundtrips_and_carries_no_map_geometry() {
         let p = SourcePayload::Sheet(sample_sheet());
         let b = p.encode();
         assert_eq!(SourcePayload::decode(&b).unwrap(), p);
         // version, kind=3, bit_depth, pal_count, pal0 len, color lo/hi ...
-        assert_eq!(&b[..6], &[3, 3, 2, 2, 2, 0x1f]);
+        assert_eq!(&b[..6], &[PAYLOAD_VERSION, 3, 2, 2, 2, 0x1f]);
         // header(2) + bit_depth(1) + pal block(1 + (1+4) + (1+2) = 9) = 12, then u16 tile_count
         assert_eq!(&b[12..14], &[2, 0]);
-        // ...and the payload ENDS with the char words: no screen_size byte, no tilemap.
-        assert_eq!(b.len(), 14 + 16 * 2);
+        // ...then the char words, and the payload ENDS with each char's palette: no screen_size byte, no tilemap.
+        assert_eq!(b.len(), 14 + 16 * 2 + 1 + 2);
+        assert_eq!(&b[14 + 16 * 2..], &[1, 0, 1]);
+        // A sheet that does not say its chars' palettes carries only the flag.
+        let none = SourcePayload::Sheet(SheetSource { pals: vec![], ..sample_sheet() });
+        assert_eq!(SourcePayload::decode(&none.encode()).unwrap(), none);
+        assert_eq!(none.encode().len(), 14 + 16 * 2 + 1);
     }
 
     // PPU-93: same strict codec discipline as the existing kinds.
@@ -1456,6 +1483,13 @@ mod tests {
             SourcePayload::decode(&huge),
             Err(PayloadError::BadParam("tile_count"))
         );
+        // A char's palette must be one of the sheet's.
+        let mut past = SourcePayload::Sheet(sample_sheet()).encode();
+        *past.last_mut().unwrap() = 2;
+        assert_eq!(SourcePayload::decode(&past), Err(PayloadError::BadParam("pals")));
+        let mut flag = SourcePayload::Sheet(sample_sheet()).encode();
+        flag[14 + 16 * 2] = 2;
+        assert_eq!(SourcePayload::decode(&flag), Err(PayloadError::BadParam("has_pals")));
     }
 
     fn sample_obj() -> ObjSource {
@@ -1488,12 +1522,14 @@ mod tests {
     // Stored payloads from every earlier version keep decoding after a bump.
     #[test]
     fn decode_accepts_every_earlier_payload_version() {
-        let mut v2 = SourcePayload::Sheet(sample_sheet()).encode();
-        v2[0] = 2;
-        assert_eq!(
-            SourcePayload::decode(&v2).unwrap(),
-            SourcePayload::Sheet(sample_sheet())
-        );
+        // Before v4 a sheet ended with its char words and did not say its chars' palettes.
+        let old = SourcePayload::Sheet(SheetSource { pals: vec![], ..sample_sheet() });
+        for version in [2, 3] {
+            let mut b = old.encode();
+            b.pop();
+            b[0] = version;
+            assert_eq!(SourcePayload::decode(&b).unwrap(), old);
+        }
         let mut v1 = SourcePayload::Bg(sample_bg()).encode();
         v1[0] = 1;
         assert_eq!(
@@ -1510,11 +1546,13 @@ mod tests {
 
     #[test]
     fn payload_self_describes_version_and_kind() {
-        assert_eq!(SourcePayload::Bg(sample_bg()).encode()[..2], [3, 0]);
-        assert_eq!(SourcePayload::M7(sample_m7()).encode()[..2], [3, 1]);
-        assert_eq!(SourcePayload::Obj(sample_obj()).encode()[..2], [3, 2]);
-        assert_eq!(SourcePayload::Sample(sample_sample()).encode()[..2], [3, 4]);
-        assert_eq!(SourcePayload::Song(vec![1, 2, 3]).encode()[..2], [3, 5]);
+        let v = PAYLOAD_VERSION;
+        assert_eq!(SourcePayload::Bg(sample_bg()).encode()[..2], [v, 0]);
+        assert_eq!(SourcePayload::M7(sample_m7()).encode()[..2], [v, 1]);
+        assert_eq!(SourcePayload::Obj(sample_obj()).encode()[..2], [v, 2]);
+        assert_eq!(SourcePayload::Sheet(sample_sheet()).encode()[..2], [v, 3]);
+        assert_eq!(SourcePayload::Sample(sample_sample()).encode()[..2], [v, 4]);
+        assert_eq!(SourcePayload::Song(vec![1, 2, 3]).encode()[..2], [v, 5]);
     }
 
     // A song source's payload is the PSNG bytes verbatim after the common
@@ -1526,7 +1564,7 @@ mod tests {
         let psng = b"PSNG\x01not-really-a-valid-body".to_vec();
         let p = SourcePayload::Song(psng.clone());
         let b = p.encode();
-        assert_eq!(&b[..2], &[3, 5]);
+        assert_eq!(&b[..2], &[PAYLOAD_VERSION, 5]);
         assert_eq!(&b[2..], &psng[..]);
         assert_eq!(SourcePayload::decode(&b).unwrap(), p);
     }
@@ -1535,7 +1573,7 @@ mod tests {
     fn song_decode_accepts_an_empty_psng_body() {
         let p = SourcePayload::Song(Vec::new());
         let b = p.encode();
-        assert_eq!(b, vec![3, 5]);
+        assert_eq!(b, vec![PAYLOAD_VERSION, 5]);
         assert_eq!(SourcePayload::decode(&b).unwrap(), p);
     }
 
@@ -1548,7 +1586,7 @@ mod tests {
         let p = SourcePayload::Sample(looped.clone());
         let b = p.encode();
         // version, kind=4, has_loop=1, loop_block=1 LE, block_count=2 LE
-        assert_eq!(&b[..7], &[3, 4, 1, 1, 0, 2, 0]);
+        assert_eq!(&b[..7], &[PAYLOAD_VERSION, 4, 1, 1, 0, 2, 0]);
         assert_eq!(&b[7..], &looped.brr[..]);
         assert_eq!(SourcePayload::decode(&b).unwrap(), p);
 
@@ -1559,7 +1597,7 @@ mod tests {
         let p2 = SourcePayload::Sample(unlooped.clone());
         let b2 = p2.encode();
         // version, kind=4, has_loop=0, block_count=2 LE
-        assert_eq!(&b2[..5], &[3, 4, 0, 2, 0]);
+        assert_eq!(&b2[..5], &[PAYLOAD_VERSION, 4, 0, 2, 0]);
         assert_eq!(&b2[5..], &unlooped.brr[..]);
         assert_eq!(SourcePayload::decode(&b2).unwrap(), p2);
     }
@@ -1624,7 +1662,7 @@ mod tests {
         };
         let b = SourcePayload::Bg(s).encode();
         // version, kind, bit_depth, tile_size, pal_count, pal0 len, color lo, hi
-        assert_eq!(&b[..8], &[3, 0, 2, 8, 1, 1, 0x1f, 0x00]);
+        assert_eq!(&b[..8], &[PAYLOAD_VERSION, 0, 2, 8, 1, 1, 0x1f, 0x00]);
         assert_eq!(&b[8..10], &[1, 0]); // u16 LE tile_count = 1
         assert_eq!(b[10 + 16], 0); // screen_size byte after 8 char words
         assert_eq!(b.len(), 10 + 16 + 1 + 0x400 * 2);
@@ -1654,8 +1692,8 @@ mod tests {
     fn decode_rejects_garbage() {
         assert_eq!(SourcePayload::decode(&[]), Err(PayloadError::Truncated));
         assert_eq!(
-            SourcePayload::decode(&[4, 0]),
-            Err(PayloadError::BadVersion(4))
+            SourcePayload::decode(&[PAYLOAD_VERSION + 1, 0]),
+            Err(PayloadError::BadVersion(PAYLOAD_VERSION + 1))
         );
         assert_eq!(
             SourcePayload::decode(&[1, 9]),

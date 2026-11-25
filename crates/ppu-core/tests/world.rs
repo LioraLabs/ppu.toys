@@ -510,10 +510,12 @@ fn empty_cells_need_a_blank_tile_in_the_sheet() {
     assert!(err.message.contains("has no blank tile"), "{}", err.message);
 }
 
+/// A sheet of several palettes says which one each char uses in its payload (v4), so a map draws from it
+/// without setSheetPalettes; a payload from before v4 does not, and is refused without them.
 #[test]
 fn a_multi_palette_sheet_without_its_palettes_is_refused() {
     let mut e = LuaEngine::new();
-    let (payload, _) = ppu_core::convert_source(
+    let (mut payload, _) = ppu_core::convert_source(
         ppu_core::SourceKind::Sheet,
         &ppu_core::ConvertOptions {
             bit_depth: Some(4),
@@ -526,6 +528,12 @@ fn a_multi_palette_sheet_without_its_palettes_is_refused() {
     .unwrap();
     e.add_source("tiles", &payload.encode()).unwrap();
     let map = tmj(64, 32, &vec![1u32; 64 * 32]);
+    e.set_sources(&[("main.luau", BOUND), ("level1.tmj", &map)]).unwrap();
+    let ppu_core::SourcePayload::Sheet(sheet) = &mut payload else { panic!("a sheet") };
+    assert!(sheet.palettes.len() > 1, "the fixture needs several palettes");
+    sheet.pals.clear();
+    let mut e = LuaEngine::new();
+    e.add_source("tiles", &payload.encode()).unwrap();
     let err = e
         .set_sources(&[("main.luau", BOUND), ("level1.tmj", &map)])
         .unwrap_err();

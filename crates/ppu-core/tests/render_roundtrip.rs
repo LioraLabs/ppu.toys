@@ -188,12 +188,23 @@ fn template_entries() -> Option<Vec<Entry>> {
     Some(out)
 }
 
+/// A sheet payload stored before v4 does not say its chars' palettes, which a fresh import adds: those
+/// compare without them (the meta's cells still carry them).
+fn same_render_data(mut fresh: SourcePayload, stored: &SourcePayload) -> bool {
+    if let (SourcePayload::Sheet(f), SourcePayload::Sheet(s)) = (&mut fresh, stored) {
+        if s.pals.is_empty() {
+            f.pals.clear();
+        }
+    }
+    fresh.encode() == stored.encode()
+}
+
 fn round_trip(entries: &[Entry]) -> Vec<String> {
     let mut failures = vec![];
     for e in entries {
         let result = render_png(&e.payload, &e.meta, None)
             .and_then(|png| convert_png_source(e.kind, &e.opts, &png, None))
-            .map(|(p, _)| p.encode() == e.payload.encode());
+            .map(|(p, _)| same_render_data(p, &e.payload));
         match result {
             Ok(true) => {}
             Ok(false) => failures.push(format!("{}: payload differs", e.name)),

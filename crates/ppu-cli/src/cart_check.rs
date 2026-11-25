@@ -152,6 +152,21 @@ fn module_hash(dir: &Path, out: &mut dyn Write) -> Result<Option<String>> {
     }
 }
 
+/// `PPU_CHECK_MODULE`'s file, cached under its content hash like a downloaded one.
+fn local_module(dir: &Path, path: &Path) -> Result<String> {
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("PPU_CHECK_MODULE: cannot read {}", path.display()))?;
+    let hash = format!("local-{}", &sha256_hex(&bytes)[..16]);
+    let wasm = dir.join(format!("{hash}.wasm"));
+    if !wasm.exists() {
+        std::fs::create_dir_all(dir)?;
+        let part = dir.join(format!("{hash}.wasm.part"));
+        std::fs::write(&part, &bytes)?;
+        std::fs::rename(&part, &wasm)?;
+    }
+    Ok(hash)
+}
+
 /// `bytes` followed by their checksum.
 // shortcut: SipHash with fixed keys catches a damaged file, not a forged one; anyone who can write
 // the cache can replace the .wasm too. Upgrade to a keyed MAC if the cache ever crosses users.
@@ -430,8 +445,13 @@ pub fn check(path: &Path, last: u32, holds: &[(u32, u32, u32)], out: &mut dyn Wr
     let body = body.to_string();
 
     let dir = cache_dir()?;
-    let Some(hash) = module_hash(&dir, out)? else {
-        return Ok(());
+    let hash = match std::env::var_os("PPU_CHECK_MODULE").filter(|v| !v.is_empty()) {
+        // A module built beside the code it checks (the repo's own gate), not the site's.
+        Some(path) => local_module(&dir, Path::new(&path))?,
+        None => match module_hash(&dir, out)? {
+            Some(hash) => hash,
+            None => return Ok(()),
+        },
     };
     let mut config = Config::new();
     // a big game's Lua recurses deeply; the run thread below has room for it
