@@ -189,9 +189,16 @@ fn m7_picture(a: [u8; 3], b: [u8; 3]) -> Vec<u8> {
 
 fn m7_engine(main: &str) -> Result<LuaEngine, String> {
     let mut e = LuaEngine::new();
-    common::add_m7(&mut e, "ocean", m7_picture([0, 0, 255], [0, 255, 255]), 8, 8);
+    common::add_m7(
+        &mut e,
+        "ocean",
+        m7_picture([0, 0, 255], [0, 255, 255]),
+        8,
+        8,
+    );
     common::add_m7(&mut e, "lair", m7_picture([255, 0, 0], [255, 255, 0]), 8, 8);
-    e.set_sources(&[("main.lua", main)]).map_err(|err| err.message)?;
+    e.set_sources(&[("main.lua", main)])
+        .map_err(|err| err.message)?;
     Ok(e)
 }
 
@@ -201,11 +208,17 @@ fn m7_engine(main: &str) -> Result<LuaEngine, String> {
 fn a_stage_load_replaces_the_mode_7_picture() {
     let two_at_setup = m7_engine("dma('ocean')\ndma('lair')\nfunction frame(t, f) end")
         .and_then(|mut e| e.frame(0.0, 0).map_err(|err| err.message));
-    assert!(two_at_setup.is_err(), "a second Mode 7 picture at setup was accepted");
+    assert!(
+        two_at_setup.is_err(),
+        "a second Mode 7 picture at setup was accepted"
+    );
     let placed = |name: &str| {
         let mut e = m7_engine(&format!("dma('{name}')\nfunction frame(t, f) end")).unwrap();
         e.frame(0.0, 0).unwrap();
-        (e.memory().vram[..64].to_vec(), e.memory().cgram[..3].to_vec())
+        (
+            e.memory().vram[..64].to_vec(),
+            e.memory().cgram[..3].to_vec(),
+        )
     };
     let (ocean, lair) = (placed("ocean"), placed("lair"));
     assert_ne!(ocean, lair);

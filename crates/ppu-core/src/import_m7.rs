@@ -153,7 +153,7 @@ fn dedup_tiles(
 }
 
 /// Budget report for a Mode 7 import — honest numbers, including overflow.
-#[derive(Clone, Debug, serde::Serialize, PartialEq)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct Mode7ImportReport {
     /// Opaque palette entries used (`cgram[1..=colors]`; index 0 is reserved
     /// transparent, so the ceiling is 255).
@@ -217,12 +217,31 @@ pub fn import_mode7_with_priority(
             }
         }
     }
-    let (tiles, map, tiles_w, tiles_h, unique_total) =
-        dedup_tiles(&indexed, width, height, M7_MAX_TILES);
-
     let palette_bgr: Vec<u16> = palette.iter().map(|c| rgb15(c[0], c[1], c[2])).collect();
+    Ok(m7_from_indexed(&indexed, palette_bgr, width, height, extbg))
+}
+
+/// Back half of [`import_mode7_with_priority`]: one palette-index byte per pixel
+/// (row-major, 0 = transparent, entry i of `palette_bgr` = index i+1, bit 7 =
+/// EXTBG priority) in, an `M7Source` out. Exact 8x8 dedup to at most 256 tiles
+/// (overflow reported, overflowing cells fall back to tile 0) and the tilemap.
+/// Panics if `indexed.len() != width * height`.
+pub fn m7_from_indexed(
+    indexed: &[u8],
+    palette_bgr: Vec<u16>,
+    width: usize,
+    height: usize,
+    extbg: bool,
+) -> (crate::source::M7Source, crate::source::SourceMeta) {
+    assert_eq!(
+        indexed.len(),
+        width * height,
+        "indexed buffer/dimensions mismatch"
+    );
+    let (tiles, map, tiles_w, tiles_h, unique_total) =
+        dedup_tiles(indexed, width, height, M7_MAX_TILES);
     let report = Mode7ImportReport {
-        colors: palette.len() as u16,
+        colors: palette_bgr.len() as u16,
         unique_tiles: unique_total.min(u16::MAX as usize) as u16,
         tile_capacity: M7_MAX_TILES as u16,
         overflow_tiles: unique_total
@@ -231,9 +250,16 @@ pub fn import_mode7_with_priority(
         map_tiles_w: tiles_w as u16,
         map_tiles_h: tiles_h as u16,
     };
-    Ok((
+    (
         crate::source::M7Source {
-            options: crate::source::M7Options { extbg },
+            options: crate::source::M7Options {
+                extbg,
+                overflowed_tiles: if unique_total > M7_MAX_TILES {
+                    unique_total.min(u16::MAX as usize) as u16
+                } else {
+                    0
+                },
+            },
             palette: palette_bgr,
             tiles,
             tiles_w: tiles_w as u8,
@@ -246,7 +272,7 @@ pub fn import_mode7_with_priority(
             report: crate::source::SourceReport::Mode7 { report },
             cells: None,
         },
-    ))
+    )
 }
 
 #[cfg(test)]
@@ -433,5 +459,16 @@ mod tests {
         assert_eq!(mem.vram[0], 1 << 8);
         assert_eq!(mem.vram[63], 1 << 8);
         assert_eq!(mem.cgram[1], rgb15(0, 255, 0));
+    }
+
+    #[test]
+    fn back_half_builds_payload_from_an_index_grid() {
+        let mut idx = vec![0u8; 16 * 8];
+        idx[0] = 1; // first tile differs from the blank second tile
+        let (src, meta) = m7_from_indexed(&idx, vec![0x1234], 16, 8, false);
+        assert_eq!(src.tiles.len(), 2);
+        assert_eq!(src.map, vec![0, 1]);
+        assert_eq!(src.palette, vec![0x1234]);
+        assert_eq!((meta.width, meta.height), (16, 8));
     }
 }

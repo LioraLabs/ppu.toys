@@ -28,16 +28,18 @@ end
 }
 
 #[test]
-fn failed_parallel_assignment_is_atomic_and_evaluates_values_once() {
+fn a_broken_parallel_assignment_stores_every_value_and_evaluates_them_once() {
     let mut e = LuaEngine::new();
     e.set_source("local x=makeBounded(3,0,10)\nlocal y=makeBounded(4,0,10)\nlocal calls=0\nlocal function once() calls=calls+1;return 5,99 end\nfunction frame(t,f)\n if f==0 then x,y=once() end\n obj[0].x=x;obj[1].x=y;obj[2].x=calls\nend").unwrap();
-    let error = e.frame(0., 0).unwrap_err();
-    assert_eq!(error.line, Some(6));
-    assert!(error.message.contains("binding y"), "{error:?}");
+    e.frame(0., 0).unwrap();
+    let [v] = e.violations() else {
+        panic!("{:?}", e.violations())
+    };
+    assert_eq!((v.store.as_str(), v.line, v.value), ("y", 6, 99.));
     e.frame(1. / 60., 1).unwrap();
     assert_eq!(
         e.memory().oam[..3].iter().map(|s| s.x).collect::<Vec<_>>(),
-        [3, 4, 1]
+        [5, 99, 1]
     );
 }
 
@@ -79,14 +81,25 @@ fn forward_global_contracts_check_stores_in_the_defining_helpers_file() {
         ),
     ])
     .unwrap();
-    let error = e.frame(0., 0).unwrap_err();
-    assert_eq!(error.file.as_deref(), Some("helper.lua"));
-    assert_eq!(error.line, Some(2));
+    e.frame(0., 0).unwrap();
+    let [v] = e.violations() else {
+        panic!("{:?}", e.violations())
+    };
+    assert_eq!((v.file.as_str(), v.line, v.value), ("helper.lua", 2, -1.));
 }
 
 #[test]
 fn invalid_values_and_declarations_fail_without_clamping() {
-    for value in ["-1", "101", "1.5", "nil", "true", "'3'", "0/0"] {
+    // A number out of bounds is recorded and kept; a value no store can hold still stops.
+    for value in ["-1", "101", "1.5", "0/0"] {
+        let mut e = LuaEngine::new();
+        e.set_source(&format!(
+            "local x=makeBounded({value},0,100)\nfunction frame() end"
+        ))
+        .unwrap();
+        assert_eq!(e.violations().len(), 1, "{value}");
+    }
+    for value in ["nil", "true", "'3'"] {
         let mut e = LuaEngine::new();
         let error = e
             .set_source(&format!("local x=makeBounded({value},0,100)"))
@@ -110,7 +123,9 @@ fn invalid_values_and_declarations_fail_without_clamping() {
         assert!(LuaEngine::new().set_source(source).is_err(), "{source}");
     }
     // Record fields keep their contract (see luau_surface.rs).
-    assert!(LuaEngine::new().set_source("local t={hp=makeBounded(0,0,10)}").is_ok());
+    assert!(LuaEngine::new()
+        .set_source("local t={hp=makeBounded(0,0,10)}")
+        .is_ok());
 }
 
 #[test]

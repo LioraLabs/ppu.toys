@@ -1,5 +1,6 @@
--- Tracked environment for ppuglobals.lua (see LuaEngine::load_controls/frame's
--- Phase A). ppuglobals.lua is compiled with `__ppu_controls_env` as its _ENV,
+-- Tracked environment for the live pokes chunk (see LuaEngine::set_pokes,
+-- load_controls and frame's Phase A). The chunk is compiled with
+-- `__ppu_controls_env` as its _ENV,
 -- so every global read/write it makes (including nested table fields, e.g.
 -- `obj[0].x = 96`) passes through `track`'s proxy. A write is logged as
 -- (real table, key, old value) before it lands on the REAL table, so
@@ -10,12 +11,11 @@
 -- accumulator (see frame()'s Phase A doc comment). Reads do NOT pass
 -- through untouched: a nested-table read returns a PROXY, not the real
 -- table (`#` and `pairs` are forwarded; `rawget` and identity comparisons
--- still give wrong answers inside ppuglobals.lua). Writing a table-valued READ
+-- still give wrong answers inside the chunk). Writing a table-valued READ
 -- elsewhere (e.g. `obj[0] = obj[1]`) stores that PROXY onto the real
 -- globals, not the underlying table — also unsupported. The generated
--- document only ever does scalar reads/assignments and `hdma(...)` calls,
--- plus the setup calls apply_setup makes, and those forms are the only
--- ones supported inside ppuglobals.lua.
+-- chunk only ever does scalar reads/assignments and `hdma(...)`/`dma(...)`
+-- calls, and those forms are the only ones supported inside it.
 local G = _ENV
 local log = {}
 local n = 0
@@ -29,7 +29,7 @@ local n = 0
 -- can tell a register write from a memory-table one.
 local cache = {}
 
--- ppuglobals.lua's own `vr`: the built-in writes the REAL `vram`, which would
+-- The chunk's own `vr`: the built-in writes the REAL `vram`, which would
 -- skip the undo log and leave a released tile poke baked in. This one writes
 -- through the tracked proxy, one logged write per word like the raw
 -- `vram[addr] = word` lines it replaces. Assigned below, once `track` exists.
@@ -82,8 +82,8 @@ local function track(real, root)
       real[k] = v
     end,
     -- `#` and pairs() see the real table (values still come back proxied),
-    -- so a setup call made from ppuglobals.lua that walks a global table
-    -- with `#` or pairs() (in apply_setup, say) reads the chunk it names.
+    -- so a call made from the chunk that walks a global table with `#` or
+    -- pairs() reads the table it names.
     __len = function()
       return #real
     end,
@@ -103,9 +103,9 @@ end
 
 G.__ppu_controls_env = track(G)
 
--- While `apply_vram()` is being captured (once per load, see below), `vr`
+-- While `__ppu_pokes_vram()` is being captured (once per load, see below), `vr`
 -- records its words instead of writing them. Outside that window it is a
--- tracked write like any other line in this file.
+-- tracked write like any other line in the chunk.
 local capture
 
 tracked_vr = function(addr, words)
@@ -123,13 +123,13 @@ end
 
 -- The painted tiles are constant literals, so they never need to run as Lua
 -- at frame time: a 32x32 map through the tracked proxy cost ~20 ms EVERY
--- frame. Instead `apply_vram()` runs ONCE per load with `vr` capturing, and
+-- frame. Instead `__ppu_pokes_vram()` runs ONCE per load with `vr` capturing, and
 -- the engine overlays the captured words onto VRAM in Rust each frame, after
 -- everything else (pokes always win). Leaves `__ppu_controls_vram` as a
--- sparse {addr = word} table. Raises whatever apply_vram raises.
+-- sparse {addr = word} table. Raises whatever __ppu_pokes_vram raises.
 function G.__ppu_controls_capture_vram()
   G.__ppu_controls_vram = {}
-  local v = G.apply_vram
+  local v = G.__ppu_pokes_vram
   if type(v) ~= "function" then
     return
   end

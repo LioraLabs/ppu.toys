@@ -45,6 +45,8 @@ jobs:
             os: macos-14
           - target: aarch64-apple-darwin
             os: macos-14
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -57,22 +59,45 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }} -p ppu-cli
-      - name: Package
+      - name: Smoke test on Windows
+        if: runner.os == 'Windows'
+        shell: bash
         run: |
+          PPU="target/${{ matrix.target }}/release/ppu.exe"
+          "$PPU" new smoke
+          sed -i 's/$/\r/' smoke/main.luau   # a toy saved with CRLF line endings
+          "$PPU" check smoke --duration 2
+          "$PPU" render 'smoke\' --at 1 -o 'frames\one'
+          test -f frames/one/frame-00000060.png
+          "$PPU" pack smoke -o smoke.ppu.json
+          "$PPU" unpack smoke.ppu.json unpacked
+          "$PPU" check smoke.ppu.json --duration 2
+          cmp smoke/main.luau unpacked/main.luau
+      - name: Package
+        shell: bash
+        run: |
+          # Windows gets a zip with ppu.exe and ppu-link.exe (the ppu:// handler); everything else a tarball.
+          archive() {
+            if [ "$RUNNER_OS" = Windows ]; then 7z a "$1.zip" "$1" > /dev/null; else tar czf "$1.tar.gz" "$1"; fi
+          }
+          BIN=ppu; [ "$RUNNER_OS" = Windows ] && BIN="ppu.exe ppu-link.exe"
           ARCHIVE="ppu-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir "$ARCHIVE"
-          cp "target/${{ matrix.target }}/release/ppu" README.md LICENSE "$ARCHIVE/"
-          tar czf "$ARCHIVE.tar.gz" "$ARCHIVE"
+          for b in $BIN; do cp "target/${{ matrix.target }}/release/$b" "$ARCHIVE/"; done
+          cp README.md LICENSE "$ARCHIVE/"
+          archive "$ARCHIVE"
           # The same contents under a versionless name, so a consumer can fetch
-          # releases/latest/download/ppu-<target>.tar.gz without asking an API
-          # which version "latest" is. SHA256SUMS covers both names.
+          # releases/latest/download/ppu-<target>.tar.gz (or .zip) without asking an
+          # API which version "latest" is. SHA256SUMS covers both names.
           ALIAS="ppu-${{ matrix.target }}"
           mv "$ARCHIVE" "$ALIAS"
-          tar czf "$ALIAS.tar.gz" "$ALIAS"
+          archive "$ALIAS"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: "*.tar.gz"
+          path: |
+            *.tar.gz
+            *.zip
 
   release:
     needs: build
@@ -82,7 +107,7 @@ jobs:
         with:
           merge-multiple: true
       - name: Checksums
-        run: sha256sum *.tar.gz | tee SHA256SUMS
+        run: sha256sum *.tar.gz *.zip | tee SHA256SUMS
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -91,4 +116,4 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --title "ppu $GITHUB_REF_NAME" \
             --generate-notes \
-            *.tar.gz SHA256SUMS
+            *.tar.gz *.zip SHA256SUMS

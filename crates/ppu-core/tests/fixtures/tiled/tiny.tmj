@@ -1,0 +1,14 @@
+{
+  "type": "map",
+  "orientation": "orthogonal",
+  "infinite": false,
+  "width": 2,
+  "height": 2,
+  "tilewidth": 8,
+  "tileheight": 8,
+  "tilesets": [{"firstgid": 1, "source": "tiny.tsj"}],
+  "layers": [
+    {"id": 1, "name": "ground", "type": "tilelayer", "x": 0, "y": 0, "width": 2, "height": 2,
+     "encoding": "base64", "data": "AQAAAAYAAAAAAAAAEAAAgA=="}
+  ]
+}

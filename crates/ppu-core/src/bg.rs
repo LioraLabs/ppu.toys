@@ -47,11 +47,12 @@ pub(crate) fn char_pixel_index(mem: &Memory, addr: u16, bpp: u8, fx: u32, fy: u3
     index
 }
 
-/// VRAM word address of the tilemap entry for tile column `tx`, row `ty`
-/// (already wrapped to the layer's total tile extent). A tilemap is 1, 2, or
-/// 4 32x32-entry screens of 0x400 words, arranged per the BGnSC screen size:
-/// 0 = 32x32; 1 = 64x32 (screen 1 right); 2 = 32x64 (screen 1 below);
-/// 3 = 64x64 (screens 0|1 over 2|3). Wraps mod VRAM.
+/// VRAM word address of the tilemap entry for tile column `tx`, row `ty`. A
+/// tilemap is 1, 2, or 4 32x32-entry screens of 0x400 words, arranged per the
+/// BGnSC screen size: 0 = 32x32; 1 = 64x32 (screen 1 right); 2 = 32x64
+/// (screen 1 below); 3 = 64x64 (screens 0|1 over 2|3). Wraps mod VRAM. The
+/// rasterizer passes coordinates wrapped to the layer's extent; a `bg[n].map`
+/// poke passes raw ones, whose screen number wraps mod 32 with VRAM.
 pub(crate) fn map_entry_addr(map_base: u16, screen_size: u8, tx: u32, ty: u32) -> u16 {
     let screen = match screen_size {
         1 => tx / 32,
@@ -59,7 +60,8 @@ pub(crate) fn map_entry_addr(map_base: u16, screen_size: u8, tx: u32, ty: u32) -
         3 => (ty / 32) * 2 + tx / 32,
         _ => 0,
     };
-    let off = screen * 0x400 + (ty % 32) * 32 + (tx % 32);
+    // Screen bits 5+ only add multiples of 0x8000, which the VRAM mask drops.
+    let off = (screen & 31) * 0x400 + (ty % 32) * 32 + (tx % 32);
     ((map_base as u32 + off) & 0x7fff) as u16
 }
 
@@ -118,6 +120,23 @@ fn offset_per_tile(layer: &RegBg, mem: &Memory, screen_x: usize) -> ColumnOffset
         h: entry(word),
         v: entry(read(8)),
     }
+}
+
+/// `bg[n].columns` -> the 32 vertical words of Mode 2's offset table (BG3 map row 1), for layer
+/// 0 (BG1) or 1 (BG2) with 8px tiles and BG3 scroll 0. Entry k serves map column
+/// `scroll_x // 8 + k + 1` (mod the map's width in tiles); a column with a nonzero `dy` arms the
+/// entry with `scroll_y + dy`, as an armed vertical entry replaces VOFS. Pinned frame by frame by
+/// tests/fixtures/columns_table.json, the same fixture the cartridge lowering checks against.
+pub fn columns_vertical_words(layer: u8, width: u32, scroll_x: i16, scroll_y: i16, dy: impl Fn(u32) -> i16) -> [u16; 32] {
+    let first = (scroll_x as i64).div_euclid(8) + 1;
+    std::array::from_fn(|k| {
+        let d = dy((first + k as i64).rem_euclid(width as i64) as u32);
+        if d == 0 {
+            0
+        } else {
+            (0x2000 << layer) | ((scroll_y as i64 + d as i64) & 0x3ff) as u16
+        }
+    })
 }
 
 /// Direct color (CGWSEL.0): build a BGR555 word from an 8bpp pixel `index` and the
@@ -893,6 +912,55 @@ mod tests {
     fn map_entry_addr_wraps_vram() {
         // map_base at the top of VRAM: screen 1 wraps around to word 0.
         assert_eq!(map_entry_addr(0x7c00, 1, 32, 0), 0x0000);
+    }
+
+    #[test]
+    fn map_entry_addr_matches_wrapping_u32_arithmetic_for_any_input() {
+        // The address as plain u32 arithmetic wrapping on overflow (what
+        // release builds computed before the screen was reduced mod 32).
+        fn wrapping(map_base: u16, screen_size: u8, tx: u32, ty: u32) -> u16 {
+            let screen = match screen_size {
+                1 => tx / 32,
+                2 => ty / 32,
+                3 => (ty / 32).wrapping_mul(2).wrapping_add(tx / 32),
+                _ => 0,
+            };
+            let off = screen
+                .wrapping_mul(0x400)
+                .wrapping_add((ty % 32) * 32)
+                .wrapping_add(tx % 32);
+            ((map_base as u32).wrapping_add(off) & 0x7fff) as u16
+        }
+        let check = |b: u16, s: u8, x: u32, y: u32| {
+            assert_eq!(
+                map_entry_addr(b, s, x, y),
+                wrapping(b, s, x, y),
+                "{b:#x} {s} {x} {y}"
+            );
+        };
+        // Exhaustive at both ends of the u32 range, where negative coordinates land.
+        let ends: Vec<u32> = (0..256).chain(u32::MAX - 255..=u32::MAX).collect();
+        for b in [0, 0x7c00, 0x7fff, 0x8000, 0xffff] {
+            for s in [0, 1, 2, 3, 4, 255] {
+                for &x in &ends {
+                    for &y in &ends {
+                        check(b, s, x, y);
+                    }
+                }
+            }
+        }
+        // A million full-domain samples (xorshift64).
+        let mut r = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = || {
+            r ^= r << 13;
+            r ^= r >> 7;
+            r ^= r << 17;
+            r
+        };
+        for _ in 0..1_000_000 {
+            let (a, c) = (next(), next());
+            check(a as u16, (a >> 16) as u8, (a >> 32) as u32, c as u32);
+        }
     }
 
     #[test]

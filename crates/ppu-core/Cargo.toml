@@ -19,19 +19,27 @@ bindings = []
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64 = "0.22"
 # piccolo 0.3.3 aborts the VM on two ordinary table shapes (PPU-97). The fix has
 # been on piccolo's master since 2024 but was never released, and upstream is
 # unmaintained. vendor/piccolo is 0.3.3 plus that one fix, published to crates.io
 # as piccolo-ppu so `cargo install ppu-cli` gets it too. See vendor/piccolo/README.md.
-piccolo = { package = "piccolo-ppu", version = "0.3.4", path = "../../vendor/piccolo" }
+piccolo = { package = "piccolo-ppu", version = "0.3.6", path = "../../vendor/piccolo" }
 ahash = "=0.8.11" # pin: forces single getrandom 0.2 so wasm32 builds
 full_moon = { version = "=3.0.0", features = ["luau"] }
+# Only the Lua to Luau converter reads Lua 5.3 operators. A separate major keeps lua53 off the
+# version above: with it on, a Luau-only parse of `a & b` panics in full_moon 3.0.0.
+full_moon_lua53 = { package = "full_moon", version = "=2.0.0", features = ["luau", "lua53"] }
+ppu-rules = { path = "../ppu-rules", version = "0.2.0" }
+# Render a source to an indexed PNG and read PNGs back (cli and wasm both import art).
+png = "0.17"
+# Read WAV sample sources and write WAVs (cli: sample files, render --wav, sfx).
+hound = "3.5"
+# Parse Standard MIDI Files: a .mid song source (cli pack, Studio import).
+midly = { version = "0.5.3", default-features = false, features = ["std"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 serde-wasm-bindgen = "0.6"
 getrandom = { version = "0.2", features = ["js"] }
 js-sys = "0.3"
-
-[dev-dependencies]
-png = "0.17"

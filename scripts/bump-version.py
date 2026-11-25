@@ -45,8 +45,17 @@ def main():
     ok &= replace_once(ROOT / "Cargo.toml", r'^version = "[^"]+"$',
                        f'version = "{version}"', "Cargo.toml [workspace.package]")
     ok &= replace_once(ROOT / "crates/ppu-cli/Cargo.toml",
-                       r'^(ppu-core = \{ path = "\.\./ppu-core", version = )"[^"]+"',
+                       r'^(ppu-core = \{ path = "\.\./ppu-core",[^}\n]*version = )"[^"]+"',
                        rf'\1"{version}"', "ppu-cli's ppu-core pin")
+    ok &= replace_once(ROOT / "crates/ppu-cli/Cargo.toml",
+                       r'^(ppu-docs = \{ path = "\.\./ppu-docs",[^}\n]*version = )"[^"]+"',
+                       rf'\1"{version}"', "ppu-cli's ppu-docs pin")
+    ok &= replace_once(ROOT / "crates/ppu-docs/Cargo.toml",
+                       r'^(ppu-core = \{ path = "\.\./ppu-core",[^}\n]*version = )"[^"]+"',
+                       rf'\1"{version}"', "ppu-docs's ppu-core pin")
+    ok &= replace_once(ROOT / "crates/ppu-core/Cargo.toml",
+                       r'^(ppu-rules = \{ path = "\.\./ppu-rules",[^}\n]*version = )"[^"]+"',
+                       rf'\1"{version}"', "ppu-core's ppu-rules pin")
     ok &= replace_once(ROOT / "packaging/aur/PKGBUILD", r"^pkgver=.+$",
                        f"pkgver={version}", "PKGBUILD pkgver")
     ok &= replace_once(ROOT / "packaging/aur/PKGBUILD", r"^pkgrel=.+$",

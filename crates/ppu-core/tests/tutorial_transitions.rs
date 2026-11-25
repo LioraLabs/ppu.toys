@@ -122,13 +122,13 @@ fn vista() -> Vec<u8> {
     data
 }
 
-/// Render the toy at an arbitrary schedule point (the golden uses t=1.0/f=60).
-fn render_at(t: f64, f: u32) -> Vec<u8> {
+/// Render the toy at an arbitrary schedule point (the golden uses t=1.0), at the frame that t falls on.
+fn render_at(t: f64) -> Vec<u8> {
     let mut e = common::engine_with(
         &mut |e| common::add_bg(e, "vista", vista(), WIDTH as u32, HEIGHT as u32, 8),
         &[("main.luau", MAIN_SRC)],
     );
-    let lt = e.frame(t, f).unwrap();
+    let lt = e.frame(t, (t * 60.0).round() as u32).unwrap();
     render_frame(&lt, e.memory())
 }
 
@@ -140,7 +140,7 @@ fn lum(p: &[u8]) -> u32 {
 fn t1_wipe_frame_shows_the_scene_above_a_darkening_front() {
     // t=1.0 -> phase 0, u=1.0, edge=144: full brightness above ~y=114, a ramp
     // down to the front, black below — the golden frame, mid-transition.
-    let fb = render_at(1.0, 60);
+    let fb = render_at(1.0);
     let sky = common::px(&fb, 128, 20);
     assert_eq!(sky[3], 255);
     assert_ne!(&sky[..3], &[0, 0, 0], "sky above the front was black");
@@ -153,7 +153,7 @@ fn t1_wipe_frame_shows_the_scene_above_a_darkening_front() {
     assert_eq!(&below[..3], &[0, 0, 0], "below the front must be black");
     // inside the ramp: dimmer than the same pixel at the hold, but not black
     let band = common::px(&fb, 128, 132);
-    let hold = render_at(3.0, 60);
+    let hold = render_at(3.0);
     let held = common::px(&hold, 128, 132);
     assert_ne!(&band[..3], &[0, 0, 0], "ramp pixel already black");
     assert!(
@@ -165,8 +165,8 @@ fn t1_wipe_frame_shows_the_scene_above_a_darkening_front() {
 #[test]
 fn fade_phase_is_dimmer_than_the_hold() {
     // t=4.5 -> phase 2, u=0.5 -> brightness = floor(15 * 0.5) = 7.
-    let hold = render_at(3.0, 60);
-    let fade = render_at(4.5, 60);
+    let hold = render_at(3.0);
+    let fade = render_at(4.5);
     let (h, f) = (common::px(&hold, 128, 80), common::px(&fade, 128, 80));
     assert!(
         lum(f) < lum(h),
@@ -179,13 +179,13 @@ fn fade_phase_is_dimmer_than_the_hold() {
 fn mosaic_phase_flattens_the_water_flecks() {
     // Row 141 has a fleck at x=0 but not x=2, so the pixels differ at the hold;
     // t=7.0 -> mosaic = 15 -> 16px blocks replicate one sample across both.
-    let hold = render_at(3.0, 60);
+    let hold = render_at(3.0);
     assert_ne!(
         common::px(&hold, 0, 141),
         common::px(&hold, 2, 141),
         "the fine detail the mosaic test relies on is missing"
     );
-    let mosaic = render_at(7.0, 60);
+    let mosaic = render_at(7.0);
     assert_eq!(
         common::px(&mosaic, 0, 141),
         common::px(&mosaic, 2, 141),
@@ -196,8 +196,8 @@ fn mosaic_phase_flattens_the_water_flecks() {
 #[test]
 fn combo_phase_chunks_and_dims_at_once() {
     // t=9.0 -> phase 4, k=1: mosaic 15 AND brightness 4 — the level-exit.
-    let hold = render_at(3.0, 60);
-    let combo = render_at(9.0, 60);
+    let hold = render_at(3.0);
+    let combo = render_at(9.0);
     assert_eq!(
         common::px(&combo, 0, 141),
         common::px(&combo, 2, 141),
@@ -212,7 +212,7 @@ fn combo_phase_chunks_and_dims_at_once() {
 #[test]
 fn force_blank_blink_cuts_the_whole_frame_to_black() {
     // t=11.05 -> phase 5, u in [1, 1.15): force_blank = true.
-    let fb = render_at(11.05, 60);
+    let fb = render_at(11.05);
     assert!(
         fb.chunks_exact(4).all(|p| p[..3] == [0, 0, 0]),
         "force_blank frame was not fully black"
@@ -222,7 +222,7 @@ fn force_blank_blink_cuts_the_whole_frame_to_black() {
 #[test]
 fn transitions_matches_golden_png() {
     assert!(Path::new(GOLDEN).exists());
-    let actual = render_at(1.0, 60);
+    let actual = render_at(1.0);
     let expected = common::decode_png(GOLDEN);
     assert_eq!(actual.len(), expected.len());
     assert!(
@@ -234,6 +234,6 @@ fn transitions_matches_golden_png() {
 #[test]
 #[ignore = "regenerates the committed transitions golden PNG"]
 fn regen_golden_transitions() {
-    let fb = render_at(1.0, 60);
+    let fb = render_at(1.0);
     common::write_png(GOLDEN, &fb);
 }

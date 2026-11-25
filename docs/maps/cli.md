@@ -1,0 +1,37 @@
+---
+id: cli
+title: The ppu command
+order: 12
+description: Connecting a folder, checking, rendering and building from the shell.
+---
+- [[ppu-connect]]
+- [[connected-folder]]
+- [[ppu-check]]
+- [[ppu-render]]
+- [[render-a-few-moments]]
+- [[ppu-build]]
+- [[install-ppu]]
+- [[ppu-new]]
+- [[ppu-login]]
+- [[ppu-setup-links]]
+- [[ppu-json-manifest]]
+- [[ppu-json-cartridge-settings]]
+- [[ppu-check-seek-and-loop]]
+- [[ppu-render-with-a-save-file]]
+- [[ppu-render-wav]]
+- [[ppu-song-check]]
+- [[ppu-song-roll]]
+- [[ppu-sfx]]
+- [[a-wav-file-is-a-sample-source]]
+- [[a-song-json-file-is-a-song-source]]
+- [[a-mid-file-is-a-song-source]]
+- [[ppu-convert-lua-to-luau]]
+- [[ppu-pack-and-unpack]]
+- [[ppu-docs-offline]]
+- [[ppu-skills-refresh]]
+- [[ppu-types-after-an-upgrade]]
+- [[ppu-connect-clashes]]
+- [[ppu-connect-art-as-files]]
+- [[site-api-lists-published-toys]]
+- [[site-api-reads-a-toy-and-its-source]]
+- [[site-api-serves-roms]]

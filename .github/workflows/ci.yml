@@ -17,3 +17,12 @@ jobs:
       - run: python3 scripts/check-version-sync.py
       - run: cargo fmt -p ppu-core -p ppu-cli --check
       - run: cargo test --workspace --locked
+
+  # Prove ppu-cli still builds on Windows before a release tag finds out. Build only: the tests' fixtures check out with CRLF there.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p ppu-cli --locked

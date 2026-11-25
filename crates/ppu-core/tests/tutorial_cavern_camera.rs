@@ -259,7 +259,7 @@ fn engine(src: &str) -> LuaEngine {
 
 fn render(src: &str, t: f64) -> Vec<u8> {
     let mut e = engine(src);
-    let lt = e.frame(t, 60).unwrap();
+    let lt = e.frame(t, (t * 60.0).round() as u32).unwrap();
     render_frame(&lt, e.memory())
 }
 

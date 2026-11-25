@@ -1,0 +1,12 @@
+{
+  "type": "tileset",
+  "name": "tiny",
+  "image": "tiles.png",
+  "imagewidth": 32,
+  "imageheight": 32,
+  "tilewidth": 8,
+  "tileheight": 8,
+  "columns": 4,
+  "tilecount": 16,
+  "tiles": [{"id": 5, "type": "spike"}]
+}

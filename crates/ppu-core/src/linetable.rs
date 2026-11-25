@@ -77,7 +77,7 @@ impl LineTableBuilder {
 }
 
 /// The resolved per-scanline register state for a whole frame (absolute values).
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct LineTable {
     pub rows: Vec<RegRow>,
 }

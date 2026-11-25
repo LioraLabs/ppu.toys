@@ -77,7 +77,10 @@ fn a_damaged_or_foreign_save_starts_from_the_defaults() {
     }
     // Intact but out of range (stage stored 9): defaults too.
     let mut e = LuaEngine::new();
-    e.set_sram(&format!(r#"{{"ppu.save":"{}"}}"#, hex(&fresh(&l, &[0, 0, 9]))));
+    e.set_sram(&format!(
+        r#"{{"ppu.save":"{}"}}"#,
+        hex(&fresh(&l, &[0, 0, 9]))
+    ));
     e.set_sources(&[("main.luau", MAIN)]).unwrap();
     assert_eq!(e.frame(0.0, 0).unwrap().rows[0].brightness, 1);
 }
@@ -86,15 +89,26 @@ fn a_damaged_or_foreign_save_starts_from_the_defaults() {
 fn fields_keep_their_contracts_and_the_declaration_is_checked() {
     let run = |main: &str| {
         let mut e = LuaEngine::new();
-        e.set_sources(&[("main.luau", main)]).and_then(|_| e.frame(0.0, 0).map(|_| ()))
+        e.set_sources(&[("main.luau", main)])
+            .and_then(|_| e.frame(0.0, 0).map(|_| ()))
     };
-    let e = run("local save = saveData({lives = makeBounded(3, 0, 9)})\nfunction frame() save.lives = 10 end").unwrap_err();
-    assert!(e.message.contains("0..9"), "{}", e.message);
-    let e = run("local save = saveData({seen = false})\nfunction frame() save.other = 1 end").unwrap_err();
+    let mut e = LuaEngine::new();
+    e.set_sources(&[("main.luau", "local save = saveData({lives = makeBounded(3, 0, 9)})\nfunction frame() save.lives = 10 end")]).unwrap();
+    e.frame(0.0, 0).unwrap();
+    assert_eq!(
+        e.violations()
+            .iter()
+            .map(|v| (v.store.as_str(), v.max, v.value))
+            .collect::<Vec<_>>(),
+        [("lives", 9, 10.)]
+    );
+    let e = run("local save = saveData({seen = false})\nfunction frame() save.other = 1 end")
+        .unwrap_err();
     assert!(e.message.contains("no field other"), "{}", e.message);
     let e = run("local MAX = 9\nlocal save = saveData({lives = makeBounded(3, 0, MAX)})\nfunction frame() end").unwrap_err();
     assert!(e.message.contains("literal bounds"), "{}", e.message);
-    let e = run("local save = saveData({speed = makeFixed(0, 0, 4)})\nfunction frame() end").unwrap_err();
+    let e = run("local save = saveData({speed = makeFixed(0, 0, 4)})\nfunction frame() end")
+        .unwrap_err();
     assert!(e.message.contains("saveData field speed"), "{}", e.message);
 }
 
@@ -108,5 +122,20 @@ fn a_foreign_save_full_of_junk_resets_quickly() {
     e.set_sources(&[("main.luau", MAIN)]).unwrap();
     e.frame(0.0, 0).unwrap();
     assert!(start.elapsed().as_millis() < 500, "{:?}", start.elapsed());
-    assert_eq!(slot(&mut e).unwrap(), hex(&fresh(&the_layout(), &[0, 0, 0])));
+    assert_eq!(
+        slot(&mut e).unwrap(),
+        hex(&fresh(&the_layout(), &[0, 0, 0]))
+    );
+}
+
+/// A kept save whose keys arrive in reverse order is not dirty, with or without `preserve_order`.
+#[test]
+fn a_kept_save_in_reverse_key_order_is_not_dirty() {
+    let l = the_layout();
+    let saved = hex(&fresh(&l, &[500, 1, 2]));
+    let mut e = LuaEngine::new();
+    e.set_sram(&format!(r#"{{"ppu.save.size":2048,"ppu.save":"{saved}"}}"#));
+    e.set_sources(&[("main.luau", MAIN)]).unwrap();
+    e.frame(0.0, 0).unwrap();
+    assert_eq!(e.take_sram(), None);
 }

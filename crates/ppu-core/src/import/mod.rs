@@ -3,17 +3,20 @@
 //! this module's own surface is the tile-BG importer.
 
 pub mod brr;
+pub mod check;
 pub mod dither;
+pub mod keep;
+pub mod midi;
 pub mod obj;
 pub mod quantize;
 pub mod tiles;
 
 use std::collections::BTreeMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use self::dither::{remap_image, RemapOptions};
-use self::quantize::{fit_palettes, reduce_palette};
+use self::quantize::{fit_palettes, reduce_palette, trim_unused_colors};
 use self::tiles::{pack_planar, split_tiles_at, TileSet};
 
 /// Importer input format. `bit_depth` comes from the target layer's slot in
@@ -52,7 +55,7 @@ impl Default for ImportOptions {
 
 /// One honest budget overflow. Structured for the UI (m4/inspector); the
 /// importer never silently truncates.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum Overflow {
     /// Image exceeded the 512px (64-tile) map edge; excess cropped.
@@ -76,7 +79,7 @@ pub enum Overflow {
 }
 
 /// Colors/palettes/tiles/VRAM accounting + honest overflows.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BudgetReport {
     /// CGRAM entries written (sum of sub-palette sizes, excl. transparent 0s).
     pub colors_used: usize,
@@ -89,6 +92,30 @@ pub struct BudgetReport {
     pub unique_tiles: usize,
     /// Total VRAM words emitted (char + tilemap).
     pub vram_words: usize,
+    pub overflows: Vec<Overflow>,
+}
+
+/// The seam between an importer's front half (pixels -> palette rows + index
+/// grid) and the shared back half (`bg_from_indexed`, `sheet_from_indexed`,
+/// `obj::obj_from_indexed`): everything dedup, tilemap, banding, cell tables and
+/// bitplane packing need, and nothing about RGBA or quantizing.
+///
+/// Invariants (the back halves panic with a message if broken): `grids.len() ==
+/// cols * tile_rows`; every entry of `rows` is `< palettes.len()`; `rows` holds
+/// one entry per 8x8 tile (bg, sheet, obj 8x8 cells) or per cell (obj blocks).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IndexedArt {
+    /// Sub-palettes, colour 0 of each implicit (transparent).
+    pub palettes: Vec<Vec<u16>>,
+    /// One 8x8 grid of local palette indices (0 = transparent) per tile, row-major.
+    pub grids: Vec<tiles::IndexTile>,
+    /// Palette row per unit (see above).
+    pub rows: Vec<u8>,
+    /// Tile-grid width.
+    pub cols: usize,
+    /// Tile-grid height.
+    pub tile_rows: usize,
+    /// Front-half overflows (Cropped, TileSize16, Colors, Palettes), in order.
     pub overflows: Vec<Overflow>,
 }
 
@@ -178,10 +205,7 @@ pub fn import_tile_bg(
     }
 
     // 1. crop to the 64x64-tile (512px) map limit
-    let (w, h) = ((width as usize).min(512), (height as usize).min(512));
-    if (w, h) != (width as usize, height as usize) {
-        overflows.push(Overflow::Cropped { max_px: 512 });
-    }
+    let (w, h) = crop_to_map(width, height, &mut overflows);
     let cropped: std::borrow::Cow<[u8]> = if w == width as usize && h == height as usize {
         rgba.into()
     } else {
@@ -212,12 +236,84 @@ pub fn import_tile_bg(
         rows,
         &opts.remap,
     );
+    bg_from_indexed(
+        IndexedArt {
+            palettes: trim_unused_colors(fit.palettes, &grids, &fit.assignment),
+            grids,
+            rows: fit.assignment,
+            cols,
+            tile_rows: rows,
+            overflows,
+        },
+        bpp,
+        width,
+        height,
+    )
+}
+
+/// A tile BG's pixel size: the image's, cut to the 64x64-tile (512 px) map, with
+/// `Overflow::Cropped` pushed when it was cut. Every bg front half crops here.
+pub fn crop_to_map(width: u32, height: u32, overflows: &mut Vec<Overflow>) -> (usize, usize) {
+    let (w, h) = ((width as usize).min(512), (height as usize).min(512));
+    if (w, h) != (width as usize, height as usize) {
+        overflows.push(Overflow::Cropped { max_px: 512 });
+    }
+    (w, h)
+}
+
+/// Check an [`IndexedArt`] is internally consistent: one grid per tile of the
+/// `cols` x `tile_rows` grid, and `unit_rows` palette rows, each naming a palette.
+fn check_indexed(art: &IndexedArt, units: usize) {
+    assert_eq!(
+        art.grids.len(),
+        art.cols * art.tile_rows,
+        "IndexedArt: grids must hold cols * tile_rows tiles"
+    );
+    assert_eq!(
+        art.rows.len(),
+        units,
+        "IndexedArt: one palette row per unit"
+    );
+    assert!(
+        art.palettes.is_empty() || art.rows.iter().all(|&r| (r as usize) < art.palettes.len()),
+        "IndexedArt: a palette row names a palette that does not exist"
+    );
+}
+
+/// Chars a bg tilemap or a sheet can name (10-bit tile field).
+pub(crate) const BG_MAX_TILES: usize = 1024;
+
+/// Back half of [`import_tile_bg`]: an index grid in, a BG payload out. Flip-aware
+/// dedup (tile 0 reserved blank), bitplane pack and the screen-ordered tilemap.
+/// `art.rows` holds one palette row per 8x8 tile. `width`/`height` are the
+/// original image dims that go into the `SourceMeta`; `art.cols`/`art.tile_rows`
+/// are the (already cropped) tile grid that drives the map. Panics if `bpp` is
+/// not 2/4/8 or the art is internally inconsistent (see [`IndexedArt`]).
+pub fn bg_from_indexed(
+    art: IndexedArt,
+    bpp: u8,
+    width: u32,
+    height: u32,
+) -> (crate::source::BgSource, crate::source::SourceMeta) {
+    assert!(
+        matches!(bpp, 2 | 4 | 8),
+        "bg_from_indexed: bpp must be 2, 4 or 8"
+    );
+    check_indexed(&art, art.grids.len());
+    let IndexedArt {
+        palettes,
+        grids,
+        rows: assignment,
+        cols,
+        tile_rows: rows,
+        mut overflows,
+    } = art;
     let words_per_tile = bpp as usize * 4;
-    let max_tiles = 1024usize; // 10-bit tilemap tile field — placement-fit is a placement concern
+    let max_tiles = BG_MAX_TILES; // 10-bit tilemap tile field — placement-fit is a placement concern
     let mut set = TileSet::new(true);
     set.insert([0u8; 64]);
     let mut cells: Vec<u16> = Vec::with_capacity(grids.len());
-    for (grid, &pal) in grids.iter().zip(&fit.assignment) {
+    for (grid, &pal) in grids.iter().zip(&assignment) {
         let (n, hf, vf) = set.insert(*grid);
         let word = if (n as usize) >= max_tiles {
             0 // over char budget: blank cell (reported below, never mangled)
@@ -260,8 +356,8 @@ pub fn import_tile_bg(
     }
 
     let report = BudgetReport {
-        colors_used: fit.palettes.iter().map(|p| p.len()).sum(),
-        palettes_used: fit.palettes.len(),
+        colors_used: palettes.iter().map(|p| p.len()).sum(),
+        palettes_used: palettes.len(),
         tile_cells: cols * rows,
         unique_tiles,
         vram_words: char_words.len() + tilemap_words.len(),
@@ -271,7 +367,7 @@ pub fn import_tile_bg(
         crate::source::BgSource {
             bit_depth: bpp,
             tile_size: 8,
-            palettes: fit.palettes,
+            palettes,
             char_words,
             screen_size,
             tilemap_words,
@@ -320,10 +416,47 @@ pub fn import_tile_sheet(
         &opts.remap,
     );
 
+    sheet_from_indexed(
+        IndexedArt {
+            palettes: trim_unused_colors(fit.palettes, &grids, &fit.assignment),
+            grids,
+            rows: fit.assignment,
+            cols,
+            tile_rows: rows,
+            overflows,
+        },
+        bpp,
+        width,
+        height,
+    )
+}
+
+/// Back half of [`import_tile_sheet`]: an index grid in, a sheet payload out.
+/// No dedup and no reserved blank: char N is the Nth tile of `art.grids`. The
+/// cell table keeps TRUE sheet indices. `art.rows` holds one palette row per
+/// 8x8 tile. Panics on a bad `bpp` or inconsistent art, like [`bg_from_indexed`].
+pub fn sheet_from_indexed(
+    art: IndexedArt,
+    bpp: u8,
+    width: u32,
+    height: u32,
+) -> (crate::source::SheetSource, crate::source::SourceMeta) {
+    assert!(
+        matches!(bpp, 2 | 4 | 8),
+        "sheet_from_indexed: bpp must be 2, 4 or 8"
+    );
+    check_indexed(&art, art.grids.len());
+    let IndexedArt {
+        palettes,
+        grids,
+        rows: assignment,
+        mut overflows,
+        ..
+    } = art;
     // No dedup and no reserved blank: cell k IS char k. Only the 10-bit
     // tilemap tile field caps how many of them a map can name.
     let ncells = grids.len();
-    let max_tiles = 1024usize;
+    let max_tiles = BG_MAX_TILES;
     let kept = ncells.min(max_tiles);
     if ncells > max_tiles {
         overflows.push(Overflow::Tiles {
@@ -339,8 +472,7 @@ pub fn import_tile_sheet(
 
     // Cells keep their TRUE sheet index even past the ceiling: an honest
     // "this cell has no char" beats renumbering a WYSIWYG sheet.
-    let cells: Vec<obj::ObjCell> = fit
-        .assignment
+    let cells: Vec<obj::ObjCell> = assignment
         .iter()
         .enumerate()
         .map(|(k, &pal)| obj::ObjCell {
@@ -352,8 +484,8 @@ pub fn import_tile_sheet(
         .collect();
 
     let report = BudgetReport {
-        colors_used: fit.palettes.iter().map(|p| p.len()).sum(),
-        palettes_used: fit.palettes.len(),
+        colors_used: palettes.iter().map(|p| p.len()).sum(),
+        palettes_used: palettes.len(),
         tile_cells: ncells,
         unique_tiles: kept,
         vram_words: char_words.len(),
@@ -362,7 +494,7 @@ pub fn import_tile_sheet(
     (
         crate::source::SheetSource {
             bit_depth: bpp,
-            palettes: fit.palettes,
+            palettes,
             char_words,
         },
         crate::source::SourceMeta {
@@ -637,5 +769,39 @@ mod tests {
         assert_eq!(run(8), 4);
         assert_eq!(run(2), 2);
         assert_eq!(run(0), 1); // clamped to at least one
+    }
+
+    /// A 2-tile art: tile 0 solid index 1, tile 1 a mirror-free second pattern.
+    fn hand_art() -> IndexedArt {
+        let mut a = [0u8; 64];
+        a[0] = 1;
+        let mut b = [0u8; 64];
+        b[7] = 1; // a's horizontal mirror
+        IndexedArt {
+            palettes: vec![vec![0x1234]],
+            grids: vec![a, b],
+            rows: vec![0, 0],
+            cols: 2,
+            tile_rows: 1,
+            overflows: vec![],
+        }
+    }
+
+    #[test]
+    fn bg_back_half_builds_payload_from_an_index_grid() {
+        let (src, meta) = bg_from_indexed(hand_art(), 4, 16, 8);
+        // blank + one stored tile; the mirrored tile dedups with an h-flip
+        assert_eq!(src.char_words.len(), 2 * 16);
+        assert_eq!(src.tilemap_words[0], 1);
+        assert_eq!(src.tilemap_words[1], 1 | (1 << 14));
+        assert_eq!((meta.width, meta.height), (16, 8));
+    }
+
+    #[test]
+    fn sheet_back_half_keeps_every_cell_in_order() {
+        let (src, meta) = sheet_from_indexed(hand_art(), 4, 16, 8);
+        assert_eq!(src.char_words.len(), 2 * 16);
+        let cells = meta.cells.unwrap();
+        assert_eq!(cells.iter().map(|c| c.tile).collect::<Vec<_>>(), [0, 1]);
     }
 }

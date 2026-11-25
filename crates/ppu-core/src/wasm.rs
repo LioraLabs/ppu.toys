@@ -73,11 +73,83 @@ impl PpuCore {
         to_set_source_result(self.engine.set_sources(&pairs))
     }
 
+    /// The Studio's live pokes chunk the engine keeps across loads: top-level `dma()` lines,
+    /// `function __ppu_pokes_vram()`, `function __ppu_pokes()` (see `LuaEngine::set_pokes`); ""
+    /// drops them. Same `{ok, error?}` shape as `setSources`; errors carry `file: "pokes"`.
+    #[wasm_bindgen(js_name = setPokes)]
+    pub fn set_pokes(&mut self, chunk: &str) -> Result<JsValue, JsValue> {
+        to_set_source_result(self.engine.set_pokes(chunk))
+    }
+
     /// Power-cycle the sound chip (Run from t=0): fresh DSP, zero ARAM,
     /// recompile so placements re-write and timers restart at phase zero.
     /// Same `{ok, error?}` result shape as `setSources`.
     pub fn reset(&mut self) -> Result<JsValue, JsValue> {
         to_set_source_result(self.engine.reset())
+    }
+
+    /// The program's scene files (`scenes.add` order; one implied scene, the main file, without
+    /// scenes). Changes only with a load: read it after `setSources`/`reset`.
+    pub fn scenes(&self) -> Vec<String> {
+        self.engine.scenes()
+    }
+
+    /// The running scene, an index into `scenes()`; it follows `scenes.go`.
+    #[wasm_bindgen(js_name = currentScene)]
+    pub fn current_scene(&self) -> u32 {
+        self.engine.current_scene() as u32
+    }
+
+    /// The scene file the next load (`reset`, `setSources`) boots straight into; none = the
+    /// program's own boot. With `preview` it is a Scene view entry that runs the scene's `preview`
+    /// before its `init`.
+    #[wasm_bindgen(js_name = setStartScene)]
+    pub fn set_start_scene(&mut self, file: Option<String>, preview: bool) {
+        self.engine.set_start_scene(file, preview);
+    }
+
+    /// The project's update target (`targetHz`: 25, 30, 50 or 60; none: a `---@snes frames N` line
+    /// decides, else every video frame). At 25 or 30 `frame()` runs Lua only on every second video frame.
+    #[wasm_bindgen(js_name = setTargetHz)]
+    pub fn set_target_hz(&mut self, hz: Option<u8>) -> Result<(), JsValue> {
+        self.engine
+            .set_target_hz(hz)
+            .map_err(|e| JsValue::from_str(&e))
+    }
+
+    /// Video frames per update (30 Hz: 2): a held `scenes.go` is entered this many video frames
+    /// after the update that asked, as the cartridge enters it.
+    /// The run frame (from power-on) the host's `f = 0` stands for: after `enterPendingScene` the
+    /// host counts the scene from 0, and t still rounds as the cart's run does.
+    #[wasm_bindgen(js_name = setRunBase)]
+    pub fn set_run_base(&mut self, f: u32) {
+        self.engine.set_run_base(f);
+    }
+
+    #[wasm_bindgen(js_name = updateFrames)]
+    pub fn update_frames(&self) -> u32 {
+        self.engine.update_frames()
+    }
+
+    /// The scene a `scenes.go` asked for, not yet entered (an index into `scenes()`); none while
+    /// no switch waits.
+    #[wasm_bindgen(js_name = pendingScene)]
+    pub fn pending_scene(&self) -> Option<u32> {
+        self.engine.pending_scene().map(|k| k as u32)
+    }
+
+    /// Enter the pending scene now with its clock from t = 0 (the next frame is `frame(0, 0)`),
+    /// no preview. `{ok, error?}` as `setSources`; ok without a pending switch changes nothing.
+    #[wasm_bindgen(js_name = enterPendingScene)]
+    pub fn enter_pending_scene(&mut self) -> Result<JsValue, JsValue> {
+        to_set_source_result(self.engine.enter_pending_scene().map(|_| ()))
+    }
+
+    /// The host paused (true) or plays (false): paused, `frame()` again for the same `f` starts from
+    /// the state that frame first started from, so a poke redraws without advancing the program.
+    #[wasm_bindgen(js_name = setHold)]
+    pub fn set_hold(&mut self, on: bool) {
+        self.engine.set_hold(on);
     }
 
     /// Run one frame in full: Lua `frame()`, scanout, DSP/audio, sram, and the
@@ -124,21 +196,30 @@ impl PpuCore {
                 }
             }
         }
-        if self.obj_visible == Some(false) {
-            for o in self.engine.memory_mut().oam.iter_mut() {
-                o.on = false;
-            }
-        }
-
-        let mem = self.engine.memory();
         if compose {
-            let view = render_frame_view(&lt, mem);
+            // obj hidden for this picture only: OAM persists, and a held picture (30 Hz) reruns nothing
+            let hidden = self.obj_visible == Some(false);
+            let on: Vec<bool> = if hidden {
+                self.engine
+                    .memory_mut()
+                    .oam
+                    .iter_mut()
+                    .map(|o| std::mem::replace(&mut o.on, false))
+                    .collect()
+            } else {
+                vec![]
+            };
+            let view = render_frame_view(&lt, self.engine.memory());
+            for (o, on) in self.engine.memory_mut().oam.iter_mut().zip(on) {
+                o.on = on;
+            }
             self.framebuffer = view.framebuffer;
             self.obj_overflow = view.overflow;
             self.main_screen = view.main;
             self.sub_screen = view.sub;
             self.math_mask = view.math_mask;
         }
+        let mem = self.engine.memory();
         self.cgram = mem.cgram.to_vec();
         self.oam = mem.oam.iter().map(OamSprite::from).collect();
 
@@ -183,6 +264,32 @@ impl PpuCore {
     #[wasm_bindgen(js_name = objOverflow)]
     pub fn obj_overflow(&self) -> Result<JsValue, JsValue> {
         serde_wasm_bindgen::to_value(&self.obj_overflow).map_err(Into::into)
+    }
+
+    /// Every broken contract store since the last `reset`, repeats counted: it moves whenever
+    /// `violations()` would differ, and is cheap enough to ask every frame.
+    #[wasm_bindgen(js_name = violationCount)]
+    pub fn violation_count(&self) -> u32 {
+        self.engine.violations().iter().map(|v| v.count).sum()
+    }
+
+    /// Broken contract stores since the last `reset`, first seen first, one per file:line and store:
+    /// `{store, value, min, max, file, line, scene, frame?, count}` (`frame` absent: during a load).
+    pub fn violations(&self) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(self.engine.violations()).map_err(Into::into)
+    }
+
+    /// What the last load did not carry over from the running program, one human line per
+    /// variable that kept its new initial value. Empty after a power-on.
+    #[wasm_bindgen(js_name = notCarried)]
+    pub fn not_carried(&self) -> Vec<String> {
+        self.engine.not_carried().to_vec()
+    }
+
+    /// Another toy opens: the next load powers on instead of carrying the running program's state.
+    #[wasm_bindgen(js_name = forgetRun)]
+    pub fn forget_run(&mut self) {
+        self.engine.forget_run();
     }
 
     /// Per-layer import budget reports from the most recent `frame()`
@@ -456,6 +563,89 @@ impl PpuCore {
         Ok(out.into())
     }
 
+    /// Pure PNG import: PNG bytes -> versioned source payload + meta. An indexed PNG that is
+    /// SNES art keeps its indices; anything else quantizes like `convertSource`.
+    /// `priorityPng` is Mode 7 EXTBG's mask. Returns `{ payload: Uint8Array, meta: SourceMeta }`.
+    #[wasm_bindgen(js_name = convertPngSource)]
+    pub fn convert_png_source(
+        &self,
+        kind: &str,
+        options: JsValue,
+        png: &[u8],
+        priority_png: Option<Vec<u8>>,
+    ) -> Result<JsValue, JsValue> {
+        let kind: crate::SourceKind = kind.parse().map_err(|e: String| JsValue::from_str(&e))?;
+        let opts: crate::ConvertOptions = if options.is_undefined() || options.is_null() {
+            Default::default()
+        } else {
+            serde_wasm_bindgen::from_value(options)?
+        };
+        let (payload, meta) = crate::convert_png_source(kind, &opts, png, priority_png.as_deref())
+            .map_err(|e| JsValue::from_str(&e))?;
+        let out = Object::new();
+        Reflect::set(
+            &out,
+            &"payload".into(),
+            &Uint8Array::from(payload.encode().as_slice()).into(),
+        )?;
+        Reflect::set(&out, &"meta".into(), &serde_wasm_bindgen::to_value(&meta)?)?;
+        Ok(out.into())
+    }
+
+    /// Pure render: a bg/sheet/obj/m7 payload + its `meta` (width, height, and a sheet's or obj's
+    /// `cells`) -> the indexed PNG bytes that `convertPngSource` reads back exactly. `palette` is
+    /// the payload of the palette source the art names, if any.
+    #[wasm_bindgen(js_name = renderPng)]
+    pub fn render_png(
+        &self,
+        payload: &[u8],
+        meta: JsValue,
+        palette: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, JsValue> {
+        let meta: crate::SourceMeta = serde_wasm_bindgen::from_value(meta)?;
+        let payload =
+            crate::SourcePayload::decode(payload).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let palette = match palette.as_deref().map(crate::SourcePayload::decode) {
+            None => None,
+            Some(Ok(crate::SourcePayload::Palette(p))) => Some(p),
+            Some(Ok(_)) => return Err(JsValue::from_str("the palette is not a palette source")),
+            Some(Err(e)) => return Err(JsValue::from_str(&format!("the palette: {e}"))),
+        };
+        crate::render::render_png(&payload, &meta, palette.as_ref())
+            .map_err(|e| JsValue::from_str(&e))
+    }
+
+    /// Pure palette-fit check: whether the palette payload can stand in for the art payload's own
+    /// colours (`source::palette_fits`, the rule dma applies). Undefined = fits, else the reason.
+    #[wasm_bindgen(js_name = paletteFits)]
+    pub fn palette_fits(&self, art: &[u8], palette: &[u8]) -> Option<String> {
+        let art = match crate::SourcePayload::decode(art) {
+            Ok(a) => a,
+            Err(e) => return Some(e.to_string()),
+        };
+        match crate::SourcePayload::decode(palette) {
+            Ok(crate::SourcePayload::Palette(p)) => crate::source::palette_fits(&art, &p).err(),
+            Ok(_) => Some("not a palette source".into()),
+            Err(e) => Some(e.to_string()),
+        }
+    }
+
+    /// Pure `.gpl` conversion: palette text -> versioned palette payload + meta.
+    /// Returns `{ payload: Uint8Array, meta: SourceMeta }`.
+    #[wasm_bindgen(js_name = convertPalette)]
+    pub fn convert_palette(&self, text: &str) -> Result<JsValue, JsValue> {
+        let (payload, meta) =
+            crate::gpl::convert_palette(text).map_err(|e| JsValue::from_str(&e))?;
+        let out = Object::new();
+        Reflect::set(
+            &out,
+            &"payload".into(),
+            &Uint8Array::from(payload.encode().as_slice()).into(),
+        )?;
+        Reflect::set(&out, &"meta".into(), &serde_wasm_bindgen::to_value(&meta)?)?;
+        Ok(out.into())
+    }
+
     /// Pure BRR encode: 32 kHz i16 mono PCM -> versioned sample payload +
     /// meta. No engine state mutation. Returns `{ payload: Uint8Array, meta: SourceMeta }`.
     #[wasm_bindgen(js_name = convertSample)]
@@ -495,6 +685,13 @@ impl PpuCore {
         Ok(out.into())
     }
 
+    /// The palette of each char of sheet source `name` (the `pal` of each `meta.cells` entry
+    /// `convertSource` returned), which a Tiled map drawn from the sheet needs.
+    #[wasm_bindgen(js_name = setSheetPalettes)]
+    pub fn set_sheet_palettes(&mut self, name: &str, pals: &[u8]) {
+        self.engine.set_sheet_palettes(name, pals);
+    }
+
     /// Decode + register a payload in the source store. Never throws for a bad
     /// payload — returns `{ ok: false, error }` (the structured-diagnostic channel).
     #[wasm_bindgen(js_name = addSource)]
@@ -529,6 +726,52 @@ impl Default for PpuCore {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// A Lua toy's files as a Luau toy's: `files` is `[{name, source}]` in tab order; the result is
+/// `{files: [{name, source}], changes, unconverted}`, each note `{file, line, message}` (see `convert`).
+#[wasm_bindgen(js_name = convertToLuau)]
+pub fn convert_to_luau(files: JsValue) -> Result<JsValue, JsValue> {
+    let files: Vec<SourceFileIn> = serde_wasm_bindgen::from_value(files)?;
+    let pairs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|f| (f.name.as_str(), f.source.as_str()))
+        .collect();
+    serde_wasm_bindgen::to_value(&crate::convert::convert(&pairs)).map_err(Into::into)
+}
+
+/// Live pokes written into scene module `file` (see `apply`): `edits` is `[{kind: "assign", lvalue,
+/// expr}]`; the result is `{source, written, notes}`, `written` the 1-based lines Apply wrote. A
+/// refusal (a Lua file, a source that does not parse, an unknown poke kind) throws its message.
+#[wasm_bindgen(js_name = applyPokes)]
+pub fn apply_to_scene(file: &str, source: &str, edits: JsValue) -> Result<JsValue, JsValue> {
+    let edits: Vec<crate::apply::Edit> = serde_wasm_bindgen::from_value(edits)?;
+    let applied = crate::apply::apply(file, source, &edits).map_err(|e| JsValue::from_str(&e))?;
+    serde_wasm_bindgen::to_value(&applied).map_err(Into::into)
+}
+
+/// A source made from VRAM words (see `generated_source`): `{payload: Uint8Array, meta}`; `cells`
+/// (`{cell_w, cell_h, cells}`, an obj source's) is undefined for a sheet. A kind it does not make,
+/// or words that are not whole tiles, throw.
+#[wasm_bindgen(js_name = generatedSource)]
+pub fn generated_source(
+    kind: &str,
+    bit_depth: u8,
+    char_words: &[u16],
+    cells: JsValue,
+) -> Result<JsValue, JsValue> {
+    let kind: crate::SourceKind = kind.parse().map_err(|e: String| JsValue::from_str(&e))?;
+    let cells: Option<crate::GeneratedCells> = serde_wasm_bindgen::from_value(cells)?;
+    let (payload, meta) = crate::generated_source(kind, bit_depth, char_words, cells.as_ref())
+        .map_err(|e| JsValue::from_str(&e))?;
+    let out = Object::new();
+    Reflect::set(
+        &out,
+        &"payload".into(),
+        &Uint8Array::from(payload.encode().as_slice()).into(),
+    )?;
+    Reflect::set(&out, &"meta".into(), &serde_wasm_bindgen::to_value(&meta)?)?;
+    Ok(out.into())
 }
 
 /// One incoming source file for `setSources`, matching the TS `SourceFile`.
@@ -598,6 +841,108 @@ pub fn encode_song(song: JsValue) -> Result<JsValue, JsValue> {
             .and_then(|s| {
                 crate::song::compile(&s)?;
                 Ok(Uint8Array::from(crate::song::encode(&s).as_slice()).into())
+            }),
+    )
+}
+
+/// write_song's argument (the authored song JSON, as text: `song::Authored`) -> the song
+/// object, or the key or field that is wrong.
+#[wasm_bindgen(js_name = songFromAuthored)]
+pub fn song_from_authored(text: &str) -> Result<JsValue, JsValue> {
+    song_result(crate::song::from_json(text).and_then(|s| {
+        serde_wasm_bindgen::to_value(&s).map_err(|e| crate::song::SongError(e.to_string()))
+    }))
+}
+
+/// .mid bytes -> `{ song, rounded }`: the song object and how many notes moved onto the
+/// 1/48-beat grid, or why the file is not a song (`import::midi`).
+#[wasm_bindgen(js_name = songFromMidi)]
+pub fn song_from_midi(bytes: &[u8]) -> Result<JsValue, JsValue> {
+    song_result(
+        crate::import::midi::import(bytes)
+            .map_err(crate::song::SongError)
+            .and_then(|i| {
+                let out = Object::new();
+                let song = serde_wasm_bindgen::to_value(&i.song)
+                    .map_err(|e| crate::song::SongError(e.to_string()))?;
+                Reflect::set(&out, &"song".into(), &song).expect("set on a fresh object");
+                Reflect::set(&out, &"rounded".into(), &i.rounded.into())
+                    .expect("set on a fresh object");
+                Ok(out.into())
+            }),
+    )
+}
+
+/// The song object -> read_song's answer: the authored song JSON, as compact text.
+#[wasm_bindgen(js_name = songToAuthored)]
+pub fn song_to_authored(song: JsValue) -> Result<JsValue, JsValue> {
+    song_result(
+        serde_wasm_bindgen::from_value::<crate::song::Song>(song)
+            .map_err(|e| crate::song::SongError(e.to_string()))
+            .map(|s| {
+                serde_json::to_string(&crate::song::Authored::of(&s))
+                    .expect("a song serializes")
+                    .into()
+            }),
+    )
+}
+
+/// PSNG bytes -> the song_check report as text, `name` heading it (`song_check::Report::lines`).
+/// `samples` is an array of `[name, source payload]` pairs: the toy's samples a row may name.
+#[wasm_bindgen(js_name = songCheck)]
+pub fn song_check(bytes: &[u8], name: &str, samples: js_sys::Array) -> Result<JsValue, JsValue> {
+    let mut owned = Vec::new();
+    for pair in samples.iter() {
+        let pair = js_sys::Array::from(&pair);
+        let sample = pair
+            .get(0)
+            .as_string()
+            .ok_or("a sample's name is a string")?;
+        owned.push((sample, Uint8Array::new(&pair.get(1)).to_vec()));
+    }
+    let samples: Vec<(&str, &[u8])> = owned
+        .iter()
+        .map(|(n, b)| (n.as_str(), b.as_slice()))
+        .collect();
+    song_result(
+        crate::song::decode(bytes)
+            .and_then(|s| crate::song_check::check(&s, &samples))
+            .map(|r| r.lines(name).join("\n").into()),
+    )
+}
+
+/// PSNG bytes -> the piano roll `ppu song roll` draws, as PNG bytes (`song_roll`); `from` and
+/// `to` (both drawn) crop it to arrangement slots, all of them when either is undefined.
+#[wasm_bindgen(js_name = songRoll)]
+pub fn song_roll(bytes: &[u8], from: Option<u32>, to: Option<u32>) -> Result<JsValue, JsValue> {
+    let slots = from.zip(to).map(|(a, b)| (a as usize, b as usize));
+    song_result(
+        crate::song::decode(bytes)
+            .and_then(|s| crate::song_roll::roll(&s, slots))
+            .map(|r| Uint8Array::from(crate::song_roll::encode_png(&r).as_slice()).into()),
+    )
+}
+
+/// `ppu sfx`'s arguments as one string ("laser --pitch 900 --length 200") -> `{ wav, stats }`:
+/// the WAV bytes `ppu sfx` writes and its JSON report as text, or every problem with the request.
+#[wasm_bindgen(js_name = sfxWav)]
+pub fn sfx_wav(args: &str) -> Result<JsValue, JsValue> {
+    let args: Vec<String> = args.split_whitespace().map(String::from).collect();
+    song_result(
+        crate::sfx::parse(&args)
+            .and_then(|r| crate::sfx::make(r.preset, &r.knobs))
+            .map_err(crate::song::SongError)
+            .map(|(wav, stats)| {
+                let out = Object::new();
+                Reflect::set(
+                    &out,
+                    &"wav".into(),
+                    &Uint8Array::from(wav.as_slice()).into(),
+                )
+                .expect("set on a fresh object");
+                Reflect::set(&out, &"stats".into(), &stats.to_json().to_string().into())
+                    .expect("set on a fresh object");
+                out.into()
             }),
     )
 }

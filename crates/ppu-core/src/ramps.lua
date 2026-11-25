@@ -2,7 +2,7 @@
 -- Keys are {position, value, optional easing}, sorted by position.
 -- Positions can be scanlines, seconds, or any other numeric coordinate.
 function clamp(value, lo, hi)
-  if lo > hi then error("clamp: minimum must not exceed maximum") end
+  if lo > hi then error("error[snes.clamp]: clamp: minimum must not exceed maximum") end
   return max(lo, min(hi, value))
 end
 
@@ -29,7 +29,7 @@ function ease(t, easing)
 end
 function ramp(kf, y)
   local n = #kf
-  if n == 0 then error("ramp: at least one keyframe is required") end
+  if n == 0 then error("error[snes.ramp]: ramp: at least one keyframe is required") end
   if y <= kf[1][1] then return kf[1][2] end
   for i = 2, n do
     local a, b = kf[i - 1], kf[i]
@@ -44,7 +44,7 @@ end
 function ramp_int(kf, y) return floor(ramp(kf, y) + 0.5) end
 
 function ramp_color(kf, y)
-  if #kf == 0 then error("ramp_color: at least one keyframe is required") end
+  if #kf == 0 then error("error[snes.ramp]: ramp_color: at least one keyframe is required") end
   local a, b = kf[1], kf[1]
   for i = 2, #kf do
     if y <= b[1] then break end

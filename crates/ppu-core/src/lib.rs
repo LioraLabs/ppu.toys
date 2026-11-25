@@ -27,6 +27,7 @@ pub use sprite::*;
 mod compositor;
 pub use compositor::*;
 
+mod carry;
 mod lua;
 mod lua_buffer;
 mod lua_raster;
@@ -34,15 +35,73 @@ pub use lua::*;
 
 mod quantize;
 pub use quantize::*;
+pub mod apply;
 pub mod bounded;
+pub mod convert;
 pub mod frontend;
 pub mod save;
 
 /// Luau type declarations for the authoring surface (`declare` statements), for editors and
 /// type checkers; `tests/luau_declarations.rs` holds them to the runtime's globals.
 pub const LUAU_DECLARATIONS: &str = include_str!("ppu.d.luau");
+
+/// The codes the engine's own errors carry (its Lua libraries and native callbacks), each a note id: one id space with the
+/// compiler's `snes.*` codes, and the cart refuses the same mistake under the same one. A message reads
+/// `error[code]: ...`, as the compiler prints it.
+pub mod codes {
+    pub const BANK: &str = "snes.bank";
+    pub const BIT32: &str = "snes.bit32";
+    pub const BOUNDED: &str = "snes.bounded";
+    pub const CLAMP: &str = "snes.clamp";
+    pub const DMA: &str = "snes.dma";
+    pub const DIVISION: &str = "snes.division";
+    pub const HDMA_BAKE: &str = "snes.hdma_bake";
+    pub const HUD: &str = "snes.hud";
+    pub const LOOKUP: &str = "snes.lookup";
+    pub const MAP: &str = "snes.map";
+    pub const MODE7: &str = "snes.mode7";
+    pub const NOTE: &str = "snes.note";
+    pub const RAMP: &str = "snes.ramp";
+    pub const REQUIRE: &str = "snes.require";
+    pub const ROUTINE: &str = "snes.routine";
+    pub const SAVE: &str = "snes.save";
+    pub const SCENES: &str = "snes.scenes";
+    pub const SCORE: &str = "snes.score";
+    pub const SONG: &str = "snes.song";
+    pub const SPRITES: &str = "snes.sprites";
+    pub const TARGET: &str = "snes.target";
+    pub const TIMER: &str = "snes.timer";
+    pub const WORLD: &str = "snes.world";
+    /// Every engine code.
+    pub const ALL: &[&str] = &[
+        BANK, BIT32, BOUNDED, CLAMP, DIVISION, DMA, HDMA_BAKE, HUD, LOOKUP, MAP, MODE7, NOTE, RAMP, REQUIRE, ROUTINE, SAVE, SCENES, SCORE,
+        SONG, SPRITES, TARGET, TIMER, WORLD,
+    ];
+}
+
+/// The engine code an error message carries: its first `error[code]: `, at the start or after a
+/// `file:line: ` or other `...: ` prefix. `None` for a code not in `codes::ALL`.
+pub fn engine_code(message: &str) -> Option<&'static str> {
+    let (before, rest) = message.split_once("error[")?;
+    if !(before.is_empty() || before.ends_with(": ")) {
+        return None;
+    }
+    let code = rest.split_once("]: ")?.0;
+    codes::ALL.iter().copied().find(|c| *c == code)
+}
+
+/// An error message's engine code and the message without its `error[code]: ` tag, for a reader that prints the
+/// code beside the message (the cart's diagnostics).
+pub fn split_code(message: &str) -> (Option<&'static str>, String) {
+    match engine_code(message) {
+        Some(code) => (Some(code), message.replacen(&format!("error[{code}]: "), "", 1)),
+        None => (None, message.to_string()),
+    }
+}
 pub mod sprites;
+// Tiled `.tmj` maps read into the map model the world library and the compiler share.
 pub mod precision;
+pub mod tiled;
 
 mod modes;
 pub use modes::*;
@@ -68,6 +127,22 @@ pub use import_m7::*;
 mod source;
 pub use source::*;
 
+// A source payload as an indexed image / PNG, and PNG decoding (the exact two-way map).
+pub mod render;
+pub use import::check::{check_indexed, ArtCheck, Budget, Budgets, Finding, Rule, UnitSize};
+pub use import::keep::{convert_indexed_source, convert_png_source};
+
+// WAV files -> mono 32 kHz PCM for `convert_sample`, and 16-bit PCM WAVs out.
+pub mod wav;
+
+// `ppu sfx`: sound effects rolled from a preset and a seed, out as a sample-source WAV.
+pub mod sfx;
+
+// `.gpl` text -> palette source (also what ppu-cli converts a palette file with).
+pub mod gpl;
+// Palette rows of indexed art: set, fix and switch, over index bytes.
+pub mod rows;
+
 // M12/audio: headless S-DSP core (BRR/Gaussian/ADSR/echo), ported from
 // snes-apu. See `dsp/mod.rs` for the license notice and register map.
 mod dsp;
@@ -82,6 +157,12 @@ pub mod song;
 
 // Per-step voice load of a compiled song (the panel's voice strip).
 pub mod song_analyze;
+
+// song_check's report: voice budget, rows above C6, held clashes, loudness.
+pub mod song_check;
+
+// The piano roll PNG: `ppu song roll` and read_song's roll.
+pub mod song_roll;
 
 /// Native SNES PPU output dimensions (the only resolution v1 targets).
 pub const WIDTH: usize = 256;
@@ -272,7 +353,55 @@ mod wasm;
 mod tests {
     use super::*;
     use crate::registers::{LineTableRow, Obsel, RegRow};
-    use std::collections::HashMap;
+    use std::collections::{BTreeSet, HashMap};
+
+    #[test]
+    fn engine_codes_are_the_codes_the_engine_raises() {
+        let sources = [
+            include_str!("kit.lua"),
+            include_str!("luau.lua"),
+            include_str!("sprites.lua"),
+            include_str!("hud.lua"),
+            include_str!("ramps.lua"),
+            include_str!("lua.rs"),
+        ];
+        let libs: Vec<String> = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/lib"))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|x| x == "luau"))
+            .map(|p| std::fs::read_to_string(p).unwrap())
+            .collect();
+        let sources = sources.into_iter().chain(libs.iter().map(String::as_str));
+        let raised: BTreeSet<&str> = sources
+            .flat_map(|s| s.split("error[").skip(1).map(|r| r.split(']').next().unwrap()))
+            .collect();
+        assert_eq!(raised, codes::ALL.iter().copied().collect::<BTreeSet<_>>());
+        // Every native callback error names its code at the call: a literal, or a format! whose literal starts with it.
+        let uncoded: Vec<&str> = include_str!("lua.rs")
+            .split("lua_err(")
+            .skip(1)
+            .filter(|r| {
+                let arg = r.trim_start().strip_prefix("ctx,").unwrap_or(r).trim_start();
+                let arg = arg.strip_prefix("&format!(").unwrap_or(arg).trim_start();
+                !arg.starts_with("\"error[")
+            })
+            .map(|r| &r[..r.len().min(60)])
+            .collect();
+        assert!(uncoded.is_empty(), "native errors without a code: {uncoded:#?}");
+        // Every Luau library error names its code.
+        let uncoded: Vec<&str> = libs
+            .iter()
+            .flat_map(|s| s.split("error(").skip(1))
+            .filter(|r| !r.starts_with("\"error["))
+            .map(|r| &r[..r.len().min(60)])
+            .collect();
+        assert!(uncoded.is_empty(), "Luau library errors without a code: {uncoded:#?}");
+        assert_eq!(engine_code("main.luau:3: error[snes.lookup]: lookup grid ..."), Some("snes.lookup"));
+        assert_eq!(engine_code("evaluating lookups: error[snes.lookup]: x"), Some("snes.lookup"));
+        assert_eq!(engine_code("error[snes.nope]: x"), None);
+        assert_eq!(engine_code("no code here"), None);
+        assert_eq!(split_code("main.luau:3: error[snes.dma]: dma: x"), (Some("snes.dma"), "main.luau:3: dma: x".into()));
+    }
 
     #[test]
     fn derive_registers_reports_mode7_centers() {

@@ -110,7 +110,7 @@ function frame(t, f)
 end
 "#;
     let mut e = engine(src);
-    let lt = e.frame(1.0, 0).unwrap();
+    let lt = e.frame(1.0, 60).unwrap();
     let r = &lt.rows[0];
     assert_eq!(r.mode, 1);
     assert_eq!(r.brightness, 15);
@@ -139,7 +139,7 @@ function frame(t, f)
 end
 "#;
     let mut e = engine(src);
-    let lt = e.frame(1.0, 0).unwrap();
+    let lt = e.frame(1.0, 60).unwrap();
     // Above the horizon: frame-wide defaults (mode 7, identity-ish m7.a default 1.0).
     assert_eq!(lt.rows[0].mode, 7);
     assert_eq!(lt.rows[0].m7.a, 256); // default 1.0, Q8

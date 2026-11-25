@@ -16,22 +16,22 @@ local HUD_GLYPHS = {
 }
 function __ppu_hud_glyph(character)
   local tile = HUD_GLYPHS[character]
-  assert(tile ~= nil, "HUD character is absent from the printable ASCII font")
+  assert(tile ~= nil, "error[snes.hud]: HUD character is absent from the printable ASCII font")
   return tile
 end
 
 function __ppu_hud_bounds(map, x, y, columns, rows)
-  assert(map.width == floor(map.width) and map.width >= 1 and map.width <= 32, "HUD width must be 1..32 cells")
-  assert(map.height == floor(map.height) and map.height >= 1 and map.height <= 32, "HUD height must be 1..32 cells")
-  assert(map.map == floor(map.map) and map.map >= 0 and map.map + (map.height - 1) * 32 + map.width <= 32768, "HUD map is outside VRAM")
-  assert(x == floor(x) and y == floor(y) and columns == floor(columns) and rows == floor(rows), "HUD cell coordinates must be integers")
-  assert(x >= 0 and y >= 0 and columns >= 0 and rows >= 0 and x + columns <= map.width and y + rows <= map.height, "HUD field is outside its map")
+  assert(map.width == floor(map.width) and map.width >= 1 and map.width <= 32, "error[snes.hud]: HUD width must be 1..32 cells")
+  assert(map.height == floor(map.height) and map.height >= 1 and map.height <= 32, "error[snes.hud]: HUD height must be 1..32 cells")
+  assert(map.map == floor(map.map) and map.map >= 0 and map.map + (map.height - 1) * 32 + map.width <= 32768, "error[snes.hud]: HUD map is outside VRAM")
+  assert(x == floor(x) and y == floor(y) and columns == floor(columns) and rows == floor(rows), "error[snes.hud]: HUD cell coordinates must be integers")
+  assert(x >= 0 and y >= 0 and columns >= 0 and rows >= 0 and x + columns <= map.width and y + rows <= map.height, "error[snes.hud]: HUD field is outside its map")
 end
 
 function hud_text(map, x, y, message, palette)
   local color = palette or map.palette
   __ppu_hud_bounds(map, x, y, #message, 1)
-  assert(color == floor(color) and color >= 0 and color <= 7, "HUD palette must be 0..7")
+  assert(color == floor(color) and color >= 0 and color <= 7, "error[snes.hud]: HUD palette must be 0..7")
   -- Validation rejects overflow first. Counting characters from 1 keeps string.sub on its
   -- positive-index path; the row address and palette bits are computed once.
   local base, tint = map.map + y * 32 + x - 1, color * 1024
@@ -43,9 +43,9 @@ end
 function hud_number(map, x, y, value, width, palette)
   local color = palette or map.palette
   __ppu_hud_bounds(map, x, y, width, 1)
-  assert(width >= 1 and width <= 10, "HUD number width must be 1..10 cells")
-  assert(value == floor(value) and value >= 0 and value <= 2147483647, "HUD number must be an integer in 0..2147483647")
-  assert(color == floor(color) and color >= 0 and color <= 7, "HUD palette must be 0..7")
+  assert(width >= 1 and width <= 10, "error[snes.hud]: HUD number width must be 1..10 cells")
+  assert(value == floor(value) and value >= 0 and value <= 2147483647, "error[snes.hud]: HUD number must be an integer in 0..2147483647")
+  assert(color == floor(color) and color >= 0 and color <= 7, "error[snes.hud]: HUD palette must be 0..7")
   local tint = color * 1024
   local padding = __ppu_hud_glyph(map.padding or " ") + tint
   local base = map.map + y * 32

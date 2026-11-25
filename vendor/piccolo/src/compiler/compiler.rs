@@ -115,6 +115,8 @@ pub struct CompiledPrototype<S> {
     /// Stored in sorted opcode index order with redundant entries removed.
     pub opcode_line_numbers: Vec<(usize, LineNumber)>,
     pub upvalues: Vec<UpValueDescriptor>,
+    /// The name of each upvalue, indexed like `upvalues`.
+    pub upvalue_names: Vec<S>,
     pub prototypes: Vec<Box<CompiledPrototype<S>>>,
 }
 
@@ -137,6 +139,7 @@ impl<S> CompiledPrototype<S> {
                 opcodes: this.opcodes,
                 opcode_line_numbers: this.opcode_line_numbers,
                 upvalues: this.upvalues,
+                upvalue_names: this.upvalue_names.into_iter().map(f).collect(),
                 prototypes: this
                     .prototypes
                     .into_iter()
@@ -2579,6 +2582,7 @@ impl<S: Clone> CompilerFunction<S> {
                 .collect(),
             opcode_line_numbers: operation_lines,
             upvalues: self.upvalues.iter().map(|(_, d)| *d).collect(),
+            upvalue_names: self.upvalues.iter().map(|(n, _)| n.clone()).collect(),
             prototypes: self.functions.into_iter().map(|f| Box::new(f)).collect(),
         })
     }

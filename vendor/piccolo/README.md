@@ -196,3 +196,23 @@ the end of the stack (a Rust panic) when the callee had more parameters than the
 caller's frame had registers, as in `local function f() return g(1) end` with an
 eight-parameter `g`. It now truncates and resizes exactly as `call_function`
 does. Regression coverage: `tail_call_short_stack` in the same test file.
+
+Another local fix, in `src/table/raw.rs`: a removed key whose value is a GC object
+leaves a dead bucket holding a bare pointer, and lookups matched dead buckets by
+that pointer. Strings are not interned, so a new equal string allocated at a freed
+key's address matched the dead bucket: `set` resurrected it beside the live one,
+the table held the key twice, and `next` returned it forever. ppu-core's hot-swap
+carry walks every table with `iter`, so a reload in the Studio hung and grew
+without bound (a wasm `unreachable` in `setSources`; natively, tens of GB). Lookups
+now match live keys only; `next` falls back to the dead pointer match only to
+resume past a key removed mid-traversal. Regression coverage:
+`test_next_after_resurrected_string_key` in `tests/table.rs`.
+
+A local addition, in `src/thread/executor.rs`: piccolo 0.3.3 has no tracebacks, so
+an error raised in a host callback (`dma`, `sprites.art`) or by the VM reached
+ppu-core with no line. ppu could only blame the file that holds `frame`/`init`.
+As an error unwinds, the executor now keeps each Lua frame it pops (prototype and
+pc) and `Executor::error_trace` returns them as (chunk name, line), innermost first.
+A caught error (pcall) clears the trail, and so does `restart`. ppu-core's
+`located` picks the first frame in an author's own file. Regression coverage:
+`a_runtime_error_points_at_the_authors_line` in `crates/ppu-core/tests/lua_sources.rs`.

@@ -244,6 +244,7 @@ fn failed_parallel_store_keeps_all_destinations_and_calls_once() {
     let mut e = LuaEngine::new();
     for assignment in ["once(), 2", "2, once()"] {
         let source = source.replace("once(), 2", assignment);
+        e.forget_run(); // two programs, not one edited: calls starts at 0 each time
         e.set_sources(&[("atomic.lua", &source)]).unwrap();
         let error = e.frame(0., 0).unwrap_err();
         assert_eq!(error.file.as_deref(), Some("atomic.lua"));
@@ -492,16 +493,18 @@ end"#;
     e.frame(0., 0).unwrap();
     // 190 * 168/1024 = 31.17 (Q10 31920), / 60 = 532/1024, down to 8/16 = 512/1024.
     assert_eq!([e.memory().oam[0].x, e.memory().oam[1].x], [512, 3]);
-    let broken = source.replace("-8, 8)\n  obj", "-8, 9)\n  obj").replace("+ 190", "+ 1900");
+    let broken = source
+        .replace("-8, 8)\n  obj", "-8, 9)\n  obj")
+        .replace("+ 190", "+ 1900");
     let mut e = LuaEngine::new();
     e.set_sources(&[("main.luau", &broken)]).unwrap();
     for f in 0..2 {
-        if let Err(error) = e.frame(0., f) {
-            assert!(error.message.contains("makeFixed binding x"), "{error:?}");
-            return;
-        }
+        e.frame(0., f).unwrap();
     }
-    panic!("a store above 8 should break x's contract");
+    assert!(
+        e.violations().iter().any(|v| v.store == "x"),
+        "a store above 8 should break x's contract"
+    );
 }
 
 #[test]
@@ -523,7 +526,14 @@ fn precision_nil_initialized_bindings_take_the_representation_of_later_stores() 
 #[test]
 fn a_fixed_binding_beside_a_dma_placement() {
     let mut e = LuaEngine::new();
-    common::add_bg(&mut e, "green", vec![0, 255, 0, 255].repeat(64 * 64), 64, 64, 4);
+    common::add_bg(
+        &mut e,
+        "green",
+        vec![0, 255, 0, 255].repeat(64 * 64),
+        64,
+        64,
+        4,
+    );
     e.set_sources(&[(
         "main.lua",
         "local g = dma(\"green\", {char = 0x2000, map = 0x1800, pal = 0})\nlocal px = makeFixed(128, 8, 248, 16)\nfunction frame(t, f)\n  px = math.max(8, px - 2.5)\n  obj[0].x = floor(px)\n  obj[1].x = g.char // 256\nend",

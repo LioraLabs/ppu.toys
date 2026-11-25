@@ -1,0 +1,77 @@
+{
+  "type": "map",
+  "version": "1.10",
+  "tiledversion": "1.10.2",
+  "orientation": "orthogonal",
+  "renderorder": "right-down",
+  "infinite": false,
+  "width": 3,
+  "height": 2,
+  "tilewidth": 16,
+  "tileheight": 16,
+  "nextlayerid": 4,
+  "nextobjectid": 3,
+  "properties": [{"name": "music", "type": "string", "value": "cave"}],
+  "tilesets": [
+    {
+      "firstgid": 1,
+      "name": "tiles",
+      "image": "art/tiles.png",
+      "imagewidth": 32,
+      "imageheight": 32,
+      "tilewidth": 16,
+      "tileheight": 16,
+      "columns": 2,
+      "tilecount": 4,
+      "margin": 0,
+      "spacing": 0,
+      "tiles": [
+        {"id": 3, "type": "solid"},
+        {"id": 1, "class": "ladder"}
+      ]
+    }
+  ],
+  "layers": [
+    {
+      "id": 1,
+      "name": "ground",
+      "type": "tilelayer",
+      "x": 0,
+      "y": 0,
+      "width": 3,
+      "height": 2,
+      "opacity": 1,
+      "visible": true,
+      "data": [1, 2147483650, 0, 1073741827, 4, 0],
+      "properties": [{"name": "solid", "type": "bool", "value": true}]
+    },
+    {
+      "id": 2,
+      "name": "back",
+      "type": "tilelayer",
+      "x": 0,
+      "y": 0,
+      "width": 3,
+      "height": 2,
+      "opacity": 1,
+      "visible": true,
+      "encoding": "csv",
+      "data": "0,0,0,\n0,0,4"
+    },
+    {
+      "id": 3,
+      "name": "things",
+      "type": "objectgroup",
+      "x": 0,
+      "y": 0,
+      "opacity": 1,
+      "visible": true,
+      "draworder": "topdown",
+      "objects": [
+        {"id": 1, "name": "spawn", "type": "player", "x": 16, "y": 32, "width": 16, "height": 16, "rotation": 0, "visible": true,
+         "properties": [{"name": "hp", "type": "int", "value": 3}]},
+        {"id": 2, "name": "exit", "class": "door", "x": 80, "y": 16, "width": 0, "height": 0, "rotation": 0, "visible": true, "point": true}
+      ]
+    }
+  ]
+}

@@ -348,6 +348,7 @@ fn slot_step_song() -> Song {
             note: None,
             vol: 127,
             pan: 0,
+            keep: false,
         }],
         patterns: vec![
             Pattern {
@@ -475,6 +476,7 @@ fn one_row_song(sound: &str) -> Song {
             note: None,
             vol: 127,
             pan: 0,
+            keep: false,
         }],
         patterns: vec![Pattern {
             name: "A".into(),

@@ -26,6 +26,7 @@ fn song(voice_mask: u8, patterns: Vec<Pattern>, arrangement: Vec<u32>) -> Song {
             note: None,
             vol: 100,
             pan: 0,
+            keep: false,
         }],
         patterns,
         arrangement,

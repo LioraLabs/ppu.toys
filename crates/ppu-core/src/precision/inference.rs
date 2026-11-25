@@ -278,7 +278,11 @@ impl Infer {
                 }
             }
             // A stored nil leaves the target untyped: its later stores decide its representation.
-            result.push(if nil(value) { self.slot(None) } else { self.expr(value) });
+            result.push(if nil(value) {
+                self.slot(None)
+            } else {
+                self.expr(value)
+            });
         }
         result
     }

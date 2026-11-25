@@ -3,6 +3,28 @@
 //! Shared core: the Mode-7 importer (256-color) reuses `median_cut`/`nearest`;
 //! OBJ import (4bpp) reuses everything incl. `region_fit`.
 
+/// Trim each sub-palette to the highest local index any tile of its row uses (`tile_rows[i]` is
+/// the row of `grids[i]`): trailing colours no pixel shows are dropped, so a row is as long as
+/// its art needs and an indexed re-import of the result keeps the same length. Rows keep their
+/// position; one nothing uses becomes empty.
+pub fn trim_unused_colors(
+    mut palettes: Vec<Vec<u16>>,
+    grids: &[super::tiles::IndexTile],
+    tile_rows: &[u8],
+) -> Vec<Vec<u16>> {
+    let mut used = vec![0usize; palettes.len()];
+    for (grid, &row) in grids.iter().zip(tile_rows) {
+        let hi = grid.iter().copied().max().unwrap_or(0) as usize;
+        if let Some(u) = used.get_mut(row as usize) {
+            *u = (*u).max(hi);
+        }
+    }
+    for (p, u) in palettes.iter_mut().zip(used) {
+        p.truncate(u);
+    }
+    palettes
+}
+
 /// Split a BGR555 word into [r, g, b] 5-bit channels.
 #[inline]
 fn channels(c: u16) -> [i32; 3] {

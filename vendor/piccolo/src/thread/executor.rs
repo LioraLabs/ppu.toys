@@ -43,6 +43,8 @@ pub struct BadExecutorMode {
 #[collect(no_drop)]
 pub struct ExecutorState<'gc> {
     thread_stack: vec::Vec<Thread<'gc>, MetricsAlloc<'gc>>,
+    /// ppu: the Lua frames an uncaught error unwound through, innermost first, as (prototype, pc).
+    error_trace: std::vec::Vec<(Gc<'gc, FunctionPrototype<'gc>>, usize)>,
 }
 
 pub type ExecutorInner<'gc> = RefLock<ExecutorState<'gc>>;
@@ -95,7 +97,13 @@ impl<'gc> Executor<'gc> {
     pub fn run(mc: &Mutation<'gc>, thread: Thread<'gc>) -> Self {
         let mut thread_stack = vec::Vec::new_in(MetricsAlloc::new(mc));
         thread_stack.push(thread);
-        Executor(Gc::new(mc, RefLock::new(ExecutorState { thread_stack })))
+        Executor(Gc::new(
+            mc,
+            RefLock::new(ExecutorState {
+                thread_stack,
+                error_trace: std::vec::Vec::new(),
+            }),
+        ))
     }
 
     pub fn from_inner(inner: Gc<'gc, ExecutorInner<'gc>>) -> Self {
@@ -418,7 +426,12 @@ impl<'gc> Executor<'gc> {
                             .pop()
                             .expect("normal thread must have frame above error")
                         {
-                            Frame::Lua { bottom, .. } => {
+                            Frame::Lua { bottom, pc, .. } => {
+                                if let Value::Function(Function::Closure(c)) =
+                                    top_state.stack[bottom]
+                                {
+                                    state.error_trace.push((c.prototype(), pc));
+                                }
                                 top_state.close_upvalues(&ctx, bottom);
                                 top_state.stack.truncate(bottom);
                                 top_state.frames.push(Frame::Error(err));
@@ -429,6 +442,8 @@ impl<'gc> Executor<'gc> {
                                 pending_error: error,
                             } => {
                                 assert!(error.is_none());
+                                // caught (pcall and kin): the trail belongs to no uncaught error
+                                state.error_trace.clear();
                                 top_state.frames.push(Frame::Sequence {
                                     bottom,
                                     sequence,
@@ -498,6 +513,17 @@ impl<'gc> Executor<'gc> {
         }
     }
 
+    /// ppu: where the error this executor ended with passed, innermost Lua frame first, as (chunk
+    /// name, line). Empty after a success or for an error raised outside any Lua frame.
+    pub fn error_trace(self) -> std::vec::Vec<(String<'gc>, LineNumber)> {
+        let state = self.0.borrow();
+        state
+            .error_trace
+            .iter()
+            .map(|(proto, pc)| (proto.chunk_name, line_at(proto, pc.saturating_sub(1))))
+            .collect()
+    }
+
     /// Reset this `Executor` entirely, leaving it with a stopped main thread. Equivalent to
     /// creating a new executor with `Executor::new`.
     pub fn stop(self, mc: &Mutation<'gc>) {
@@ -523,6 +549,7 @@ impl<'gc> Executor<'gc> {
         args: impl IntoMultiValue<'gc>,
     ) {
         let mut state = self.0.borrow_mut(&ctx);
+        state.error_trace.clear();
         state.thread_stack.truncate(1);
         state.thread_stack[0].reset(&ctx).unwrap();
         state.thread_stack[0].start(ctx, function, args).unwrap();
@@ -566,14 +593,19 @@ impl<'gc, 'a> Execution<'gc, 'a> {
         self.upper_lua.map(|(proto, pc)| UpperLuaFrame {
             chunk_name: proto.chunk_name,
             current_function: proto.reference,
-            current_line: match proto
-                .opcode_line_numbers
-                .binary_search_by_key(&pc, |(opi, _)| *opi)
-            {
-                Ok(i) => proto.opcode_line_numbers[i].1,
-                Err(i) => proto.opcode_line_numbers[i - 1].1,
-            },
+            current_line: line_at(&proto, pc),
         })
+    }
+}
+
+/// The source line of opcode `pc` in `proto`.
+fn line_at(proto: &FunctionPrototype<'_>, pc: usize) -> LineNumber {
+    match proto
+        .opcode_line_numbers
+        .binary_search_by_key(&pc, |(opi, _)| *opi)
+    {
+        Ok(i) => proto.opcode_line_numbers[i].1,
+        Err(i) => proto.opcode_line_numbers[i.max(1) - 1].1,
     }
 }
 

@@ -27,8 +27,7 @@ pub fn m7_center(v: f32) -> i16 {
 }
 
 /// Sprite X: 9-bit signed screen coordinate (negatives = partially off-left).
-/// ponytail: like `scroll_reg`, the bit-width mask is deferred — rounding is the
-/// load-bearing part; the rasterizer clips off-screen x.
+/// Stored unmasked; the rasterizer reads the low 9 bits (`sprite::obj_x`), as the PPU does.
 #[inline]
 pub fn sprite_x(v: f32) -> i16 {
     v.round() as i16

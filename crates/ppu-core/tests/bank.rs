@@ -32,6 +32,7 @@ fn piano_song() -> Song {
             note: Some(60),
             vol: 127,
             pan: 0,
+            keep: false,
         }],
         patterns: vec![Pattern {
             name: "A".into(),

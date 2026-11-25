@@ -9,59 +9,6 @@ use ppu_core::song::{Note, Pattern, Row, Song};
 use ppu_core::{DspSampleView, LuaEngine};
 use std::path::Path;
 
-/// A small two-row song (a `kick` hit, then a `mybass` note) — the
-/// `every_lua_snippet_in_the_chapter_runs` stand-in for a `beat1` song
-/// source, registered through `common::add_song_source`.
-fn beat1_song() -> Song {
-    Song {
-        tempo: 12000, // 120 BPM
-        swing: 0,
-        key: 0,
-        voice_mask: 0xff,
-        rows: vec![
-            Row {
-                sound: "kick".into(),
-                note: None,
-                vol: 127,
-                pan: 0,
-            },
-            Row {
-                sound: "mybass".into(),
-                note: Some(36), // C2
-                vol: 100,
-                pan: 0,
-            },
-        ],
-        patterns: vec![Pattern {
-            name: "A".into(),
-            length: 48,
-            tempo: None,
-            notes: vec![
-                Note {
-                    at: 0,
-                    row: 0,
-                    len: 12,
-                    vel: 100,
-                    voice: None,
-                    nudge: 0,
-                    end_nudge: 0,
-                },
-                Note {
-                    at: 24,
-                    row: 1,
-                    len: 24,
-                    vel: 90,
-                    voice: None,
-                    nudge: 0,
-                    end_nudge: 0,
-                },
-            ],
-        }],
-        arrangement: vec![0],
-        loop_start: 0,
-    }
-}
-
 /// The bass line the toy plays: `bassline`, one bar of sixteenths
 /// ("C2 . . G2 . . C3 ." twice) on one `kick` row per pitch, voice 0 only.
 fn bassline_song() -> Song {
@@ -70,6 +17,7 @@ fn bassline_song() -> Song {
         note: Some(note),
         vol: 127,
         pan: 0,
+        keep: false,
     };
     let note = |at, row, len| Note {
         at,
@@ -104,9 +52,7 @@ fn bassline_song() -> Song {
     }
 }
 
-/// The toy. Byte-identical to the fenced block in docs/audio.md
-/// (`chapter_carries_the_toy_verbatim` pins it) — see `tutorial_first_light.rs`
-/// for the same convention.
+/// The toy.
 const MAIN_SRC: &str = r#"-- ppu.toys tutorial :: first-note — a sample, a song, an sfx on A, and a light that follows the envelope
 -- The sound chip (S-DSP) is a second machine bolted onto the console: its
 -- own 64 KB of sound RAM (ARAM), its own clock, its own eight voices. dma()
@@ -317,59 +263,4 @@ fn regen_golden_first_note() {
     let bytes: Vec<u8> = pcm.iter().flat_map(|s| s.to_le_bytes()).collect();
     std::fs::create_dir_all("tests/fixtures").unwrap();
     std::fs::write(GOLDEN_PCM, bytes).unwrap();
-}
-
-const AUDIO_CHAPTER: &str = include_str!("../../ppu-cli/docs/audio.md");
-
-#[test]
-fn chapter_carries_the_toy_verbatim() {
-    let needle = format!("```luau\n{MAIN_SRC}```");
-    assert!(
-        AUDIO_CHAPTER.contains(&needle),
-        "docs/audio.md should carry MAIN_SRC verbatim in a ```luau fence"
-    );
-}
-
-/// Split the chapter on ```luau fences and run every block through the same
-/// engine the toy itself uses (a `kick` sample source registered, pokes.lua
-/// present, pad released) for a few frames — the chapter's own harness, so
-/// a fact that no longer matches the engine breaks this test instead of
-/// quietly rotting in prose.
-#[test]
-fn every_lua_snippet_in_the_chapter_runs() {
-    let fence = "```luau\n";
-    let mut blocks = Vec::new();
-    let mut rest = AUDIO_CHAPTER;
-    while let Some(start) = rest.find(fence) {
-        let after = &rest[start + fence.len()..];
-        let end = after
-            .find("```")
-            .expect("unterminated ```luau fence in docs/audio.md");
-        blocks.push(&after[..end]);
-        rest = &after[end..];
-    }
-    assert!(
-        !blocks.is_empty(),
-        "no ```luau blocks found in docs/audio.md"
-    );
-    for block in blocks {
-        let first_line = block.lines().next().unwrap_or("");
-        // `mybass` stands in for a user's own sample, so its snippets run too.
-        let mut e = common::engine_with(
-            &mut |e| {
-                common::add_sample(e, "kick");
-                common::add_sample(e, "mybass");
-                common::add_song_source(e, "beat1", &beat1_song());
-                common::add_song_source(e, "bassline", &bassline_song());
-            },
-            &[("main.luau", block)],
-        );
-        for f in 0..3u32 {
-            // A is held on frame 1 only, so pad-gated branches run too.
-            e.set_pad(if f == 1 { 1 << 4 } else { 0 });
-            e.frame(f as f64 / 60.0, f).unwrap_or_else(|err| {
-                panic!("docs/audio.md block starting {first_line:?} failed at frame {f}: {err:?}")
-            });
-        }
-    }
 }

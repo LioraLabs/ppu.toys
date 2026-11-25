@@ -22,8 +22,10 @@ struct Lower {
 
 // From the first token's start to the last token's end: `Node::range` can stop before a closing
 // bracket (`a[1]`), which put inserted parentheses inside it.
-fn range(node: &impl Node) -> Range<usize> {
-    let mut tokens = node.tokens().map(|t| t.token().start_position().bytes()..t.token().end_position().bytes());
+pub(crate) fn range(node: &impl Node) -> Range<usize> {
+    let mut tokens = node
+        .tokens()
+        .map(|t| t.token().start_position().bytes()..t.token().end_position().bytes());
     let first = tokens.next().expect("parsed syntax has tokens");
     tokens.fold(first, |a, b| a.start.min(b.start)..a.end.max(b.end))
 }
@@ -68,13 +70,22 @@ impl Lower {
         fn fail(this: &mut Lower, node: &impl Node, message: String) {
             this.errors.push((
                 range(node).start,
-                Error { line: node.start_position().unwrap().line() as u32, message },
+                Error {
+                    line: node.start_position().unwrap().line() as u32,
+                    message,
+                },
             ));
         }
-        let [ast::Suffix::Call(ast::Call::AnonymousCall(args))] = node.suffixes().collect::<Vec<_>>().as_slice() else {
+        let [ast::Suffix::Call(ast::Call::AnonymousCall(args))] =
+            node.suffixes().collect::<Vec<_>>().as_slice()
+        else {
             return fail(self, node, HELP.into());
         };
-        let ast::FunctionArgs::Parentheses { parentheses, arguments } = args.as_ref() else {
+        let ast::FunctionArgs::Parentheses {
+            parentheses,
+            arguments,
+        } = args.as_ref()
+        else {
             return fail(self, node, HELP.into());
         };
         let values: Vec<_> = arguments.iter().collect();
@@ -93,11 +104,12 @@ impl Lower {
             };
             let name = key.token().to_string();
             let kind = match &**value {
-                ast::Expression::Symbol(t) if matches!(t.token().to_string().as_str(), "true" | "false") => {
+                ast::Expression::Symbol(t)
+                    if matches!(t.token().to_string().as_str(), "true" | "false") =>
+                {
                     crate::save::Kind::Boolean
                 }
-                ast::Expression::FunctionCall(call)
-                    if matches!(call.prefix(), ast::Prefix::Name(n) if n.token().to_string() == "makeBounded") =>
+                ast::Expression::FunctionCall(call) if matches!(call.prefix(), ast::Prefix::Name(n) if n.token().to_string() == "makeBounded") =>
                 {
                     let bounds = match call.suffixes().collect::<Vec<_>>().as_slice() {
                         [ast::Suffix::Call(ast::Call::AnonymousCall(a))] => match a.as_ref() {
@@ -124,7 +136,8 @@ impl Lower {
         match crate::save::layout(&fields) {
             Ok(layout) => {
                 let close = range(parentheses.tokens().1).start;
-                self.edits.push((close, close..close, format!(", {}", layout.lua())));
+                self.edits
+                    .push((close, close..close, format!(", {}", layout.lua())));
             }
             Err(message) => fail(self, node, message),
         }
@@ -135,7 +148,10 @@ impl Lower {
 fn integer(e: &ast::Expression) -> Option<i64> {
     match e {
         ast::Expression::Number(n) => n.token().to_string().parse().ok(),
-        ast::Expression::UnaryOperator { unop: ast::UnOp::Minus(_), expression } => integer(expression).map(|n| -n),
+        ast::Expression::UnaryOperator {
+            unop: ast::UnOp::Minus(_),
+            expression,
+        } => integer(expression).map(|n| -n),
         ast::Expression::Parentheses { expression, .. } => integer(expression),
         _ => None,
     }
@@ -169,7 +185,12 @@ impl Visitor for Lower {
                 .map(|e| (e.binding(), e.expression())),
         );
         let conditions: Vec<&ast::Expression> = std::iter::once(node.condition())
-            .chain(node.else_if_expressions().into_iter().flatten().map(|e| e.condition()))
+            .chain(
+                node.else_if_expressions()
+                    .into_iter()
+                    .flatten()
+                    .map(|e| e.condition()),
+            )
             .collect();
         let mut paired = false;
         for (binding, value) in branches {
@@ -182,7 +203,10 @@ impl Visitor for Lower {
         // `c and a or not c and b`, which tests each condition twice: only conditions without calls (and on one line,
         // so the copy keeps the line numbers). A then-value that is nil comes out false.
         if paired {
-            if let Some(c) = conditions.iter().find(|c| has_call(c) || c.to_string().contains('\n')) {
+            if let Some(c) = conditions
+                .iter()
+                .find(|c| has_call(c) || c.to_string().contains('\n'))
+            {
                 return self.reject(*c, "if expressions whose then-value may be false or nil and whose condition calls a function; use an if statement");
             }
         }
@@ -196,24 +220,49 @@ impl Visitor for Lower {
         swap(node.if_token(), "((".into());
         swap(node.then_token(), ") and (".into());
         for (k, e) in node.else_if_expressions().into_iter().flatten().enumerate() {
-            let otherwise = if paired { format!(") or (not ({})) and ((", text(conditions[k])) } else { ") or ((".into() };
+            let otherwise = if paired {
+                format!(") or (not ({})) and ((", text(conditions[k]))
+            } else {
+                ") or ((".into()
+            };
             swap(e.else_if_token(), otherwise);
             swap(e.then_token(), ") and (".into());
         }
-        let last = if paired { format!(") or (not ({})) and (", text(conditions[conditions.len() - 1])) } else { ") or (".into() };
+        let last = if paired {
+            format!(
+                ") or (not ({})) and (",
+                text(conditions[conditions.len() - 1])
+            )
+        } else {
+            ") or (".into()
+        };
         swap(node.else_token(), last);
         let closers = inserted.matches('(').count() - inserted.matches(')').count();
         let span = range(node);
-        self.edits.push((span.start, span.end..span.end, ")".repeat(closers)));
+        self.edits
+            .push((span.start, span.end..span.end, ")".repeat(closers)));
     }
     // `{x = makeFixed(0, -8, 8)}` -> `__ppu_record({x = __ppu_initial(0, -8, 8)}, {x = {true, -8, 8, 1024}})`:
-    // a record whose field keeps its contract for every later store (see luau.lua).
+    // a record whose field keeps its contract for every later store (see luau.lua). A list's elements keep
+    // theirs the same way, by position: `{makeBounded(3, 0, 9)}` -> `... {[1] = {false, 0, 9, 1024}}`.
     fn visit_table_constructor(&mut self, node: &ast::TableConstructor) {
         let mut contracts = vec![];
+        let mut position = 0;
         for field in node.fields() {
-            let ast::Field::NameKey { key, value, .. } = field else { continue };
-            let ast::Expression::FunctionCall(call) = value.as_ref() else { continue };
-            let ast::Prefix::Name(callee) = call.prefix() else { continue };
+            let (key, value) = match field {
+                ast::Field::NameKey { key, value, .. } => (key.token().to_string(), value.as_ref()),
+                ast::Field::NoKey(value) => {
+                    position += 1;
+                    (format!("[{position}]"), value)
+                }
+                _ => continue,
+            };
+            let ast::Expression::FunctionCall(call) = value else {
+                continue;
+            };
+            let ast::Prefix::Name(callee) = call.prefix() else {
+                continue;
+            };
             let fixed = match callee.token().to_string().as_str() {
                 "makeFixed" => true,
                 "makeBounded" => false,
@@ -224,8 +273,14 @@ impl Visitor for Lower {
             else {
                 continue;
             };
-            let ast::FunctionArgs::Parentheses { arguments, .. } = args.as_ref() else { continue };
-            let text = |e: &ast::Expression| e.tokens().map(|t| t.token().to_string()).collect::<String>();
+            let ast::FunctionArgs::Parentheses { arguments, .. } = args.as_ref() else {
+                continue;
+            };
+            let text = |e: &ast::Expression| {
+                e.tokens()
+                    .map(|t| t.token().to_string())
+                    .collect::<String>()
+            };
             let args: Vec<String> = arguments.iter().map(text).collect();
             if args.len() != 3 && !(fixed && args.len() == 4) {
                 continue; // the runtime constructor reports the arity error
@@ -233,9 +288,7 @@ impl Visitor for Lower {
             let denominator = args.get(3).map_or("1024", String::as_str);
             contracts.push(format!(
                 "{} = {{{fixed}, {}, {}, {denominator}}}",
-                key.token(),
-                args[1],
-                args[2]
+                key, args[1], args[2]
             ));
             let span = range(callee);
             self.edits.push((span.start, span, "__ppu_initial".into()));
@@ -244,8 +297,13 @@ impl Visitor for Lower {
             return;
         }
         let span = range(node);
-        self.edits.push((span.start, span.start..span.start, "__ppu_record(".into()));
-        self.edits.push((span.start, span.end..span.end, format!(", {{{}}})", contracts.join(", "))));
+        self.edits
+            .push((span.start, span.start..span.start, "__ppu_record(".into()));
+        self.edits.push((
+            span.start,
+            span.end..span.end,
+            format!(", {{{}}})", contracts.join(", ")),
+        ));
     }
     // Luau iterates a table directly; `pairs` visits the array part in order, then the rest.
     fn visit_generic_for(&mut self, node: &ast::GenericFor) {
@@ -253,14 +311,18 @@ impl Visitor for Lower {
         if let (Some(value), None) = (values.next(), values.next()) {
             if !matches!(value, ast::Expression::FunctionCall(_)) {
                 let span = range(value);
-                self.edits.push((span.start, span.start..span.start, "pairs(".into()));
-                self.edits.push((span.start, span.end..span.end, ")".into()));
+                self.edits
+                    .push((span.start, span.start..span.start, "pairs(".into()));
+                self.edits
+                    .push((span.start, span.end..span.end, ")".into()));
             }
         }
     }
     // lookup/bakeHdma grids are keyed by parameter name, which Lua cannot read at run time.
     fn visit_function_call(&mut self, node: &ast::FunctionCall) {
-        let ast::Prefix::Name(name) = node.prefix() else { return };
+        let ast::Prefix::Name(name) = node.prefix() else {
+            return;
+        };
         if name.token().to_string() == "saveData" {
             return self.save_data(node);
         }
@@ -272,10 +334,16 @@ impl Visitor for Lower {
         else {
             return;
         };
-        let ast::FunctionArgs::Parentheses { parentheses, arguments } = args.as_ref() else {
+        let ast::FunctionArgs::Parentheses {
+            parentheses,
+            arguments,
+        } = args.as_ref()
+        else {
             return;
         };
-        let Some(ast::Expression::Function(f)) = arguments.iter().last() else { return };
+        let Some(ast::Expression::Function(f)) = arguments.iter().last() else {
+            return;
+        };
         let names: Vec<String> = f
             .body()
             .parameters()
@@ -286,7 +354,8 @@ impl Visitor for Lower {
             })
             .collect();
         let close = range(parentheses.tokens().1).start;
-        self.edits.push((close, close..close, format!(", {{{}}}", names.join(", "))));
+        self.edits
+            .push((close, close..close, format!(", {{{}}}", names.join(", "))));
     }
     fn visit_last_stmt(&mut self, node: &ast::LastStmt) {
         if matches!(node, ast::LastStmt::Continue(_)) {
@@ -301,7 +370,9 @@ impl Visitor for Lower {
                 matches!(v.prefix(), ast::Prefix::Name(_))
                     && v.suffixes().all(|s| match s {
                         ast::Suffix::Index(ast::Index::Dot { .. }) => true,
-                        ast::Suffix::Index(ast::Index::Brackets { expression, .. }) => !has_call(expression),
+                        ast::Suffix::Index(ast::Index::Brackets { expression, .. }) => {
+                            !has_call(expression)
+                        }
                         _ => false,
                     })
             }
@@ -312,9 +383,17 @@ impl Visitor for Lower {
             return;
         }
         // Node::tokens visits a bracketed span's delimiters before its contents: order by position.
-        let mut tokens: Vec<_> = node.lhs().tokens().map(|t| (t.token().start_position().bytes(), t.token().to_string())).collect();
+        let mut tokens: Vec<_> = node
+            .lhs()
+            .tokens()
+            .map(|t| (t.token().start_position().bytes(), t.token().to_string()))
+            .collect();
         tokens.sort_by_key(|(at, _)| *at);
-        let lhs = tokens.into_iter().map(|(_, t)| t).collect::<Vec<_>>().join(" ");
+        let lhs = tokens
+            .into_iter()
+            .map(|(_, t)| t)
+            .collect::<Vec<_>>()
+            .join(" ");
         let operator = node.compound_operator().token().token().to_string();
         let operator = operator.strip_suffix('=').unwrap();
         let operator_span = range(node.compound_operator());
@@ -328,6 +407,173 @@ impl Visitor for Lower {
     }
 }
 
+/// The deepest an author's source may nest: each open bracket, block and if-expression is a level,
+/// and so is each operator of the expression being read at each level. The parser and every pass
+/// after it recurse once per level; this keeps a compiler on a 2 MiB thread in a debug build safe,
+/// where 100 nested `if` blocks or 550 chained `+` overflowed it. Real code stays below 25.
+pub const MAX_NESTING: usize = 64;
+
+/// The deepest any Lua the engine runs may nest ([`prepare`]): the authors' limit and headroom for
+/// a compiler's own Lua output, which nests a little deeper than its source (`do` scopes: one level
+/// measured). Nested functions cost the preview most: 80 of them overflowed a 2 MiB debug thread.
+pub const PARSE_NESTING: usize = MAX_NESTING + 8;
+
+/// The open levels while [`nesting`] reads tokens: one per bracket or block (the file is the
+/// first), each with the operators read at it so far and its if-expressions still waiting for
+/// their `else`.
+struct Nest {
+    levels: Vec<(bool, usize, usize)>,
+    depth: usize,
+}
+
+impl Nest {
+    fn top(&mut self) -> &mut (bool, usize, usize) {
+        self.levels
+            .last_mut()
+            .expect("the file's level is never closed")
+    }
+    fn open(&mut self, block: bool) {
+        self.levels.push((block, 0, 0));
+        self.depth += 1;
+    }
+    // A closer that does not match its opener is the parser's to report: the level stays.
+    fn close(&mut self, block: bool) {
+        if self.levels.len() > 1 && self.top().0 == block {
+            self.depth -= self.levels.pop().unwrap().1 + 1;
+        }
+    }
+    fn operator(&mut self) {
+        self.top().1 += 1;
+        self.depth += 1;
+    }
+    // An expression ends where a statement or the next item starts.
+    fn end_expression(&mut self) {
+        self.depth -= std::mem::take(&mut self.top().1);
+    }
+}
+
+/// Refuses `source` nested deeper than `limit` ([`MAX_NESTING`] for an author's source), at the
+/// line of its deepest point. It reads tokens, never a tree, so it cannot overflow itself: run it
+/// before anything parses.
+pub fn nesting(source: &str, limit: usize) -> Result<(), Error> {
+    let (depth, line) = deepest(source);
+    if depth <= limit {
+        return Ok(());
+    }
+    Err(Error {
+        line,
+        message: format!(
+            "This line nests {depth} levels deep, past the limit of {limit} (each open bracket, block, and operator of one expression, is a level): the compiler refuses deeper code rather than overflow its stack. Split the expression with locals, or move inner blocks into functions."
+        ),
+    })
+}
+
+/// The deepest [`nesting`] in `source` and the line it is first reached on.
+fn deepest(source: &str) -> (usize, u32) {
+    use full_moon::tokenizer::{InterpolatedStringKind as Part, Lexer, LexerResult, TokenType};
+    // Recovered: the lexer skips what it cannot read and goes on (collect never returns Fatal).
+    let (LexerResult::Ok(tokens) | LexerResult::Recovered(tokens, _)) =
+        Lexer::new(source, full_moon::LuaVersion::luau()).collect()
+    else {
+        return (0, 1);
+    };
+    let mut deepest = (0, 1);
+    let mut nest = Nest {
+        levels: vec![(true, 0, 0)],
+        depth: 0,
+    };
+    // Per `if`/`elseif` waiting for its `then`: whether it is an if-expression (no block, no `end`).
+    let mut thens: Vec<bool> = vec![];
+    // Whether the previous token leaves an expression to finish: an `if` there is an if-expression.
+    let mut in_expression = false;
+    for token in tokens.iter().filter(|t| !t.token_type().is_trivia()) {
+        let text = token.to_string();
+        let open_ifs = nest.top().2;
+        let mut expression = true;
+        match (token.token_type(), text.as_str()) {
+            (
+                TokenType::InterpolatedString {
+                    kind: Part::Begin, ..
+                },
+                _,
+            )
+            | (_, "(" | "[" | "{") => nest.open(false),
+            (
+                TokenType::InterpolatedString {
+                    kind: Part::Middle, ..
+                },
+                _,
+            ) => nest.end_expression(),
+            (
+                TokenType::InterpolatedString {
+                    kind: Part::End, ..
+                },
+                _,
+            )
+            | (_, ")" | "]" | "}") => {
+                nest.close(false);
+                expression = false;
+            }
+            (_, "function") => {
+                nest.open(true);
+                expression = false;
+            }
+            (_, "do" | "repeat") => {
+                nest.end_expression();
+                nest.open(true);
+                expression = false;
+            }
+            (_, "end") => {
+                nest.close(true);
+                expression = false;
+            }
+            (_, "until") => nest.close(true),
+            (_, "if") if in_expression => {
+                thens.push(true);
+                nest.top().2 += 1;
+                nest.operator();
+            }
+            (_, "if") => {
+                thens.push(false);
+                nest.end_expression();
+            }
+            (_, "then") if thens.pop().unwrap_or(false) => {}
+            (_, "then") => {
+                nest.end_expression();
+                nest.open(true);
+                expression = false;
+            }
+            (_, "elseif") if open_ifs > 0 => thens.push(true),
+            (_, "elseif") => {
+                nest.close(true);
+                thens.push(false);
+            }
+            (_, "else") if open_ifs > 0 => nest.top().2 -= 1,
+            (_, "else" | ";" | "local" | "for" | "break") => {
+                nest.end_expression();
+                expression = false;
+            }
+            (
+                _,
+                "=" | "+=" | "-=" | "*=" | "/=" | "//=" | "%=" | "^=" | "..=" | "," | "return"
+                | "while" | "in",
+            ) => nest.end_expression(),
+            (
+                _,
+                "+" | "-" | "*" | "/" | "//" | "%" | "^" | ".." | "#" | "==" | "~=" | "<" | "<="
+                | ">" | ">=" | "and" | "or" | "not" | "~" | "<<" | ">>",
+            ) => nest.operator(),
+            // Not `|` or `&`: in Luau they only join types, which parse as flat lists (a long union nests nothing).
+            _ => expression = false,
+        }
+        in_expression = expression;
+        if nest.depth > deepest.0 {
+            deepest = (nest.depth, token.start_position().line() as u32);
+        }
+    }
+    deepest
+}
+
 /// The `require("./name")` paths in `source`, in order of appearance (`./` dropped); an
 /// engine library's path keeps its prefix: `require("@ppu/blink")` gives `@ppu/blink`.
 pub fn requires(source: &str) -> Vec<&str> {
@@ -339,8 +585,12 @@ pub fn requires(source: &str) -> Vec<&str> {
             continue;
         }
         let rest = &source[at + "require(".len()..];
-        let Some(quote) = rest.chars().next().filter(|c| *c == '"' || *c == '\'') else { continue };
-        let Some(end) = rest[1..].find(quote) else { continue };
+        let Some(quote) = rest.chars().next().filter(|c| *c == '"' || *c == '\'') else {
+            continue;
+        };
+        let Some(end) = rest[1..].find(quote) else {
+            continue;
+        };
         let path = &rest[1..1 + end];
         if let Some(path) = path.strip_prefix("./") {
             paths.push(path);
@@ -351,26 +601,39 @@ pub fn requires(source: &str) -> Vec<&str> {
     paths
 }
 
-/// The prefix of an engine library's require path.
-pub const LIBRARY: &str = "@ppu/";
+pub use ppu_rules::frontend::{is_project_file, LIBRARY};
 
 /// The engine's Luau libraries as files: (`@ppu/<name>.luau`, source), from lib/ (see build.rs).
 pub const LIBRARIES: &[(&str, &str)] = include!(concat!(env!("OUT_DIR"), "/libraries.rs"));
 
 /// `files` plus the engine libraries they require, directly or through each other, as files
 /// named `@ppu/<name>.luau`; an unknown library is refused as (file, message).
-pub fn with_libraries<'a>(files: &[(&'a str, &'a str)]) -> Result<Vec<(&'a str, &'a str)>, (String, String)> {
+pub fn with_libraries<'a>(
+    files: &[(&'a str, &'a str)],
+) -> Result<Vec<(&'a str, &'a str)>, (String, String)> {
     let mut out = files.to_vec();
     let mut at = 0;
     while at < out.len() {
-        for path in requires(out[at].1).into_iter().filter(|p| p.starts_with(LIBRARY)) {
+        for path in requires(out[at].1)
+            .into_iter()
+            .filter(|p| p.starts_with(LIBRARY))
+        {
             let file = format!("{path}.luau");
             if out.iter().any(|(n, _)| *n == file) {
                 continue;
             }
             let Some(library) = LIBRARIES.iter().find(|(n, _)| *n == file) else {
-                let shipped: Vec<&str> = LIBRARIES.iter().map(|(n, _)| n.trim_end_matches(".luau")).collect();
-                return Err((out[at].0.into(), format!("require(\"{path}\"): the engine has no such library; it ships {}", shipped.join(", "))));
+                let shipped: Vec<&str> = LIBRARIES
+                    .iter()
+                    .map(|(n, _)| n.trim_end_matches(".luau"))
+                    .collect();
+                return Err((
+                    out[at].0.into(),
+                    format!(
+                        "require(\"{path}\"): the engine has no such library; it ships {}",
+                        shipped.join(", ")
+                    ),
+                ));
             };
             out.push(*library);
         }
@@ -409,8 +672,12 @@ pub fn scene_files(files: &[(&str, &str)]) -> Vec<String> {
             if !(rest.starts_with("require(\"./") || rest.starts_with("require('./")) {
                 continue;
             }
-            let Some(path) = requires(rest).into_iter().next() else { continue };
-            let file = [format!("{path}.luau"), format!("{path}.lua")].into_iter().find(|f| names.contains(f.as_str()));
+            let Some(path) = requires(rest).into_iter().next() else {
+                continue;
+            };
+            let file = [format!("{path}.luau"), format!("{path}.lua")]
+                .into_iter()
+                .find(|f| names.contains(f.as_str()));
             if let Some(file) = file.filter(|f| !out.contains(f)) {
                 out.push(file);
             }
@@ -423,17 +690,23 @@ pub fn scene_files(files: &[(&str, &str)]) -> Vec<String> {
 /// Whether evaluating `e` may call a function (so it must run once).
 fn has_call(e: &ast::Expression) -> bool {
     match e {
-        ast::Expression::FunctionCall(_) | ast::Expression::IfExpression(_) | ast::Expression::Function(_) => true,
+        ast::Expression::FunctionCall(_)
+        | ast::Expression::IfExpression(_)
+        | ast::Expression::Function(_) => true,
         ast::Expression::Parentheses { expression, .. } => has_call(expression),
         ast::Expression::UnaryOperator { expression, .. } => has_call(expression),
         ast::Expression::BinaryOperator { lhs, rhs, .. } => has_call(lhs) || has_call(rhs),
         ast::Expression::Var(ast::Var::Name(_)) => false,
-        ast::Expression::Var(ast::Var::Expression(v)) => v.suffixes().any(|s| match s {
-            ast::Suffix::Call(_) => true,
-            ast::Suffix::Index(ast::Index::Brackets { expression, .. }) => has_call(expression),
-            _ => false,
-        }) || matches!(v.prefix(), ast::Prefix::Expression(inner) if has_call(inner)),
-        ast::Expression::Symbol(_) | ast::Expression::Number(_) | ast::Expression::String(_) => false,
+        ast::Expression::Var(ast::Var::Expression(v)) => {
+            v.suffixes().any(|s| match s {
+                ast::Suffix::Call(_) => true,
+                ast::Suffix::Index(ast::Index::Brackets { expression, .. }) => has_call(expression),
+                _ => false,
+            }) || matches!(v.prefix(), ast::Prefix::Expression(inner) if has_call(inner))
+        }
+        ast::Expression::Symbol(_) | ast::Expression::Number(_) | ast::Expression::String(_) => {
+            false
+        }
         _ => true,
     }
 }
@@ -453,8 +726,9 @@ fn may_be_false(value: &ast::Expression) -> bool {
 
 /// Normalize supported Luau syntax without moving comments or newlines.
 /// A Luau syntax rejection returns the original source for the existing parser.
-/// An accepted but unsupported Luau construct is an error, never a fallback.
+/// An accepted but unsupported Luau construct is an error, never a fallback, and so is [`nesting`] too deep.
 pub fn prepare(source: &str) -> Result<Cow<'_, str>, Error> {
+    nesting(source, PARSE_NESTING)?;
     let Ok(ast) = full_moon::parse_fallible(source, full_moon::LuaVersion::luau()).into_result()
     else {
         // The existing parser validates the original bytes and retains its diagnostics.
@@ -481,7 +755,9 @@ pub fn prepare(source: &str) -> Result<Cow<'_, str>, Error> {
     }
     let mut result = String::from_utf8(masked).expect("only whole syntax tokens are erased");
     // At one position, replace a token before inserting in front of it.
-    lower.edits.sort_by(|a, b| (b.1.start, b.1.end).cmp(&(a.1.start, a.1.end)));
+    lower
+        .edits
+        .sort_by(|a, b| (b.1.start, b.1.end).cmp(&(a.1.start, a.1.end)));
     for (_, span, replacement) in lower.edits {
         result.replace_range(span, &replacement);
     }
@@ -531,7 +807,7 @@ fn makes_fixed(source: &str, anywhere: bool) -> bool {
 /// precision uses. Fractional literals round to Q10 (nearest, ties away from zero), and `*`
 /// and `/` run on Q10 operands with the result truncated toward zero (`__ppu_mul`/`__ppu_div`
 /// in luau.lua). Sums, differences, comparisons, floors and `%` of Q10 values are already
-/// exact. Functions passed to `lookup` keep f64: they are sampled tables, not runtime code;
+/// exact. Functions passed to `lookup` or `bakeHdma` keep f64: they are sampled tables, not runtime code;
 /// helpers they call follow `__ppu_sampling` at run time.
 /// Runs on `prepare`d text, so compound assignments are already plain operators.
 pub fn fixed_point(source: &str) -> Cow<'_, str> {
@@ -543,14 +819,21 @@ pub fn fixed_point(source: &str) -> Cow<'_, str> {
     struct Sampled(Vec<Range<usize>>);
     impl Visitor for Sampled {
         fn visit_function_call(&mut self, node: &ast::FunctionCall) {
-            let ast::Prefix::Name(name) = node.prefix() else { return };
-            if name.token().to_string() != "lookup" {
+            let ast::Prefix::Name(name) = node.prefix() else {
+                return;
+            };
+            if !matches!(name.token().to_string().as_str(), "lookup" | "bakeHdma") {
                 return;
             }
             for suffix in node.suffixes() {
-                let ast::Suffix::Call(ast::Call::AnonymousCall(args)) = suffix else { continue };
+                let ast::Suffix::Call(ast::Call::AnonymousCall(args)) = suffix else {
+                    continue;
+                };
                 if let ast::FunctionArgs::Parentheses { arguments, .. } = args.as_ref() {
-                    for a in arguments.iter().filter(|a| matches!(a, ast::Expression::Function(_))) {
+                    for a in arguments
+                        .iter()
+                        .filter(|a| matches!(a, ast::Expression::Function(_)))
+                    {
                         self.0.push(range(a));
                     }
                 }
@@ -571,7 +854,9 @@ pub fn fixed_point(source: &str) -> Cow<'_, str> {
         fn visit_expression(&mut self, node: &ast::Expression) {
             let order = self.edits.len();
             match node {
-                ast::Expression::BinaryOperator { lhs, binop, rhs } if self.runtime(range(node).start) => {
+                ast::Expression::BinaryOperator { lhs, binop, rhs }
+                    if self.runtime(range(node).start) =>
+                {
                     let helper = match binop {
                         ast::BinOp::Star(_) => "__ppu_mul",
                         ast::BinOp::Slash(_) => "__ppu_div",
@@ -585,16 +870,29 @@ pub fn fixed_point(source: &str) -> Cow<'_, str> {
                 }
                 ast::Expression::Number(n) if self.runtime(range(node).start) => {
                     let text = n.token().to_string();
-                    if text.starts_with("0x") || text.starts_with("0X") || !text.contains(['.', 'e', 'E']) {
+                    if text.starts_with("0x")
+                        || text.starts_with("0X")
+                        || !text.contains(['.', 'e', 'E'])
+                    {
                         return;
                     }
-                    let Ok(value) = text.parse::<f64>() else { return };
+                    let Ok(value) = text.parse::<f64>() else {
+                        return;
+                    };
                     let raw = (value * 1024.).round();
                     if raw / 1024. != value {
                         let q = raw / 1024.;
-                        let q = if q.fract() == 0. { format!("{q:.1}") } else { format!("{q:?}") };
+                        let q = if q.fract() == 0. {
+                            format!("{q:.1}")
+                        } else {
+                            format!("{q:?}")
+                        };
                         // A helper a lookup is sampling sees the authored value.
-                        self.edits.push((range(n), order, format!("(__ppu_sampling and {text} or {q})")));
+                        self.edits.push((
+                            range(n),
+                            order,
+                            format!("(__ppu_sampling and {text} or {q})"),
+                        ));
                     }
                 }
                 _ => {}
@@ -603,7 +901,10 @@ pub fn fixed_point(source: &str) -> Cow<'_, str> {
     }
     let mut sampled = Sampled::default();
     sampled.visit_ast(&ast);
-    let mut fixed = Fixed { sampled: sampled.0, edits: vec![] };
+    let mut fixed = Fixed {
+        sampled: sampled.0,
+        edits: vec![],
+    };
     fixed.visit_ast(&ast);
     if fixed.edits.is_empty() {
         return Cow::Borrowed(source);
@@ -679,13 +980,108 @@ mod tests {
     fn engine_libraries_join_the_files_that_require_them() {
         let main = "local blink = require(\"@ppu/blink\")\nlocal state = require(\"./state\")\n";
         assert_eq!(requires(main), ["@ppu/blink", "state"]);
-        let files = with_libraries(&[("main.luau", main), ("state.luau", "require(\"@ppu/blink\")")]).unwrap();
+        let files = with_libraries(&[
+            ("main.luau", main),
+            ("state.luau", "require(\"@ppu/blink\")"),
+        ])
+        .unwrap();
         let names: Vec<&str> = files.iter().map(|(n, _)| *n).collect();
         assert_eq!(names, ["main.luau", "state.luau", "@ppu/blink.luau"]);
         assert_eq!(with_libraries(&[("main.luau", "")]).unwrap().len(), 1);
-        let (file, message) = with_libraries(&[("main.luau", "local x = require(\"@ppu/nope\")")]).unwrap_err();
+        let (file, message) =
+            with_libraries(&[("main.luau", "local x = require(\"@ppu/nope\")")]).unwrap_err();
         assert_eq!(file, "main.luau");
-        assert!(message.contains("no such library; it ships @ppu/blink"), "{message}");
+        assert!(
+            message.contains("no such library; it ships @ppu/blink"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn nesting_counts_brackets_blocks_and_operators_up_to_the_limit() {
+        let parens = |n: usize| format!("local x = 1\n\nx = {}1{}\n", "(".repeat(n), ")".repeat(n));
+        assert_eq!(deepest(&parens(MAX_NESTING)), (MAX_NESTING, 3));
+        assert!(nesting(&parens(MAX_NESTING), MAX_NESTING).is_ok());
+        let error = nesting(&parens(MAX_NESTING + 1), MAX_NESTING).unwrap_err();
+        assert_eq!(error.line, 3);
+        assert!(
+            error
+                .message
+                .contains(&format!("past the limit of {MAX_NESTING}")),
+            "{}",
+            error.message
+        );
+        let sum = |n: usize| format!("x = 1{}\n", " + 1".repeat(n));
+        assert!(
+            nesting(&sum(MAX_NESTING), MAX_NESTING).is_ok()
+                && nesting(&sum(MAX_NESTING + 1), MAX_NESTING).is_err()
+        );
+        let ifs = |n: usize| format!("{}x = 1{}", "if x then\n".repeat(n), "\nend".repeat(n));
+        assert!(
+            nesting(&ifs(MAX_NESTING), MAX_NESTING).is_ok()
+                && nesting(&ifs(MAX_NESTING + 1), MAX_NESTING).is_err()
+        );
+        assert!(
+            prepare(&parens(PARSE_NESTING)).is_ok() && prepare(&parens(PARSE_NESTING + 1)).is_err()
+        );
+        assert_eq!(deepest("f(function() return {[1] = -x} end)"), (4, 1));
+        // Tokens the lexer cannot read do not hide the depth.
+        assert!(nesting(&format!("x = $ \"open\n{}1", "(".repeat(1000)), MAX_NESTING).is_err());
+    }
+
+    #[test]
+    fn the_preview_survives_its_nesting_ceiling_on_a_2_mib_thread() {
+        // Each form exactly PARSE_NESTING deep (frame's block is one level): loaded or refused, never an abort.
+        let n = PARSE_NESTING - 2;
+        let forms = [
+            format!("x = {}f{}", "(".repeat(n + 1), ")".repeat(n + 1)),
+            format!("x = {}f", "- ".repeat(n + 1)),
+            format!("x = f{}", " + f".repeat(n + 1)),
+            format!(
+                "{}x = 1{}",
+                "if f > 1 then ".repeat(n + 1),
+                " end".repeat(n + 1)
+            ),
+            format!(
+                "{}x = 1{}",
+                "while f < 0 do ".repeat(n + 1),
+                " end".repeat(n + 1)
+            ),
+            format!(
+                "x = {}1{}",
+                "function() return ".repeat(n),
+                " end".repeat(n)
+            ),
+            format!("x = {}1{}", "{".repeat(n + 1), "}".repeat(n + 1)),
+            format!("x = {}f{}", "t[".repeat(n + 1), "]".repeat(n + 1)),
+        ];
+        for form in forms {
+            let source = format!("local x, t = 0, {{}}\nfunction frame(_t, f)\n  {form}\nend\n");
+            assert_eq!(deepest(&source).0, PARSE_NESTING, "{form}");
+            std::thread::Builder::new()
+                .stack_size(2 << 20)
+                .spawn(move || {
+                    let _ = crate::LuaEngine::new().set_source(&source);
+                })
+                .unwrap()
+                .join()
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn nesting_does_not_drift_over_balanced_code() {
+        let line = "local a = if x then 1 elseif y then 2 else 3\n\
+            local b = if x then if y then 1 else 2 else if z then 3 else 4\n\
+            if x then a = 1 elseif y then a = 2 else a = if z then 3 else 4 end\n\
+            if if x then y else z then a = 1 end\n\
+            while x do repeat a += 1 until a > 3 end\n\
+            for i = 1, 3 do local f = function(v: number): number return v end end\n\
+            local s = `{a}{b + 1}` .. \"((((\" .. [[ (((( ]] -- ((((\n\
+            type Cue = \"a\" | \"b\" | \"c\" | \"d\"\n\
+            f(a + b) g(c + d)\n";
+        let source = line.repeat(200);
+        assert!(deepest(&source).0 <= 4, "{:?}", deepest(&source));
     }
 
     #[test]
@@ -719,7 +1115,11 @@ mod tests {
         assert_eq!((oam[0].x, oam[1].x, oam[2].x), (9, 7, 9));
         // A then-value that may be false needs a condition without calls (it is tested twice).
         let error = prepare("local t = if f(1) == 1 then false else a[2]").unwrap_err();
-        assert!(error.message.contains("then-value may be false or nil"), "{}", error.message);
+        assert!(
+            error.message.contains("then-value may be false or nil"),
+            "{}",
+            error.message
+        );
     }
     #[test]
     fn if_expressions_whose_then_value_may_be_false_pick_it() {
@@ -732,11 +1132,21 @@ mod tests {
             engine.frame(f as f64 / 60., f).unwrap();
             let owner = f % 3;
             let near = (f % 5) < 3;
-            let hit = match owner { 1 => false, 2 => near, _ => !near };
-            if hit { hits += 1 }
+            let hit = match owner {
+                1 => false,
+                2 => near,
+                _ => !near,
+            };
+            if hit {
+                hits += 1
+            }
             let tally = if f % 2 == 0 { hits > 2 } else { true };
             let oam = &engine.memory().oam;
-            assert_eq!((oam[0].x as i32, oam[1].x), (hits, tally as i16), "frame {f}");
+            assert_eq!(
+                (oam[0].x as i32, oam[1].x),
+                (hits, tally as i16),
+                "frame {f}"
+            );
         }
     }
     #[test]
@@ -759,20 +1169,32 @@ mod tests {
             t[i] = (t[i] + 2) * 3;
             a[(i + 1) % 2] -= 1;
             let oam = &engine.memory().oam;
-            assert_eq!((oam[0].x as i32, oam[1].x as i32, oam[2].x as i32), (t[0] + t[1] * 4 + t[2] * 16, a[0] + 100, a[1] + 100), "frame {f}");
+            assert_eq!(
+                (oam[0].x as i32, oam[1].x as i32, oam[2].x as i32),
+                (t[0] + t[1] * 4 + t[2] * 16, a[0] + 100, a[1] + 100),
+                "frame {f}"
+            );
         }
         let error = prepare("local a={0} local function f() return 1 end a[f()] += 1").unwrap_err();
-        assert!(error.message.contains("target that calls a function"), "{}", error.message);
+        assert!(
+            error.message.contains("target that calls a function"),
+            "{}",
+            error.message
+        );
     }
     #[test]
     fn preview_uses_shared_frontend_and_keeps_runtime_locations() {
         let source="--!strict\nlocal hp: number=makeBounded(1,0,2)\nfunction frame()\n hp += (\n 1\n )\n hp=3\nend\n";
         let mut engine = crate::LuaEngine::new();
         engine.set_sources(&[("game.luau", source)]).unwrap();
-        let error = engine.frame(0., 0).unwrap_err();
-        assert_eq!(error.file.as_deref(), Some("game.luau"));
-        assert_eq!(error.line, Some(7));
-        assert!(error.message.contains("makeBounded"));
+        engine.frame(0., 0).unwrap();
+        let [v] = engine.violations() else {
+            panic!("{:?}", engine.violations())
+        };
+        assert_eq!(
+            (v.file.as_str(), v.line, v.store.as_str()),
+            ("game.luau", 7, "hp")
+        );
     }
     #[test]
     fn binary_string_content_and_contextual_identifiers_remain_lua() {

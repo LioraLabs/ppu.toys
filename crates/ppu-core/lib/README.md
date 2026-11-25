@@ -32,6 +32,15 @@ The preview runs it, and the SNES compiler builds it into the cartridge, from th
 - A `makeFixed` anywhere in a library turns on fixed-point arithmetic for every toy that
   requires it. Use whole numbers unless the library needs fractions.
 
+- A library may lean on engine primitives, globals named `__ppu_*` that only the engine's own
+  code calls. `world.luau` (`@ppu/world`, Tiled maps) is one: it does the camera arithmetic
+  and leaves every VRAM write to `__ppu_world_strip`, which presents one row or column of a
+  bound layer. The preview writes the cells through `vram[]`; a cartridge streams the same
+  strips its own way, and the library does not change. A generated world adds `__ppu_world_chunk`, which says
+  which template a chunk of its ground shows before the strips that cross it, and `w:set` adds
+  `__ppu_world_set`, which changes a layer's cells (its words and kinds) without drawing: the
+  library then presents the changed cells the camera shows as column strips.
+
 ## Types for the editor
 
 Add the library's type to the Libraries section at the end of `src/ppu.d.luau`, under a

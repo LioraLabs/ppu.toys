@@ -1,10 +1,18 @@
 [workspace]
-members = ["crates/ppu-core", "crates/ppu-cli", "crates/ppu-cart", "vendor/piccolo"]
+members = ["crates/ppu-rules", "crates/ppu-core", "crates/ppu-docs", "crates/ppu-cli", "crates/ppu-console", "vendor/piccolo"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/LioraLabs/ppu.toys"
 homepage = "https://ppu.toys"
+
+# The parser and the Lua compiler optimised even in a debug build, as the compiler workspace has them: unoptimised,
+# 32 nested `if` blocks overflowed a 2 MiB test thread, under frontend::MAX_NESTING (ppu-core's
+# the_preview_survives_its_nesting_ceiling_on_a_2_mib_thread).
+[profile.dev.package.full_moon]
+opt-level = 3
+[profile.dev.package.piccolo-ppu]
+opt-level = 3

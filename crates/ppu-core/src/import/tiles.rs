@@ -81,6 +81,23 @@ pub fn pack_planar(t: &IndexTile, bpp: u8) -> Vec<u16> {
     out
 }
 
+/// Inverse of [`pack_planar`]: char words back to an 8x8 grid of local indices.
+/// Panics if `words` holds fewer than `bpp * 4` words.
+pub fn unpack_planar(words: &[u16], bpp: u8) -> IndexTile {
+    let mut t = [0u8; 64];
+    for pair in 0..bpp as usize / 2 {
+        for r in 0..8 {
+            let w = words[pair * 8 + r];
+            for x in 0..8 {
+                let bit = 7 - x;
+                t[r * 8 + x] |= ((((w >> bit) & 1) as u8) << (2 * pair))
+                    | ((((w >> (8 + bit)) & 1) as u8) << (2 * pair + 1));
+            }
+        }
+    }
+    t
+}
+
 /// Flip-aware tile dedup: identical tiles — including H/V/HV-mirrored
 /// duplicates when `allow_flips` — collapse to one stored char tile.
 /// `allow_flips = false` is for tilemaps without flip bits (Mode 7).
@@ -142,6 +159,15 @@ impl TileSet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unpack_planar_inverts_pack_planar_at_every_depth() {
+        for bpp in [2u8, 4, 8] {
+            let mask = ((1u16 << bpp) - 1) as u8;
+            let t: IndexTile = std::array::from_fn(|i| (i as u8).wrapping_mul(37) & mask);
+            assert_eq!(unpack_planar(&pack_planar(&t, bpp), bpp), t, "{bpp}bpp");
+        }
+    }
 
     #[test]
     fn split_quantizes_pads_and_handles_alpha() {

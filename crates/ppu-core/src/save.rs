@@ -27,7 +27,10 @@ pub const MAX_BYTES: usize = 8192;
 pub enum Kind {
     Boolean,
     /// A whole number in `lo..=hi`.
-    Bounded { lo: i64, hi: i64 },
+    Bounded {
+        lo: i64,
+        hi: i64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -68,7 +71,9 @@ pub struct Layout {
 impl Layout {
     /// Words the header and fields occupy.
     pub fn used_words(&self) -> usize {
-        self.fields.last().map_or(HEADER_WORDS, |f| f.word + f.words)
+        self.fields
+            .last()
+            .map_or(HEADER_WORDS, |f| f.word + f.words)
     }
 
     /// The literal the Luau frontend passes to luau.lua's `saveData` (a cartridge build
@@ -80,7 +85,10 @@ impl Layout {
                 Kind::Boolean => (0, 1, true),
                 Kind::Bounded { lo, hi } => (lo, hi, false),
             };
-            out += &format!(", {{{:?}, {}, {}, {lo}, {hi}, {boolean}}}", f.name, f.word, f.words);
+            out += &format!(
+                ", {{{:?}, {}, {}, {lo}, {hi}, {boolean}}}",
+                f.name, f.word, f.words
+            );
         }
         out + "}"
     }
@@ -115,7 +123,9 @@ pub fn layout(fields: &[(String, Kind)]) -> Result<Layout, String> {
             }
             Kind::Bounded { lo, hi } => {
                 if lo > hi {
-                    return Err(format!("saveData field {name} needs its minimum no greater than its maximum"));
+                    return Err(format!(
+                        "saveData field {name} needs its minimum no greater than its maximum"
+                    ));
                 }
                 if hi - lo > i32::MAX as i64 || lo < i32::MIN as i64 || hi > i32::MAX as i64 {
                     return Err(format!("saveData field {name}'s range {lo}..{hi} is wider than a cartridge integer holds"));
@@ -128,15 +138,26 @@ pub fn layout(fields: &[(String, Kind)]) -> Result<Layout, String> {
                 }
             }
         };
-        out.push(Field { name: name.clone(), kind: *kind, word, words });
+        out.push(Field {
+            name: name.clone(),
+            kind: *kind,
+            word,
+            words,
+        });
         word += words;
     }
     let bytes = word * 2;
     if bytes > MAX_BYTES {
-        return Err(format!("saveData needs {bytes} bytes, more than the 8 KiB a save may hold"));
+        return Err(format!(
+            "saveData needs {bytes} bytes, more than the 8 KiB a save may hold"
+        ));
     }
     let size = bytes.next_power_of_two().max(MIN_BYTES);
-    Ok(Layout { fields: out, id, size })
+    Ok(Layout {
+        fields: out,
+        id,
+        size,
+    })
 }
 
 /// The image a fresh start writes: zeros, the header, and each field's default (stored value per
@@ -151,18 +172,29 @@ pub fn fresh(layout: &Layout, stored: &[i64]) -> Vec<u8> {
             words[f.word + 1] = (s >> 16) as u16;
         }
     }
-    words[CHECKSUM_WORD] = words[HEADER_WORDS..layout.used_words()].iter().fold(0, |c, w| c ^ w);
+    words[CHECKSUM_WORD] = words[HEADER_WORDS..layout.used_words()]
+        .iter()
+        .fold(0, |c, w| c ^ w);
     words.iter().flat_map(|w| w.to_le_bytes()).collect()
 }
 
 /// Whether a power-on keeps `image`, by the rules the preview and the cartridge share.
 pub fn valid(layout: &Layout, image: &[u8]) -> bool {
-    let word = |i: usize| image.get(i * 2..i * 2 + 2).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]));
+    let word = |i: usize| {
+        image
+            .get(i * 2..i * 2 + 2)
+            .map_or(0, |b| u16::from_le_bytes([b[0], b[1]]))
+    };
     word(0) == MAGIC
         && word(1) == layout.id
         && (HEADER_WORDS..layout.used_words()).fold(0, |c, i| c ^ word(i)) == word(CHECKSUM_WORD)
         && layout.fields.iter().all(|f| {
-            let stored = word(f.word) as i64 | if f.words == 2 { (word(f.word + 1) as i64) << 16 } else { 0 };
+            let stored = word(f.word) as i64
+                | if f.words == 2 {
+                    (word(f.word + 1) as i64) << 16
+                } else {
+                    0
+                };
             stored <= f.span()
         })
 }
@@ -172,8 +204,13 @@ pub fn valid(layout: &Layout, image: &[u8]) -> bool {
 pub fn srm_from_slot(json: &str) -> Option<Vec<u8>> {
     let slot: serde_json::Value = serde_json::from_str(json).ok()?;
     let hex = slot.get("ppu.save")?.as_str()?;
-    let size = slot.get("ppu.save.size").and_then(|s| s.as_u64()).map_or(hex.len() / 2, |s| s as usize);
-    let mut image: Vec<u8> = (0..hex.len() / 2).filter_map(|i| u8::from_str_radix(hex.get(i * 2..i * 2 + 2)?, 16).ok()).collect();
+    let size = slot
+        .get("ppu.save.size")
+        .and_then(|s| s.as_u64())
+        .map_or(hex.len() / 2, |s| s as usize);
+    let mut image: Vec<u8> = (0..hex.len() / 2)
+        .filter_map(|i| u8::from_str_radix(hex.get(i * 2..i * 2 + 2)?, 16).ok())
+        .collect();
     image.resize(size.max(image.len()), 0);
     Some(image)
 }
@@ -186,8 +223,42 @@ pub fn slot_members(image: &[u8]) -> String {
     format!("\"ppu.save\":\"{hex}\",\"ppu.save.size\":{}", image.len())
 }
 
+/// `v` as compact JSON with every object's keys sorted, at any depth, whatever map order serde_json
+/// was built with (a `preserve_order` anywhere in a build unifies into every crate), so any text two
+/// sides compare or hash goes through here: the sram dirty flag, and the hashes of a `ppu connect` link.
+pub fn canonical_json(v: &serde_json::Value) -> String {
+    use serde_json::Value;
+    fn sorted(v: &Value) -> Value {
+        match v {
+            Value::Object(m) => {
+                let mut keys: Vec<_> = m.keys().collect();
+                keys.sort();
+                Value::Object(
+                    keys.into_iter()
+                        .map(|k| (k.clone(), sorted(&m[k])))
+                        .collect(),
+                )
+            }
+            Value::Array(a) => Value::Array(a.iter().map(sorted).collect()),
+            other => other.clone(),
+        }
+    }
+    sorted(v).to_string()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn canonical_json_is_the_sorted_compact_text() {
+        let v: serde_json::Value =
+            serde_json::from_str(r#"{"b":[{"z":1,"a":null}],"a":"x y"}"#).unwrap();
+        assert_eq!(
+            super::canonical_json(&v),
+            r#"{"a":"x y","b":[{"a":null,"z":1}]}"#
+        );
+        assert_eq!(super::canonical_json(&serde_json::Value::Null), "null");
+    }
+
     use super::*;
 
     fn hiscore() -> Layout {
@@ -202,8 +273,15 @@ mod tests {
     #[test]
     fn fields_take_name_order_and_whole_words() {
         let l = hiscore();
-        let place: Vec<(&str, usize, usize)> = l.fields.iter().map(|f| (f.name.as_str(), f.word, f.words)).collect();
-        assert_eq!(place, [("hiscore", 3, 2), ("seen_intro", 5, 1), ("stage", 6, 1)]);
+        let place: Vec<(&str, usize, usize)> = l
+            .fields
+            .iter()
+            .map(|f| (f.name.as_str(), f.word, f.words))
+            .collect();
+        assert_eq!(
+            place,
+            [("hiscore", 3, 2), ("seen_intro", 5, 1), ("stage", 6, 1)]
+        );
         assert_eq!(l.size, 2048);
         assert_eq!(size_code(l.size), 1);
         assert_eq!(l.lua(), format!("{{size = 2048, id = {}, {{\"hiscore\", 3, 2, 0, 999999, false}}, {{\"seen_intro\", 5, 1, 0, 1, true}}, {{\"stage\", 6, 1, 1, 8, false}}}}", l.id));
@@ -222,7 +300,25 @@ mod tests {
         // hiscore 123456 (0x1E240), seen_intro true, stage 3 (stored 2).
         let mut image = fresh(&l, &[123_456, 1, 2]);
         assert_eq!(image.len(), 2048);
-        assert_eq!(&image[..14], &[0x50, 0x53, l.id as u8, (l.id >> 8) as u8, 0x42, 0xe2, 0x40, 0xe2, 0x01, 0x00, 0x01, 0x00, 0x02, 0x00]);
+        assert_eq!(
+            &image[..14],
+            &[
+                0x50,
+                0x53,
+                l.id as u8,
+                (l.id >> 8) as u8,
+                0x42,
+                0xe2,
+                0x40,
+                0xe2,
+                0x01,
+                0x00,
+                0x01,
+                0x00,
+                0x02,
+                0x00
+            ]
+        );
         assert!(valid(&l, &image));
         image[12] ^= 4;
         assert!(!valid(&l, &image));
@@ -244,12 +340,23 @@ mod tests {
 
     #[test]
     fn sizes_and_refusals() {
-        let many: Vec<(String, Kind)> = (0..1100).map(|i| (format!("f{i:04}"), Kind::Boolean)).collect();
+        let many: Vec<(String, Kind)> = (0..1100)
+            .map(|i| (format!("f{i:04}"), Kind::Boolean))
+            .collect();
         assert_eq!(layout(&many).unwrap().size, 4096);
-        let too_many: Vec<(String, Kind)> = (0..4100).map(|i| (format!("f{i:04}"), Kind::Boolean)).collect();
+        let too_many: Vec<(String, Kind)> = (0..4100)
+            .map(|i| (format!("f{i:04}"), Kind::Boolean))
+            .collect();
         assert!(layout(&too_many).unwrap_err().contains("8 KiB"));
         assert!(layout(&[("x".into(), Kind::Bounded { lo: 2, hi: 1 })]).is_err());
-        assert!(layout(&[("x".into(), Kind::Bounded { lo: -(1 << 31), hi: 1 << 31 })]).is_err());
+        assert!(layout(&[(
+            "x".into(),
+            Kind::Bounded {
+                lo: -(1 << 31),
+                hi: 1 << 31
+            }
+        )])
+        .is_err());
         assert!(layout(&[]).is_err());
     }
 }

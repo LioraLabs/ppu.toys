@@ -1,7 +1,7 @@
 # Maintainer: Alex Gilbert <code@lioralabs.dev>
 
 pkgname=ppu-cli-bin
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Author SNES PPU toys for ppu.toys offline: new, check, render, pack, docs"
 arch=('x86_64' 'aarch64')

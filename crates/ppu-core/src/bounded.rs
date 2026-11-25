@@ -347,10 +347,19 @@ impl Walk<'_> {
                     string(&d.name),
                     integer(d.min as i64),
                     integer(d.max as i64),
-                    integer(if d.fixed { d.denominator.unwrap_or(1024) as i64 } else { 0 }),
+                    integer(if d.fixed {
+                        d.denominator.unwrap_or(1024) as i64
+                    } else {
+                        0
+                    }),
                 ]);
             } else {
-                args.extend([simple(ast::SimpleExpression::Nil), integer(0), integer(0), integer(0)]);
+                args.extend([
+                    simple(ast::SimpleExpression::Nil),
+                    integer(0),
+                    integer(0),
+                    integer(0),
+                ]);
             }
         }
         args.append(values);
@@ -546,9 +555,183 @@ impl Walk<'_> {
     }
 }
 
-pub(crate) fn install(ctx: piccolo::Context<'_>) {
-    use piccolo::{Callback, CallbackReturn, Value};
-    let assign = Callback::from_fn(&ctx, |_, _, mut stack| {
+/// A store that broke its makeBounded or makeFixed contract. The preview keeps running and
+/// keeps the value as written; the cartridge stops on it.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct Violation {
+    /// The binding or record field.
+    pub store: String,
+    pub value: f64,
+    pub min: i32,
+    pub max: i32,
+    pub file: String,
+    pub line: u32,
+    /// The running scene's file (a program without scenes: its main file).
+    pub scene: String,
+    /// The video frame of the update that stored it; `None` during a load (file level, `init`).
+    pub frame: Option<u32>,
+    /// Stores that broke it at this file:line since the first.
+    pub count: u32,
+}
+
+/// Where the VM's contract checks put what they find; the engine stamps scene and frame.
+pub(crate) type Violations = Rc<std::cell::RefCell<Vec<Violation>>>;
+
+/// One store into a contract: the value kept (makeFixed's on its grid) and whether it is out of
+/// bounds. `None`: not a number, which no cartridge store can hold (the run cannot go on).
+fn check<'gc>(
+    value: piccolo::Value<'gc>,
+    min: i64,
+    max: i64,
+    denominator: i64,
+) -> Option<(piccolo::Value<'gc>, bool)> {
+    use piccolo::Value;
+    let n = match value {
+        Value::Integer(i) => i as f64,
+        Value::Number(n) => n,
+        _ => return None,
+    };
+    if denominator > 0 {
+        // makeFixed's store: Q10 (nearest), then down to the step; bounds check the result.
+        let raw = (n * 1024.).round() as i64;
+        let v = (raw >> (1024 / denominator).trailing_zeros()) as f64 / denominator as f64;
+        return Some((Value::Number(v), !(v >= min as f64 && v <= max as f64)));
+    }
+    Some((
+        value,
+        !(n.fract() == 0. && n >= min as f64 && n <= max as f64),
+    ))
+}
+
+fn note(
+    sink: &Violations,
+    store: String,
+    value: piccolo::Value<'_>,
+    min: i64,
+    max: i64,
+    file: String,
+    line: u32,
+) {
+    let value = value.to_number().unwrap_or(f64::NAN);
+    sink.borrow_mut().push(Violation {
+        store,
+        value,
+        min: min as i32,
+        max: max as i32,
+        file,
+        line,
+        scene: String::new(),
+        frame: None,
+        count: 1,
+    });
+}
+
+/// The Lua line that called the running callback (a metamethod's: the store that triggered it).
+// shortcut: a saveData field store goes through luau.lua's own proxy, so it reports that line, not the
+// author's; make saveData's __newindex a host callback if authors break save contracts in practice.
+fn caller(exec: &piccolo::Execution<'_, '_>) -> (String, u32) {
+    exec.upper_lua_frame().map_or((String::new(), 0), |f| {
+        (
+            String::from_utf8_lossy(f.chunk_name.as_bytes()).into_owned(),
+            f.current_line.0 as u32 + 1,
+        )
+    })
+}
+
+/// Luau record fields (`__ppu_record`, written by the frontend): the contract checks are host
+/// callbacks so a broken store is reported at the line that made it. luau.lua builds the proxy.
+pub(crate) fn install_records(ctx: piccolo::Context<'_>, sink: Violations) {
+    use piccolo::{Callback, CallbackReturn, Error, IntoValue, Value};
+    fn field<'gc>(
+        ctx: piccolo::Context<'gc>,
+        sink: &Violations,
+        at: &(String, u32),
+        name: Value<'gc>,
+        contract: Value<'gc>,
+        value: Value<'gc>,
+    ) -> Result<Value<'gc>, Error<'gc>> {
+        let Value::Table(c) = contract else {
+            return Ok(value);
+        };
+        let fixed = c.get(ctx, 1).to_bool();
+        let (min, max) = (
+            c.get(ctx, 2).to_integer().unwrap_or(0),
+            c.get(ctx, 3).to_integer().unwrap_or(0),
+        );
+        let denominator = if fixed {
+            c.get(ctx, 4).to_integer().unwrap_or(1024)
+        } else {
+            0
+        };
+        let kind = if fixed { "makeFixed" } else { "makeBounded" };
+        let Some((stored, broken)) = check(value, min, max, denominator) else {
+            return Err(crate::precision::Failure {
+                file: at.0.clone(),
+                line: at.1,
+                message: format!("{kind} field {name} requires a number; got {value}"),
+            }
+            .into());
+        };
+        if broken {
+            note(sink, name.to_string(), stored, min, max, at.0.clone(), at.1);
+        }
+        Ok(stored)
+    }
+    let s = sink.clone();
+    let record = Callback::from_fn(&ctx, move |ctx, exec, mut stack| {
+        let (Value::Table(values), Value::Table(contracts)) = (stack.get(0), stack.get(1)) else {
+            return Err("__ppu_record needs a values table and a contracts table"
+                .into_value(ctx)
+                .into());
+        };
+        let at = caller(&exec);
+        for (name, contract) in contracts.iter() {
+            let v = field(ctx, &s, &at, name, contract, values.get(ctx, name))?;
+            values.set(ctx, name, v)?;
+        }
+        let Value::Function(proxy) = ctx.get_global("__ppu_record_proxy") else {
+            return Err("makeFixed/makeBounded records need __ppu_record_proxy, which the engine owns: the program replaced it"
+                .into_value(ctx)
+                .into());
+        };
+        stack.replace(ctx, (values, contracts));
+        Ok(CallbackReturn::Call {
+            function: proxy,
+            then: None,
+        })
+    });
+    let store = Callback::from_fn(&ctx, move |ctx, exec, mut stack| {
+        let (proxy, name, value) = (stack.get(0), stack.get(1), stack.get(2));
+        let mt = match proxy {
+            Value::Table(t) => t.metatable(),
+            _ => None,
+        };
+        let Some((Value::Table(values), Value::Table(contracts))) =
+            mt.map(|mt| (mt.get(ctx, "__ppu_values"), mt.get(ctx, "__ppu_contracts")))
+        else {
+            return Err("__ppu_record_store only stores into a record proxy"
+                .into_value(ctx)
+                .into());
+        };
+        let v = field(
+            ctx,
+            &sink,
+            &caller(&exec),
+            name,
+            contracts.get(ctx, name),
+            value,
+        )?;
+        values.set(ctx, name, v)?;
+        stack.clear();
+        Ok(CallbackReturn::Return)
+    });
+    ctx.set_global("__ppu_record", record).unwrap();
+    ctx.set_global("__ppu_record_store", store).unwrap();
+}
+
+pub(crate) fn install(ctx: piccolo::Context<'_>, sink: Violations) {
+    use piccolo::{Callback, CallbackReturn};
+    let assign = Callback::from_fn(&ctx, move |_, _, mut stack| {
         let file = stack.get(0).to_string();
         let line = stack.get(1).to_integer().unwrap_or(0) as u32;
         let count = stack.get(2).to_integer().unwrap_or(0) as usize;
@@ -563,25 +746,33 @@ pub(crate) fn install(ctx: piccolo::Context<'_>) {
             let min = stack.get(4 + i * 4).to_integer().unwrap();
             let max = stack.get(5 + i * 4).to_integer().unwrap();
             let denominator = stack.get(6 + i * 4).to_integer().unwrap();
-            if denominator > 0 {
-                // makeFixed's store: Q10 (nearest), then down to the step; bounds check the result.
-                let stored = value.to_number().map(|v| {
-                    let raw = (v * 1024.).round() as i64;
-                    (raw >> (1024 / denominator).trailing_zeros()) as f64 / denominator as f64
-                });
-                match stored {
-                    Some(v) if v >= min as f64 && v <= max as f64 => *value = Value::Number(v),
-                    _ => return Err(crate::precision::Failure {file,line,message:format!("makeFixed binding {binding} requires a value in {min}..{max}; got {value}")}.into()),
+            let Some((stored, broken)) = check(*value, min, max, denominator) else {
+                let (kind, what) = if denominator > 0 {
+                    ("makeFixed", "a value")
+                } else {
+                    ("makeBounded", "an integer")
+                };
+                return Err(crate::precision::Failure {
+                    file,
+                    line,
+                    message: format!(
+                        "{kind} binding {binding} requires {what} in {min}..{max}; got {value}"
+                    ),
                 }
-                continue;
+                .into());
+            };
+            if broken {
+                note(
+                    &sink,
+                    binding.to_string(),
+                    stored,
+                    min,
+                    max,
+                    file.clone(),
+                    line,
+                );
             }
-            let value = *value;
-            let n = matches!(value, Value::Integer(_) | Value::Number(_))
-                .then(|| value.to_integer())
-                .flatten();
-            if !n.is_some_and(|n| n >= min && n <= max) {
-                return Err(crate::precision::Failure {file,line,message:format!("makeBounded binding {binding} requires an integer in {min}..{max}; got {value}")}.into());
-            }
+            *value = stored;
         }
         stack.clear();
         for v in values {

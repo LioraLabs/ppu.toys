@@ -573,7 +573,16 @@ impl LineRenderer {
         let bin = bin_line(m, y);
         let ranges = row.window_ranges();
         let ladder = ladder_for(row);
-        sample_line(row, m, y, &bin.sprites, &bin.clip, &ladder, row.tm | row.ts, sc);
+        sample_line(
+            row,
+            m,
+            y,
+            &bin.sprites,
+            &bin.clip,
+            &ladder,
+            row.tm | row.ts,
+            sc,
+        );
         fill_hidden(row, &ranges, row.tmw | row.tsw, sc);
         let backdrop = unpack_rgb15(m.cgram[0]);
         resolve_screen(

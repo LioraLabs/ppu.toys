@@ -1,6 +1,6 @@
 //! Demo-corpus digest for compositor refactors.
 //!
-//! Plays every toy under `$PPU_DEMOS` (default `$HOME/dev/ppu-demos/toys`) for
+//! Plays every toy under `$PPU_CORPUS` (default the monorepo's `templates/`) for
 //! 180 frames and folds the framebuffer AND the inspector buffers (main, sub,
 //! math mask, sprite-overflow stats) of each frame into a per-toy FNV-1a
 //! digest. A compositor refactor must reproduce every digest exactly; the
@@ -10,7 +10,7 @@
 //! `cargo test --release --manifest-path <ppu>/Cargo.toml -p ppu-cli --test compositor_corpus -- --ignored --nocapture`
 
 use base64::Engine as _;
-use ppu_core::{render_frame_view, LuaEngine, CONTROLS_FILE};
+use ppu_core::{render_frame_view, LuaEngine};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -56,14 +56,6 @@ fn toy_digest(dir: &std::path::Path, toy: &str) -> u64 {
         .iter()
         .map(|f| (str_of(f, "name", toy), str_of(f, "source", toy)))
         .collect();
-    // Studio supplies the generated controls file; the packed demos omit it, so
-    // give toys that call `apply_pokes()` the same empty one (as `ppu new` does).
-    let controls = [(CONTROLS_FILE, "function apply_pokes() end")];
-    let files: Vec<_> = if files.iter().any(|(n, _)| *n == CONTROLS_FILE) {
-        files
-    } else {
-        controls.into_iter().chain(files).collect()
-    };
     e.set_sources(&files).unwrap_or_else(|err| {
         panic!(
             "{toy}: set_sources: {}: {}",
@@ -97,13 +89,13 @@ fn toy_digest(dir: &std::path::Path, toy: &str) -> u64 {
 #[test]
 #[ignore]
 fn compositor_corpus_digest() {
-    let root = std::env::var_os("PPU_DEMOS")
+    let root = std::env::var_os("PPU_CORPUS")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join("dev/ppu-demos/toys")
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../templates")
         });
     if !root.is_dir() {
-        eprintln!("skipping: {} not found (set PPU_DEMOS)", root.display());
+        eprintln!("skipping: {} not found (set PPU_CORPUS)", root.display());
         return;
     }
     let mut dirs: Vec<_> = std::fs::read_dir(&root)

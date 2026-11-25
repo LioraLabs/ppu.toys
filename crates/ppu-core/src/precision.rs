@@ -1,95 +1,7 @@
-//! Canonical `snes fixed` storage law. Expressions use Q10; only stores choose
-//! a binary denominator, 1..=1024. Bounds check the rounded stored value.
+//! The preview's numeric annotations and canonical precision, over the storage
+//! law in ppu-rules (re-exported here at its old paths).
 
-/// Parse the exact `1/N` step spelling (binary N, no finer than Q10).
-pub fn denominator(step: &str) -> Option<u16> {
-    let digits = step.strip_prefix("1/")?;
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let n: u16 = digits.parse().ok()?;
-    (n.is_power_of_two() && n <= 1024).then_some(n)
-}
-
-/// Encode a Q10 expression in storage units, rounding down (floor): an arithmetic
-/// right shift, as fixed point stores on the hardware. The caller supplies a
-/// validated binary denominator in 1..=1024.
-pub fn encode(raw: i32, denominator: u16) -> i32 {
-    assert!(denominator.is_power_of_two() && denominator <= 1024);
-    raw >> (1024 / denominator as u32).trailing_zeros()
-}
-
-/// The logical Q10 value after a store; rounding down never leaves Q21.10.
-pub fn snap(raw: i32, denominator: u16) -> Option<i32> {
-    encode(raw, denominator).checked_mul(1024 / denominator as i32)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn store_contract() {
-        assert_eq!(denominator("1/16"), Some(16));
-        for bad in ["1/0", "1/3", "1/2048", "2/16", "1/+16", "1/1.0"] {
-            assert_eq!(denominator(bad), None, "{bad}");
-        }
-        assert_eq!(encode(204, 16), 3);
-        assert_eq!(encode(32, 16), 0);
-        assert_eq!(encode(64, 16), 1);
-        assert_eq!(encode(-32, 16), -1);
-        assert_eq!(encode(-1, 16), -1);
-        assert_eq!(snap(i32::MIN, 1), Some(i32::MIN));
-        assert_eq!(snap(i32::MAX, 1), Some(2097151 * 1024));
-    }
-}
-
-// Inspect actual short comments, skipping quoted strings and Lua long blocks.
-pub fn comments(source: &str) -> Vec<(usize, &str)> {
-    let b = source.as_bytes();
-    let (mut i, mut line) = (0, 1);
-    let mut result = vec![];
-    while i < b.len() {
-        let start = i;
-        if b[i] == b'\'' || b[i] == b'"' {
-            let quote = b[i];
-            i += 1;
-            while i < b.len() {
-                if b[i] == b'\\' {
-                    i = (i + 2).min(b.len());
-                } else if b[i] == quote {
-                    i += 1;
-                    break;
-                } else {
-                    i += 1;
-                }
-            }
-        } else {
-            let comment = b[i..].starts_with(b"--");
-            let open = i + if comment { 2 } else { 0 };
-            let mut end = open + 1;
-            if b.get(open) == Some(&b'[') {
-                while b.get(end) == Some(&b'=') {
-                    end += 1;
-                }
-            }
-            if b.get(open) == Some(&b'[') && b.get(end) == Some(&b'[') {
-                let close = format!("]{}]", "=".repeat(end - open - 1));
-                i = source[end + 1..]
-                    .find(&close)
-                    .map(|n| end + 1 + n + close.len())
-                    .unwrap_or(b.len());
-            } else if comment {
-                i = source[i..].find('\n').map(|n| i + n).unwrap_or(b.len());
-                result.push((line, &source[start..i]));
-            } else {
-                i += 1;
-            }
-        }
-        line += b[start..i].iter().filter(|&&c| c == b'\n').count();
-    }
-    result
-}
+pub use ppu_rules::precision::{comments, denominator, encode, snap, Annotation, PreviewError};
 
 use piccolo::compiler::{self, interning::BasicInterner, parser as ast, LineNumber};
 use std::{collections::HashMap, rc::Rc};
@@ -101,34 +13,6 @@ type Expr = ast::Expression<Text>;
 type Block = ast::Block<Text>;
 
 const ANNOTATION_HELP: &str = "Use `---@snes fixed name lo hi [step 1/N]` with N a power of two from 1 through 1024 (default 1024), or a legacy numeric annotation. Write ordered signed integer bounds on the line before the declaration: `---@snes range score 0 9999` (`fixed10 speed -4 4` and `array scores 8 0 99` take the same form).";
-
-#[derive(Clone, Debug)]
-pub struct PreviewError {
-    pub line: u64,
-    pub message: String,
-    pub help: String,
-}
-impl PreviewError {
-    fn new(line: u64, message: &str, help: &str) -> Self {
-        Self {
-            line,
-            message: message.into(),
-            help: help.into(),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct Annotation {
-    pub line: u64,
-    pub comment: (u64, String),
-    pub name: String,
-    pub min: i32,
-    pub max: i32,
-    pub capacity: Option<usize>,
-    pub fixed: bool,
-    pub precision: Option<u16>,
-}
 
 pub fn annotations(source: &str) -> Result<Vec<Annotation>, PreviewError> {
     let mut diagnostics = vec![];
@@ -324,7 +208,11 @@ fn name(s: &str) -> Text {
 }
 /// A literal `nil`: clearing a binding carries no representation (it neither types nor converts).
 fn nil(e: &Expr) -> bool {
-    e.tail.is_empty() && matches!(e.head.as_ref(), ast::HeadExpression::Simple(ast::SimpleExpression::Nil))
+    e.tail.is_empty()
+        && matches!(
+            e.head.as_ref(),
+            ast::HeadExpression::Simple(ast::SimpleExpression::Nil)
+        )
 }
 fn simple(s: ast::SimpleExpression<Text>) -> Expr {
     Expr {
@@ -402,7 +290,14 @@ pub fn prepare_sources_with(
                     .into_iter()
                     .map(|(file, chunk)| {
                         compiler::compile_chunk(&chunk, BasicInterner::default()).map_err(|e| {
-                            (file, PreviewError::new(e.line_number.0 + 1, &e.to_string(), "Split this large function into smaller helpers."))
+                            (
+                                file,
+                                PreviewError::new(
+                                    e.line_number.0 + 1,
+                                    &e.to_string(),
+                                    "Split this large function into smaller helpers.",
+                                ),
+                            )
                         })
                     })
                     .collect()
@@ -1214,7 +1109,11 @@ impl Transform<'_> {
             } // Mode7 constants have one authored-f64 -> Q8 rounding.
             let cleared = nil(e);
             let k = self.expr(e)?;
-            if let Some(b) = stores.get(i).and_then(Option::as_ref).filter(|b| !cleared || b.annotation.is_some()) {
+            if let Some(b) = stores
+                .get(i)
+                .and_then(Option::as_ref)
+                .filter(|b| !cleared || b.annotation.is_some())
+            {
                 if !k.numeric() && b.kind.numeric() {
                     return Err(self.error(
                         "A numeric binding needs a numeric store.",
@@ -1269,22 +1168,26 @@ impl Transform<'_> {
             ));
         };
         // A dma() placement (Kind::Other) reads like the hardware: its char, map, pal and cells are integers.
-        let placed = self.binding(&text(n)).is_some_and(|b| b.kind == Kind::Other);
-        if !placed && !matches!(
-            text(n).as_str(),
-            "obj"
-                | "bg"
-                | "m7"
-                | "vram"
-                | "cgram"
-                | "raster"
-                | "pad"
-                | "voice"
-                | "dsp"
-                | "win"
-                | "color"
-                | "screen"
-        ) {
+        let placed = self
+            .binding(&text(n))
+            .is_some_and(|b| b.kind == Kind::Other);
+        if !placed
+            && !matches!(
+                text(n).as_str(),
+                "obj"
+                    | "bg"
+                    | "m7"
+                    | "vram"
+                    | "cgram"
+                    | "raster"
+                    | "pad"
+                    | "voice"
+                    | "dsp"
+                    | "win"
+                    | "color"
+                    | "screen"
+            )
+        {
             return Err(self.error(&format!("Precision analysis cannot resolve fields on {:?}.",text(n)),"Declare the record and initialize its fields; helpers may reference globals initialized later. Use supported hardware bindings directly."));
         }
         for suffix in &mut head.suffixes {

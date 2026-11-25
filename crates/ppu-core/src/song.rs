@@ -59,6 +59,9 @@ pub struct Row {
     pub vol: u32,
     /// -100..=100, maps to -1..1.
     pub pan: i32,
+    /// A kept part: its notes take the lowest voices first, and no automatic sound effect takes those voices.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep: bool,
 }
 
 /// A block of step data: a name, a length in units, an optional tempo
@@ -288,6 +291,7 @@ fn parse_rows(body: &[u8], ctx: &str) -> Result<Vec<Row>, SongError> {
             note,
             vol,
             pan,
+            keep: false,
         });
     }
     c.finish()?;
@@ -356,6 +360,20 @@ fn parse_arrg(body: &[u8], ctx: &str, version: u8) -> Result<(Vec<u32>, u32), So
     Ok((arr, loop_start))
 }
 
+/// The KEEP chunk: the kept rows' indices. Songs without kept rows have none, so older builds (which skip unknown
+/// chunks) read every song that does not keep a part unchanged.
+fn parse_keep(body: &[u8], ctx: &str) -> Result<Vec<u32>, SongError> {
+    let mut c = Cursor::new(body, ctx);
+    let count = c.varint()?;
+    // See parse_rows: cap the raw wire count by the bytes left.
+    let mut kept = Vec::with_capacity((count as usize).min(c.remaining()));
+    for _ in 0..count {
+        kept.push(c.varint()?);
+    }
+    c.finish()?;
+    Ok(kept)
+}
+
 /// Decodes PSNG bytes into a [`Song`]. Structural only: no range checks
 /// (that's [`Song::validate`]).
 pub fn decode(bytes: &[u8]) -> Result<Song, SongError> {
@@ -371,6 +389,7 @@ pub fn decode(bytes: &[u8]) -> Result<Song, SongError> {
     let mut head: Option<(u32, u32, i32, u8)> = None;
     let mut rows: Option<Vec<Row>> = None;
     let mut arrangement: Option<(Vec<u32>, u32)> = None;
+    let mut kept: Option<Vec<u32>> = None;
     let mut patterns: Vec<Pattern> = Vec::new();
 
     while pos < bytes.len() {
@@ -418,13 +437,24 @@ pub fn decode(bytes: &[u8]) -> Result<Song, SongError> {
             b"PATT" => {
                 patterns.push(parse_patt(body, &label)?);
             }
+            b"KEEP" => {
+                if kept.is_some() {
+                    return Err(SongError("duplicate KEEP chunk".into()));
+                }
+                kept = Some(parse_keep(body, &label)?);
+            }
             _ => {} // unknown tag: skipped
         }
     }
 
     let (tempo, swing, key, voice_mask) =
         head.ok_or_else(|| SongError("missing HEAD chunk".into()))?;
-    let rows = rows.ok_or_else(|| SongError("missing ROWS chunk".into()))?;
+    let mut rows = rows.ok_or_else(|| SongError("missing ROWS chunk".into()))?;
+    for r in kept.unwrap_or_default() {
+        rows.get_mut(r as usize)
+            .ok_or_else(|| SongError(format!("KEEP chunk names row {}, which does not exist", r + 1)))?
+            .keep = true;
+    }
     let (arrangement, loop_start) =
         arrangement.ok_or_else(|| SongError("missing ARRG chunk".into()))?;
 
@@ -451,8 +481,8 @@ fn write_string(out: &mut Vec<u8>, s: &str) {
     out.extend_from_slice(s.as_bytes());
 }
 
-/// Encodes a [`Song`] to PSNG bytes, chunks in HEAD, ROWS, PATT..., ARRG
-/// order with minimal varints.
+/// Encodes a [`Song`] to PSNG bytes, chunks in HEAD, ROWS, KEEP (only when a
+/// row is kept), PATT..., ARRG order with minimal varints.
 ///
 /// Precondition: `song` passes [`Song::validate`]. This is infallible and
 /// does not check that; out-of-range fields (e.g. a `vol` over 127) are
@@ -461,6 +491,190 @@ fn write_string(out: &mut Vec<u8>, s: &str) {
 /// flag and corrupts the stream instead of just round-tripping a bad value.
 /// Only validated songs may be encoded.
 ///
+/// The song JSON a person or an agent writes: MCP write_song's argument, read_song's answer and
+/// a folder's `.song.json`. Tempo is in BPM; vol, pan, vel, swing, a pattern's name and the
+/// arrangement have defaults; key, voice mask, pinned voices, nudges and pattern tempos are not
+/// authored (key 0, every voice, none). Unknown keys are refused, by name.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Authored {
+    #[serde(serialize_with = "bpm")]
+    pub tempo: f64,
+    #[serde(default)]
+    pub swing: u32,
+    pub rows: Vec<AuthoredRow>,
+    pub patterns: Vec<AuthoredPattern>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arrangement: Option<Vec<u32>>,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub loop_start: u32,
+}
+
+/// An authored row: vol defaults to 110, pan to 0; no note for drums.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthoredRow {
+    pub sound: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<u32>,
+    #[serde(default = "default_vol")]
+    pub vol: u32,
+    #[serde(default)]
+    pub pan: i32,
+    /// No automatic sound effect takes this part's voices (it gets the lowest ones first).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep: bool,
+}
+
+/// An authored pattern: its name defaults to a letter by position.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthoredPattern {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub length: u32,
+    pub notes: Vec<AuthoredNote>,
+}
+
+/// An authored note: vel defaults to 100.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthoredNote {
+    pub at: u32,
+    pub row: u32,
+    pub len: u32,
+    #[serde(default = "default_vel")]
+    pub vel: u32,
+}
+
+fn default_vol() -> u32 {
+    110
+}
+
+fn default_vel() -> u32 {
+    100
+}
+
+/// A whole BPM as an integer (`120`, not `120.0`).
+fn bpm<S: serde::Serializer>(t: &f64, s: S) -> Result<S::Ok, S::Error> {
+    if t.fract() == 0.0 && t.abs() < 1e15 {
+        s.serialize_i64(*t as i64)
+    } else {
+        s.serialize_f64(*t)
+    }
+}
+
+impl Authored {
+    /// The song it writes: defaults filled, each pattern's notes in (at, row) order, then
+    /// checked the way `score{}` setup checks it ([`compile`]).
+    pub fn to_song(self) -> Result<Song, SongError> {
+        let arrangement = self
+            .arrangement
+            .unwrap_or_else(|| (0..self.patterns.len() as u32).collect());
+        let song = Song {
+            // `as` saturates: a negative or NaN tempo becomes 0, which validate refuses.
+            tempo: (self.tempo * 100.0).round() as u32,
+            swing: self.swing,
+            key: 0,
+            voice_mask: 0xff,
+            rows: (self.rows.into_iter())
+                .map(|r| Row {
+                    sound: r.sound,
+                    note: r.note,
+                    vol: r.vol,
+                    pan: r.pan,
+                    keep: r.keep,
+                })
+                .collect(),
+            patterns: (self.patterns.into_iter().enumerate())
+                .map(|(i, p)| {
+                    let mut notes: Vec<Note> = (p.notes.into_iter())
+                        .map(|n| Note {
+                            at: n.at,
+                            row: n.row,
+                            len: n.len,
+                            vel: n.vel,
+                            ..Note::default()
+                        })
+                        .collect();
+                    notes.sort_by_key(|n| (n.at, n.row));
+                    Pattern {
+                        name: p
+                            .name
+                            .unwrap_or_else(|| char::from(b'A' + (i % 26) as u8).to_string()),
+                        length: p.length,
+                        tempo: None,
+                        notes,
+                    }
+                })
+                .collect(),
+            arrangement,
+            loop_start: self.loop_start,
+        };
+        compile(&song)?;
+        Ok(song)
+    }
+
+    /// What read_song answers for `song`: the authored fields only (a song using a key, a voice
+    /// mask, pinned voices, nudges or pattern tempos does not come back from it unchanged).
+    pub fn of(song: &Song) -> Authored {
+        Authored {
+            tempo: f64::from(song.tempo) / 100.0,
+            swing: song.swing,
+            rows: (song.rows.iter())
+                .map(|r| AuthoredRow {
+                    sound: r.sound.clone(),
+                    note: r.note,
+                    vol: r.vol,
+                    pan: r.pan,
+                    keep: r.keep,
+                })
+                .collect(),
+            patterns: (song.patterns.iter())
+                .map(|p| AuthoredPattern {
+                    name: Some(p.name.clone()),
+                    length: p.length,
+                    notes: (p.notes.iter())
+                        .map(|n| AuthoredNote {
+                            at: n.at,
+                            row: n.row,
+                            len: n.len,
+                            vel: n.vel,
+                        })
+                        .collect(),
+                })
+                .collect(),
+            arrangement: Some(song.arrangement.clone()),
+            loop_start: song.loop_start,
+        }
+    }
+}
+
+/// A `.song.json` file (or write_song's argument, as text) -> the song, refused with the key or
+/// field that is wrong: what serde names (an unknown key, a missing field) or [`compile`] does.
+pub fn from_json(text: &str) -> Result<Song, SongError> {
+    serde_json::from_str::<Authored>(text)
+        .map_err(|e| SongError(e.to_string()))?
+        .to_song()
+}
+
+/// `song` as `.song.json` text ([`Authored`]): pretty-printed, one trailing newline.
+pub fn to_json(song: &Song) -> String {
+    format!(
+        "{}\n",
+        serde_json::to_string_pretty(&Authored::of(song)).expect("a song serializes")
+    )
+}
+
+/// The meta a song source carries (what the Studio's `songMeta` derives): note and
+/// pattern counts and the PSNG length.
+pub fn source_meta(song: &Song, psng: &[u8]) -> serde_json::Value {
+    let notes: usize = song.patterns.iter().map(|p| p.notes.len()).sum();
+    serde_json::json!({"width": 0, "height": 0, "report": {"mode": "song", "report": {
+        "notes": notes, "patterns": song.patterns.len(), "bytes": psng.len(),
+    }}})
+}
+
 /// A song with `loop_start == 0` is written as version 1, byte-identical to
 /// what older builds wrote; a nonzero loop start writes version 2, whose
 /// ARRG body ends with the loop start as one more varint.
@@ -486,6 +700,16 @@ pub fn encode(song: &Song) -> Vec<u8> {
         write_varint(&mut rows_body, zigzag_encode(row.pan));
     }
     write_chunk(&mut out, b"ROWS", &rows_body);
+
+    let kept: Vec<u32> = (0..song.rows.len() as u32).filter(|&r| song.rows[r as usize].keep).collect();
+    if !kept.is_empty() {
+        let mut keep_body = Vec::new();
+        write_varint(&mut keep_body, kept.len() as u32);
+        for r in kept {
+            write_varint(&mut keep_body, r);
+        }
+        write_chunk(&mut out, b"KEEP", &keep_body);
+    }
 
     for pat in &song.patterns {
         let mut body = Vec::new();
@@ -981,6 +1205,8 @@ pub struct Event {
 pub struct Compiled {
     pub events: Vec<Event>,
     pub timing: Timing,
+    /// The voices kept parts play ([`keep_mask`]).
+    pub keep: u8,
 }
 
 /// Validates, times, flattens and allocates a song's notes into events,
@@ -1035,9 +1261,42 @@ pub fn compile(song: &Song) -> Result<Compiled, SongError> {
         }
     }
 
-    events.sort_by_key(|e| e.start); // stable: ties keep (slot, note) order
-    allocate(&mut events, song.voice_mask);
-    Ok(Compiled { events, timing })
+    // Kept parts first, alone, so they take the lowest voices; the other parts share what they leave.
+    let (mut kept, mut rest): (Vec<Event>, Vec<Event>) =
+        events.into_iter().partition(|e| song.rows[e.row as usize].keep);
+    kept.sort_by_key(|e| e.start); // stable: ties keep (slot, note) order
+    rest.sort_by_key(|e| e.start);
+    allocate(&mut kept, song.voice_mask);
+    let keep = keep_mask(song, &kept);
+    if let Some(e) = rest.first().filter(|_| keep != 0 && song.voice_mask & !keep == 0) {
+        let pat = &song.patterns[song.arrangement[e.slot as usize] as usize];
+        return Err(SongError(format!(
+            "pattern '{}' note {}: kept parts use every voice the song may take, so other parts have none (keep fewer parts)",
+            pat.name,
+            e.note + 1
+        )));
+    }
+    if let Some(e) = rest.iter().find(|e| e.pin.is_some_and(|v| keep & 1 << v != 0)) {
+        let pat = &song.patterns[song.arrangement[e.slot as usize] as usize];
+        return Err(SongError(format!(
+            "pattern '{}' note {}: pinned to voice {}, which a kept part plays",
+            pat.name,
+            e.note + 1,
+            e.pin.unwrap()
+        )));
+    }
+    allocate(&mut rest, if keep == 0 { song.voice_mask } else { song.voice_mask & !keep });
+    let mut events = kept;
+    events.append(&mut rest);
+    events.sort_by_key(|e| (e.start, e.slot, e.note));
+    Ok(Compiled { events, timing, keep })
+}
+
+/// The voices `song`'s kept parts play among `events`: no automatic sound effect takes them.
+pub fn keep_mask(song: &Song, events: &[Event]) -> u8 {
+    (events.iter())
+        .filter(|e| song.rows[e.row as usize].keep)
+        .fold(0, |m, e| m | 1 << e.voice)
 }
 
 /// Assigns each event (already start-ordered) to a voice in `mask`. A

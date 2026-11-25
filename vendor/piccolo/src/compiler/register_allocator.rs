@@ -83,7 +83,8 @@ impl RegisterAllocator {
             None
         } else if size as u16 <= 256 - self.stack_top {
             let rbegin = self.stack_top as u8;
-            for i in rbegin..rbegin + size {
+            // In u16: a block that ends at register 256 overflowed u8 (a debug panic; release left it unmarked).
+            for i in self.stack_top..self.stack_top + size as u16 {
                 self.registers[i as usize] = true;
             }
             if self.first_free == self.stack_top {
@@ -113,5 +114,20 @@ impl RegisterAllocator {
                 self.stack_top = i;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_block_may_end_at_the_last_register() {
+        let mut r = RegisterAllocator::default();
+        assert_eq!(r.push(255).map(|i| i.0), Some(0));
+        assert_eq!(r.push(1).map(|i| i.0), Some(255));
+        assert!(r.push(1).is_none());
+        r.free(RegisterIndex(255));
+        assert_eq!(r.stack_top(), 255);
     }
 }

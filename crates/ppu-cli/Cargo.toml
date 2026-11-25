@@ -10,14 +10,38 @@ description = "The ppu command: author SNES PPU toys for ppu.toys offline (new, 
 [[bin]]
 name = "ppu"
 path = "src/main.rs"
+required-features = ["cart-check"]
+
+[features]
+# `ppu check`'s cartridge half: a wasm runtime for the site's check module. The compiler links
+# this library without it.
+default = ["cart-check"]
+cart-check = ["dep:wasmtime", "dep:sha2"]
+
+# Windows only: the ppu:// handler `ppu setup` registers (no console window), see src/bin/ppu-link.rs
+[[bin]]
+name = "ppu-link"
+path = "src/bin/ppu-link.rs"
 
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-ppu-core = { path = "../ppu-core", default-features = false, version = "0.1.0" }
+ppu-core = { path = "../ppu-core", default-features = false, version = "0.2.0" }
+ppu-rules = { path = "../ppu-rules", version = "0.2.0" }
+ppu-docs = { path = "../ppu-docs", version = "0.2.0" }
 png = "0.17"
+
+# `ppu login` only: this library is also linked for wasm32, where there is no blocking HTTP.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ureq = "2"
+# `ppu check`'s cartridge half: the site's check module (wasm) runs here; its finding lines end
+# in ppu-rules' docs pointer
+wasmtime = { version = "51", optional = true, default-features = false, features = ["anyhow", "cranelift", "runtime", "std", "gc", "gc-drc", "parallel-compilation"] }
+ppu-rules = { path = "../ppu-rules", version = "0.2.0" }
+# the downloaded check module is checked against the sha256 the site serves before it is cached
+sha2 = { version = "0.10", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

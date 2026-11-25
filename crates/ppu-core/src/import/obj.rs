@@ -8,9 +8,9 @@
 use std::collections::BTreeMap;
 
 use super::dither::{remap_image, RemapOptions};
-use super::quantize::{fit_palettes, nearest, reduce_palette};
+use super::quantize::{fit_palettes, nearest, reduce_palette, trim_unused_colors};
 use super::tiles::{pack_planar, split_tiles_at, IndexTile, PixelTile, TileSet};
-use super::{BudgetReport, Overflow};
+use super::{check_indexed, BudgetReport, IndexedArt, Overflow};
 
 /// OBJ 4bpp: 15 colors/sub-palette (index 0 transparent), 8 palettes, 16
 /// words/tile. CGRAM base 128 (OBJ palettes 8-15) is `place_obj`'s concern.
@@ -20,7 +20,7 @@ const WORDS_PER_TILE: usize = 16;
 /// The OBJ attributes one source cell resolved to. `tile` indexes the emitted
 /// OBJ char data (0 = reserved blank); flips reproduce the source from the
 /// deduped stored tile.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ObjCell {
     pub tile: u16,
     pub pal: u8,
@@ -74,6 +74,15 @@ fn band_rows(nh: usize, bands: usize) -> Vec<usize> {
         at += nh;
     }
     rows
+}
+
+/// How many `nw` x `nh` tile cells the 32-row name table holds: the cap on a block sheet's cells.
+pub(crate) fn block_capacity(nw: usize, nh: usize) -> usize {
+    band_rows(nh, 32)
+        .iter()
+        .take_while(|r| *r + nh <= 32)
+        .count()
+        * (16 / nw)
 }
 
 /// Global color budget over all source tiles: returns a remap closure that
@@ -160,11 +169,71 @@ fn import_obj_cells8(
         rows,
         remap,
     );
-    let max_tiles = (0x8000usize / WORDS_PER_TILE).min(512); // OBJ name table = 9-bit tile#
+    obj_from_indexed(
+        IndexedArt {
+            palettes: trim_unused_colors(fit.palettes, &grids, &fit.assignment),
+            grids,
+            rows: fit.assignment,
+            cols,
+            tile_rows: rows,
+            overflows,
+        },
+        width,
+        height,
+        (8, 8),
+    )
+}
+
+/// Back half of the OBJ importers: an index grid in, an OBJ payload out. A cell
+/// of 8x8 dedups flip-aware into a char set with reserved blank tile 0 and
+/// `art.rows` holds one palette row per tile; any other cell is a block layout
+/// with ONE palette row per cell (`art.rows.len() == big_cols * big_rows`) and
+/// no dedup. `width`/`height` are the original image dims for the `SourceMeta`.
+/// Panics on inconsistent art (see [`IndexedArt`]) or a cell that is not a
+/// multiple of 8 within 8..=128.
+pub fn obj_from_indexed(
+    art: IndexedArt,
+    width: u32,
+    height: u32,
+    cell: (u8, u8),
+) -> (crate::source::ObjSource, crate::source::SourceMeta) {
+    if cell == (8, 8) {
+        check_indexed(&art, art.grids.len());
+        cells8_from_indexed(art, width, height)
+    } else {
+        assert!(
+            [cell.0, cell.1]
+                .iter()
+                .all(|&c| c % 8 == 0 && (8..=128).contains(&c)),
+            "obj_from_indexed: cell edges must be multiples of 8 in 8..=128"
+        );
+        let (nw, nh) = ((cell.0 / 8) as usize, (cell.1 / 8) as usize);
+        check_indexed(&art, art.cols.div_ceil(nw) * art.tile_rows.div_ceil(nh));
+        blocks_from_indexed(art, width, height, cell)
+    }
+}
+
+/// OBJ name table = 9-bit tile#.
+pub(crate) const OBJ_MAX_TILES: usize = 512;
+
+fn cells8_from_indexed(
+    art: IndexedArt,
+    width: u32,
+    height: u32,
+) -> (crate::source::ObjSource, crate::source::SourceMeta) {
+    let IndexedArt {
+        palettes,
+        grids,
+        rows: assignment,
+        cols,
+        tile_rows: rows,
+        mut overflows,
+    } = art;
+    let max_tiles = OBJ_MAX_TILES;
     let mut set = TileSet::new(true);
     set.insert([0u8; 64]);
     let mut cells: Vec<ObjCell> = Vec::with_capacity(grids.len());
-    for (grid, &pal) in grids.iter().zip(&fit.assignment) {
+    for (grid, &pal) in grids.iter().zip(&assignment) {
         let (n, hf, vf) = set.insert(*grid);
         let tile = if (n as usize) >= max_tiles { 0 } else { n };
         cells.push(ObjCell {
@@ -189,8 +258,8 @@ fn import_obj_cells8(
     }
 
     let report = BudgetReport {
-        colors_used: fit.palettes.iter().map(|p| p.len()).sum(),
-        palettes_used: fit.palettes.len(),
+        colors_used: palettes.iter().map(|p| p.len()).sum(),
+        palettes_used: palettes.len(),
         tile_cells: cols * rows,
         unique_tiles,
         vram_words: char_words.len(),
@@ -200,7 +269,7 @@ fn import_obj_cells8(
         crate::source::ObjSource {
             cell_size: 8,
             cell_height: 8,
-            palettes: fit.palettes,
+            palettes,
             char_words,
             cells: cells.clone(),
         },
@@ -227,7 +296,6 @@ fn import_obj_blocks(
 ) -> (crate::source::ObjSource, crate::source::SourceMeta) {
     let mut overflows = Vec::new();
     let (nw, nh) = ((cell_w / 8) as usize, (cell_h / 8) as usize); // tiles per cell edge
-    let per_row = 16 / nw; // cells per 16-wide name-table band
     let (ptiles, cols, rows) =
         split_tiles_at(rgba, width as usize, height as usize, remap.alpha_threshold);
     let big_cols = cols.div_ceil(nw);
@@ -299,10 +367,45 @@ fn import_obj_blocks(
         remap,
     );
 
+    obj_from_indexed(
+        IndexedArt {
+            // grids are per tile here, so the per-tile assignment (the art carries fit.assignment, per cell)
+            palettes: trim_unused_colors(fit.palettes, &grids, &tile_assignment),
+            grids,
+            rows: fit.assignment,
+            cols,
+            tile_rows: rows,
+            overflows,
+        },
+        width,
+        height,
+        (cell_w, cell_h),
+    )
+}
+
+fn blocks_from_indexed(
+    art: IndexedArt,
+    width: u32,
+    height: u32,
+    (cell_w, cell_h): (u8, u8),
+) -> (crate::source::ObjSource, crate::source::SourceMeta) {
+    let IndexedArt {
+        palettes,
+        grids,
+        rows: assignment,
+        cols,
+        tile_rows: rows,
+        mut overflows,
+    } = art;
+    let (nw, nh) = ((cell_w / 8) as usize, (cell_h / 8) as usize);
+    let per_row = 16 / nw;
+    let big_cols = cols.div_ceil(nw);
+    let ncells = big_cols * rows.div_ceil(nh);
+
     // Name table = 512 8x8 tiles in 32 rows of 16; cells pack per_row per
     // 16-wide band, each band nh tile rows tall.
     let bands = band_rows(nh, ncells.div_ceil(per_row));
-    let max_cells = bands.iter().take_while(|r| *r + nh <= 32).count() * per_row;
+    let max_cells = block_capacity(nw, nh);
     let kept_cells = ncells.min(max_cells);
     if ncells > max_cells {
         overflows.push(Overflow::Tiles {
@@ -317,7 +420,11 @@ fn import_obj_blocks(
         let gy = bands[k / per_row];
         (gy * 16 + gx) as u16
     };
-    let tile_rows = if kept_cells == 0 { 0 } else { bands[(kept_cells - 1) / per_row] + nh }; // 8x8 name-table rows used
+    let tile_rows = if kept_cells == 0 {
+        0
+    } else {
+        bands[(kept_cells - 1) / per_row] + nh
+    }; // 8x8 name-table rows used
     let mut char_words = vec![0u16; tile_rows * 16 * WORDS_PER_TILE];
     for k in 0..kept_cells {
         let (cy, cx) = (k / big_cols, k % big_cols);
@@ -341,15 +448,15 @@ fn import_obj_blocks(
     let cells: Vec<ObjCell> = (0..ncells)
         .map(|k| ObjCell {
             tile: if k < kept_cells { base_of(k) } else { 0 },
-            pal: fit.assignment[k] & 7,
+            pal: assignment[k] & 7,
             flip_x: false,
             flip_y: false,
         })
         .collect();
 
     let report = BudgetReport {
-        colors_used: fit.palettes.iter().map(|p| p.len()).sum(),
-        palettes_used: fit.palettes.len(),
+        colors_used: palettes.iter().map(|p| p.len()).sum(),
+        palettes_used: palettes.len(),
         tile_cells: ncells,
         unique_tiles: kept_cells * nw * nh,
         vram_words: char_words.len(),
@@ -359,7 +466,7 @@ fn import_obj_blocks(
         crate::source::ObjSource {
             cell_size: cell_w,
             cell_height: cell_h,
-            palettes: fit.palettes,
+            palettes,
             char_words,
             cells: cells.clone(),
         },
@@ -554,9 +661,16 @@ mod tests {
     fn odd_and_rectangular_cells_stay_inside_their_band() {
         // 24x24 cells: five per band (3 tiles each), bands 3 rows tall; the sixth band would cross tile row 16.
         let rgba = vec![255u8; 120 * 144 * 4];
-        let (src, meta) = import_obj_sheet_cells(&rgba, 120, 144, (24, 24), &RemapOptions::default());
+        let (src, meta) =
+            import_obj_sheet_cells(&rgba, 120, 144, (24, 24), &RemapOptions::default());
         assert_eq!((src.cell_size, src.cell_height), (24, 24));
-        let tiles: Vec<u16> = meta.cells.as_ref().unwrap().iter().map(|c| c.tile).collect();
+        let tiles: Vec<u16> = meta
+            .cells
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|c| c.tile)
+            .collect();
         assert_eq!(&tiles[..6], &[0, 3, 6, 9, 12, 48]);
         assert_eq!(tiles[25], 256); // band 6 starts at row 16, not 15
         for t in &tiles {
@@ -566,7 +680,13 @@ mod tests {
         let rgba = vec![255u8; 96 * 32 * 4];
         let (src, meta) = import_obj_sheet_cells(&rgba, 96, 32, (48, 32), &RemapOptions::default());
         assert_eq!((src.cell_size, src.cell_height), (48, 32));
-        let tiles: Vec<u16> = meta.cells.as_ref().unwrap().iter().map(|c| c.tile).collect();
+        let tiles: Vec<u16> = meta
+            .cells
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|c| c.tile)
+            .collect();
         assert_eq!(tiles, vec![0, 6]);
     }
 
@@ -630,5 +750,28 @@ mod tests {
                 flip_y: false
             }
         );
+    }
+
+    #[test]
+    fn back_half_builds_8x8_and_block_payloads_from_an_index_grid() {
+        let mut a = [0u8; 64];
+        a[0] = 1;
+        let art = |rows: Vec<u8>, grids: Vec<[u8; 64]>, cols, tile_rows| IndexedArt {
+            palettes: vec![vec![0x1234]],
+            grids,
+            rows,
+            cols,
+            tile_rows,
+            overflows: vec![],
+        };
+        let (src, _) = obj_from_indexed(art(vec![0, 0], vec![a, a], 2, 1), 16, 8, (8, 8));
+        assert_eq!(src.char_words.len(), 2 * WORDS_PER_TILE); // blank + one deduped tile
+        assert_eq!(src.cells.iter().map(|c| c.tile).collect::<Vec<_>>(), [1, 1]);
+
+        // one 16x16 cell: base tile 0, four subtiles, one palette row
+        let (src, meta) = obj_from_indexed(art(vec![0], vec![a; 4], 2, 2), 16, 16, (16, 16));
+        assert_eq!(src.cells[0].tile, 0);
+        assert_eq!(src.char_words.len(), 2 * 16 * WORDS_PER_TILE);
+        assert_eq!(meta.cells.unwrap().len(), 1);
     }
 }

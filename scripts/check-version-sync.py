@@ -2,7 +2,7 @@
 """Assert every file that claims a ppu version agrees with Cargo.toml.
 
 [workspace.package] version is canonical. The ppu-* members must inherit it,
-ppu-cli's pin on ppu-core must equal it, Cargo.lock must carry it, and the AUR
+ppu-cli's pins on ppu-core and ppu-docs, ppu-docs' on ppu-core and ppu-core's on ppu-rules must equal it, Cargo.lock must carry it, and the AUR
 PKGBUILD must name it. Run by `cook version-sync`; gates `cook release`.
 """
 
@@ -27,10 +27,11 @@ def main():
             problems.append(f"{member}/Cargo.toml sets version = {pkg.get('version')!r}; "
                             "use `version.workspace = true`")
 
-    cli = tomllib.loads((ROOT / "crates/ppu-cli/Cargo.toml").read_text())
-    pin = cli["dependencies"]["ppu-core"].get("version")
-    if pin != canonical:
-        problems.append(f"ppu-cli pins ppu-core version = {pin!r}, expected {canonical!r}")
+    for crate, dep in [("ppu-cli", "ppu-core"), ("ppu-cli", "ppu-docs"), ("ppu-docs", "ppu-core"), ("ppu-core", "ppu-rules")]:
+        manifest = tomllib.loads((ROOT / f"crates/{crate}/Cargo.toml").read_text())
+        pin = manifest["dependencies"][dep].get("version")
+        if pin != canonical:
+            problems.append(f"{crate} pins {dep} version = {pin!r}, expected {canonical!r}")
 
     lock = tomllib.loads((ROOT / "Cargo.lock").read_text())
     for pkg in lock["package"]:

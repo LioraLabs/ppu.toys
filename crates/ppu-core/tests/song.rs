@@ -22,12 +22,14 @@ fn sample_song() -> Song {
                 note: None,
                 vol: 127,
                 pan: -80,
+                keep: false,
             },
             Row {
                 sound: "snare".into(),
                 note: Some(64),
                 vol: 100,
                 pan: 25,
+                keep: false,
             },
         ],
         patterns: vec![
@@ -102,6 +104,7 @@ fn valid_song() -> Song {
             note: None,
             vol: 100,
             pan: 0,
+            keep: false,
         }],
         patterns: vec![Pattern {
             name: "A".into(),
@@ -575,6 +578,7 @@ fn fixture_song_without_end_nudges() -> Song {
             note: None,
             vol: 100,
             pan: 0,
+            keep: false,
         }],
         patterns: vec![Pattern {
             name: "A".into(),
@@ -655,6 +659,7 @@ fn timing_matches_kit_lua_16th_grid_with_swing() {
             note: None,
             vol: 100,
             pan: 0,
+            keep: false,
         }],
         patterns: vec![Pattern {
             name: "A".into(),
@@ -719,6 +724,7 @@ fn hand_computed_mixed_tempo_pinned_nudged_song() {
         note: None,
         vol: 127,
         pan: -50,
+        keep: false,
     };
     let pattern_a = Pattern {
         name: "A".into(),
@@ -862,6 +868,7 @@ fn timing_matches_kit_lua_16th_grid_with_swing_at_an_inexact_tempo() {
             note: None,
             vol: 100,
             pan: 0,
+            keep: false,
         }],
         patterns: vec![Pattern {
             name: "A".into(),
@@ -911,6 +918,7 @@ fn swing_warps_an_off_16th_pair_correctly() {
             note: None,
             vol: 100,
             pan: 0,
+            keep: false,
         }],
         patterns: vec![Pattern {
             name: "A".into(),
@@ -988,6 +996,7 @@ fn swing_only_warps_a_pair_wholly_inside_an_odd_length_pattern() {
         note: None,
         vol: 100,
         pan: 0,
+        keep: false,
     };
 
     let single = Song {
@@ -1047,6 +1056,7 @@ fn tick_song(mask: u8, pattern_len: u32, notes: Vec<Note>) -> Song {
             note: None,
             vol: 100,
             pan: 0,
+            keep: false,
         }],
         patterns: vec![Pattern {
             name: "A".into(),
@@ -1185,6 +1195,7 @@ fn build_stress_song() -> Song {
             note: None,
             vol: 100,
             pan: 0,
+            keep: false,
         })
         .collect();
     let patterns: Vec<Pattern> = (0..16)
@@ -1303,6 +1314,7 @@ fn small_song(voice_mask: u8) -> Song {
             note: None,
             vol: 100,
             pan: 0,
+            keep: false,
         }],
         patterns: vec![Pattern {
             name: "A".into(),
@@ -1449,6 +1461,7 @@ fn native_song_never_touches_a_voice_outside_its_mask() {
             note: None,
             vol: 100,
             pan: 0,
+            keep: false,
         }],
         patterns: vec![Pattern {
             name: "A".into(),
@@ -1763,5 +1776,151 @@ fn analysis_reports_the_loop_tick() {
             .unwrap()
             .loop_tick,
         0
+    );
+}
+
+// ---- .song.json ------------------------------------------------------
+
+/// A `.song.json` is write_song's JSON (`Authored`): a song in that shape (every voice, key 0, no
+/// nudges or pins) comes back from `to_json` text unchanged, so it encodes to the same bytes; one
+/// using what the shape leaves out does not.
+#[test]
+fn song_json_round_trips_the_authored_songs() {
+    let mut song = valid_song();
+    song.voice_mask = 0xff;
+    song.rows[0].note = Some(60);
+    song.arrangement = vec![0, 0];
+    song.loop_start = 1;
+    let text = to_json(&song);
+    assert!(text.contains("\"tempo\": 120,"), "{text}");
+    let back = from_json(&text).unwrap();
+    assert_eq!(back, song);
+    assert_eq!(encode(&back), encode(&song));
+    let mut pinned = song.clone();
+    pinned.patterns[0].notes[0].voice = Some(0);
+    assert_ne!(from_json(&to_json(&pinned)).unwrap(), pinned);
+}
+
+/// write_song's defaults: vol 110, pan 0, vel 100, swing 0, patterns named by letter, the
+/// arrangement every pattern once; notes sorted by (at, row); tempo in BPM.
+#[test]
+fn song_json_fills_write_songs_defaults() {
+    let song = from_json(
+        r#"{"tempo": 137.5, "rows": [{"sound": "kick"}, {"sound": "lead", "note": 64}],
+            "patterns": [{"length": 48, "notes": [{"at": 24, "row": 1, "len": 12}, {"at": 0, "row": 0, "len": 6}]},
+                         {"name": "B2", "length": 24, "notes": []}]}"#,
+    )
+    .unwrap();
+    assert_eq!(song.tempo, 13750);
+    assert_eq!((song.swing, song.key, song.voice_mask), (0, 0, 0xff));
+    assert_eq!(
+        (song.rows[0].vol, song.rows[0].pan, song.rows[1].note),
+        (110, 0, Some(64))
+    );
+    assert_eq!(song.patterns[0].name, "A");
+    assert_eq!(song.patterns[1].name, "B2");
+    let notes = &song.patterns[0].notes;
+    assert_eq!((notes[0].at, notes[0].vel, notes[1].at), (0, 100, 24));
+    assert_eq!(song.arrangement, vec![0, 1]);
+}
+
+/// Text that is not a song, a key the shape does not have, or a song that would not play is
+/// refused naming the key or the field.
+#[test]
+fn song_json_refusals_name_the_field() {
+    let refused = |text: &str| from_json(text).unwrap_err().0;
+    let ok = r#"{"tempo": 120, "rows": [{"sound": "kick"}], "patterns": [{"length": 12, "notes": [{"at": 0, "row": 0, "len": 12}]}]}"#;
+    assert!(from_json(ok).is_ok());
+    let err = refused(r#"{"swing": 0, "rows": [], "patterns": []}"#);
+    assert!(err.contains("missing field `tempo`"), "{err}");
+    let err = refused(&ok.replace(r#""sound": "kick""#, r#""sound": "kick", "volume": 3"#));
+    assert!(err.contains("unknown field `volume`"), "{err}");
+    let err = refused(&ok.replace(r#""len": 12}"#, r#""len": 12, "nudge": 2}"#));
+    assert!(err.contains("unknown field `nudge`"), "{err}");
+    let err = refused(&ok.replace("\"tempo\": 120", "\"tempo\": 0.5"));
+    assert!(err.contains("tempo must be"), "{err}");
+    let err = refused(&ok.replace(r#""sound": "kick""#, r#""sound": "kick", "pan": 300"#));
+    assert!(err.contains("row 1: pan"), "{err}");
+    assert!(from_json("not json").is_err());
+}
+
+// ---- kept parts -------------------------------------------------------
+
+/// `tick_song` with a second row, kept: a lead the effects never take.
+fn kept_song(mask: u8, notes: Vec<Note>) -> Song {
+    let mut song = tick_song(mask, 200, notes);
+    song.rows.push(Row {
+        sound: "lead".into(),
+        note: Some(72),
+        vol: 100,
+        pan: 0,
+        keep: true,
+    });
+    song
+}
+
+fn lead_at(at: u32, len: u32) -> Note {
+    Note { row: 1, ..note_at(at, len, None) }
+}
+
+#[test]
+fn keep_round_trips_through_psng_and_json_and_old_songs_stay_byte_identical() {
+    let song = kept_song(0xff, vec![lead_at(0, 10)]);
+    let bytes = encode(&song);
+    assert!(bytes.windows(4).any(|w| w == b"KEEP"));
+    assert_eq!(decode(&bytes).unwrap(), song);
+    let json = to_json(&song);
+    assert!(json.contains("\"keep\": true"), "{json}");
+    assert_eq!(from_json(&json).unwrap().rows[1].keep, true);
+    // A song keeping nothing writes no KEEP chunk and no "keep" key: what older builds wrote.
+    let plain = tick_song(0xff, 200, vec![note_at(0, 10, None)]);
+    assert!(!encode(&plain).windows(4).any(|w| w == b"KEEP"));
+    assert!(!to_json(&plain).contains("keep"));
+    assert_eq!(decode(&encode(&plain)).unwrap(), plain);
+}
+
+#[test]
+fn a_keep_chunk_naming_a_missing_row_is_refused() {
+    let mut bytes = encode(&kept_song(0xff, vec![]));
+    let at = bytes.windows(4).position(|w| w == b"KEEP").unwrap();
+    bytes[at + 6] = 9; // the chunk's one row index
+    assert_eq!(
+        decode(&bytes).unwrap_err().0,
+        "KEEP chunk names row 10, which does not exist"
+    );
+}
+
+/// The kept lead takes voice 0 though the drum starts first; the drums share the other voices, never the lead's,
+/// even while the lead rests; the keep mask is the lead's voices.
+#[test]
+fn kept_parts_take_the_lowest_voices_and_the_others_never_share_them() {
+    let song = kept_song(
+        0b0111,
+        vec![
+            note_at(0, 100, None),
+            lead_at(10, 20),
+            note_at(40, 100, None),
+            note_at(50, 100, None),
+        ],
+    );
+    let compiled = compile(&song).expect("compiles");
+    let voice = |row, at| {
+        compiled.events.iter().find(|e| e.row == row && e.start == at).unwrap().voice
+    };
+    assert_eq!(voice(1, 10), 0);
+    assert_eq!((voice(0, 0), voice(0, 40), voice(0, 50)), (1, 2, 1));
+    assert_eq!(compiled.keep, 0b1);
+    assert_eq!(keep_mask(&song, &compiled.events), 0b1);
+    assert_eq!(compile(&tick_song(0b0111, 200, vec![note_at(0, 10, None)])).unwrap().keep, 0);
+}
+
+#[test]
+fn kept_parts_that_leave_no_voice_for_the_rest_are_refused() {
+    let full = kept_song(0b1, vec![lead_at(0, 10), note_at(20, 10, None)]);
+    assert!(compile(&full).unwrap_err().0.contains("kept parts use every voice"));
+    let pinned = kept_song(0b11, vec![lead_at(0, 10), note_at(20, 10, Some(0))]);
+    assert_eq!(
+        compile(&pinned).unwrap_err().0,
+        "pattern 'A' note 2: pinned to voice 0, which a kept part plays"
     );
 }

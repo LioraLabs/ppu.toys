@@ -1,0 +1,10 @@
+[package]
+name = "ppu-rules"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "The ppu.toys engine's dependency-free law: the fixed-point storage rule, the annotation comment scanner, library require paths"
+
+[dependencies]

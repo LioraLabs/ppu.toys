@@ -30,6 +30,9 @@ pub const NAMES: [&str; 15] = [
     "ohat", "tom", "clap", "crash",
 ];
 
+/// The one-shots: a drum row's note is a tuning, not a pitch.
+pub const DRUMS: [&str; 7] = ["kick", "snare", "hat", "ohat", "tom", "clap", "crash"];
+
 /// The built-in payload for `name`, encoded on first request.
 pub fn get(name: &str) -> Option<SourcePayload> {
     get_with_meta(name).map(|(payload, _)| payload)

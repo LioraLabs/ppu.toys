@@ -3,14 +3,15 @@ use anyhow::{anyhow, ensure};
 use ppu_core::{render_frame_stats, LuaEngine, LuaError, ObjOverflow, HEIGHT, WIDTH};
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File};
-use std::io::{BufReader, BufWriter};
+use std::io::BufWriter;
 
 pub(super) fn source_bytes(
     dir: &Path,
     source: &ManifestSource,
 ) -> Result<(Vec<u8>, serde_json::Value)> {
     let read_path = |name: &str| -> Result<std::path::PathBuf> {
-        ensure!(safe_relative(name), "unsafe source path {name:?}");
+        let name = name.replace('\\', "/");
+        ensure!(safe_relative(&name), "unsafe source path {name:?}");
         Ok(dir.join(name))
     };
     match (&source.payload, &source.file) {
@@ -22,61 +23,67 @@ pub(super) fn source_bytes(
             Ok((fs::read(read_path(payload)?)?, source.meta.clone()))
         }
         (None, Some(file)) => {
-            let (width, height, rgba) = read_png(&read_path(file)?)?;
-            let priority = source
-                .priority_file
-                .as_ref()
-                .map(|name| -> Result<Vec<u8>> {
-                    let (w, h, pixels) = read_png(&read_path(name)?)?;
-                    ensure!(
-                        (w, h) == (width, height),
-                        "priority PNG dimensions must match source"
-                    );
-                    Ok(pixels)
-                })
-                .transpose()?;
-            let kind = source.kind.parse().map_err(|e: String| anyhow!(e))?;
-            let options =
-                serde_json::from_value(source.options.clone()).context("invalid source options")?;
-            let (payload, meta) = ppu_core::convert_source_with_priority(
-                kind,
-                &options,
-                &rgba,
-                width,
-                height,
-                priority.as_deref(),
-            )
+            let path = read_path(file)?;
+            let read =
+                |p: &Path| fs::read(p).with_context(|| format!("cannot read {}", p.display()));
+            // A song has no SourceKind string (it is no convertSource kind): one arm per song
+            // file format, by extension.
+            if source.kind == "song" {
+                ensure!(
+                    source.priority_file.is_none(),
+                    "priority_file requires a PNG file"
+                );
+                let song = if file.ends_with(".song.json") {
+                    let text =
+                        String::from_utf8(read(&path)?).context("a .song.json file is text")?;
+                    ppu_core::song::from_json(&text).map_err(|e| anyhow!("{file}: {e}"))?
+                } else if file.to_lowercase().ends_with(".mid") {
+                    let song = ppu_core::import::midi::song_from_midi(&read(&path)?)
+                        .map_err(|e| anyhow!("{file}: {e}"))?;
+                    ppu_core::song::compile(&song).map_err(|e| anyhow!("{file}: {e}"))?;
+                    song
+                } else {
+                    bail!("{file}: a song file is a .song.json or a .mid");
+                };
+                let psng = ppu_core::song::encode(&song);
+                let meta = ppu_core::song::source_meta(&song, &psng);
+                return Ok((ppu_core::SourcePayload::Song(psng).encode(), meta));
+            }
+            let kind: ppu_core::SourceKind = source.kind.parse().map_err(|e: String| anyhow!(e))?;
+            ensure!(
+                source.priority_file.is_none() || ppu_core::row_size_for(kind, 4).is_some(),
+                "priority_file requires a PNG file"
+            );
+            let (payload, meta) = match kind {
+                ppu_core::SourceKind::Palette => {
+                    let text = String::from_utf8(read(&path)?).context("a .gpl file is text")?;
+                    ppu_core::gpl::convert_palette(&text)
+                }
+                ppu_core::SourceKind::Sample => {
+                    let options = serde_json::from_value(source.options.clone())
+                        .context("invalid source options")?;
+                    ppu_core::wav::read(&read(&path)?)
+                        .and_then(|pcm| ppu_core::convert_sample(&pcm, &options))
+                        .map_err(|e| format!("{file}: {e}"))
+                }
+                _ => {
+                    let options = serde_json::from_value(source.options.clone())
+                        .context("invalid source options")?;
+                    let priority = source
+                        .priority_file
+                        .as_ref()
+                        .map(|name| read(&read_path(name)?))
+                        .transpose()?;
+                    ppu_core::convert_png_source(kind, &options, &read(&path)?, priority.as_deref())
+                }
+            }
             .map_err(|e| anyhow!(e))?;
             Ok((payload.encode(), serde_json::to_value(meta)?))
         }
-        _ => bail!("specify exactly one of file (PNG) or payload (binary)"),
-    }
-}
-
-fn read_png(path: &Path) -> Result<(u32, u32, Vec<u8>)> {
-    let mut decoder = png::Decoder::new(BufReader::new(
-        File::open(path).with_context(|| format!("cannot read {}", path.display()))?,
-    ));
-    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
-    let mut reader = decoder.read_info().context("invalid PNG")?;
-    let mut bytes = vec![0; reader.output_buffer_size()];
-    let info = reader.next_frame(&mut bytes)?;
-    let bytes = &bytes[..info.buffer_size()];
-    let mut rgba = Vec::with_capacity(info.width as usize * info.height as usize * 4);
-    for pixel in bytes.chunks_exact(info.color_type.samples()) {
-        match info.color_type {
-            png::ColorType::Rgba => rgba.extend_from_slice(pixel),
-            png::ColorType::Rgb => rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]),
-            png::ColorType::Grayscale => {
-                rgba.extend_from_slice(&[pixel[0], pixel[0], pixel[0], 255])
-            }
-            png::ColorType::GrayscaleAlpha => {
-                rgba.extend_from_slice(&[pixel[0], pixel[0], pixel[0], pixel[1]])
-            }
-            png::ColorType::Indexed => bail!("PNG palette was not expanded"),
+        _ => {
+            bail!("specify exactly one of file (PNG, .gpl, .wav, .song.json or .mid) or payload (binary)")
         }
     }
-    Ok((info.width, info.height, rgba))
 }
 
 fn write_png(path: &Path, width: u32, height: u32, pixels: &[u8]) -> Result<()> {
@@ -88,7 +95,7 @@ fn write_png(path: &Path, width: u32, height: u32, pixels: &[u8]) -> Result<()> 
 }
 
 /// Create a complete animated project, including an editable PNG source.
-/// Scaffold a project: a Luau toy (`main.luau` and the `ppu.d.luau` declarations), or with
+/// Scaffold a project: a Luau toy (`main.luau` and the luau-lsp setup, see `write_editor_files`), or with
 /// `lua` a Lua one (`main.lua`).
 pub fn new_project(dir: &Path, lua: bool) -> Result<()> {
     let main = if lua { "main.lua" } else { "main.luau" };
@@ -98,34 +105,21 @@ pub fn new_project(dir: &Path, lua: bool) -> Result<()> {
     let manifest = serde_json::json!({
         "title": dir.file_name().and_then(|n| n.to_str()).unwrap_or("My demo"),
         "description": "Mode 7 flight with per-scanline perspective and palette lighting.",
-        "files": [ppu_core::CONTROLS_FILE, main],
+        "files": [main],
         "sources": [{"name": "floor", "kind": "m7", "file": "assets/floor.png", "options": {}}]
     });
     fs::write(
         dir.join(MANIFEST),
         format!("{}\n", serde_json::to_string_pretty(&manifest)?),
     )?;
-    // Hand-copied output of the TS `formatControls` (web/src/studio/pokes/
-    // controls.ts) for this exact timeline data (end=8 in=0 out=8 loop=true,
-    // markers start=0/loop_end=8) — NOT derived from it, since this is a Rust
-    // binary with no access to the TS formatter. MUST stay byte-identical to
-    // what `formatControls` emits for that data, or a scaffolded project
-    // silently diverges from what the web Studio would generate; pinned by a
-    // cross-language test in web/src/studio/pokes/controls.test.ts, which
-    // reads scaffold_controls.lua and asserts it against a real
-    // `formatControls` call — grep that file for "scaffold_controls.lua"
-    // (mirrors the `SCANLINE_PREAMBLE` doc comment in scanlinePokes.ts for
-    // the analogous hand-copied-fixture risk).
-    fs::write(
-        dir.join(ppu_core::CONTROLS_FILE),
-        include_str!("scaffold_controls.lua"),
-    )?;
+    write_ignore(dir)?;
     if lua {
         fs::write(dir.join(main), include_str!("starter.lua"))?;
     } else {
         fs::write(dir.join(main), include_str!("starter.luau"))?;
-        fs::write(dir.join(crate::LUAU_DECLARATIONS_FILE), ppu_core::LUAU_DECLARATIONS)?;
+        crate::write_editor_files(dir)?;
     }
+    crate::write_skills(dir, false)?;
     let mut pixels = Vec::with_capacity(128 * 128 * 4);
     for y in 0..128 {
         for x in 0..128 {
@@ -140,6 +134,123 @@ pub fn new_project(dir: &Path, lua: bool) -> Result<()> {
         }
     }
     write_png(&dir.join("assets/floor.png"), 128, 128, &pixels)
+}
+
+/// Scaffold a Luau world toy for Tiled: `ppu new` plus a map (`level1.tmj`), an external tileset
+/// (`tiles.tsj`) whose image is the `tiles` source's PNG, and a Tiled project file to open.
+pub fn new_world_project(dir: &Path) -> Result<()> {
+    new_project(dir, false)?;
+    // Swap the flight starter for the world one; the Luau editor files stay.
+    fs::remove_file(dir.join("assets/floor.png"))?;
+    fs::write(dir.join("main.luau"), include_str!("starter_world.luau"))?;
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(dir.join(MANIFEST))?)?;
+    manifest["description"] =
+        "A side-scrolling world painted in Tiled: level1.tmj on bg[1].".into();
+    manifest["files"] = serde_json::json!(["main.luau", "level1.tmj", "tiles.tsj"]);
+    manifest["sources"] = serde_json::json!([{"name": "tiles", "kind": "sheet",
+        "file": "assets/tiles.png", "options": {"bit_depth": 4, "tile_size": 8}}]);
+    let json = |v: serde_json::Value| -> Result<String> {
+        Ok(format!("{}\n", serde_json::to_string_pretty(&v)?))
+    };
+    fs::write(dir.join(MANIFEST), json(manifest)?)?;
+
+    // Eight 8x8 tiles in a row. Tile 0 is fully transparent: empty map cells draw it.
+    const TILES: u32 = 8;
+    let mut pixels = Vec::with_capacity((TILES * 8 * 8 * 4) as usize);
+    for y in 0..8u32 {
+        for x in 0..TILES * 8 {
+            let (tile, tx) = (x / 8, x % 8);
+            let edge = tx == 0 || y == 0;
+            let color: [u8; 4] = match tile {
+                1 if y < 2 => [72, 184, 64, 255], // grass over dirt
+                1 | 2 if (tx + y * 3) % 5 == 0 => [96, 56, 32, 255],
+                1 | 2 => [144, 88, 48, 255], // dirt
+                3 if edge || (y == 4) => [200, 192, 176, 255],
+                3 => [176, 64, 48, 255], // brick
+                4 if edge => [80, 80, 96, 255],
+                4 => [136, 136, 152, 255], // stone
+                5 if y == 1 => [168, 216, 248, 255],
+                5 => [48, 104, 200, 255], // water
+                6 if (1..7).contains(&tx) && (2..6).contains(&y) => [240, 240, 248, 255], // cloud
+                7 if tx.abs_diff(4) + y.abs_diff(4) < 3 => [248, 216, 64, 255], // gem
+                _ => [0, 0, 0, 0],
+            };
+            pixels.extend_from_slice(&color);
+        }
+    }
+    write_png(&dir.join("assets/tiles.png"), TILES * 8, 8, &pixels)?;
+
+    // Paths inside Tiled files are relative to the file: the tileset sits beside the map.
+    fs::write(
+        dir.join("tiles.tsj"),
+        json(serde_json::json!({
+            "type": "tileset", "version": "1.10", "tiledversion": "1.11.0", "name": "tiles",
+            "image": "assets/tiles.png", "imagewidth": TILES * 8, "imageheight": 8,
+            "tilewidth": 8, "tileheight": 8, "columns": TILES, "tilecount": TILES,
+            "margin": 0, "spacing": 0,
+            "tiles": ([1, 2, 3, 4].map(|id| serde_json::json!({"id": id, "type": "solid"}))),
+        }))?,
+    )?;
+
+    // 64x28 cells: two screens wide, one high. Tile ids are gids, so tileset tile n is n + 1.
+    let (w, h) = (64usize, 28usize);
+    let mut data = vec![0u32; w * h];
+    let mut put = |x: usize, y: usize, tile: u32| data[y * w + x] = tile + 1;
+    for x in 0..w {
+        let water = (40..45).contains(&x);
+        put(x, 24, if water { 5 } else { 1 });
+        for y in 25..h {
+            put(x, y, if water { 5 } else { 2 });
+        }
+    }
+    (10..16).for_each(|x| put(x, 18, 3));
+    (20..22).for_each(|x| (20..24).for_each(|y| put(x, y, 4)));
+    (5..8)
+        .chain(28..31)
+        .chain(50..53)
+        .for_each(|x| put(x, 4, 6));
+    put(12, 16, 7);
+    put(42, 20, 7);
+    fs::write(
+        dir.join("level1.tmj"),
+        json(serde_json::json!({
+            "type": "map", "version": "1.10", "tiledversion": "1.11.0",
+            "orientation": "orthogonal", "renderorder": "right-down", "infinite": false,
+            "width": w, "height": h, "tilewidth": 8, "tileheight": 8,
+            "nextlayerid": 2, "nextobjectid": 1,
+            "tilesets": [{"firstgid": 1, "source": "tiles.tsj"}],
+            "layers": [{"id": 1, "name": "ground", "type": "tilelayer", "x": 0, "y": 0,
+                "width": w, "height": h, "opacity": 1, "visible": true, "data": data}],
+        }))?,
+    )?;
+
+    write_tiled_project(dir)
+}
+
+/// The `.gitignore` of a new or pulled project, when it has none: `ppu connect` keeps the
+/// folder's copies the site's replaced in `.ppu-backup/`, which is no part of the project.
+pub(crate) fn write_ignore(dir: &Path) -> Result<()> {
+    let path = dir.join(".gitignore");
+    if !path.exists() {
+        fs::write(&path, format!("{}/\n", crate::BACKUP_DIR))
+            .with_context(|| format!("cannot write {}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// The Tiled project file `ppu new --world` writes: opening it in Tiled shows the folder's maps
+/// and tilesets in its project view.
+pub(crate) fn write_tiled_project(dir: &Path) -> Result<()> {
+    let project = serde_json::json!({
+        "automappingRulesFile": "", "commands": [], "compatibilityVersion": 1100,
+        "extensionsPath": "extensions", "folders": ["."], "properties": [], "propertyTypes": [],
+    });
+    fs::write(
+        dir.join("project.tiled-project"),
+        format!("{}\n", serde_json::to_string_pretty(&project)?),
+    )?;
+    Ok(())
 }
 
 fn lua_error(e: LuaError) -> anyhow::Error {
@@ -164,7 +275,9 @@ fn load_body(path: &Path) -> Result<FileBody> {
         body.version
     );
     ensure!(
-        body.files.iter().any(|f| f.name == "main.lua" || f.name == "main.luau"),
+        body.files
+            .iter()
+            .any(|f| f.name == "main.lua" || f.name == "main.luau"),
         "toy must include main.lua or main.luau"
     );
     let mut names = HashSet::new();
@@ -204,6 +317,16 @@ fn engine_on(body: &FileBody, slot: Option<&str>) -> Result<LuaEngine> {
         engine
             .add_source(&source.name, &bytes)
             .map_err(|e| anyhow!("source {:?}: {e:?}", source.name))?;
+        // A sheet's per-char palettes live in its meta, not its payload; a Tiled map needs them.
+        if source.kind == "sheet" {
+            if let Some(cells) = source.meta.get("cells").and_then(|c| c.as_array()) {
+                let pals: Vec<u8> = cells
+                    .iter()
+                    .map(|c| c.get("pal").and_then(|p| p.as_u64()).unwrap_or(0) as u8)
+                    .collect();
+                engine.set_sheet_palettes(&source.name, &pals);
+            }
+        }
     }
     let files: Vec<_> = body
         .files
@@ -221,7 +344,9 @@ pub fn parse_holds(value: &str) -> Result<Vec<(u32, u32, u32)>> {
         .split(',')
         .map(|hold| {
             let (buttons, frames) = hold.split_once('@').context("hold needs buttons@from-to")?;
-            let (from, to) = frames.split_once('-').context("hold needs buttons@from-to")?;
+            let (from, to) = frames
+                .split_once('-')
+                .context("hold needs buttons@from-to")?;
             let mut mask = 0;
             for button in buttons.split('+') {
                 let (name, shift) = match button.strip_prefix("2.") {
@@ -239,17 +364,32 @@ pub fn parse_holds(value: &str) -> Result<Vec<(u32, u32, u32)>> {
         .collect()
 }
 
-fn draw(engine: &mut LuaEngine, frame: u32, holds: &[(u32, u32, u32)]) -> Result<(Vec<u8>, ObjOverflow)> {
-    let held = holds.iter().filter(|(_, from, to)| (*from..*to).contains(&frame));
+fn draw(
+    engine: &mut LuaEngine,
+    frame: u32,
+    holds: &[(u32, u32, u32)],
+) -> Result<(Vec<u8>, ObjOverflow)> {
+    let lines = step(engine, frame, holds)?;
+    Ok(render_frame_stats(&lines, engine.memory()))
+}
+
+/// One frame with the held buttons, without composing a picture; `engine.audio()` is its sound.
+fn step(
+    engine: &mut LuaEngine,
+    frame: u32,
+    holds: &[(u32, u32, u32)],
+) -> Result<ppu_core::LineTable> {
+    let held = holds
+        .iter()
+        .filter(|(_, from, to)| (*from..*to).contains(&frame));
     let mask = held.fold(0, |mask, (buttons, _, _)| mask | buttons);
     engine.set_pad(mask as u16);
     engine.set_pad2((mask >> 16) as u16);
     let time = f64::from(frame) / 60.0;
-    let lines = engine
+    engine
         .frame(time, frame)
         .map_err(lua_error)
-        .with_context(|| format!("frame {frame} at {time:.6}s"))?;
-    Ok(render_frame_stats(&lines, engine.memory()))
+        .with_context(|| format!("frame {frame} at {time:.6}s"))
 }
 
 /// Times are sampled on the same 60 Hz grid as continuous playback.
@@ -271,11 +411,22 @@ pub fn parse_times(value: &str) -> Result<Vec<u32>> {
 /// Render sequentially from zero, including intermediate frames for stateful toys.
 /// `srm`: a saveData record's battery RAM image, loaded first when the file exists and written back after the
 /// last frame (the cartridge's layout, so the file moves to and from emulators and flash carts).
-pub fn render(path: &Path, frames: &[u32], out: &Path, holds: &[(u32, u32, u32)], srm: Option<&Path>) -> Result<()> {
+pub fn render(
+    path: &Path,
+    frames: &[u32],
+    out: &Path,
+    holds: &[(u32, u32, u32)],
+    srm: Option<&Path>,
+) -> Result<()> {
     ensure!(!frames.is_empty(), "at least one sample time is required");
     let body = load_body(path)?;
     let mut slot = match srm.filter(|p| p.exists()) {
-        Some(p) => format!("{{{}}}", ppu_core::save::slot_members(&fs::read(p).with_context(|| format!("cannot read {}", p.display()))?)),
+        Some(p) => format!(
+            "{{{}}}",
+            ppu_core::save::slot_members(
+                &fs::read(p).with_context(|| format!("cannot read {}", p.display()))?
+            )
+        ),
         None => "{}".into(),
     };
     let mut engine = engine_on(&body, Some(&slot))?;
@@ -296,9 +447,46 @@ pub fn render(path: &Path, frames: &[u32], out: &Path, holds: &[(u32, u32, u32)]
         }
     }
     if let Some(p) = srm {
-        let image = ppu_core::save::srm_from_slot(&slot).context("--srm: the program keeps no saveData record")?;
+        let image = ppu_core::save::srm_from_slot(&slot)
+            .context("--srm: the program keeps no saveData record")?;
         fs::write(p, image).with_context(|| format!("cannot write {}", p.display()))?;
     }
+    Ok(())
+}
+
+/// Play frames [0, `frames`) headless and write their stereo S-DSP output as a WAV: the samples
+/// the Studio plays for those frames. Prints the file, its length and peak/RMS in dBFS.
+pub fn render_wav(path: &Path, frames: u32, out: &Path, holds: &[(u32, u32, u32)]) -> Result<()> {
+    ensure!(frames > 0, "duration must be at least one frame");
+    let mut engine = engine(&load_body(path)?)?;
+    let mut samples = Vec::new();
+    for f in 0..frames {
+        step(&mut engine, f, holds)?;
+        samples.extend_from_slice(engine.audio());
+    }
+    let bytes =
+        ppu_core::wav::write(&samples, 2, ppu_core::wav::DSP_RATE).map_err(|e| anyhow!(e))?;
+    fs::write(out, bytes).with_context(|| format!("cannot write {}", out.display()))?;
+    let (peak, sum) = samples.iter().fold((0f64, 0f64), |(p, s), &v| {
+        let v = f64::from(v) / 32768.0;
+        (p.max(v.abs()), s + v * v)
+    });
+    let rms = (sum / samples.len().max(1) as f64).sqrt();
+    let db = |v: f64| {
+        if v > 0.0 {
+            format!("{:.1} dBFS", 20.0 * v.log10())
+        } else {
+            "silent".into()
+        }
+    };
+    println!(
+        "{} ({:.3}s stereo {} Hz): peak {}, RMS {}",
+        out.display(),
+        (samples.len() / 2) as f64 / f64::from(ppu_core::wav::DSP_RATE),
+        ppu_core::wav::DSP_RATE,
+        db(peak),
+        db(rms)
+    );
     Ok(())
 }
 
@@ -335,9 +523,15 @@ pub fn check(
     let mut runner = engine(&body)?;
     let mut references = BTreeMap::new();
     let (mut max_sprites, mut max_tiles, mut overflow_frames) = (0, 0, 0);
+    let mut sustained = BTreeMap::new();
     // Include the endpoint so exact cuts and loop boundaries are exercised.
     for f in 0..=end {
         let (pixels, overflow) = draw(&mut runner, f, holds)?;
+        for (n, v) in runner.dsp_view().voices.iter().enumerate() {
+            if let (Some(secs), true) = (v.sustains, v.envx > 0) {
+                sustained.insert(n, secs);
+            }
+        }
         max_sprites = max_sprites.max(overflow.max_sprites);
         max_tiles = max_tiles.max(overflow.max_tiles);
         if overflow.range_over || overflow.time_over {
@@ -347,6 +541,28 @@ pub fn check(
         if samples.contains(&f) {
             references.insert(f, pixels);
         }
+    }
+    // The Studio's contract violations, from the same engine record: a cartridge stops on the first.
+    let broken = runner.violations().to_vec();
+    for v in &broken {
+        let when = v.frame.map_or("at load".to_string(), |f| format!("frame {f}"));
+        eprintln!(
+            "{}:{}: error[contract]: {} = {} outside {}..{} ({}, {when}, {}×)",
+            v.file, v.line, v.store, v.value, v.min, v.max, v.scene, v.count
+        );
+    }
+    ensure!(
+        broken.is_empty(),
+        "{} contract violation(s) above: the preview runs on, a cartridge stops at the first",
+        broken.len()
+    );
+    for (n, secs) in sustained {
+        let how = if secs.is_finite() {
+            format!("~{secs:.1} s")
+        } else {
+            "forever".into()
+        };
+        eprintln!("warning: voice {n} sustains {how}: a looping sample keyed on with kon() and no koff(); play it with sfx() (it stops after its len, 0.15 s by default) or koff({n})");
     }
     for (&f, expected) in references.iter().rev() {
         ensure!(

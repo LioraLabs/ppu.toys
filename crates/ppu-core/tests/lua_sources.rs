@@ -138,3 +138,69 @@ fn init_runtime_error_attributes_inits_defining_file() {
         .unwrap_err();
     assert_eq!(err.file.as_deref(), Some("setup.lua"));
 }
+
+#[test]
+fn a_runtime_error_points_at_the_authors_line() {
+    let mut e = LuaEngine::new();
+    // a host call refused in init(): the line that called dma, not just the file
+    let err = e
+        .set_sources(&[(
+            "main.luau",
+            "function init()\n  local a = 1\n  dma(\"nope\")\nend\nfunction frame(t, f) end",
+        )])
+        .unwrap_err();
+    assert!(
+        err.message.contains("no source named 'nope'"),
+        "{}",
+        err.message
+    );
+    assert_eq!(
+        (err.file.as_deref(), err.line),
+        (Some("main.luau"), Some(3))
+    );
+
+    // in a module frame() calls: the module's line
+    e.set_sources(&[
+        (
+            "art.luau",
+            "local M = {}\nfunction M.load()\n  dma(\"nope\")\nend\nreturn M",
+        ),
+        (
+            "main.luau",
+            "local art = require(\"./art\")\nfunction frame(t, f)\n  art.load()\nend",
+        ),
+    ])
+    .unwrap();
+    let err = e.frame(0.0, 0).unwrap_err();
+    assert_eq!((err.file.as_deref(), err.line), (Some("art.luau"), Some(3)));
+
+    // at file level in a required module, as art is usually loaded
+    let err = e
+        .set_sources(&[
+            (
+                "player.luau",
+                "local M = {}\nM.art = dma(\"hero\", {palette = \"sprites\"})\nreturn M",
+            ),
+            (
+                "main.luau",
+                "local player = require(\"./player\")\nfunction frame(t, f) end",
+            ),
+        ])
+        .unwrap_err();
+    assert_eq!(
+        (err.file.as_deref(), err.line),
+        (Some("player.luau"), Some(2))
+    );
+
+    // a plain Lua error in frame()
+    e.set_sources(&[(
+        "main.luau",
+        "local t: any = nil\nfunction frame(t2, f)\n  local x = 1\n  t.y = x\nend",
+    )])
+    .unwrap();
+    let err = e.frame(0.0, 0).unwrap_err();
+    assert_eq!(
+        (err.file.as_deref(), err.line),
+        (Some("main.luau"), Some(4))
+    );
+}

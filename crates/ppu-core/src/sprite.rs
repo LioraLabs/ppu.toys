@@ -140,7 +140,11 @@ pub fn bin_line(mem: &Memory, y: usize) -> LineBin {
         }
     }
     let time_over = tile_count as usize > MAX_TILES_PER_LINE;
-    let (sprites, clip) = in_range.iter().zip(clips).filter_map(|(&i, c)| Some((i, c?))).unzip();
+    let (sprites, clip) = in_range
+        .iter()
+        .zip(clips)
+        .filter_map(|(&i, c)| Some((i, c?)))
+        .unzip();
 
     LineBin {
         sprites,
@@ -222,11 +226,14 @@ pub fn render_scanline_for_into(
     for (n, &i) in indices.iter().enumerate() {
         let o = mem.oam[i];
         let (w, h) = sprite_dims(size_sel, o.large);
-        let (from, to) = clip.get(n).map_or((0, w), |c| (c.0 as u32 * 8, c.1 as u32 * 8));
+        let (from, to) = clip
+            .get(n)
+            .map_or((0, w), |c| (c.0 as u32 * 8, c.1 as u32 * 8));
         let row = (y as i64 - o.y as i64).rem_euclid(256) as u32; // 0..h (binning guarantees in-range)
         let pal_base = 128 + (o.pal as usize & 7) * 16;
+        let x = obj_x(o.x);
         for sx in from..to {
-            let screen_x = o.x as i64 + sx as i64;
+            let screen_x = x + sx as i64;
             if screen_x < 0 || screen_x >= width as i64 {
                 continue;
             }
@@ -248,7 +255,7 @@ pub fn render_scanline_for_into(
             }
             *slot = Some(SpritePixel {
                 rgba: unpack_rgb15(mem.cgram[pal_base + index as usize]),
-                prio: o.prio,
+                prio: o.prio & 3, // two bits in OAM, as pal is three
                 pal: o.pal & 7,
             });
         }
@@ -337,7 +344,12 @@ mod tests {
     fn sprites_wrap_from_the_bottom_to_the_top() {
         let mut m = mem();
         m.obsel.size_sel = 0;
-        m.oam[0] = Obj { y: 250, large: true, on: true, ..Obj::default() }; // 16x16: rows 250-255, 0-9
+        m.oam[0] = Obj {
+            y: 250,
+            large: true,
+            on: true,
+            ..Obj::default()
+        }; // 16x16: rows 250-255, 0-9
         assert_eq!(sprites_on_line(&m, 255), vec![0]);
         assert_eq!(sprites_on_line(&m, 0), vec![0]);
         assert_eq!(sprites_on_line(&m, 9), vec![0]);
@@ -441,7 +453,13 @@ mod tests {
         let mut mem = mem();
         mem.obsel.size_sel = 2;
         for (i, x) in [-60i16, 250, -64, -256].into_iter().enumerate() {
-            mem.oam[i] = Obj { on: true, x, y: 0, large: true, ..Obj::default() };
+            mem.oam[i] = Obj {
+                on: true,
+                x,
+                y: 0,
+                large: true,
+                ..Obj::default()
+            };
         }
         let bin = bin_line(&mem, 0);
         // -64 is wholly off screen: out of range. -256 counts, and loads all of its (unseen) slivers.
@@ -455,7 +473,13 @@ mod tests {
         // Size sel 6 small = 16x32; a sprite flipped vertically shows its top square's last row on line 0.
         let mut mem = mem();
         mem.obsel.size_sel = 6;
-        mem.oam[0] = Obj { on: true, x: 0, y: 0, flip_y: true, ..Obj::default() };
+        mem.oam[0] = Obj {
+            on: true,
+            x: 0,
+            y: 0,
+            flip_y: true,
+            ..Obj::default()
+        };
         // Tile 16 (the top square's second tile row) gets colour 1 at x = 7 in its last line: pixel row 15.
         mem.vram[16 * 16 + 7] = 0x0001;
         mem.cgram[129] = 0x7fff;
@@ -498,7 +522,13 @@ mod tests {
         // is not in range, except at X = -256, which takes a range slot and loads its slivers.
         let mut mem = mem();
         for (i, x) in [-8i16, -256, 0].into_iter().enumerate() {
-            mem.oam[i] = Obj { on: true, x, y: 0, large: false, ..Obj::default() };
+            mem.oam[i] = Obj {
+                on: true,
+                x,
+                y: 0,
+                large: false,
+                ..Obj::default()
+            };
         }
         let bin = bin_line(&mem, 0);
         assert_eq!((bin.sprite_count, bin.tile_count), (2, 2));
@@ -629,6 +659,28 @@ mod tests {
     }
 
     #[test]
+    fn x_draws_at_the_nine_bits_the_ppu_reads() {
+        let mut mem = obj_mem();
+        mem.cgram[128 + 1] = rgb15(255, 0, 0);
+        let mut g = [[0u8; 8]; 8];
+        g[0][0] = 1;
+        put_obj_char(&mut mem, 1, g);
+        for (x, at) in [(520, 8), (-260, 252)] {
+            mem.oam[0] = Obj {
+                on: true,
+                x,
+                y: 0,
+                tile: 1,
+                ..Obj::default()
+            };
+            assert!(
+                render_scanline(&mem, 0, crate::WIDTH)[at].is_some(),
+                "x {x} draws at {at}"
+            );
+        }
+    }
+
+    #[test]
     fn priority_field_is_carried() {
         let mut mem = obj_mem();
         mem.cgram[128 + 1] = rgb15(1, 2, 3);
@@ -644,6 +696,8 @@ mod tests {
             ..Obj::default()
         };
         assert_eq!(render_scanline(&mem, 0, crate::WIDTH)[0].unwrap().prio, 2);
+        mem.oam[0].prio = 5; // the PPU keeps the low two bits
+        assert_eq!(render_scanline(&mem, 0, crate::WIDTH)[0].unwrap().prio, 1);
     }
 
     #[test]

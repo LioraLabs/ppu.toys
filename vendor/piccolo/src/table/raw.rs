@@ -136,11 +136,13 @@ impl<'gc> RawTable<'gc> {
         // entry.
         let raw_map = self.map.raw_table_mut();
         if let Some(bucket) = raw_map.find(hash, |(k, _)| k.eq(table_key)) {
+            let (_, v) = unsafe { bucket.as_mut() };
+            return Ok(mem::replace(v, value));
+        } else if let Some(bucket) = raw_map.find(hash, |(k, _)| k.was(table_key)) {
+            // No live copy exists, so reviving the removed key's bucket cannot hold it twice
+            // (PPU-1048); never reviving one left every removed key's bucket to pile up.
             let (k, v) = unsafe { bucket.as_mut() };
-            if k.is_dead_key() {
-                // Resurrect the key if it is dead.
-                *k = Key::Live(table_key);
-            }
+            *k = Key::Live(table_key);
             return Ok(mem::replace(v, value));
         } else if raw_map
             .try_insert_no_grow(hash, (Key::Live(table_key), value))
@@ -343,9 +345,11 @@ impl<'gc> RawTable<'gc> {
         }
 
         if let Ok(table_key) = CanonicalKey::new(key) {
-            if let Some(bucket) = raw_table.find(self.hash_builder.hash_one(table_key), |(k, _)| {
-                k.eq(table_key)
-            }) {
+            // LOCAL DELTA (PPU-1048): the live bucket first; a dead one only resumes past a key
+            // removed mid-traversal. See `Key::eq`.
+            let hash = self.hash_builder.hash_one(table_key);
+            let live = raw_table.find(hash, |(k, _)| k.eq(table_key));
+            if let Some(bucket) = live.or_else(|| raw_table.find(hash, |(k, _)| k.was(table_key))) {
                 unsafe {
                     let bucket_index = raw_table.bucket_index(&bucket);
                     for i in bucket_index + 1..raw_table.buckets() {
@@ -510,9 +514,6 @@ impl<'gc> Key<'gc> {
         }
     }
 
-    fn is_dead_key(&self) -> bool {
-        self.live_key().is_none()
-    }
 
     fn live_key(self) -> Option<CanonicalKey<'gc>> {
         match self {
@@ -521,7 +522,15 @@ impl<'gc> Key<'gc> {
         }
     }
 
+    // LOCAL DELTA (PPU-1048): lookups match live keys only. A dead key holds a bare pointer to an
+    // object the GC may have freed; a new equal string allocated at that address matched it, so
+    // `set` resurrected the dead bucket beside the live one and the table held the key twice
+    // (`next` then returned it forever). Only `next` asks `was`, to resume past a removed key.
     fn eq(self, key: CanonicalKey<'gc>) -> bool {
+        matches!(self, Key::Live(a) if a == key)
+    }
+
+    fn was(self, key: CanonicalKey<'gc>) -> bool {
         match (self, key) {
             (Key::Live(a), b) => a == b,
             (Key::Dead(a), b) => match b {

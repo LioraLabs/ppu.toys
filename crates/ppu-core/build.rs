@@ -12,7 +12,12 @@ fn main() {
     let lib = Path::new(&env::var("CARGO_MANIFEST_DIR").unwrap()).join("lib");
     let entries: String = names
         .iter()
-        .map(|n| format!("    (\"@ppu/{n}.luau\", include_str!({:?})),\n", lib.join(format!("{n}.luau"))))
+        .map(|n| {
+            format!(
+                "    (\"@ppu/{n}.luau\", include_str!({:?})),\n",
+                lib.join(format!("{n}.luau"))
+            )
+        })
         .collect();
     let out = Path::new(&env::var("OUT_DIR").unwrap()).join("libraries.rs");
     fs::write(out, format!("&[\n{entries}]")).unwrap();

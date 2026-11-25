@@ -35,6 +35,8 @@ pub struct FunctionPrototype<'gc> {
     pub opcodes: boxed::Box<[OpCode], MetricsAlloc<'gc>>,
     pub opcode_line_numbers: boxed::Box<[(usize, LineNumber)], MetricsAlloc<'gc>>,
     pub upvalues: boxed::Box<[UpValueDescriptor], MetricsAlloc<'gc>>,
+    /// The name of each upvalue, indexed like `upvalues`.
+    pub upvalue_names: boxed::Box<[String<'gc>], MetricsAlloc<'gc>>,
     pub prototypes: boxed::Box<[Gc<'gc, FunctionPrototype<'gc>>], MetricsAlloc<'gc>>,
 }
 
@@ -76,6 +78,8 @@ impl<'gc> FunctionPrototype<'gc> {
             );
             let upvalues =
                 SliceExt::to_vec_in(compiled_function.upvalues.as_slice(), alloc.clone());
+            let mut upvalue_names = vec::Vec::new_in(alloc.clone());
+            upvalue_names.extend(compiled_function.upvalue_names.iter().map(map_string));
 
             let mut prototypes = vec::Vec::new_in(alloc);
             prototypes.extend(
@@ -98,6 +102,7 @@ impl<'gc> FunctionPrototype<'gc> {
                 opcodes: opcodes.into_boxed_slice(),
                 opcode_line_numbers: opcode_line_numbers.into_boxed_slice(),
                 upvalues: upvalues.into_boxed_slice(),
+                upvalue_names: upvalue_names.into_boxed_slice(),
                 prototypes: prototypes.into_boxed_slice(),
             }
         }

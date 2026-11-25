@@ -33,7 +33,10 @@ function frame(t, f)
   obj[1].x = if A == B then 1 else 0
 end"#;
     let state = "loads = (loads or 0) + 1\nreturn {loads = loads}";
-    assert_eq!(run(&[("main.luau", main), ("state.luau", state)], 1, 2), [1, 1]);
+    assert_eq!(
+        run(&[("main.luau", main), ("state.luau", state)], 1, 2),
+        [1, 1]
+    );
 }
 
 #[test]
@@ -46,9 +49,15 @@ end"#;
     let both = "local blink = require(\"@ppu/blink\")\nlocal S = require(\"./state\")\nfunction frame(t, f) obj[0].x = if S.blink == blink then 1 else 0 end";
     assert_eq!(run(&[("main.luau", main)], 2, 1), [10]);
     assert_eq!(run(&[("main.luau", main)], 3, 1), [20]);
-    assert_eq!(run(&[("main.luau", both), ("state.luau", state)], 1, 1), [1]);
+    assert_eq!(
+        run(&[("main.luau", both), ("state.luau", state)], 1, 1),
+        [1]
+    );
     let refused = error(&[("main.luau", "local x = require(\"@ppu/nope\")")], 1);
-    assert!(refused.contains("no such library; it ships @ppu/blink"), "{refused}");
+    assert!(
+        refused.contains("no such library; it ships @ppu/blink"),
+        "{refused}"
+    );
 }
 
 #[test]
@@ -118,9 +127,27 @@ function frame(t, f)
 end"#;
     // 1.0004 snaps to the nearest 1/1024.
     assert_eq!(run(&[("main.luau", main)], 1, 2), [1024, 2]);
-    assert!(error(&[("main.luau", main)], 5).contains("-4..4"));
+    let broken = |files: &[(&str, &str)], frames: u32| {
+        let mut engine = LuaEngine::new();
+        engine.set_sources(files).unwrap();
+        for f in 0..frames {
+            engine.frame(f as f64 / 60., f).unwrap();
+        }
+        engine
+            .violations()
+            .iter()
+            .map(|v| (v.store.clone(), v.min, v.max, v.value, v.line))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        broken(&[("main.luau", main)], 5),
+        [("x".into(), -4, 4, 5., 5)]
+    );
     let hp = "local s = {hp = makeBounded(2, 0, 2)}\nfunction frame() s.hp = 1.5 end";
-    assert!(error(&[("main.luau", hp)], 1).contains("integer"));
+    assert_eq!(
+        broken(&[("main.luau", hp)], 1),
+        [("hp".into(), 0, 2, 1.5, 2)]
+    );
 }
 
 #[test]
@@ -149,7 +176,15 @@ end"#;
     let rows = |lines: &ppu_core::LineTable, y: usize| lines.rows[y].bg[0].scroll_x;
     // Both programs called in one frame: each on its own rows.
     let lines = engine.frame(0., 0).unwrap();
-    assert_eq!((rows(&lines, 0), rows(&lines, 111), rows(&lines, 112), rows(&lines, 223)), (1, 1, 12, 12));
+    assert_eq!(
+        (
+            rows(&lines, 0),
+            rows(&lines, 111),
+            rows(&lines, 112),
+            rows(&lines, 223)
+        ),
+        (1, 1, 12, 12)
+    );
     // Where two calls cover a row, the later one wins.
     let lines = engine.frame(1. / 60., 1).unwrap();
     assert_eq!((rows(&lines, 111), rows(&lines, 112)), (4, 23));
@@ -159,7 +194,43 @@ end"#;
 }
 
 #[test]
+fn a_bake_grid_that_misses_its_parameters_names_a_code() {
+    let missing = r#"local lines = bakeHdma({p = {0, 7}}, 0, 223, function(y, q) bg[1].scroll.x = q end)
+function frame(t, f) lines(1) end"#;
+    let extra = r#"local lines = bakeHdma({p = {0, 7}, q = {0, 3}}, 0, 223, function(y, p) bg[1].scroll.x = p end)
+function frame(t, f) lines(1) end"#;
+    for main in [missing, extra] {
+        let e = error(&[("main.luau", main)], 1);
+        assert_eq!(ppu_core::engine_code(&e), Some("snes.hdma_bake"), "{e}");
+    }
+}
+
+#[test]
 fn target_is_a_build_setting_not_source() {
     let main = "target({region = \"ntsc\", hz = 60})\nfunction frame(t, f) end";
     assert!(error(&[("main.luau", main)], 1).contains("region and update rate are build settings"));
+}
+
+/// @ppu/sound: the highest priority wins an update (boom over shot), a cue without one always plays, and the priority
+/// starts again at 0 on the next update with no flush call.
+#[test]
+fn sound_cues_rank_by_priority_within_one_update() {
+    let main = r#"local sound = require("@ppu/sound")
+local zap = bank("pluck")
+local cues = sound.cues({shot = {zap, 5, "C6", 1}, boom = {zap, 6, "C3", 3}, tick = {zap, 7, "A5"}})
+function init() sound.volume(100) end
+function frame(t, f)
+  if f == 0 then cues:play("boom") end
+  cues:play("shot")
+  cues:play("tick")
+end"#;
+    let mut engine = LuaEngine::new();
+    engine.set_sources(&[("main.luau", main)]).unwrap();
+    engine.start_dsp_log();
+    let mut kon = vec![];
+    for f in 0..2 {
+        engine.frame(f as f64 / 60., f).unwrap();
+        kon.push(engine.take_dsp_log().iter().filter(|w| w.1 == 0x4c).fold(0u8, |a, w| a | w.2));
+    }
+    assert_eq!(kon, [1 << 6 | 1 << 7, 1 << 5 | 1 << 7]);
 }

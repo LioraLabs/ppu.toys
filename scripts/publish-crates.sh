@@ -1,12 +1,12 @@
 #!/bin/sh
-# Publish the workspace to crates.io, bottom-up: piccolo-ppu, ppu-core, ppu-cli.
+# Publish the workspace to crates.io, bottom-up: piccolo-ppu, ppu-rules, ppu-core, ppu-docs, ppu-cli.
 #
 # `cargo publish` blocks until each crate appears in the index, so the next one
 # resolves. Already-published versions are skipped, so a partial run is safe to
 # re-run.
 set -eu
 
-ORDER="piccolo-ppu ppu-core ppu-cli"
+ORDER="piccolo-ppu ppu-rules ppu-core ppu-docs ppu-cli"
 
 fail() { printf 'publish: %s\n' "$*" >&2; exit 1; }
 

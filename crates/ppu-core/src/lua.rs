@@ -1,6 +1,6 @@
 //! piccolo Lua VM + flat-global DSL binding. Runs `frame(t,f)` once to populate
 //! frame-wide defaults + CGRAM/OAM, registers `hdma` hooks, then (Phase A)
-//! applies `ppuglobals.lua`'s `apply_pokes` as a synthetic frame-wide `hdma`
+//! applies the live pokes chunk's `__ppu_pokes` as a synthetic frame-wide `hdma`
 //! hook spliced in after the program's own hooks, then resolves the
 //! LineTable by invoking each covering hook per scanline (later call wins).
 
@@ -108,6 +108,11 @@ pub struct DspVoiceView {
     pub envx: u8,
     pub outx: i8,
     pub ended: bool,
+    /// Seconds this voice's note lasts with no key-off on the way: it was keyed on by `kon()` (not
+    /// `sfx()`) on a looping sample and not keyed off since. `f64::INFINITY` when it holds forever;
+    /// absent otherwise. Only [`LuaEngine::dsp_view`] fills it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sustains: Option<f64>,
 }
 
 /// One `dma()` sample placement, as surfaced to the UI (Audio inspector) —
@@ -183,12 +188,8 @@ pub struct ScoreView {
     pub finished: bool,
 }
 
-/// The controls document's reserved file name (PPU-146's generated
-/// `ppuglobals.lua`): its `apply_pokes` is applied automatically every frame
-/// as a final visual override pass — see [`LuaEngine::load_controls`] and
-/// `frame()`'s Phase A. Filtered out of the normal multi-file chunk list the
-/// same way [`crate::AUDIO_MIX_FILE`] is.
-pub const CONTROLS_FILE: &str = "ppuglobals.lua";
+/// The label errors from the live pokes chunk carry (see [`LuaEngine::set_pokes`]): not a file.
+const POKES: &str = "pokes";
 
 /// Compile/runtime error surfaced to the editor, matching the TS `LuaError` shape.
 #[derive(Debug, Clone, PartialEq)]
@@ -209,8 +210,27 @@ impl LuaError {
 
 /// The embedded Lua VM plus the captured `frame`/`init` entry points and mirrored
 /// PPU memory. Globals persist across frames (sticky registers).
+/// Video frames per update a `---@snes frames N` line (N from 1 to 4) declares in any of `files`; 1 without one.
+fn frames_note(files: &[(&str, &str)]) -> u32 {
+    files
+        .iter()
+        .flat_map(|(_, source)| source.lines())
+        .find_map(
+            |line| match line.split_whitespace().collect::<Vec<_>>()[..] {
+                ["---@snes", "frames", n] => n.parse().ok().filter(|n| (1..=4).contains(n)),
+                _ => None,
+            },
+        )
+        .unwrap_or(1)
+}
+
 pub struct LuaEngine {
     lua: Rc<RefCell<Lua>>,
+    /// The last good load's VM and main chunks, which the next load carries state from; `None`
+    /// at a power-on (`reset`, [`Self::forget_run`], a new engine).
+    prev_run: Option<crate::carry::Run>,
+    /// Variables the last load left at their new initial value ([`Self::not_carried`]).
+    not_carried: Vec<String>,
     /// Pre-interned glue keys for `lua` (see [`Keys`]); swapped with it.
     keys: Rc<StashedKeys>,
     /// Diff-on-write baseline for `write_state` (see [`Mirror`]). Valid only
@@ -223,14 +243,16 @@ pub struct LuaEngine {
     frame_file: Option<String>,
     /// The program calls `sprites.draw`: each frame() ends with the library's flush.
     sprites: bool,
-    /// `ppuglobals.lua`'s `apply_pokes`, stashed from the tracked
-    /// `__ppu_controls_env` (see [`Self::load_controls`]). `None` when the
-    /// current program carries no controls document — `frame()`'s Phase A
-    /// is then a no-op, matching pre-M147 behavior exactly.
+    /// The pokes chunk's `__ppu_pokes`, stashed from the tracked
+    /// `__ppu_controls_env` (see [`Self::load_controls`]). `None` without
+    /// one: `frame()`'s Phase A is then a no-op.
     controls_fn: Option<StashedFunction>,
-    /// Painted tiles captured from `ppuglobals.lua`'s `apply_vram()` at load;
+    /// Painted tiles captured from the pokes chunk's `__ppu_pokes_vram()` at load;
     /// overlaid onto VRAM every frame after all Lua has run.
     controls_vram: Vec<(u16, u16)>,
+    /// The Studio's live pokes (see [`Self::set_pokes`]): a chunk loaded first on every load,
+    /// never part of the program's files.
+    pokes: String,
     memory: Memory,
     /// The source store: decoded `addSource` payloads keyed by name — the
     /// graphics-data home (kind + depth + palettes + tiles + tilemap all
@@ -238,6 +260,12 @@ pub struct LuaEngine {
     /// cleared by set_sources, which owns Lua files). Shared with the `dma`
     /// callback installed in the VM (init-time name/kind validation).
     source_store: Rc<RefCell<HashMap<String, crate::source::SourcePayload>>>,
+    /// Each sheet source's palette per char (its `SourceMeta.cells`), which the payload does not
+    /// carry; `world.load` needs it to colour a map. Survives recompiles, like the store.
+    sheet_pals: Rc<RefCell<HashMap<String, Vec<u8>>>>,
+    /// The program's project files (`frontend::is_project_file`: Tiled maps and tilesets), by
+    /// name, as the last `set_sources` gave them.
+    project_files: Rc<RefCell<HashMap<String, String>>>,
     /// Placements recorded by `dma()` during the current program's init
     /// (top-level chunks + `init()`), replayed into VRAM/CGRAM each frame.
     /// Swapped wholesale on a successful `set_sources` (recompile).
@@ -248,10 +276,16 @@ pub struct LuaEngine {
     source_dirty: bool,
     /// Run fixed-point arithmetic even without a makeFixed contract in the sources.
     fixed_point: bool,
+    /// Off: `frame()` leaves `memory()` as it was (the Lua tables' CGRAM, OAM and VRAM pokes unread).
+    picture_memory: bool,
     /// Controller state for the next frame: a PAD_* bitmask mirrored into the
     /// Lua `pad` table before frame() runs. JS owns the key/gamepad mapping.
     pad: u16,
     pad2: u16,
+    /// The last frame() run for `pad.pressed`/`pad.released`: its f, both masks, and the masks it compared
+    /// with, so a repeat of that frame sees the same edges. None at the program's and each scene's start,
+    /// whose first frame reports no edges (a button held across a switch is not a press).
+    pads_before: Option<(u32, (u16, u16), (u16, u16))>,
     /// The live S-DSP core (M12/audio). Survives recompiles and `Memory::new()`
     /// resets — only `render_frame_audio` writes to it.
     dsp: Dsp,
@@ -279,6 +313,11 @@ pub struct LuaEngine {
     /// (and a recompile's song key-offs) reach the chip — not a jump, so no
     /// song key-off and no echo clear.
     recompiled: bool,
+    /// The host is paused ([`Self::set_hold`]): an update captures the program's file-level state
+    /// before it runs, and the same update drawn again (a poke, a panel's change) starts from it.
+    hold: bool,
+    /// The update `held` was captured before, and that state.
+    held: Option<(u32, crate::carry::Snap)>,
     /// `timer(n, div, fn)` hooks registered by the current program's init
     /// window (top-level chunks + `init()`). Dropped and re-registered
     /// wholesale on every `set_sources`, then re-phased onto the timeline at
@@ -296,6 +335,27 @@ pub struct LuaEngine {
     mix_koff: u8,
     /// The program's scenes (`scenes.add`), or `None` for one implied scene.
     scenes: Option<Scenes>,
+    /// The scene file every load boots into instead of the program's own boot scene (the Studio's
+    /// scene switcher); a file that is no scene of the program leaves the normal boot.
+    start_scene: Option<String>,
+    /// Booting into `start_scene` is a Scene view entry, which runs its `preview`.
+    start_preview: bool,
+    /// The project's update target (`targetHz`: 25 or 30 run one update every second video frame).
+    target_hz: Option<u8>,
+    /// The run frame (from power-on) the host's `f = 0` stands for: a host that counts a scene it
+    /// entered from 0 ([`Self::enter_pending_scene`]) names its entry here, so t rounds as the cart's.
+    run_base: u32,
+    /// Video frames per update a `---@snes frames N` line in the sources declares (1 without one).
+    frames_note: u32,
+    /// The last update run between updates of a program slower than the video rate: its program
+    /// frame and what it returned, which the video frames up to the next update show again.
+    shown: Option<(u32, Result<LineTable, LuaError>)>,
+    /// What the VM's contract checks found (bounded.rs), not yet stamped with scene and frame.
+    violation_sink: crate::bounded::Violations,
+    /// Broken contract stores since the last `reset`, one per file:line and store.
+    violations: Vec<crate::bounded::Violation>,
+    /// The program frame of the update running, which stamps its violations.
+    update_f: u32,
 }
 
 /// One `scenes.add(require("./x"))`: its module file and the functions the module returned.
@@ -304,7 +364,13 @@ struct Scene {
     init: Option<StashedFunction>,
     frame: StashedFunction,
     frame_file: Option<String>,
+    /// The module's `preview`: run only on a Scene view entry (the switcher's start scene).
+    preview: Option<StashedFunction>,
 }
+
+/// luau.lua's fade state (`scenes.go(s, {fade = n})`) and its pending switch (set the update a fade-out ends),
+/// which an edit that stays in the running scene carries.
+const SCENE_FADE: [&str; 6] = ["__ppu_scene_next", "__ppu_scene_out", "__ppu_scene_in", "__ppu_scene_fade", "__ppu_scene_after", "__ppu_scene_shown"];
 
 /// A program of scenes. Entering one is a cold boot (see [`LuaEngine::enter_scene`]): its frame()
 /// and the audio timeline count from the update it was entered on, `f0`.
@@ -312,6 +378,10 @@ struct Scenes {
     list: Vec<Scene>,
     /// The scene the program boots into: the first added, or one a file-level `scenes.go` chose.
     boot: usize,
+    /// The scene a load enters: `boot`, or the one a recompile found running.
+    entry: usize,
+    /// `boot` is the switcher's start scene: entering it is a Scene view entry, which runs its preview.
+    chosen: bool,
     current: usize,
     f0: u32,
     t0: f64,
@@ -340,6 +410,21 @@ enum Hook {
 /// A recorded `timer(n, div, fn)` (or song) registration: timer, div, hook, defining chunk, and
 /// the scene module whose load or init made it (`None`: the whole program's).
 type TimerReg = (u8, u8, Hook, Option<String>, Option<String>);
+
+/// A `dma()` or `world.load` result is setup the next load rebuilds from the sources: a hot swap
+/// never carries it (see `carry`), so an edited image or map lands.
+fn mark_setup_handle<'gc>(ctx: piccolo::Context<'gc>, rec: &DmaRecorder, handle: Table<'gc>) {
+    let mut slot = rec.setup_mark.borrow_mut();
+    let mark = match &*slot {
+        Some(m) => ctx.fetch(m),
+        None => {
+            let m = Table::new(&ctx);
+            *slot = Some(ctx.stash(m));
+            m
+        }
+    };
+    handle.set_metatable(&ctx, Some(mark));
+}
 
 /// Recorded registrations as hooks, each first due one period from t = 0 (see `realign`).
 fn timer_hooks(regs: impl Iterator<Item = TimerReg>) -> Vec<TimerHook> {
@@ -390,6 +475,8 @@ struct DmaPlacement {
     char_base: u16,
     map_base: u16,
     cgram_base: u8,
+    /// The palette source whose colours replace the art's own, resolved each frame like `name`.
+    palette: Option<String>,
     /// The result's other integer fields (`next_char`, `bit_depth`, ...).
     fields: Vec<(&'static str, i64)>,
 }
@@ -436,6 +523,7 @@ struct SamplePlacement {
     addr: u16,
     end: u32,
     loop_addr: u16,
+    loops: bool,
 }
 
 /// A native `score{ song = "<name>" }` player: PSNG events plus the live
@@ -525,6 +613,11 @@ impl SongPlayer {
         }
     }
 
+    /// Whether the voice choice counts this song: playing, or play()ed and starting with the next span.
+    fn sounds_for_effects(&self) -> bool {
+        self.playing && matches!(self.anchor, Anchor::At(_) | Anchor::Pending)
+    }
+
     /// Back to the top: tick 0, first fire next, nothing sounding.
     fn rewind(&mut self) {
         self.tick = 0;
@@ -538,6 +631,12 @@ impl SongPlayer {
 const SAMPLE_DIR: u32 = 0x0100;
 /// End (exclusive) of the sample directory page: 256 entries * 4 bytes.
 const SAMPLE_DIR_END: u32 = SAMPLE_DIR + 256 * 4;
+
+/// A program's t at frame `f` (from power-on), as the cartridge counts it: whole 1/1024 s steps, rounded down (60 frames
+/// a second). A scene's t is its frame's less its entry frame's, so it can be a step longer than its own f gives.
+pub fn cart_t(f: u32) -> f64 {
+    (u64::from(f) * 1024 / 60) as f64 / 1024.0
+}
 
 /// The half-open ARAM range `[start, end)` the echo buffer reserves for a
 /// given `dsp.echo.delay` (0..=15, already clamped by the caller). Echo RAM
@@ -558,8 +657,12 @@ fn echo_region(delay: i64) -> (u32, u32) {
 /// `timer` share.
 #[derive(Default)]
 struct DmaRecorder {
+    /// The metatable that marks a `dma()` / `world.load` result as setup (see `mark_setup_handle`).
+    setup_mark: RefCell<Option<piccolo::StashedTable>>,
     raster: crate::lua_raster::Raster,
     active: Cell<bool>,
+    /// The program's `world.load` maps, by the handle `__ppu_world_load` returned (index + 1).
+    worlds: RefCell<Vec<World>>,
     placements: RefCell<Vec<DmaPlacement>>,
     /// Stage loads (`dma()` from frame() under force_blank), in call order.
     loads: RefCell<Vec<DmaLoad>>,
@@ -567,6 +670,8 @@ struct DmaRecorder {
     in_frame: Cell<bool>,
     /// This update made a load, so force_blank must still be true when it ends.
     loaded: Cell<bool>,
+    /// `allow_overlaps`: placements conflict with nothing.
+    overlaps: Cell<bool>,
     /// Setup spans `(name, start, end, owner)`: placements conflict only within one scene.
     vram_ranges: RefCell<Vec<(String, usize, usize, Option<String>)>>,
     cgram_ranges: RefCell<Vec<(String, usize, usize, Option<String>)>>,
@@ -590,6 +695,115 @@ struct DmaRecorder {
     /// time — frame(), hooks) but is dropped wholesale on the next
     /// `set_sources` along with the rest of this recorder.
     songs: RefCell<Vec<SongPlayer>>,
+    /// sfx() key-off countdowns in frames, per voice (0: none); see `tick_sfx_holds`. Carried
+    /// across a recompile like the voices themselves.
+    sfx_hold: Cell<[u16; 8]>,
+    /// Voices sfx() keyed on this frame: their countdown starts next frame.
+    sfx_armed: Cell<u8>,
+    /// Frames each voice stays an effect's (0: the songs'; `u16::MAX`: until koff()). A song's
+    /// key-ons, key-offs and register writes skip a voice an effect holds: it borrows the voice,
+    /// and the song's next note after it ends plays. Carried like `sfx_hold`.
+    sfx_own: Cell<[u16; 8]>,
+    /// Voices held by automatic effects, and when each started (`sfx_seq` at the time).
+    sfx_auto: Cell<u8>,
+    sfx_since: Cell<[u16; 8]>,
+    sfx_seq: Cell<u16>,
+    /// Voices keyed on by kon() with no key-off on the way (the check's sustain warning).
+    kon_open: Cell<u8>,
+    /// True while the engine runs `__ppu_world_hotswap`: not a game frame, so w:enter skips the
+    /// screen-off check. Held here, where a program can't set it.
+    hot_swap: Cell<bool>,
+    /// The layer last streamed into each VRAM map (`__ppu_world_strip`) since the scene began, whose tile
+    /// animations play: (map, world, layer, its sheet's char base). See `animate_worlds`.
+    world_animated: RefCell<Vec<(u16, usize, usize, u16)>>,
+}
+
+impl DmaRecorder {
+    /// Voices an effect holds: a song leaves them alone until the effect ends.
+    fn owned(&self) -> u8 {
+        self.sfx_own
+            .get()
+            .iter()
+            .enumerate()
+            .fold(0, |m, (v, &f)| if f > 0 { m | 1 << v } else { m })
+    }
+
+    /// The voice choice's view of the 8 voices: which ones the playing songs use, how long each
+    /// rests before its next key-on (known only up to the current slot's end, as on a cartridge,
+    /// whose driver sees one slot's streams), and which effects hold them.
+    fn voice_view(&self) -> [ppu_rules::voices::Voice; 8] {
+        use ppu_rules::voices::{Held, Voice};
+        let mut view = [Voice::FREE; 8];
+        let (own, auto, since, seq) = (
+            self.sfx_own.get(),
+            self.sfx_auto.get(),
+            self.sfx_since.get(),
+            self.sfx_seq.get(),
+        );
+        let Ok(songs) = self.songs.try_borrow() else {
+            return view;
+        };
+        for p in songs.iter().filter(|p| p.sounds_for_effects()) {
+            // A song play()ed this update is seen from its top, where realign rewinds it: the cartridge's driver
+            // starts it on its play command, before the effects sent after it.
+            let (tick, cursor, ends) = match p.anchor {
+                Anchor::Pending => (0, 0, [None; 8]),
+                _ => (p.tick, p.cursor, p.ends),
+            };
+            let t = &p.timing;
+            let slot_end = t
+                .slots
+                .iter()
+                .map(|s| t.tick(s.pos + s.len as u64))
+                .find(|&end| end > tick)
+                .unwrap_or(t.length);
+            let mut rest: [Option<i64>; 8] = [None; 8];
+            for e in &p.events[cursor..] {
+                if e.start >= slot_end {
+                    break;
+                }
+                rest[e.voice as usize].get_or_insert(e.start - tick);
+            }
+            let used = p.events.iter().fold(0u8, |m, e| m | 1 << e.voice);
+            for (i, v) in view
+                .iter_mut()
+                .enumerate()
+                .filter(|(i, _)| used & 1 << i != 0)
+            {
+                let r = match (ends[i], rest[i]) {
+                    (None, Some(r)) => Some(r.clamp(0, u16::MAX as i64) as u16),
+                    _ => None,
+                };
+                v.rest = if v.song {
+                    v.rest.zip(r).map(|(a, b)| a.min(b))
+                } else {
+                    r
+                };
+                v.song = true;
+            }
+        }
+        for (i, v) in view.iter_mut().enumerate() {
+            if own[i] > 0 {
+                // Smaller is older: the oldest effect has the largest age.
+                v.held = if auto & 1 << i != 0 {
+                    Held::Auto(u16::MAX - seq.wrapping_sub(since[i]))
+                } else {
+                    Held::Explicit
+                };
+            }
+        }
+        view
+    }
+
+    /// The voices the playing songs' kept parts play, which no automatic effect takes (the cartridge's KEEP).
+    fn keep_mask(&self) -> u8 {
+        let Ok(songs) = self.songs.try_borrow() else {
+            return 0;
+        };
+        (songs.iter())
+            .filter(|p| p.sounds_for_effects())
+            .fold(0, |m, p| m | crate::song::keep_mask(&p.song, &p.events))
+    }
 }
 
 impl Default for LuaEngine {
@@ -623,6 +837,17 @@ impl LuaEngine {
             let (store, rec) = (source_store.clone(), dma.clone());
             lua.enter(move |ctx| install_dma(ctx, store, rec));
         }
+        let sheet_pals: Rc<RefCell<HashMap<String, Vec<u8>>>> = Rc::default();
+        let project_files: Rc<RefCell<HashMap<String, String>>> = Rc::default();
+        {
+            let (store, pals, files, rec) = (
+                source_store.clone(),
+                sheet_pals.clone(),
+                project_files.clone(),
+                dma.clone(),
+            );
+            lua.enter(move |ctx| install_world(ctx, store, pals, files, rec));
+        }
         let dsp = power_on_dsp();
         lua.enter(|ctx| seed_dsp_tables(ctx, &dsp, None));
         LuaEngine {
@@ -635,20 +860,29 @@ impl LuaEngine {
             sprites: false,
             controls_fn: None,
             controls_vram: Vec::new(),
+            pokes: String::new(),
             memory: Memory::new(),
             source_store,
+            sheet_pals,
+            project_files,
             dma,
             reports: Vec::new(),
             program_sources: Vec::new(),
             source_dirty: false,
             fixed_point: false,
+            picture_memory: true,
             pad: 0,
             pad2: 0,
+            pads_before: None,
             dsp,
             aram: Box::new([0u8; 0x10000]),
             audio: Vec::new(),
             last_f: None,
             recompiled: false,
+            prev_run: None,
+            hold: false,
+            held: None,
+            not_carried: Vec::new(),
             timers: Vec::new(),
             sram_json: "{}".to_string(),
             sram_dirty: false,
@@ -658,12 +892,30 @@ impl LuaEngine {
             mix_kon: 0,
             mix_koff: 0,
             scenes: None,
+            target_hz: None,
+            run_base: 0,
+            frames_note: 1,
+            shown: None,
+            violation_sink: Rc::default(),
+            violations: Vec::new(),
+            update_f: 0,
+            start_scene: None,
+            start_preview: false,
         }
     }
 
     /// Mirrored PPU memory after the most recent `frame()`.
     pub fn memory(&self) -> &Memory {
         &self.memory
+    }
+
+    /// The palette of each char of sheet source `name`, in sheet order: the `pal` of each of its
+    /// `SourceMeta.cells`. A Tiled map drawn from the sheet takes its colours from these.
+    pub fn set_sheet_palettes(&mut self, name: &str, pals: &[u8]) {
+        self.sheet_pals
+            .borrow_mut()
+            .insert(name.to_string(), pals.to_vec());
+        self.source_dirty = !self.program_sources.is_empty();
     }
 
     /// Decode + register a source payload under `name` (the `addSource` core).
@@ -768,7 +1020,7 @@ impl LuaEngine {
                 let old = (&p.song, &p.timing);
                 let remapped = crate::song::remap(old, (&song, new_t), p.tick);
                 if p.playing {
-                    song_koff(ctx, p.mask);
+                    song_koff(ctx, p.mask & !dma.owned());
                 }
                 // `next < 0`: no fire since a jump; the next one re-seeks
                 // by time, so there is no position to keep.
@@ -827,6 +1079,62 @@ impl LuaEngine {
         let removed = self.source_store.borrow_mut().remove(name).is_some();
         self.source_dirty |= removed && !self.program_sources.is_empty();
         removed
+    }
+
+    /// The program's scene files in `scenes.add` order; a program without scenes is one implied
+    /// scene, its main file. Changes only with a load.
+    pub fn scenes(&self) -> Vec<String> {
+        match &self.scenes {
+            Some(sc) => sc.list.iter().map(|s| s.file.clone()).collect(),
+            None => {
+                let names = || self.program_sources.iter().map(|(n, _)| n.as_str());
+                let main = ["main.luau", "main.lua"]
+                    .into_iter()
+                    .find(|m| names().any(|n| n == *m));
+                let first = names().find(|n| *n != AUDIO_MIX_FILE);
+                vec![main.or(first).unwrap_or("main.luau").to_string()]
+            }
+        }
+    }
+
+    /// The running scene: an index into [`Self::scenes`]. It follows `scenes.go` from the update
+    /// the switch lands on.
+    pub fn current_scene(&self) -> usize {
+        self.scenes.as_ref().map_or(0, |sc| sc.current)
+    }
+
+    /// Boot every later load (a recompile, [`Self::reset`]) straight into scene `file`, as if the
+    /// program had switched to it before its first update: file level and every `scenes.add` run,
+    /// no other scene's init or frame does. With `preview` it is a Scene view entry: the scene's
+    /// `preview` runs before its init; without, the load only lands where the program was (a scene
+    /// `scenes.go` entered), never staging it. `None`, or a file that is no scene, boots as the
+    /// program does. Takes effect at the next load, which this does not start.
+    pub fn set_start_scene(&mut self, file: Option<String>, preview: bool) {
+        self.start_scene = file;
+        self.start_preview = preview;
+    }
+
+    /// The scene a `scenes.go` asked for and the next new update would enter: an index into
+    /// [`Self::scenes`]. The Studio's Scene view holds the switch here instead of following it.
+    pub fn pending_scene(&self) -> Option<usize> {
+        let count = self.scenes.as_ref()?.list.len() as i64;
+        let next = self
+            .lua
+            .borrow_mut()
+            .enter(|ctx| ctx.get_global("__ppu_scene_next").to_int());
+        next.filter(|n| (1..=count).contains(n))
+            .map(|n| n as usize - 1)
+    }
+
+    /// Enter the [`Self::pending_scene`] now, as `scenes.go` would but with its clock starting
+    /// over: the next update is `frame(0, 0)` and the scene sees t = 0, f = 0. No preview runs.
+    /// False when no switch waits.
+    pub fn enter_pending_scene(&mut self) -> Result<bool, LuaError> {
+        let Some(k) = self.pending_scene() else {
+            return Ok(false);
+        };
+        self.enter_scene(k, Some((0.0, 0)), false)?;
+        Ok(true)
     }
 
     /// Per-layer import budgets from the most recent `frame()` (m4/inspector).
@@ -935,6 +1243,24 @@ impl LuaEngine {
                 end: s.end,
             })
             .collect();
+        let open = self.dma.kon_open.get();
+        let samples = self.dma.samples.borrow();
+        for (n, v) in view.voices.iter_mut().enumerate() {
+            let loops = samples
+                .iter()
+                .rev()
+                .find(|s| s.id == v.sample)
+                .is_some_and(|s| s.loops);
+            if open & 1 << n == 0 || !loops {
+                continue;
+            }
+            v.sustains = match v.gain {
+                // Direct and increasing GAIN hold; decreasing GAIN fades out on its own.
+                Some(g) if g & 0x80 == 0 || g >> 5 >= 6 => Some(f64::INFINITY),
+                Some(_) => None,
+                None => Some(crate::dsp::sustain_seconds(v.adsr.s, v.adsr.r)),
+            };
+        }
         view
     }
 
@@ -980,7 +1306,10 @@ impl LuaEngine {
                 slot,
                 step,
                 anchor: match p.anchor {
-                    Anchor::At(a) => Some((a - p.shift_h) as f64 / 64000.0 + self.scenes.as_ref().map_or(0.0, |s| s.t0)),
+                    Anchor::At(a) => Some(
+                        (a - p.shift_h) as f64 / 64000.0
+                            + self.scenes.as_ref().map_or(0.0, |s| s.t0),
+                    ),
                     _ => None,
                 },
                 loop_tick: p.looping.then_some(p.timing.loop_tick),
@@ -998,6 +1327,12 @@ impl LuaEngine {
         self.fixed_point = on;
     }
 
+    /// Whether `frame()` rebuilds `memory()` from the program's `cgram`, `obj`, `bg[n].map`, `m7` and `vram` tables
+    /// (on by default). A run that only watches for errors turns it off: nothing it checks reads that memory.
+    pub fn set_picture_memory(&mut self, on: bool) {
+        self.picture_memory = on;
+    }
+
     pub fn set_source(&mut self, src: &str) -> Result<(), LuaError> {
         self.set_sources(&[("source", src)])
     }
@@ -1007,9 +1342,100 @@ impl LuaEngine {
     /// see `kit.lua`'s own doc comment.
     const KIT_LUA: &'static str = include_str!("kit.lua");
 
-    /// The change-tracking environment `ppuglobals.lua` is compiled against —
+    /// Luau's `math.random` signatures over `random.lua`'s generator, which a cartridge
+    /// compiles too (so this wrapper stays out of that file): `()` a fraction in [0, 1),
+    /// `(n)` an integer 1..n, `(m, n)` an integer m..n.
+    const MATH_RANDOM_LUA: &'static str = r#"
+function math.random(m, n)
+  if m == nil then return (__ppu_random_next() - 1) / 65535 end
+  if n == nil then m, n = 1, m end
+  if m > n then error("math.random: the interval is empty", 2) end
+  return __ppu_random(m, n)
+end
+math.randomseed = __ppu_randomseed
+"#;
+
+    /// `math.hash(seed, x, y)`: 0 to 255 from a seed and two whole numbers, table lookups over a fixed permutation of
+    /// 0..255, which a cartridge bakes the same (the cartridge compiler).
+    const MATH_HASH_LUA: &'static str = r#"
+local perm = {}
+for i = 0, 255 do
+  local a = i * (2 * i + 1) % 256
+  local b = a % 16 * 16 + a // 16
+  perm[i] = b * (2 * b + 1) % 256
+end
+function math.hash(seed, x, y)
+  if seed % 1 ~= 0 or x % 1 ~= 0 or y % 1 ~= 0 then
+    error("math.hash(seed, x, y) takes three whole numbers, got " .. tostring(seed) .. ", " .. tostring(x) .. ", " .. tostring(y), 2)
+  end
+  local a = perm[(seed + x) % 256]
+  local b = perm[(seed // 256 + y) % 256]
+  return perm[(perm[(a + y) % 256] + perm[(b + x) % 256]) % 256]
+end
+"#;
+
+    /// The change-tracking environment the live pokes chunk is compiled against —
     /// see `controls_env.lua`'s own doc comment and [`Self::load_controls`].
     const CONTROLS_ENV_LUA: &'static str = include_str!("controls_env.lua");
+
+    /// For a tool that loads a program to read what it builds, never to draw it: `dma()` places over anything.
+    pub fn allow_overlaps(&mut self) {
+        self.dma.overlaps.set(true);
+    }
+
+    /// Every VRAM span the loaded program's file-level `dma()` calls placed, in words: (name,
+    /// first, end, the scene module that placed it; `None` for the whole program's).
+    pub fn vram_spans(&self) -> Vec<(String, usize, usize, Option<String>)> {
+        self.dma.vram_ranges.borrow().clone()
+    }
+
+    /// The maps the loaded program's `world.load` calls read, in call order (a world's handle is
+    /// its index + 1), each tile layer as binding it in the world's own scene would draw it.
+    pub fn worlds(&self) -> Vec<WorldView> {
+        // Every scene's placements: entering a scene keeps only its own in `dma.placements`.
+        let current = self.dma.placements.borrow();
+        let placements = self
+            .scenes
+            .as_ref()
+            .map_or(&current[..], |sc| &sc.placements[..]);
+        self.dma
+            .worlds
+            .borrow()
+            .iter()
+            .map(|w| WorldView {
+                name: w.name.clone(),
+                owner: w.owner.clone(),
+                map: w.map.clone(),
+                layers: (0..w.map.layers.len())
+                    .map(|li| {
+                        if w.map.layers[li].mode7 {
+                            m7_layer(placements, w, li, &w.owner)?;
+                            let words = w.words[li].clone().unwrap_or_default();
+                            return Ok(WorldLayerView { words, char_base: 0, palettes: 0, extbg: w.extbg[li], char_words: 0, pal: 0 });
+                        }
+                        let (char_base, pal) = sheet_layer(placements, w, li, &w.owner)?;
+                        // A whole-program world bound in a scene draws with that scene's latest placement, which
+                        // this answer cannot know: it holds only when every scene places the sheet the same way.
+                        if w.owner.is_none() {
+                            let mut scenes = placements.iter().filter_map(|p| p.owner.clone());
+                            if let Some(scene) = scenes.find(|s| sheet_layer(placements, w, li, &Some(s.clone())).ok() != Some((char_base, pal))) {
+                                return Err(format!(
+                                    "layer {} draws from a sheet scene {scene} places at other chars or CGRAM than the program does, so it draws differently in each scene: load the world in the scene that binds it, or place the sheet once for the whole program",
+                                    w.map.layers[li].name
+                                ));
+                            }
+                        }
+                        let words = w.words[li].iter().flatten().map(|&word| word + (pal << 10)).collect();
+                        let char_words = w.map.layers[li].source.as_ref().and_then(|s| match self.source_store.borrow().get(s) {
+                            Some(crate::source::SourcePayload::Sheet(sheet)) => Some(sheet.bit_depth as usize * 4),
+                            _ => None,
+                        }).unwrap_or(0);
+                        Ok(WorldLayerView { words, char_base, palettes: w.palettes[li], extbg: false, char_words, pal })
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
 
     /// Compile and load a multi-file sketch (PICO-8 scope): builds a fresh VM,
     /// installs bindings, then executes each `(name, source)` chunk **in list
@@ -1020,13 +1446,86 @@ impl LuaEngine {
     /// A file named by `require("./name")` in any file runs as a module (see `luau.lua`), and so
     /// does an engine library named by `require("@ppu/name")` (lib/name.luau).
     pub fn set_sources(&mut self, files: &[(&str, &str)]) -> Result<(), LuaError> {
-        let libraries = crate::frontend::with_libraries(files)
-            .map_err(|(file, message)| LuaError { file: Some(file), line: None, message })?;
+        let loaded = self.load_sources(files);
+        self.note_violations(None);
+        loaded
+    }
+
+    /// What the last load did not carry over from the running program, one line per variable
+    /// that kept its new initial value ("main.luau: enemies kept its new value: ..."). Empty after
+    /// a load that carried everything, and after any power-on.
+    pub fn not_carried(&self) -> &[String] {
+        &self.not_carried
+    }
+
+    /// The host paused (true) or plays (false). Paused, drawing the same update again does not
+    /// advance the program: each repeat starts from the state the update first started from, so
+    /// a poke shows its change and nothing else moves. A coroutine (a `routine`) still steps.
+    pub fn set_hold(&mut self, on: bool) {
+        if self.hold != on {
+            self.hold = on;
+            self.held = None;
+        }
+    }
+
+    /// Another toy opens: the next load powers on instead of carrying the running program's state.
+    pub fn forget_run(&mut self) {
+        self.prev_run = None;
+        self.not_carried.clear();
+    }
+
+    /// Broken contract stores since the last `reset` (a power-on or a scene's restart), first
+    /// seen first. The preview never stops on one: the value stays as written.
+    pub fn violations(&self) -> &[crate::bounded::Violation] {
+        &self.violations
+    }
+
+    /// Stamp what the contract checks found with the running scene and `frame`, folding repeats
+    /// of one file:line and store into its first.
+    fn note_violations(&mut self, frame: Option<u32>) {
+        let found = std::mem::take(&mut *self.violation_sink.borrow_mut());
+        if found.is_empty() {
+            return;
+        }
+        let scene = self.scenes().swap_remove(self.current_scene());
+        for v in found {
+            match self
+                .violations
+                .iter_mut()
+                .find(|o| (&o.file, o.line, &o.store) == (&v.file, v.line, &v.store))
+            {
+                Some(o) => o.count += 1,
+                None => self.violations.push(crate::bounded::Violation {
+                    scene: scene.clone(),
+                    frame,
+                    ..v
+                }),
+            }
+        }
+    }
+
+    fn load_sources(&mut self, files: &[(&str, &str)]) -> Result<(), LuaError> {
+        // Tiled maps and tilesets are data `world.load` reads, never Luau.
+        let (project, files): (Vec<_>, Vec<_>) = files
+            .iter()
+            .copied()
+            .partition(|(name, _)| crate::frontend::is_project_file(name));
+        let files = files.as_slice();
+        let project: HashMap<String, String> = project
+            .into_iter()
+            .map(|(n, s)| (n.to_string(), s.to_string()))
+            .collect();
+        if *self.project_files.borrow() != project {
+            self.source_dirty |= !self.program_sources.is_empty();
+            *self.project_files.borrow_mut() = project;
+        }
+        let libraries =
+            crate::frontend::with_libraries(files).map_err(|(file, message)| LuaError {
+                file: Some(file),
+                line: None,
+                message,
+            })?;
         let files = libraries.as_slice();
-        let fixed_point = self.fixed_point
-            || files.iter().any(|(name, source)| {
-                *name != AUDIO_MIX_FILE && crate::frontend::fixed_contracts(source)
-            });
         let prepared: Vec<_> = files
             .iter()
             .map(|&(name, source)| {
@@ -1042,41 +1541,38 @@ impl LuaEngine {
                 Ok((name, source))
             })
             .collect::<Result<_, LuaError>>()?;
+        // After prepare: it refuses nesting too deep for the parse fixed_contracts makes.
+        let fixed_point = self.fixed_point
+            || files.iter().any(|(name, source)| {
+                *name != AUDIO_MIX_FILE && crate::frontend::fixed_contracts(source)
+            });
         let files: Vec<_> = prepared
             .iter()
             .map(|(name, source)| (*name, source.as_ref()))
             .collect();
         let files = files.as_slice();
-        // Older saved toys used controls.lua for the generated document.
-        // A user's controls.lua stays ordinary code; an existing ppuglobals.lua wins.
-        let has_globals = files.iter().any(|(name, _)| *name == CONTROLS_FILE);
-        let normalized: Vec<_> = files
-            .iter()
-            .map(|&(name, source)| {
-                if !has_globals
-                    && name == "controls.lua"
-                    && source.starts_with("-- controls.lua · generated by the Studio panels.")
-                {
-                    (CONTROLS_FILE, source)
-                } else {
-                    (name, source)
-                }
-            })
-            .collect();
-        let files = normalized.as_slice();
         let precision_files: Vec<_> = files
             .iter()
             .copied()
-            .filter(|(n, _)| *n != AUDIO_MIX_FILE && *n != CONTROLS_FILE)
+            .filter(|(n, _)| *n != AUDIO_MIX_FILE)
             .collect();
+        // Helpers that cut art become their art at each file-level call, as the cartridge reads them.
+        let expanded = crate::sprites::expand_helpers(&precision_files);
+        let precision_files: Vec<(&str, &str)> = match &expanded {
+            Some(e) => e.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect(),
+            None => precision_files,
+        };
         let sprite_plan = crate::sprites::plan(&precision_files).map_err(|e| LuaError {
             file: Some(e.file),
             line: Some(e.line),
-            message: e.message,
+            message: format!("error[snes.sprites]: {}", e.message),
         })?;
         // Each sprites.art and sprites.group call passes its number in the plan.
         let numbered: Vec<(&str, String)> = match &sprite_plan {
-            Some(plan) => precision_files.iter().map(|(n, s)| (*n, crate::sprites::number_sites(plan, n, s))).collect(),
+            Some(plan) => precision_files
+                .iter()
+                .map(|(n, s)| (*n, crate::sprites::number_sites(plan, n, s)))
+                .collect(),
             None => vec![],
         };
         let precision_files: Vec<(&str, &str)> = if sprite_plan.is_some() {
@@ -1090,9 +1586,15 @@ impl LuaEngine {
             .iter()
             .any(|(n, s)| n.ends_with(".luau") || !crate::frontend::requires(s).is_empty());
         let fixed_point = fixed_point
-            || surface && precision_files.iter().any(|(_, s)| crate::frontend::fixed_calls(s));
+            || surface
+                && precision_files
+                    .iter()
+                    .any(|(_, s)| crate::frontend::fixed_calls(s));
         let dynamic = fixed_point
-            && (surface || !precision_files.iter().any(|(_, s)| crate::precision::enabled(s)));
+            && (surface
+                || !precision_files
+                    .iter()
+                    .any(|(_, s)| crate::precision::enabled(s)));
         let fixed_sources: Vec<(&str, std::borrow::Cow<str>)> = precision_files
             .iter()
             .map(|&(name, source)| {
@@ -1104,14 +1606,18 @@ impl LuaEngine {
                 (name, source)
             })
             .collect();
-        let precision_files: Vec<(&str, &str)> =
-            fixed_sources.iter().map(|(n, s)| (*n, s.as_ref())).collect();
-        let precision_chunks = crate::precision::prepare_sources_with(&precision_files, dynamic && surface)
-            .map_err(|(file, e)| LuaError {
-                file: Some(file),
-                line: Some(e.line as u32),
-                message: format!("{} {}", e.message, e.help),
-            })?;
+        let precision_files: Vec<(&str, &str)> = fixed_sources
+            .iter()
+            .map(|(n, s)| (*n, s.as_ref()))
+            .collect();
+        let precision_chunks =
+            crate::precision::prepare_sources_with(&precision_files, dynamic && surface).map_err(
+                |(file, e)| LuaError {
+                    file: Some(file),
+                    line: Some(e.line as u32),
+                    message: format!("{} {}", e.message, e.help),
+                },
+            )?;
         let saved_mix = AudioMix::parse(
             files
                 .iter()
@@ -1124,12 +1630,9 @@ impl LuaEngine {
             line: None,
             file: Some(AUDIO_MIX_FILE.into()),
         })?;
-        // Saving only the mix and/or ppuglobals.lua must preserve the VM,
-        // timer phase, and sounding notes. `live` names the files this fast
-        // path may reload in place without a full recompile — CONTROLS_FILE
-        // joins AUDIO_MIX_FILE here (PPU-147): a controls-only edit is
-        // exactly the same "reload without recompiling" shape a mix-only
-        // edit already was. A song source's own in-place reload goes through
+        // Saving only the mix must preserve the VM, timer phase, and sounding
+        // notes: the fast path below reloads it without a full recompile. A
+        // song source's own in-place reload goes through
         // `add_source`/`reload_song`, not this Lua-file fast path.
         let run_chunk = |lua: &mut Lua, name: &str, src: &str| -> Result<(), LuaError> {
             let load = lua.try_enter(|ctx| {
@@ -1139,22 +1642,7 @@ impl LuaEngine {
             load.and_then(|ex| lua.execute::<()>(&ex))
                 .map_err(|e| static_error_to_lua(e).in_file(name))
         };
-        let live = |n: &str| n == AUDIO_MIX_FILE || n == CONTROLS_FILE;
-        let controls_present = |fs: &[(String, String)]| fs.iter().any(|(n, _)| n == CONTROLS_FILE);
-        // `dma()` only works inside the init window, which the fast path
-        // never reopens — ppuglobals.lua's top-level `dma(...)` lines (the
-        // DMA panel's placements) take effect only via a full recompile,
-        // where ppuglobals.lua runs FIRST inside that window. So a
-        // controls-only push that changes those lines must recompile.
-        let old_setup = self
-            .program_sources
-            .iter()
-            .find(|(n, _)| n == CONTROLS_FILE)
-            .map(|(_, s)| setup_text(s));
-        let new_setup = files
-            .iter()
-            .find(|(n, _)| *n == CONTROLS_FILE)
-            .map(|(_, s)| setup_text(s));
+        let live = |n: &str| n == AUDIO_MIX_FILE;
         if !self.source_dirty
             && !self.program_sources.is_empty()
             && files.iter().copied().ne(self
@@ -1166,13 +1654,6 @@ impl LuaEngine {
                 .iter()
                 .filter(|(n, _)| !live(n))
                 .map(|(n, s)| (n.as_str(), s.as_str())))
-            // A controls PRESENCE change (ppuglobals.lua added or removed
-            // outright, not just its text edited) is a full recompile by
-            // design — the fast path below only ever reloads ppuglobals.lua's
-            // text in place in the live VM, never installs it fresh.
-            && files.iter().any(|(n, _)| *n == CONTROLS_FILE)
-                == controls_present(&self.program_sources)
-            && old_setup == new_setup
         {
             saved_mix
                 .validate_samples(&self.dsp_view().samples)
@@ -1181,27 +1662,6 @@ impl LuaEngine {
                     line: None,
                     file: Some(AUDIO_MIX_FILE.into()),
                 })?;
-            // A controls-only reload never recompiles: load the new text
-            // into the SAME live VM (same `__ppu_controls_env`/log, same
-            // frame/init/timers/DSP) and only touch `controls_fn` if the
-            // text actually changed — an unrelated push (e.g. mix-only)
-            // must leave the currently applying controls fn alone.
-            if let Some((_, new_src)) = files.iter().find(|(n, _)| *n == CONTROLS_FILE) {
-                let old_src = self
-                    .program_sources
-                    .iter()
-                    .find(|(n, _)| n == CONTROLS_FILE)
-                    .map(|(_, s)| s.as_str());
-                if old_src != Some(*new_src) {
-                    // The `dma(` lines are unchanged (checked above) and
-                    // already in effect from the last recompile; reloading
-                    // them here would hit the init-window gate, so they are
-                    // blanked (line numbers kept) before the in-place load.
-                    let mut l = self.lua.borrow_mut();
-                    self.controls_fn = Self::load_controls(&mut l, &without_dma_lines(new_src))?;
-                    self.controls_vram = Self::read_controls_vram(&mut l);
-                }
-            }
             self.saved_mix = saved_mix;
             self.program_sources = files
                 .iter()
@@ -1209,6 +1669,8 @@ impl LuaEngine {
                 .collect();
             return Ok(());
         }
+        self.not_carried.clear();
+        let mut mains: Vec<(String, piccolo::StashedClosure)> = vec![];
         let mut lua = Lua::core();
         let keys = Rc::new(lua.enter(StashedKeys::new));
         lua.enter(|ctx| install_bindings(ctx, &keys.fetch(ctx)));
@@ -1223,15 +1685,31 @@ impl LuaEngine {
         // re-check) restores the previous program's sample placements into
         // it — see `prev_samples` below — since nothing was written to ARAM.
         let rec = Rc::new(DmaRecorder::default());
+        rec.overlaps.set(self.dma.overlaps.get());
+        rec.sfx_hold.set(self.dma.sfx_hold.get());
+        rec.sfx_own.set(self.dma.sfx_own.get());
+        rec.sfx_auto.set(self.dma.sfx_auto.get());
+        rec.sfx_since.set(self.dma.sfx_since.get());
+        rec.sfx_seq.set(self.dma.sfx_seq.get());
+        rec.kon_open.set(self.dma.kon_open.get());
         rec.active.set(true);
         {
             let (store, rec) = (self.source_store.clone(), rec.clone());
             lua.enter(move |ctx| install_dma(ctx, store, rec));
         }
+        {
+            let (store, pals, project, rec) = (
+                self.source_store.clone(),
+                self.sheet_pals.clone(),
+                self.project_files.clone(),
+                rec.clone(),
+            );
+            lua.enter(move |ctx| install_world(ctx, store, pals, project, rec));
+        }
         // Run once per fresh VM, right before the chunk loop: installs the
         // change-tracking `__ppu_controls_env` (a proxy of globals) and the
-        // `__ppu_controls_begin/dirty/restore` hooks ppuglobals.lua's
-        // `apply_pokes` runs under — see `controls_env.lua` and
+        // `__ppu_controls_begin/dirty/restore` hooks the pokes chunk's
+        // `__ppu_pokes` runs under — see `controls_env.lua` and
         // `Self::load_controls`. Static and self-contained: a load/exec
         // failure here would be our own bug, not a user error.
         {
@@ -1246,10 +1724,14 @@ impl LuaEngine {
 
         if precision_chunks.is_some() {
             lua.enter(crate::precision::install);
-            lua.enter(crate::bounded::install);
+            let sink = self.violation_sink.clone();
+            lua.enter(move |ctx| crate::bounded::install(ctx, sink));
         }
         run_chunk(&mut lua, "kit", Self::KIT_LUA)?;
         run_chunk(&mut lua, "ramps", include_str!("ramps.lua"))?;
+        run_chunk(&mut lua, "random", include_str!("random.lua"))?;
+        run_chunk(&mut lua, "math_random", Self::MATH_RANDOM_LUA)?;
+        run_chunk(&mut lua, "math_hash", Self::MATH_HASH_LUA)?;
         run_chunk(&mut lua, "vram_helpers", include_str!("vram_helpers.lua"))?;
         run_chunk(&mut lua, "hud", include_str!("hud.lua"))?;
         run_chunk(&mut lua, "sprites", include_str!("sprites.lua"))?;
@@ -1263,21 +1745,24 @@ impl LuaEngine {
             });
         }
 
-        // ppuglobals.lua runs FIRST among the sketch's files, wherever it sits
-        // in the list, so `markers`/`scanlines`/`apply_pokes` exist before
-        // any user chunk's top level runs (a pasted `markers.intro` must
-        // resolve). It compiles against the tracked env installed above, not
-        // the plain globals table the other chunks share — see
-        // `Self::load_controls`.
-        let controls_fn = match files.iter().find(|(name, _)| *name == CONTROLS_FILE) {
-            Some((_, src)) => Self::load_controls(&mut lua, src)?,
-            None => None,
+        // The pokes chunk runs FIRST, before any of the sketch's files, inside the
+        // init window, so its `dma()` lines are setup placements like any other.
+        // It compiles against the tracked env installed above, not the plain
+        // globals table the other chunks share — see `Self::load_controls`.
+        let controls_fn = if self.pokes.is_empty() {
+            None
+        } else {
+            Self::load_controls(&mut lua, &self.pokes)?
         };
         let controls_vram = match controls_fn {
             Some(_) => Self::read_controls_vram(&mut lua),
             None => Vec::new(),
         };
 
+        {
+            let sink = self.violation_sink.clone();
+            lua.enter(move |ctx| crate::bounded::install_records(ctx, sink));
+        }
         run_chunk(&mut lua, "luau", include_str!("luau.lua"))?;
         let scene_files = crate::frontend::scene_files(&precision_files);
         lua.enter(|ctx| {
@@ -1291,7 +1776,12 @@ impl LuaEngine {
                 unreachable!("luau.lua defines the scene owners")
             };
             for (file, k) in crate::sprites::scene_owners(&precision_files) {
-                o.set(ctx, ctx.intern(file.as_bytes()), ctx.intern(scene_files[k - 1].as_bytes())).unwrap();
+                o.set(
+                    ctx,
+                    ctx.intern(file.as_bytes()),
+                    ctx.intern(scene_files[k - 1].as_bytes()),
+                )
+                .unwrap();
             }
         });
 
@@ -1319,15 +1809,17 @@ impl LuaEngine {
         let chunk = |i: usize| precision_chunks.as_ref().map(|c| &c[i]);
         for (i, (name, src)) in precision_files.iter().enumerate() {
             if modules.contains(*name as &str) {
-                lua.try_enter(|ctx| {
-                    let closure = compile(ctx, chunk(i), name, src)?;
-                    let Value::Table(registry) = ctx.get_global("__ppu_modules") else {
-                        unreachable!("luau.lua defines the module registry")
-                    };
-                    registry.set(ctx, ctx.intern(name.as_bytes()), closure)?;
-                    Ok(())
-                })
-                .map_err(|e| static_error_to_lua(e).in_file(name))?;
+                let main = lua
+                    .try_enter(|ctx| {
+                        let closure = compile(ctx, chunk(i), name, src)?;
+                        let Value::Table(registry) = ctx.get_global("__ppu_modules") else {
+                            unreachable!("luau.lua defines the module registry")
+                        };
+                        registry.set(ctx, ctx.intern(name.as_bytes()), closure)?;
+                        Ok(ctx.stash(closure))
+                    })
+                    .map_err(|e| static_error_to_lua(e).in_file(name))?;
+                mains.push((name.to_string(), main));
             }
         }
         for (i, (name, src)) in precision_files.iter().enumerate() {
@@ -1336,10 +1828,15 @@ impl LuaEngine {
             }
             let load = lua.try_enter(|ctx| {
                 let closure = compile(ctx, chunk(i), name, src)?;
-                Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
+                Ok((
+                    ctx.stash(Executor::start(ctx, closure.into(), ())),
+                    ctx.stash(closure),
+                ))
             });
-            load.and_then(|ex| lua.execute::<()>(&ex))
-                .map_err(|e| static_error_to_lua(e).in_file(name))?;
+            let (ex, main) = load.map_err(|e| static_error_to_lua(e).in_file(name))?;
+            lua.execute::<()>(&ex)
+                .map_err(|e| located(&mut lua, &ex, e).in_file(name))?;
+            mains.push((name.to_string(), main));
         }
 
         // The groups' slots, now that every art has run: the size pair and each art's pieces, then the
@@ -1349,22 +1846,42 @@ impl LuaEngine {
                 let Value::Function(finish) = ctx.get_global("__ppu_sprites_finish") else {
                     unreachable!("sprites.lua defines the finish")
                 };
-                let pin = plan.size_sel.map_or(Value::Nil, |p| Value::Integer(p as i64));
-                Ok(ctx.stash(Executor::start(ctx, finish, (pin, plan.arts.len() as i64))))
+                let pin = plan
+                    .size_sel
+                    .map_or(Value::Nil, |p| Value::Integer(p as i64));
+                let args = (
+                    pin,
+                    plan.arts.len() as i64,
+                    plan.sets_char_base,
+                    plan.sets_obj_layer,
+                );
+                Ok(ctx.stash(Executor::start(ctx, finish, args)))
             })
             .and_then(|ex| lua.execute::<()>(&ex))
             .map_err(static_error_to_lua)?;
-            let failed: Option<(i64, String)> = lua.enter(|ctx| match (ctx.get_global("__ppu_sprites_fail_site"), ctx.get_global("__ppu_sprites_fail")) {
-                (Value::Integer(site), Value::String(m)) => Some((site, m.to_str().unwrap_or("").to_string())),
-                _ => None,
+            let failed: Option<(i64, String)> = lua.enter(|ctx| {
+                match (
+                    ctx.get_global("__ppu_sprites_fail_site"),
+                    ctx.get_global("__ppu_sprites_fail"),
+                ) {
+                    (Value::Integer(site), Value::String(m)) => {
+                        Some((site, m.to_str().unwrap_or("").to_string()))
+                    }
+                    _ => None,
+                }
             });
             if let Some((site, message)) = failed {
                 let at = &plan.arts[(site.max(1) - 1) as usize];
-                let help = "re-import a sheet at another cell_size, or set obj.size_sel to the pair to draw with (cells of other sizes are drawn as several sprites)";
-                return Err(LuaError { file: Some(at.file.clone()), line: Some(at.line), message: format!("{message}: {help}") });
+                return Err(LuaError {
+                    file: Some(at.file.clone()),
+                    line: Some(at.line),
+                    message,
+                });
             }
             let cells: Vec<u64> = lua.enter(|ctx| {
-                let Value::Table(t) = ctx.get_global("__ppu_sprites_cells") else { unreachable!("sprites.lua defines the cells") };
+                let Value::Table(t) = ctx.get_global("__ppu_sprites_cells") else {
+                    unreachable!("sprites.lua defines the cells")
+                };
                 (1..=plan.arts.len())
                     .map(|k| match t.get(ctx, k as i64) {
                         Value::Integer(n) => n.max(0) as u64,
@@ -1373,7 +1890,11 @@ impl LuaEngine {
                     })
                     .collect()
             });
-            let layout = plan.layout(&cells).map_err(|e| LuaError { file: Some(e.file), line: Some(e.line), message: e.message })?;
+            let layout = plan.layout(&cells).map_err(|e| LuaError {
+                file: Some(e.file),
+                line: Some(e.line),
+                message: format!("error[snes.sprites]: {}", e.message),
+            })?;
             lua.enter(|ctx| {
                 let t = Table::new(&ctx);
                 for (i, (first, size)) in layout.iter().enumerate() {
@@ -1381,9 +1902,16 @@ impl LuaEngine {
                     g.set(ctx, "first", *first as i64).unwrap();
                     g.set(ctx, "size", *size as i64).unwrap();
                     g.set(ctx, "sort", plan.groups[i].sort).unwrap();
-                    // A scene's group shows only while its scene runs (another scene's may share its slots).
-                    if let Some((file, _)) = plan.groups[i].scene.checked_sub(1).map(|k| &plan.scenes[k]) {
-                        g.set(ctx, "scene", ctx.intern(file.as_bytes())).unwrap();
+                    g.set(ctx, "keep", plan.groups[i].keep).unwrap();
+                    // A scene's group shows only while one of its scenes runs (another scene's may share its slots).
+                    if !plan.groups[i].scenes.is_empty() {
+                        let scenes = Table::new(&ctx);
+                        for k in &plan.groups[i].scenes {
+                            scenes
+                                .set(ctx, ctx.intern(plan.scenes[k - 1].0.as_bytes()), true)
+                                .unwrap();
+                        }
+                        g.set(ctx, "scene", scenes).unwrap();
                     }
                     t.set(ctx, i as i64 + 1, g).unwrap();
                 }
@@ -1401,16 +1929,32 @@ impl LuaEngine {
             };
             (frame_fn, frame_file, init_fn, init_file)
         });
+        let start_scene = &self.start_scene;
+        let start_preview = self.start_preview;
+        let prev_scene = self
+            .prev_run
+            .as_ref()
+            .and(self.scenes.as_ref())
+            .map(|sc| (sc.list[sc.current].file.clone(), sc.f0, sc.t0));
+        // A fade under way goes on through an edit that stays in the running scene (restored after its entry).
+        let prev_fade: Option<Vec<Option<i64>>> = prev_scene.as_ref().map(|_| {
+            self.lua.borrow_mut().enter(|ctx| SCENE_FADE.iter().map(|n| ctx.get_global(*n).to_int()).collect())
+        });
+        let mut stayed = false;
         let scenes = lua.enter(|ctx| {
             ctx.set_global("__ppu_scenes_open", false).unwrap();
-            let Value::Table(list) = ctx.get_global("__ppu_scenes") else { return None };
+            let Value::Table(list) = ctx.get_global("__ppu_scenes") else {
+                return None;
+            };
             let list: Vec<Scene> = (1..=list.length())
                 .filter_map(|i| match list.get(ctx, i) {
                     Value::Table(s) => Some(s),
                     _ => None,
                 })
                 .filter_map(|s| {
-                    let Value::Function(frame) = s.get(ctx, "frame") else { return None };
+                    let Value::Function(frame) = s.get(ctx, "frame") else {
+                        return None;
+                    };
                     Some(Scene {
                         file: s.get(ctx, "file").to_string(),
                         init: match s.get(ctx, "init") {
@@ -1419,20 +1963,39 @@ impl LuaEngine {
                         },
                         frame: ctx.stash(frame),
                         frame_file: function_chunk_name(&frame),
+                        preview: match s.get(ctx, "preview") {
+                            Value::Function(f) => Some(ctx.stash(f)),
+                            _ => None,
+                        },
                     })
                 })
                 .collect();
-            let boot = match ctx.get_global("__ppu_scene_next").to_int() {
-                Some(n) if n >= 1 && (n as usize) <= list.len() => n as usize - 1,
+            let chosen = start_scene
+                .as_ref()
+                .and_then(|file| list.iter().position(|s| s.file == *file));
+            // A recompile of the running program stays in the running scene, on its own clock.
+            let carried = prev_scene
+                .as_ref()
+                .filter(|_| chosen.is_none())
+                .and_then(|(file, ..)| list.iter().position(|s| s.file == *file));
+            stayed = carried.is_some();
+            let (f0, t0) = carried
+                .and(prev_scene.as_ref())
+                .map_or((0, 0.0), |p| (p.1, p.2));
+            let boot = match (chosen, ctx.get_global("__ppu_scene_next").to_int()) {
+                (Some(k), _) => k,
+                (None, Some(n)) if n >= 1 && (n as usize) <= list.len() => n as usize - 1,
                 _ => 0,
             };
             ctx.set_global("__ppu_scene_next", Value::Nil).unwrap();
             (!list.is_empty()).then_some(Scenes {
                 list,
                 boot,
-                current: boot,
-                f0: 0,
-                t0: 0.0,
+                entry: carried.unwrap_or(boot),
+                chosen: chosen.is_some() && start_preview,
+                current: carried.unwrap_or(boot),
+                f0,
+                t0,
                 placements: vec![],
                 timers: vec![],
                 ranges: (0, 0),
@@ -1448,7 +2011,7 @@ impl LuaEngine {
                 .map(|(file, name)| LuaError {
                     file,
                     line: None,
-                    message: format!("a program of scenes runs each scene's own {name}(): make this {name}() local to a scene module and return it, return {{init = init, frame = frame}}"),
+                    message: format!("error[snes.scenes]: a program of scenes runs each scene's own {name}(): make this {name}() local to a scene module and return it, return {{init = init, frame = frame}}"),
                 })
             {
                 return Err(err);
@@ -1458,7 +2021,8 @@ impl LuaEngine {
         let prev_score = self.lua.borrow_mut().enter(score_id);
         // The audio timeline counted from the scene's entry: back to program time.
         if let Some(old) = &self.scenes {
-            self.last_f = self.last_f.map(|f| f + old.f0);
+            let f0 = scenes.as_ref().map_or(0, |s| s.f0);
+            self.last_f = self.last_f.map(|f| (f + old.f0).saturating_sub(f0));
         }
         self.scenes = scenes;
         self.lua = Rc::new(RefCell::new(lua));
@@ -1481,51 +2045,44 @@ impl LuaEngine {
         // drop them now regardless of whether init() below succeeds.
         self.timers.clear();
 
-        // Two setup-window calls, in order: the program's own `init()`, then
-        // the controls document's `apply_setup()` (the panels' setup-only
-        // calls — `score{}`, and anything else that needs every user/data
-        // chunk's globals to exist, which is why it can't run at
-        // ppuglobals.lua's own top level). Both share one failure shape: the
-        // init window closes, and nothing was written to ARAM yet (that
-        // happens after the `?` below), so the OLD program's placements
-        // (recorded above, before this compile's dma() calls) are restored —
-        // a failed setup keeps reporting what ARAM still actually holds.
-        let setup_fn = self
-            .lua
-            .borrow_mut()
-            .enter(|ctx| match ctx.get_global("apply_setup") {
-                Value::Function(f) => Some(ctx.stash(f)),
-                _ => None,
-            });
-        let calls = [
-            (self.init_fn.clone(), init_file.clone()),
-            (setup_fn, Some(CONTROLS_FILE.to_string())),
-        ];
+        // The program's own `init()`. On failure the init window closes, and
+        // nothing was written to ARAM yet (that happens after the `?` below),
+        // so the OLD program's placements (recorded above, before this
+        // compile's dma() calls) are restored — a failed setup keeps
+        // reporting what ARAM still actually holds.
         let mut res = Ok(());
-        for (func, file) in calls {
-            let Some(func) = func else { continue };
+        if let Some(func) = self.init_fn.clone() {
             let mut l = self.lua.borrow_mut();
             let ex = l.enter(|ctx| {
                 let f = ctx.fetch(&func);
                 ctx.stash(Executor::start(ctx, f, ()))
             });
             if let Err(e) = l.execute::<()>(&ex) {
-                let mut err = static_error_to_lua(e);
-                err.file = err.file.or(file);
+                let mut err = located(&mut l, &ex, e);
+                err.file = err.file.or(init_file.clone());
                 res = Err(err);
-                break;
             }
         }
         // A program of scenes boots into its first: the load's records are every scene's.
         if let (Ok(()), Some(sc)) = (&res, self.scenes.as_mut()) {
             sc.placements = rec.placements.borrow().clone();
             sc.timers = rec.timers.borrow().clone();
-            sc.ranges = (rec.vram_ranges.borrow().len(), rec.cgram_ranges.borrow().len());
+            sc.ranges = (
+                rec.vram_ranges.borrow().len(),
+                rec.cgram_ranges.borrow().len(),
+            );
             sc.obj_bases = rec.obj_base.borrow().len();
             sc.samples = rec.samples.borrow().len();
             sc.songs = rec.songs.borrow().len();
-            let boot = sc.boot;
-            res = self.enter_scene(boot, None);
+            let entry = sc.entry;
+            res = self.enter_scene(entry, None, true);
+            if let (Ok(()), true, Some(fade)) = (&res, stayed, &prev_fade) {
+                self.lua.borrow_mut().enter(|ctx| {
+                    for (name, v) in SCENE_FADE.iter().zip(fade) {
+                        ctx.set_global(*name, v.map_or(Value::Nil, Value::Integer)).unwrap();
+                    }
+                });
+            }
         }
         rec.active.set(false); // init window closes even on error
         res.map_err(|e| {
@@ -1562,7 +2119,7 @@ impl LuaEngine {
             *rec.samples.borrow_mut() = prev_samples.clone();
             return Err(LuaError {
                 message: format!(
-                    "dma: '{name}' overlaps the echo region (0x{echo_lo:04x}-0x{hi:04x}, \
+                    "error[snes.dma]: dma: '{name}' overlaps the echo region (0x{echo_lo:04x}-0x{hi:04x}, \
                      dsp.echo.delay = {delay})",
                     hi = echo_hi - 1
                 ),
@@ -1609,17 +2166,45 @@ impl LuaEngine {
             .iter()
             .map(|(name, source)| ((*name).to_string(), (*source).to_string()))
             .collect();
+        self.frames_note = frames_note(files);
         self.source_dirty = false;
         self.recompiled = true;
+        // The load is good: the running program's file-level state moves into it, and it becomes
+        // the program the next load carries from.
+        let run = crate::carry::Run {
+            lua: self.lua.clone(),
+            mains,
+            setup_mark: rec.setup_mark.borrow().clone(),
+            roots: self
+                .timers
+                .iter()
+                .filter_map(|t| match &t.hook {
+                    Hook::Lua(f) => Some(f.clone()),
+                    Hook::Song(_) => None,
+                })
+                .collect(),
+        };
+        self.not_carried = self.prev_run.take().map_or_else(Vec::new, |old| {
+            let shown = call_world_hook(&mut old.lua.borrow_mut(), "__ppu_world_shown", "");
+            let mut lines = crate::carry::carry(&old, &run);
+            // The author's camera came back over init()'s: libraries that stream from it redraw,
+            // and a world that had entered another map goes back to it.
+            rec.hot_swap.set(true);
+            let kept = call_world_hook(&mut self.lua.borrow_mut(), "__ppu_world_hotswap", &shown);
+            rec.hot_swap.set(false);
+            lines.extend(kept.lines().map(str::to_string));
+            lines
+        });
+        self.prev_run = Some(run);
+        self.held = None;
         Ok(())
     }
 
-    /// Compile `ppuglobals.lua`'s source against the tracked
+    /// Compile the live pokes chunk against the tracked
     /// `__ppu_controls_env` (installed by `controls_env.lua` — see
-    /// `set_sources`'s fresh-VM setup and its fast path) and stash
-    /// `apply_pokes` if the chunk defines one (`None` is treated exactly
-    /// like no ppuglobals.lua at all). Errors are attributed to
-    /// [`CONTROLS_FILE`].
+    /// `set_sources`'s fresh-VM setup) and stash `__ppu_pokes` if the chunk
+    /// defines one (`None` is treated exactly like no chunk at all). Errors
+    /// carry the label [`POKES`].
     ///
     /// The whole load runs inside its own begin/restore bracket: a
     /// RUNTIME failure partway through the chunk has already executed some
@@ -1627,7 +2212,7 @@ impl LuaEngine {
     /// for undo) — `__ppu_controls_restore` unwinds exactly those before the
     /// error returns, so a partially-applied controls text never leaves
     /// stray globals live in the VM. Before executing the chunk, any
-    /// previously-stashed `apply_pokes` is nil'd out THROUGH the tracked env
+    /// previously-stashed `__ppu_pokes` is nil'd out THROUGH the tracked env
     /// too, so a text that no longer defines one doesn't leave the old
     /// chunk's function re-stashed below, and that clear is itself undone by
     /// the same restore on a load failure. On success the bracket is
@@ -1636,7 +2221,7 @@ impl LuaEngine {
     fn load_controls(lua: &mut Lua, src: &str) -> Result<Option<StashedFunction>, LuaError> {
         call_controls_hook::<()>(lua, "__ppu_controls_begin");
 
-        // Nil the previous apply_pokes/apply_setup THROUGH the tracked env
+        // Nil the previous entry points THROUGH the tracked env
         // first, so a text that no longer defines one doesn't re-stash the old
         // chunk's function below — logged for undo like any other write, so
         // a load failure below puts the old one right back.
@@ -1645,26 +2230,26 @@ impl LuaEngine {
             let closure = Closure::load_with_env(
                 ctx,
                 None,
-                "apply_pokes = nil; apply_vram = nil; apply_setup = nil".as_bytes(),
+                "__ppu_pokes = nil; __ppu_pokes_vram = nil".as_bytes(),
                 env,
             )?;
             Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
         });
         clear
             .and_then(|ex| lua.execute::<()>(&ex))
-            .unwrap_or_else(|e| panic!("clearing apply_pokes must not fail: {e}"));
+            .unwrap_or_else(|e| panic!("clearing __ppu_pokes must not fail: {e}"));
 
         let load = lua.try_enter(|ctx| {
             let env = controls_env(ctx);
-            let closure = Closure::load_with_env(ctx, Some(CONTROLS_FILE), src.as_bytes(), env)?;
+            let closure = Closure::load_with_env(ctx, Some(POKES), src.as_bytes(), env)?;
             Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
         });
         if let Err(e) = load.and_then(|ex| lua.execute::<()>(&ex)) {
             call_controls_hook::<()>(lua, "__ppu_controls_restore");
-            return Err(static_error_to_lua(e).in_file(CONTROLS_FILE));
+            return Err(static_error_to_lua(e).in_file(POKES));
         }
         call_controls_hook::<()>(lua, "__ppu_controls_begin");
-        // Painted tiles: run `apply_vram()` once, capturing its `vr()` words
+        // Painted tiles: run `__ppu_pokes_vram()` once, capturing its `vr()` words
         // (see `__ppu_controls_capture_vram`); `read_controls_vram` lifts them
         // into Rust. Any other write it made is undone like a failed load's.
         let cap = lua.try_enter(|ctx| match ctx.get_global("__ppu_controls_capture_vram") {
@@ -1674,16 +2259,50 @@ impl LuaEngine {
         let captured = cap.and_then(|ex| lua.execute::<()>(&ex));
         call_controls_hook::<()>(lua, "__ppu_controls_restore");
         if let Err(e) = captured {
-            return Err(static_error_to_lua(e).in_file(CONTROLS_FILE));
+            return Err(static_error_to_lua(e).in_file(POKES));
         }
         call_controls_hook::<()>(lua, "__ppu_controls_begin");
-        Ok(lua.enter(|ctx| match ctx.get_global("apply_pokes") {
+        Ok(lua.enter(|ctx| match ctx.get_global("__ppu_pokes") {
             Value::Function(f) => Some(ctx.stash(f)),
             _ => None,
         }))
     }
 
-    /// The words the last `load_controls` captured from `apply_vram()`.
+    /// Hand the engine the Studio's live pokes: a chunk of optional top-level `dma("name", {...})`
+    /// placements, an optional `function __ppu_pokes_vram()` (painted tiles, captured once per
+    /// load) and an optional `function __ppu_pokes()` applied through a tracked,
+    /// restore-every-frame pass. Every load runs it first, inside the init window, so its `dma()`
+    /// lines are setup placements; it is kept across every later load (recompile, reset) and is
+    /// never one of the program's files. Errors carry `file: "pokes"`. "" drops the pokes.
+    /// On a running program a chunk whose `dma(` lines changed is stored and the next frame
+    /// recompiles (its errors surface there); any other chunk is reloaded in place, and one that
+    /// fails to load is refused while the previous one keeps applying. Before the first program it
+    /// is kept unchecked.
+    pub fn set_pokes(&mut self, chunk: &str) -> Result<(), LuaError> {
+        if chunk == self.pokes {
+            return Ok(());
+        }
+        self.shown = None; // a poke shows at once, between updates too
+                           // No program yet: no tracked env to load into; the first load picks the chunk up.
+        if !self.program_sources.is_empty() {
+            // dma() only works inside the init window, which an in-place load never reopens.
+            if dma_lines(chunk) != dma_lines(&self.pokes) {
+                self.source_dirty = true;
+            } else if chunk.is_empty() {
+                self.controls_fn = None;
+                self.controls_vram.clear();
+            } else {
+                // The unchanged `dma(` lines are already in effect; blanked, line numbers kept.
+                let mut l = self.lua.borrow_mut();
+                self.controls_fn = Self::load_controls(&mut l, &without_dma_lines(chunk))?;
+                self.controls_vram = Self::read_controls_vram(&mut l);
+            }
+        }
+        self.pokes = chunk.to_string();
+        Ok(())
+    }
+
+    /// The words the last `load_controls` captured from `__ppu_pokes_vram()`.
     fn read_controls_vram(lua: &mut Lua) -> Vec<(u16, u16)> {
         lua.enter(|ctx| {
             let mut out = Vec::new();
@@ -1729,7 +2348,17 @@ impl LuaEngine {
     /// previous entry's. At load (`at` is `None`) set_sources finishes the boot. Entered on update
     /// `at`, the sound chip power-cycles too: ARAM holds the samples again, and the scene's timers
     /// and songs start over on an audio timeline that, like its `t` and `f`, counts from `at`.
-    fn enter_scene(&mut self, k: usize, at: Option<(f64, u32)>) -> Result<(), LuaError> {
+    /// Booting into the switcher's start scene (at load, or a jump back before its entry) is a
+    /// Scene view entry: the scene's `preview` runs first, before the cold boot, as if an earlier
+    /// scene had set what it sets. Power-on and `scenes.go` never run it.
+    /// `staged` is false for a `scenes.go` entry, which never previews.
+    fn enter_scene(
+        &mut self,
+        k: usize,
+        at: Option<(f64, u32)>,
+        staged: bool,
+    ) -> Result<(), LuaError> {
+        self.pads_before = None;
         let sc = self.scenes.as_mut().expect("a program of scenes");
         sc.current = k;
         if let Some((t, f)) = at {
@@ -1739,9 +2368,15 @@ impl LuaEngine {
         let file = scene.file.clone();
         let mine = |o: &Option<String>| o.as_ref().is_none_or(|o| *o == file);
         let rec = self.dma.clone();
-        *rec.placements.borrow_mut() = sc.placements.iter().filter(|p| mine(&p.owner)).cloned().collect();
+        *rec.placements.borrow_mut() = sc
+            .placements
+            .iter()
+            .filter(|p| mine(&p.owner))
+            .cloned()
+            .collect();
         *rec.timers.borrow_mut() = sc.timers.iter().filter(|t| mine(&t.4)).cloned().collect();
         rec.loads.borrow_mut().clear();
+        rec.world_animated.borrow_mut().clear();
         rec.vram_ranges.borrow_mut().truncate(sc.ranges.0);
         rec.cgram_ranges.borrow_mut().truncate(sc.ranges.1);
         rec.obj_base.borrow_mut().truncate(sc.obj_bases);
@@ -1757,6 +2392,10 @@ impl LuaEngine {
             }
         }
         let init = scene.init.clone();
+        let preview = scene
+            .preview
+            .clone()
+            .filter(|_| staged && sc.chosen && k == sc.boot && at.is_none_or(|a| a == (0.0, 0)));
         self.frame_fn = Some(scene.frame.clone());
         self.frame_file = scene.frame_file.clone();
         *self.mirror.borrow_mut() = Mirror::default();
@@ -1765,7 +2404,14 @@ impl LuaEngine {
             self.unmixed_dsp = None;
             self.mix_kon = 0;
             self.mix_koff = 0;
+            self.dma.sfx_hold.set([0; 8]);
+            self.dma.sfx_own.set([0; 8]);
+            self.dma.sfx_auto.set(0);
+            self.dma.kon_open.set(0);
+            // A host's write log (start_dsp_log) listens across the power cycle.
+            let log = self.dsp.log.take();
             self.dsp = power_on_dsp();
+            self.dsp.log = log;
             self.aram.fill(0);
             self.audio.clear();
             self.last_f = None;
@@ -1782,32 +2428,52 @@ impl LuaEngine {
         let res = {
             let mut l = self.lua.borrow_mut();
             let keys = &self.keys;
-            l.enter(|ctx| {
-                power_on(ctx, &keys.fetch(ctx));
-                ctx.set_global("__ppu_scene_next", Value::Nil).unwrap();
-                // What the scene records from here on, init or a stage load, is its own.
-                ctx.set_global("__ppu_scene_file", ctx.intern(file.as_bytes())).unwrap();
-                ctx.set_global("__ppu_sprites_scene", ctx.intern(file.as_bytes())).unwrap();
-            });
-            rec.active.set(true);
-            let mut res = Ok(());
-            for func in [l.enter(|ctx| match ctx.get_global("__ppu_sprites_reset") {
-                Value::Function(f) => Some(ctx.stash(f)),
-                _ => None,
-            }), init]
-            .into_iter()
-            .flatten()
-            {
+            let run = |l: &mut Lua, func: StashedFunction| {
                 let ex = l.enter(|ctx| {
                     let f = ctx.fetch(&func);
                     ctx.stash(Executor::start(ctx, f, ()))
                 });
-                if let Err(e) = l.execute::<()>(&ex) {
-                    let mut err = static_error_to_lua(e);
+                l.execute::<()>(&ex).map_err(|e| {
+                    let mut err = located(l, &ex, e);
                     err.file = err.file.or(Some(file.clone()));
-                    res = Err(err);
+                    err
+                })
+            };
+            let mut res = preview.map_or(Ok(()), |p| run(&mut l, p));
+            // A load's boot or a jump back before the entry starts with no fade; a switch (the engine's or the
+            // Studio's enter_pending_scene) keeps its fade in.
+            let unfaded = staged;
+            l.enter(|ctx| {
+                power_on(ctx, &keys.fetch(ctx));
+                ctx.set_global("__ppu_scene_next", Value::Nil).unwrap();
+                if unfaded {
+                    for (name, v) in [("__ppu_scene_out", 0), ("__ppu_scene_in", 1), ("__ppu_scene_fade", 0)] {
+                        ctx.set_global(name, v).unwrap();
+                    }
+                    ctx.set_global("__ppu_scene_after", Value::Nil).unwrap();
+                    ctx.set_global("__ppu_scene_shown", Value::Nil).unwrap();
+                }
+                // What the scene records from here on, init or a stage load, is its own.
+                ctx.set_global("__ppu_scene_file", ctx.intern(file.as_bytes()))
+                    .unwrap();
+                ctx.set_global("__ppu_sprites_scene", ctx.intern(file.as_bytes()))
+                    .unwrap();
+            });
+            rec.active.set(true);
+            for func in [
+                l.enter(|ctx| match ctx.get_global("__ppu_sprites_reset") {
+                    Value::Function(f) => Some(ctx.stash(f)),
+                    _ => None,
+                }),
+                init,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if res.is_err() {
                     break;
                 }
+                res = run(&mut l, func);
             }
             res
         };
@@ -1818,16 +2484,22 @@ impl LuaEngine {
         res?;
         // shortcut: the echo region is checked against the samples at load only, not per scene.
         self.place_samples();
-        // A score{} at the scene's file level opened the master volume at load, which the power
-        // cycle closed: open it again, as score{} does, unless the scene's init set a level.
-        let songs = self.dma.songs.borrow();
-        let scored = self.dma.timers.borrow().iter().any(|t| matches!(t.2, Hook::Song(id) if songs.get(id).is_some_and(|p| p.declared != Anchor::Stopped)));
-        drop(songs);
+        // A score{} set up at load (playing or `at = false`) opened the master volume, which the
+        // power cycle closed: open it again, as score{} does, unless the scene's init set a level.
+        let scored = self
+            .dma
+            .timers
+            .borrow()
+            .iter()
+            .any(|t| matches!(t.2, Hook::Song(_)));
         if scored {
             self.lua.borrow_mut().enter(|ctx| {
                 if let Value::Table(d) = ctx.get_global("dsp") {
                     let silent = match d.get(ctx, "mvol") {
-                        Value::Table(m) => m.get(ctx, "l").to_int().unwrap_or(0) == 0 && m.get(ctx, "r").to_int().unwrap_or(0) == 0,
+                        Value::Table(m) => {
+                            m.get(ctx, "l").to_int().unwrap_or(0) == 0
+                                && m.get(ctx, "r").to_int().unwrap_or(0) == 0
+                        }
                         _ => true,
                     };
                     if silent {
@@ -1846,8 +2518,11 @@ impl LuaEngine {
     /// Recompile the cached program sources (`frame()`'s dirty-source path and `reset()`).
     fn recompile(&mut self) -> Result<(), LuaError> {
         let files = self.program_sources.clone();
+        // set_sources keeps only the project files it is given: hand the maps back with the code.
+        let project: Vec<_> = self.project_files.borrow().clone().into_iter().collect();
         let refs: Vec<_> = files
             .iter()
+            .chain(project.iter())
             .map(|(n, s)| (n.as_str(), s.as_str()))
             .collect();
         self.set_sources(&refs)
@@ -1865,9 +2540,17 @@ impl LuaEngine {
     /// (recompile): that keeps the DSP/ARAM running and re-phases timers to
     /// the current timeline position — it never resets anything.
     pub fn reset(&mut self) -> Result<(), LuaError> {
+        self.prev_run = None; // Run powers on: nothing carries
+        self.pads_before = None;
+        self.violations.clear();
+        self.violation_sink.borrow_mut().clear();
         self.unmixed_dsp = None;
         self.mix_kon = 0;
         self.mix_koff = 0;
+        self.dma.sfx_hold.set([0; 8]);
+        self.dma.sfx_own.set([0; 8]);
+        self.dma.sfx_auto.set(0);
+        self.dma.kon_open.set(0);
         self.dsp = power_on_dsp();
         self.aram.fill(0);
         self.audio.clear();
@@ -1900,7 +2583,7 @@ impl LuaEngine {
     pub fn set_sram(&mut self, json: &str) {
         let v: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
         self.sram_json = if v.is_object() || v.is_array() {
-            v.to_string()
+            crate::save::canonical_json(&v)
         } else {
             "{}".to_string()
         };
@@ -1923,7 +2606,7 @@ impl LuaEngine {
     /// Undo the controls log if a controls chunk is loaded: every error
     /// exit from `frame()` after `__ppu_controls_begin` must call this
     /// before returning, so a partial frame (e.g. an explicit
-    /// `apply_pokes()` call the program made before erroring) never bakes
+    /// `__ppu_pokes()` call the program made before erroring) never bakes
     /// into the next frame's baseline.
     fn restore_controls(&self) {
         if self.controls_fn.is_some() {
@@ -1936,6 +2619,21 @@ impl LuaEngine {
     /// global function `name` with integer arguments and return its result, a
     /// Lua sequence of integers. Runs after the program's `init()`.
     pub fn call_ints(&mut self, name: &str, args: &[i64]) -> Result<Vec<i64>, LuaError> {
+        self.call_sequence(name, args, "integer", |v| v.to_int())
+    }
+
+    /// As `call_ints`, for a sequence of numbers (floats kept as the program computed them).
+    pub fn call_numbers(&mut self, name: &str, args: &[i64]) -> Result<Vec<f64>, LuaError> {
+        self.call_sequence(name, args, "number", |v| v.to_number())
+    }
+
+    fn call_sequence<T>(
+        &mut self,
+        name: &str,
+        args: &[i64],
+        what: &str,
+        item: impl Fn(Value) -> Option<T>,
+    ) -> Result<Vec<T>, LuaError> {
         if self.source_dirty {
             self.recompile()?;
         }
@@ -1958,15 +2656,15 @@ impl LuaEngine {
         l.finish(&ex);
         l.try_enter(|ctx| {
             let Value::Table(t) = ctx.fetch(&ex).take_result::<Value>(ctx)?? else {
-                return Ok(Err(format!("{name} must return a sequence of integers")));
+                return Ok(Err(format!("{name} must return a sequence of {what}s")));
             };
             let mut out = Vec::new();
             loop {
                 match t.get(ctx, out.len() as i64 + 1) {
                     Value::Nil => break,
-                    v => match v.to_int() {
+                    v => match item(v) {
                         Some(n) => out.push(n),
-                        None => return Ok(Err(format!("{name} returned a non-integer"))),
+                        None => return Ok(Err(format!("{name} returned a non-{what}"))),
                     },
                 }
             }
@@ -1980,41 +2678,146 @@ impl LuaEngine {
         })
     }
 
+    /// The project's update target, `targetHz` (25, 30, 50 or 60; `None`: a `---@snes frames N`
+    /// line in the sources decides, else one update per video frame). At 25 or 30 Hz `frame()`
+    /// runs on every second video frame only, as on the cartridge.
+    pub fn set_target_hz(&mut self, hz: Option<u8>) -> Result<(), String> {
+        if hz.is_some_and(|hz| ![25, 30, 50, 60].contains(&hz)) {
+            return Err(format!(
+                "targetHz must be 25, 30, 50 or 60, not {}",
+                hz.unwrap_or(0)
+            ));
+        }
+        self.target_hz = hz;
+        self.shown = None;
+        Ok(())
+    }
+
+    /// The run frame the host's `f = 0` stands for (see `run_base`); kept across loads and resets.
+    pub fn set_run_base(&mut self, f: u32) {
+        self.run_base = f;
+    }
+
+    /// Video frames per update (30 Hz: 2): the build setting wins over the sources' annotation. A
+    /// `scenes.go` lands on the next update, this many video frames after the one that asked.
+    pub fn update_frames(&self) -> u32 {
+        match self.target_hz {
+            Some(25 | 30) => 2,
+            Some(_) => 1,
+            None => self.frames_note,
+        }
+    }
+
+    /// One video frame (`t`, the host's clock at frame `f`, anchors a scene's audio only: frame() gets [`cart_t`]). A program slower than the video rate (30 Hz: an update every second video
+    /// frame) runs its `frame()` on the cartridge's updates only, with their t and f, counted from
+    /// power-on or the scene's entry: between two updates the picture holds and the sound plays on.
+    /// A frame between updates that no update was run for (a jump, an edit) runs the update it
+    /// belongs to.
     pub fn frame(&mut self, t: f64, f: u32) -> Result<LineTable, LuaError> {
+        let out = self.video_frame(t, f);
+        self.note_violations(Some(self.update_f));
+        out
+    }
+
+    fn video_frame(&mut self, t: f64, f: u32) -> Result<LineTable, LuaError> {
         if self.source_dirty {
             self.recompile()?;
         }
+        let n = self.update_frames();
+        if n == 1 {
+            return self.update(t, f, f);
+        }
+        let f0 = self.scenes.as_ref().map_or(0, |sc| sc.f0);
+        let off = if f >= f0 { (f - f0) % n } else { 0 };
+        let u = f - off;
+        if let Some((_, shown)) = self
+            .shown
+            .as_ref()
+            .filter(|(s, _)| off != 0 && *s == u && !self.recompiled)
+        {
+            let shown = shown.clone();
+            let video = f - f0;
+            if self.last_f == Some(video) {
+                self.audio.clear(); // a paused repeat: its span is already rendered
+            } else {
+                self.render_frame_audio(video)?;
+            }
+            return shown;
+        }
+        // The host's clock at the update (a scene entry's anchors its audio); frame() gets the cartridge's t.
+        let t = if off == 0 { t } else { t * u as f64 / f as f64 };
+        let out = self.update(t, u, f);
+        self.shown = Some((u, out.clone()));
+        out
+    }
+
+    /// The update at program frame `f` (t its time), drawn on video frame `video` (`f` but between
+    /// updates): the scenes, the program's frame() and the hooks see `f`; the audio span is `video`'s.
+    fn update(&mut self, t: f64, f: u32, video: u32) -> Result<LineTable, LuaError> {
+        self.update_f = f;
+        // The same update again: a paused repeat, or an edit's replay (`recompiled`). The sprites' key
+        // clocks hold on a paused repeat only; the fade shows the step it took on either.
+        let f0 = self.scenes.as_ref().map_or(0, |sc| sc.f0);
+        let same = self.last_f.map(|l| l + f0) == Some(f);
+        let repeat = !self.recompiled && same;
+        let again = same;
+        // Before a scene's entry: its init() plays in the update it enters on, as on a cartridge.
+        self.lua.borrow_mut().enter(|ctx| {
+            ctx.set_global("__ppu_update", f as i64).unwrap();
+            ctx.set_global("__ppu_sprites_again", repeat).unwrap();
+        });
         // A program of scenes: `scenes.go` lands on the next new update, a cold boot there (a
         // paused repeat never switches); a jump to before the scene's entry boots the first scene.
         if let Some(sc) = &self.scenes {
-            let repeat = !self.recompiled && self.last_f.map(|l| l + sc.f0) == Some(f);
             let (boot, f0, count) = (sc.boot, sc.f0, sc.list.len());
             if f < f0 {
-                self.enter_scene(boot, Some((0.0, 0)))?;
+                self.enter_scene(boot, Some((0.0, 0)), true)?;
             } else if !repeat {
-                let next = self.lua.borrow_mut().enter(|ctx| ctx.get_global("__ppu_scene_next").to_int());
+                let next = self
+                    .lua
+                    .borrow_mut()
+                    .enter(|ctx| ctx.get_global("__ppu_scene_next").to_int());
                 if let Some(n) = next.filter(|n| (1..=count as i64).contains(n)) {
-                    self.enter_scene(n as usize - 1, Some((t, f)))?;
+                    self.enter_scene(n as usize - 1, Some((t, f)), false)?;
                 }
             }
         }
-        // The scene sees its own t and f, counted from its entry.
-        let (t, f) = match &self.scenes {
-            Some(sc) => (t - sc.t0, f - sc.f0),
-            None => (t, f),
+        // The scene sees its own t and f, counted from its entry; t is the cartridge's, from the run frames.
+        let b = self.run_base;
+        let (t, f, video) = match &self.scenes {
+            Some(sc) => (cart_t(b + f) - cart_t(b + sc.f0), f - sc.f0, video - sc.f0),
+            None => (cart_t(b + f) - cart_t(b), f, video),
         };
+        // Paused: the first run of an update keeps the state it starts from, and a repeat starts from it again.
+        if self.hold {
+            match (&self.held, &self.prev_run) {
+                (Some((at, snap)), Some(run)) if repeat && *at == f => {
+                    crate::carry::apply(snap, run);
+                }
+                (_, Some(run)) => self.held = Some((f, crate::carry::capture(run))),
+                _ => {}
+            }
+        }
         self.dma.raster.borrow_mut().take();
         // Reset the per-frame hook registry, then run frame(t,f) once.
         {
             let mut l = self.lua.borrow_mut();
             let (pad, pad2) = (self.pad, self.pad2);
+            // The previous update is one update's video frames back (2 at 30 Hz), not one frame.
+            let step = self.update_frames();
+            let (was, was2) = match self.pads_before {
+                Some((last, pads, _)) if last + step == f => pads,
+                Some((last, _, was)) if last == f => was,
+                _ => (pad, pad2),
+            };
+            self.pads_before = Some((f, (pad, pad2), (was, was2)));
             l.enter(|ctx| {
                 ctx.set_global("__ppu_hooks", Table::new(&ctx)).unwrap();
-                set_pad_table(ctx, "pad", pad);
-                set_pad_table(ctx, "pad2", pad2);
+                set_pad_table(ctx, "pad", pad, was);
+                set_pad_table(ctx, "pad2", pad2, was2);
             });
             // Begin the controls undo bracket BEFORE the program's own
-            // frame() runs, not after — an explicit `apply_pokes()` call
+            // frame() runs, not after — an explicit `__ppu_pokes()` call
             // from inside frame() (or a timer hook) runs under the tracked
             // env too, so its writes must be logged from the start or they
             // escape undoing entirely. One begin() now covers the whole
@@ -2033,10 +2836,10 @@ impl LuaEngine {
                 let done = l.execute::<()>(&ex);
                 self.dma.in_frame.set(false);
                 // A load lands while the update stays blanked: unblanking in the same update is an error.
-                let done = done.map_err(static_error_to_lua).and_then(|()| {
+                let done = done.map_err(|e| located(&mut l, &ex, e)).and_then(|()| {
                     if self.dma.loaded.get() && !l.enter(|ctx| ctx.get_global("force_blank").to_bool()) {
                         Err(LuaError {
-                            message: "dma in frame() needs force_blank to stay true until frame() returns: unblank on a later update".into(),
+                            message: "error[snes.dma]: dma in frame() needs force_blank to stay true until frame() returns: unblank on a later update".into(),
                             line: None,
                             file: self.frame_file.clone(),
                         })
@@ -2046,7 +2849,7 @@ impl LuaEngine {
                 });
                 if let Err(mut err) = done {
                     // Restore here too (`l` is already borrowed, so not via
-                    // `restore_controls`) — an explicit `apply_pokes()`
+                    // `restore_controls`) — an explicit `__ppu_pokes()`
                     // call made before this error would otherwise stay
                     // logged into the next frame's stale bracket.
                     if self.controls_fn.is_some() {
@@ -2057,10 +2860,14 @@ impl LuaEngine {
                 }
             }
             if self.sprites {
+                // The video frames this update spans: the keyed animation clocks advance by them.
+                let step = self.update_frames() as i64;
                 let ex = l.enter(|ctx| {
                     let func = ctx.get_global("__ppu_sprites_flush");
-                    let Value::Function(func) = func else { unreachable!("sprites.lua defines the flush") };
-                    ctx.stash(Executor::start(ctx, func, ()))
+                    let Value::Function(func) = func else {
+                        unreachable!("sprites.lua defines the flush")
+                    };
+                    ctx.stash(Executor::start(ctx, func, step))
                 });
                 if let Err(e) = l.execute::<()>(&ex) {
                     if self.controls_fn.is_some() {
@@ -2069,6 +2876,19 @@ impl LuaEngine {
                     return Err(static_error_to_lua(e));
                 }
             }
+        }
+
+        // A fade under way (scenes.go(s, {fade = n})) owns brightness: its step follows frame(), as on the cart.
+        if self.scenes.is_some() {
+            let mut l = self.lua.borrow_mut();
+            let ex = l.enter(|ctx| {
+                let Value::Function(func) = ctx.get_global("__ppu_scene_fade_step") else {
+                    unreachable!("luau.lua defines the fade step")
+                };
+                // The step in video frames this update spans; a paused repeat takes none.
+                ctx.stash(Executor::start(ctx, func, if again { 0 } else { self.update_frames() as i64 }))
+            });
+            l.execute::<()>(&ex).map_err(static_error_to_lua)?;
         }
 
         // Read frame-wide defaults + frame-global memory. VRAM is rebuilt fresh
@@ -2093,10 +2913,16 @@ impl LuaEngine {
                     &mut self.reports,
                     &mut self.memory,
                 );
-                read_memory(ctx, &mut self.memory);
-                read_state(ctx, &keys.fetch(ctx), &mut mirror)
+                animate_worlds(&self.dma, &self.source_store.borrow(), f, &mut self.memory);
+                let columns = if self.picture_memory { read_memory(ctx, &mut self.memory) } else { Ok(()) };
+                (columns, read_state(ctx, &keys.fetch(ctx), &mut mirror))
             })
         };
+        let (columns, defaults) = defaults;
+        if let Err(message) = columns {
+            self.restore_controls();
+            return Err(LuaError { message, line: None, file: self.frame_file.clone() });
+        }
 
         // M12/audio: walk this frame's audio span sample-accurately against
         // the registered `timer(n, div, fn)` hooks — BEFORE the hdma hooks
@@ -2107,7 +2933,7 @@ impl LuaEngine {
         // `voice[]`/`dsp` writes are flushed to the DSP only at the NEXT
         // frame's offset-0 flush, one frame later than a `frame()`-body or
         // timer-hook write — see the `kon`/`koff` callback comment below.
-        if self.last_f == Some(f) && !self.recompiled {
+        if self.last_f == Some(video) && !self.recompiled {
             // Repeat of the last rendered frame (paused refresh): its span
             // is already rendered, so no audio, no hooks, no DSP writes —
             // and key events issued by this repeat's body belong to the
@@ -2121,11 +2947,11 @@ impl LuaEngine {
                 ctx.set_global("__dsp_koff", 0).unwrap();
             });
         } else {
-            self.render_frame_audio(f)
+            self.render_frame_audio(video)
                 .inspect_err(|_| self.restore_controls())?;
         }
 
-        // Controls Phase A (PPU-147): run `apply_pokes()` frame-wide, once,
+        // Controls Phase A: run `__ppu_pokes()` frame-wide, once,
         // right after the program's own frame()/audio and BEFORE hooks are
         // collected below, so any `hdma()` it registers joins the program's
         // own. `n_program` counts only FUNCTION-bearing `__ppu_hooks`
@@ -2171,16 +2997,21 @@ impl LuaEngine {
                 let mut l = self.lua.borrow_mut();
                 call_controls_hook::<()>(&mut l, "__ppu_controls_restore");
                 let mut err = static_error_to_lua(e);
-                err.file = Some(CONTROLS_FILE.to_string());
+                err.file = Some(POKES.to_string());
                 return Err(err);
             }
             let mut l = self.lua.borrow_mut();
-            l.enter(|ctx| read_memory(ctx, &mut self.memory));
+            if self.picture_memory {
+                if let Err(message) = l.enter(|ctx| read_memory(ctx, &mut self.memory)) {
+                    call_controls_hook::<()>(&mut l, "__ppu_controls_restore");
+                    return Err(LuaError { message, line: None, file: Some(POKES.to_string()) });
+                }
+            }
             n_program
         } else {
             0
         };
-        // Painted tiles, last of all: over the program's and apply_pokes()'s
+        // Painted tiles, last of all: over the program's and __ppu_pokes()'s
         // own VRAM writes. `read_memory` rebuilt VRAM this frame, so a word
         // that left the list is simply not re-applied.
         for &(addr, word) in &self.controls_vram {
@@ -2214,16 +3045,16 @@ impl LuaEngine {
         };
         // Splice the whole-frame controls override in between the program's
         // hooks and controls's own (hooks[n_program..], registered by
-        // apply_pokes above, if any): it reuses the exact per-hook closure
+        // __ppu_pokes above, if any): it reuses the exact per-hook closure
         // below (write_state(row)/run/read_state), so a property controls
         // doesn't touch keeps whatever the program's hooks resolved for that
         // row, and a controls hdma hook composes on top last-write-wins, same
         // as any other hook. The hook is `__ppu_controls_replay`, which
         // re-applies the register writes Phase A logged (frozen here), not
-        // apply_pokes itself: re-executing apply_pokes 224x/frame made every
+        // __ppu_pokes itself: re-executing it 224x/frame made every
         // frame-wide poke cost 224 tracked writes, and a tilemap paint's
         // thousands of `vram[]` pokes (which no row reads) dominated the
-        // frame. Skipped when apply_pokes wrote no register this frame.
+        // frame. Skipped when __ppu_pokes wrote no register this frame.
         if self.controls_fn.is_some() {
             let replay: Option<StashedFunction> = {
                 let mut l = self.lua.borrow_mut();
@@ -2238,12 +3069,12 @@ impl LuaEngine {
             if let Some(replay) = replay {
                 // `.min(hooks.len())`: n_program matches hooks.len() in the
                 // common case (see the Phase A comment above), but a
-                // hand-edited apply_pokes assigning `__ppu_hooks = {}` can
+                // hand-written __ppu_pokes assigning `__ppu_hooks = {}` can
                 // shrink it out from under that count — clamp so the splice
                 // never goes out of range.
                 hooks.insert(
                     n_program.min(hooks.len()),
-                    (0, HEIGHT - 1, replay, Some(CONTROLS_FILE.to_string())),
+                    (0, HEIGHT - 1, replay, Some(POKES.to_string())),
                 );
             }
         }
@@ -2258,7 +3089,7 @@ impl LuaEngine {
             Rc::new(l.enter(|ctx| snapshot_cgram(ctx, &self.keys.fetch(ctx))))
         };
         // Everything since the `defaults` read wrote globals behind the
-        // mirror's back (the program's frame(), timer hooks, apply_pokes, the
+        // mirror's back (the program's frame(), timer hooks, __ppu_pokes, the
         // controls bracket): forget it, so the first per-row write_state is
         // a full write. Inside the loop only hooks write, and each is
         // followed by the read_state that refreshes the mirror.
@@ -2307,7 +3138,7 @@ impl LuaEngine {
         let lt = builder.build(HEIGHT);
 
         // Undo every write controls made this frame — including an explicit
-        // `apply_pokes()` call from inside the program's own frame(),
+        // `__ppu_pokes()` call from inside the program's own frame(),
         // Phase A's implicit call, and any per-row replay — now that the
         // LineTable/Memory have captured them: the program's own globals
         // return to exactly where its own frame() left them, so a released
@@ -2481,7 +3312,7 @@ impl LuaEngine {
                     .iter()
                     .any(|p| p.name == old.name && p.anchor == old.anchor);
                 if !continues {
-                    song_koff(ctx, old.mask);
+                    song_koff(ctx, old.mask & !prev.owned());
                 }
             }
         });
@@ -2553,6 +3384,60 @@ impl LuaEngine {
     /// once the whole span rendered cleanly; a timer hook error aborts the
     /// walk early and leaves this frame's rendered prefix plus a stale tail
     /// in `self.audio` — see [`Self::audio`].
+    /// One frame of sfx() key-offs, before the frame's offset-0 flush: a countdown sfx() armed
+    /// this frame starts, a kon()/koff() of its voice cancels it, and one that runs out keys its
+    /// voice off (a retrigger in the same frame still wins: the flush writes KOF then KON).
+    fn tick_sfx_holds(&mut self) {
+        let rec = &self.dma;
+        self.lua.borrow_mut().enter(|ctx| {
+            let kon = ctx.get_global("__dsp_kon").to_int().unwrap_or(0) as u8;
+            let koff = ctx.get_global("__dsp_koff").to_int().unwrap_or(0) as u8;
+            let armed = rec.sfx_armed.replace(0);
+            let mut hold = rec.sfx_hold.get();
+            let mut own = rec.sfx_own.get();
+            let mut off = 0u8;
+            for (v, (left, owned)) in hold.iter_mut().zip(own.iter_mut()).enumerate() {
+                let bit = 1u8 << v;
+                if armed & bit != 0 {
+                    continue;
+                }
+                if (kon | koff) & bit != 0 {
+                    *left = 0;
+                    *owned = 0;
+                } else {
+                    if *left > 0 {
+                        *left -= 1;
+                        if *left == 0 {
+                            off |= bit;
+                        }
+                    }
+                    if *owned > 0 && *owned < u16::MAX {
+                        *owned -= 1;
+                    }
+                }
+            }
+            rec.sfx_hold.set(hold);
+            rec.sfx_own.set(own);
+            rec.sfx_auto.set(rec.sfx_auto.get() & rec.owned());
+            rec.kon_open
+                .set((rec.kon_open.get() & !koff | kon & !armed) & !off);
+            if off != 0 {
+                ctx.set_global("__dsp_koff", (koff | off) as i64).unwrap();
+            }
+        });
+    }
+
+    /// Frames until sfx() keys `voice` off (0: it will not), as of the last frame.
+    pub fn sfx_hold(&self, voice: usize) -> u16 {
+        self.dma.sfx_hold.get()[voice]
+    }
+
+    /// Frames `voice` stays an effect's, a song's notes there silent (0: none; `u16::MAX`: until
+    /// koff()), as of the last frame.
+    pub fn sfx_own(&self, voice: usize) -> u16 {
+        self.dma.sfx_own.get()[voice]
+    }
+
     fn render_frame_audio(&mut self, f: u32) -> Result<(), LuaError> {
         let continuous = self.last_f.map(|l| l as u64 + 1) == Some(f as u64);
         let replay = self.recompiled && self.last_f == Some(f);
@@ -2583,12 +3468,13 @@ impl LuaEngine {
             l.enter(|ctx| {
                 for p in dma.songs.borrow_mut().iter_mut() {
                     if p.anchor != Anchor::Stopped {
-                        song_koff(ctx, p.mask);
+                        song_koff(ctx, p.mask & !dma.owned());
                         p.next = -1;
                     }
                 }
             });
         }
+        self.tick_sfx_holds();
         if self
             .lua
             .borrow_mut()
@@ -2851,7 +3737,7 @@ impl LuaEngine {
             };
             if !player.looping && n >= player.timing.length {
                 if continuous && player.playing {
-                    song_koff(ctx, player.mask);
+                    song_koff(ctx, player.mask & !dma.owned());
                     player.ends = [None; 8];
                 }
                 player.playing = false;
@@ -2865,7 +3751,7 @@ impl LuaEngine {
                 && n >= player.timing.length
                 && tick == player.timing.loop_tick
             {
-                song_koff(ctx, player.mask);
+                song_koff(ctx, player.mask & !dma.owned());
                 player.ends = [None; 8];
                 // Not `seek(loop_tick)`: that would put intro notes still
                 // sounding back into `ends` right after the key-off.
@@ -2874,13 +3760,17 @@ impl LuaEngine {
             } else if !continuous {
                 player.seek(tick);
             }
+            // An effect borrows its voice: the song's notes there are silent until it ends.
+            let owned = dma.owned();
             for v in 0..8u8 {
                 if player.mask & (1 << v) == 0 {
                     continue;
                 }
                 if let Some(end) = player.ends[v as usize] {
                     if end <= tick {
-                        song_key(ctx, "__dsp_koff", v);
+                        if owned & 1 << v == 0 {
+                            song_key(ctx, "__dsp_koff", v);
+                        }
                         player.ends[v as usize] = None;
                     }
                 }
@@ -2888,6 +3778,10 @@ impl LuaEngine {
             while player.cursor < player.events.len() && player.events[player.cursor].start <= tick
             {
                 let ev = player.events[player.cursor].clone();
+                player.cursor += 1;
+                if owned & 1 << ev.voice != 0 {
+                    continue;
+                }
                 if let Some(inst) = player.insts.get(ev.row as usize) {
                     let inst = ctx.fetch(inst);
                     let pitch = player
@@ -2898,7 +3792,6 @@ impl LuaEngine {
                     apply_song_event(ctx, inst, pitch, &ev);
                 }
                 player.ends[ev.voice as usize] = Some(ev.end);
-                player.cursor += 1;
             }
             player.tick = tick + 1;
             player.next = n + 1;
@@ -3008,28 +3901,23 @@ fn call_controls_hook<R: for<'gc> FromMultiValue<'gc>>(lua: &mut Lua, name: &'st
         .unwrap_or_else(|e| panic!("{name} (controls_env.lua) must not raise: {e}"))
 }
 
-/// The setup-only part of a controls document, in order — what the fast
-/// path cannot reload in place: the top-level `dma(` calls, plus the whole
-/// `function apply_setup()` … column-0 `end` block (only ever CALLED on a
-/// recompile, after `init()`). A change to any of it forces a recompile.
-fn setup_text(src: &str) -> Vec<&str> {
-    let mut out = Vec::new();
-    let mut in_setup = false;
-    for line in src.lines() {
-        let t = line.trim_start();
-        if in_setup {
-            out.push(line);
-            if line == "end" {
-                in_setup = false;
-            }
-        } else if t.starts_with("dma(") {
-            out.push(t);
-        } else if t.starts_with("function apply_setup(") {
-            in_setup = true;
-            out.push(line);
-        }
-    }
-    out
+/// `@ppu/world`'s hot swap hooks (if the program loaded it): their string result, empty when
+/// the hook is absent or raises (they only set flags and report, so a failure leaves the worlds as found).
+fn call_world_hook(lua: &mut Lua, name: &'static str, arg: &str) -> String {
+    let ex = lua.enter(|ctx| match ctx.get_global(name) {
+        Value::Function(f) => Some(ctx.stash(Executor::start(ctx, f, ctx.intern(arg.as_bytes())))),
+        _ => None,
+    });
+    ex.and_then(|ex| lua.execute::<String>(&ex).ok())
+        .unwrap_or_default()
+}
+
+/// The pokes chunk's top-level `dma(` lines, in order: what an in-place load cannot apply.
+fn dma_lines(src: &str) -> Vec<&str> {
+    src.lines()
+        .map(str::trim_start)
+        .filter(|l| l.starts_with("dma("))
+        .collect()
 }
 
 /// `src` with every `dma(` line blanked, line count preserved.
@@ -3087,7 +3975,7 @@ fn sram_to_json(root: Value<'_>) -> Result<String, String> {
     if !matches!(root, Value::Table(_)) {
         return Err(format!("sram must be a table, got {}", root.type_name()));
     }
-    let json = lua_to_json(root, "sram", 0)?.to_string();
+    let json = crate::save::canonical_json(&lua_to_json(root, "sram", 0)?);
     if json.len() > SRAM_MAX_BYTES {
         return Err(format!(
             "sram is {} bytes; the cartridge holds {}",
@@ -3194,18 +4082,30 @@ pub const PAD_NAMES: [&str; 12] = [
     "up", "down", "left", "right", "a", "b", "x", "y", "l", "r", "start", "select",
 ];
 
-/// Publish a controller mask as a global (`pad`, `pad2`): one boolean per button.
-fn set_pad_table(ctx: piccolo::Context<'_>, global: &'static str, mask: u16) {
-    let pad = Table::new(&ctx);
-    for (bit, name) in PAD_NAMES.iter().enumerate() {
-        pad.set(ctx, *name, mask & (1 << bit) != 0).unwrap();
-    }
+/// Publish a controller mask as a global (`pad`, `pad2`): one boolean per button, and the same buttons in
+/// `pressed` (down now, up in `was`, the previous frame's mask) and `released` (the reverse).
+fn set_pad_table(ctx: piccolo::Context<'_>, global: &'static str, mask: u16, was: u16) {
+    let buttons = |m: u16| {
+        let t = Table::new(&ctx);
+        for (bit, name) in PAD_NAMES.iter().enumerate() {
+            t.set(ctx, *name, m & (1 << bit) != 0).unwrap();
+        }
+        t
+    };
+    let pad = buttons(mask);
+    pad.set(ctx, "pressed", buttons(mask & !was)).unwrap();
+    pad.set(ctx, "released", buttons(was & !mask)).unwrap();
     ctx.set_global(global, pad).unwrap();
 }
 
 /// `parent[key]` as a table, created when absent and emptied when `empty`: power-on reuses the
 /// register tables in place, so a module that kept `local layer = bg[1]` still sees the live one.
-fn reg_table<'gc>(ctx: piccolo::Context<'gc>, parent: Table<'gc>, key: impl piccolo::IntoValue<'gc>, empty: bool) -> Table<'gc> {
+fn reg_table<'gc>(
+    ctx: piccolo::Context<'gc>,
+    parent: Table<'gc>,
+    key: impl piccolo::IntoValue<'gc>,
+    empty: bool,
+) -> Table<'gc> {
     let key = key.into_value(ctx);
     let t = match parent.get(ctx, key) {
         Value::Table(t) => t,
@@ -3222,6 +4122,64 @@ fn reg_table<'gc>(ctx: piccolo::Context<'gc>, parent: Table<'gc>, key: impl picc
         }
     }
     t
+}
+
+/// `bg[n].map:fill(x, y, w, h, entry)`: the cell table `entry` (copied per cell) over a w x h rectangle of cells,
+/// refused when any part of it falls outside the layer's map (32 or 64 cells each way, from screen_size).
+fn map_fill<'gc>(ctx: piccolo::Context<'gc>, layer: Table<'gc>) -> Callback<'gc> {
+    Callback::from_fn_with(&ctx, layer, |layer, ctx, _, mut stack| {
+        let usage = "bg[n].map:fill(x, y, w, h, {tile = .., pal = .., prio = .., flip_x = .., flip_y = ..})";
+        let Value::Table(map) = stack.get(0) else {
+            return Err(lua_err(ctx, &format!("error[snes.map]: call fill with a colon: {usage}")));
+        };
+        let mut n = [0i64; 4];
+        for (i, name) in ["x", "y", "w", "h"].iter().enumerate() {
+            let whole = match stack.get(i + 1) {
+                Value::Integer(v) => Some(v),
+                Value::Number(v) if v.fract() == 0.0 && v.abs() < 1e15 => Some(v as i64),
+                _ => None,
+            };
+            n[i] = whole.filter(|v| *v >= 0).ok_or_else(|| {
+                lua_err(ctx, &format!("error[snes.map]: bg[n].map:fill: {name} must be a whole number 0 or more: {usage}"))
+            })?;
+        }
+        let [x, y, w, h] = n;
+        let Value::Table(entry) = stack.get(5) else {
+            return Err(lua_err(ctx, &format!("error[snes.map]: bg[n].map:fill: the entry must be a table: {usage}")));
+        };
+        const FIELDS: [&str; 5] = ["tile", "pal", "prio", "flip_x", "flip_y"];
+        for (k, _) in entry {
+            let known = matches!(k, Value::String(s) if FIELDS.iter().any(|f| s.as_bytes() == f.as_bytes()));
+            if !known {
+                return Err(lua_err(ctx, &format!("error[snes.map]: bg[n].map:fill: a map entry has no field {k}: its fields are tile, pal, prio, flip_x, flip_y")));
+            }
+        }
+        let size = crate::quantize::bg_screen_size(layer.get(ctx, "screen_size").to_int().unwrap_or(0) as u8);
+        let (cols, rows) = (if size & 1 == 1 { 64 } else { 32 }, if size & 2 == 2 { 64 } else { 32 });
+        if x + w > cols || y + h > rows {
+            return Err(lua_err(ctx, &format!("error[snes.map]: bg[n].map:fill({x}, {y}, {w}, {h}) reaches past the layer's map of {cols}x{rows} cells (columns 0..{}, rows 0..{})", cols - 1, rows - 1)));
+        }
+        for col in x..x + w {
+            let column = match map.get(ctx, col) {
+                Value::Table(t) => t,
+                _ => {
+                    let t = Table::new(&ctx);
+                    map.set(ctx, col, t)?;
+                    t
+                }
+            };
+            for row in y..y + h {
+                // A copy per cell: changing `entry` later must not change the cells, as on the cart.
+                let cell = Table::new(&ctx);
+                for f in FIELDS {
+                    cell.set(ctx, f, entry.get(ctx, f))?;
+                }
+                column.set(ctx, row, cell)?;
+            }
+        }
+        stack.clear();
+        Ok(CallbackReturn::Return)
+    })
 }
 
 /// The PPU's power-on state: every register global, OAM, and the VRAM/CGRAM/tilemap poke tables
@@ -3260,6 +4218,8 @@ fn power_on<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
         let scroll = reg_table(ctx, layer, "scroll", false);
         scroll.set(ctx, "x", 0.0).unwrap();
         scroll.set(ctx, "y", 0.0).unwrap();
+        // bg[n].columns[c] = dy: Mode 2 column offsets, retained; a cold boot clears them.
+        reg_table(ctx, layer, "columns", true);
         layer.set(ctx, "visible", true).unwrap();
         // Binding registers (BGMODE tile-size / BGnSC / BGnNBA), quantize-on-write.
         layer.set(ctx, "tile_size", 8).unwrap();
@@ -3268,7 +4228,8 @@ fn power_on<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
         layer.set(ctx, "char_base", 0).unwrap();
         layer.set(ctx, "mosaic", false).unwrap();
         // Per-cell tilemap poke surface: map[col][row] = {tile,pal,prio,flip_x,flip_y}.
-        reg_table(ctx, layer, "map", true);
+        let map = reg_table(ctx, layer, "map", true);
+        map.set(ctx, "fill", map_fill(ctx, layer)).unwrap();
     }
 
     // m7
@@ -3360,8 +4321,8 @@ fn power_on<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
 fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
     crate::lua_buffer::install(ctx);
     // controller: all released until the host sets a mask; init() may read it.
-    set_pad_table(ctx, "pad", 0);
-    set_pad_table(ctx, "pad2", 0);
+    set_pad_table(ctx, "pad", 0, 0);
+    set_pad_table(ctx, "pad2", 0, 0);
     // battery-backed save data; set_sources overwrites it from the host blob.
     ctx.set_global("sram", Table::new(&ctx)).unwrap();
     power_on(ctx, k);
@@ -3392,6 +4353,8 @@ fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
 
     // hidden hook registry
     ctx.set_global("__ppu_hooks", Table::new(&ctx)).unwrap();
+    // The update a frame belongs to (`@ppu/sound` resets its per-update cue priority on a new one).
+    ctx.set_global("__ppu_update", 0).unwrap();
 
     // math aliases as flat globals
     if let Value::Table(m) = ctx.get_global("math") {
@@ -3417,7 +4380,7 @@ fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
     ctx.set_global("rgb", rgb).unwrap();
 
     // mode7_transform / mode7_floor: pure "view" helpers — callers assign the
-    // returned fields (so generated ppuglobals.lua writes stay undo-tracked).
+    // returned fields (so the pokes chunk's writes stay undo-tracked).
     // Native, not Lua: the floor view is called once per scanline (224x a
     // frame), where an interpreted body plus six argument checks cost ~2 ms
     // native and several times that under WASM.
@@ -3429,9 +4392,9 @@ fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
         match v {
             Value::Integer(_) | Value::Number(_) => match v.to_number() {
                 Some(n) if n.is_finite() => Ok(n),
-                _ => Err(lua_err(ctx, &format!("{name} must be a finite number"))),
+                _ => Err(lua_err(ctx, &format!("error[snes.mode7]: {name} must be a finite number"))),
             },
-            _ => Err(lua_err(ctx, &format!("{name} must be a finite number"))),
+            _ => Err(lua_err(ctx, &format!("error[snes.mode7]: {name} must be a finite number"))),
         }
     }
     /// Degrees + texture position -> (cos, sin, wrapped cx, wrapped cy).
@@ -3463,7 +4426,7 @@ fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
     let mode7_transform = Callback::from_fn(&ctx, |ctx, _, mut stack| {
         let zoom = finite(ctx, stack.get(1), "zoom")?;
         if zoom < 1.0 / 127.0 {
-            return Err(lua_err(ctx, "zoom must be at least 1/127"));
+            return Err(lua_err(ctx, "error[snes.mode7]: zoom must be at least 1/127"));
         }
         let angle = finite(ctx, stack.get(0), "angle")?;
         let x = finite(ctx, stack.get(2), "x")?;
@@ -3489,7 +4452,7 @@ fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
         let horizon = finite(ctx, stack.get(1), "horizon")?;
         let height = finite(ctx, stack.get(2), "height")?;
         if height <= 0.0 {
-            return Err(lua_err(ctx, "height must be positive"));
+            return Err(lua_err(ctx, "error[snes.mode7]: height must be positive"));
         }
         let heading = finite(ctx, stack.get(3), "angle")?;
         let x = finite(ctx, stack.get(4), "x")?;
@@ -3600,7 +4563,7 @@ fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
             for i in 0..stack.len() {
                 match stack.get(i).to_int() {
                     Some(n) if (0..=7).contains(&n) => mask |= 1 << n,
-                    _ => return Err(lua_err(ctx, &format!("{name}: voice numbers must be 0..7"))),
+                    _ => return Err(lua_err(ctx, &format!("error[snes.bank]: {name}: voice numbers must be 0..7"))),
                 }
             }
             stack.clear();
@@ -3641,6 +4604,7 @@ fn decode_dsp_view(dsp: &Dsp) -> DspView {
             envx: dsp.read(base | 0x08),
             outx: dsp.read(base | 0x09) as i8,
             ended: endx & (1 << n) != 0,
+            sustains: None,
         }
     });
     let flg = dsp.read(0x6c);
@@ -3906,8 +4870,1148 @@ fn scene_owner(ctx: piccolo::Context<'_>) -> Option<String> {
     }
 }
 
+/// How long sfx() holds a looping sample given no `len`, in seconds.
+const SFX_LEN: f64 = 0.15;
+
 fn lua_err<'gc>(ctx: piccolo::Context<'gc>, msg: &str) -> piccolo::Error<'gc> {
     Value::String(ctx.intern(msg.as_bytes())).into()
+}
+
+/// One `world.load` map as the preview keeps it (lib/world.luau holds the camera).
+struct World {
+    name: String,
+    /// The scene module whose load made it; `None` is the whole program's.
+    owner: Option<String>,
+    map: crate::tiled::Map,
+    /// Per tile layer: its cells as BG words, empty cells resolved (`tiled::sheet_words`); a
+    /// Mode 7 layer's tile numbers (`tiled::m7_plane`): the whole 128x128 plane, or a streamed
+    /// map's own width x height; `None` for a layer with no tiles.
+    words: Vec<Option<Vec<u16>>>,
+    /// Per tile layer: it draws from an EXTBG `m7` source.
+    extbg: Vec<bool>,
+    /// Per tile layer: its sheet's palette count (0 without a sheet).
+    palettes: Vec<usize>,
+    /// The layer bound to each of bg[1..4].
+    bound: [Option<WorldBinding>; 4],
+    /// The Mode 7 layer bound to the plane (`w:bind(name, m7)`).
+    plane: Option<usize>,
+    /// The `radius` a map past 128x128 streams through the plane with.
+    radius: Option<i64>,
+    /// A generated world's period in cells (`world.load`'s `period`): its map is a sheet of
+    /// 16x16-cell templates, and its Mode 7 layer's `words` keep the map's own width x height.
+    period: Option<i64>,
+    /// A generated world's template size in cells, (width, height): 16x16 on the Mode 7 plane.
+    chunk: (i64, i64),
+    /// A generated world's chunk grid: per slot (chunk y % 16 * 16 + chunk x % 16), the map cell
+    /// where the template that chunk shows starts (`__ppu_world_chunk`).
+    chunks: Vec<Option<(i64, i64)>>,
+    /// Per tile layer: its cells as `w:set` changed them, words (as `words`) and kinds; `None` while the
+    /// layer is as authored. `w:bind` (the layer) and `w:enter` (the map entered) put it back.
+    live: Vec<Option<(Vec<u16>, Vec<u8>)>>,
+}
+
+impl World {
+    /// Tile layer `li`'s words (sheet layers on backgrounds; see `words`), as `w:set` left them.
+    fn words_of(&self, li: usize) -> Option<&Vec<u16>> {
+        match &self.live[li] {
+            Some((words, _)) => Some(words),
+            None => self.words[li].as_ref(),
+        }
+    }
+    /// Tile layer `li`'s kinds, row-major, as `w:set` left them.
+    fn kinds_of(&self, li: usize) -> &[u8] {
+        match &self.live[li] {
+            Some((_, kinds)) => kinds,
+            None => &self.map.layers[li].kinds,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct WorldBinding {
+    layer: usize,
+    /// The VRAM map: one 32x32 screen, or two side by side when `wide` (a map wider than 32 cells).
+    map: u16,
+    wide: bool,
+    /// The palette of the sheet's first palette, added to every word.
+    pal: u16,
+    /// A wrapping bind's repeat (`tiled::painted`), columns and rows: cell (x, y) draws the layer's
+    /// (x % columns, y % rows).
+    wrap: Option<(i64, i64)>,
+    /// The priority bit added to every word: 0, or 0x2000 for a `{priority = 1}` bind.
+    priority: u16,
+}
+
+/// What sheet layer `li` of `world` draws with when bound in scene `owner` (`None`: the whole
+/// program): the char base of its sheet's latest placement there (the scene's own or the
+/// program's), and the background palette its first palette lands on. Refused when the sheet is
+/// not placed or its palettes are not whole background palettes.
+fn sheet_layer(
+    placements: &[DmaPlacement],
+    world: &World,
+    li: usize,
+    owner: &Option<String>,
+) -> Result<(u16, u16), String> {
+    let l = &world.map.layers[li];
+    let (Some(source), Some(words)) = (&l.source, &world.words[li]) else {
+        return Err(format!("layer {} has no sheet tiles", l.name));
+    };
+    let placement = placements
+        .iter()
+        .rev()
+        .find(|p| p.name == *source && (p.owner.is_none() || p.owner == *owner));
+    let Some(p) = placement else {
+        return Err(format!("layer {} draws from sheet {source}: place it first, at file level, with dma(\"{source}\", {{char = 0x1000, pal = 0}})", l.name));
+    };
+    let depth = p
+        .fields
+        .iter()
+        .find(|(k, _)| *k == "bit_depth")
+        .map_or(4, |(_, v)| *v);
+    // shortcut: palette bands as in modes 1-2 (CGRAM entry / colors per palette); mode 0's per-BG bands are not offset.
+    let stride = crate::source::row_size_of(depth as u8) as i64;
+    let base = p.cgram_base as i64;
+    let top = words.iter().map(|w| (w >> 10) & 7).max().unwrap_or(0) as i64;
+    if base % stride != 0 || base / stride + top > 7 {
+        return Err(format!("sheet {source} is placed at CGRAM {base}, so its palettes are not whole background palettes 0..7: place it at a multiple of {stride} with room for {} palettes", top + 1));
+    }
+    Ok((p.char_base, (base / stride) as u16))
+}
+
+/// Refused unless bg[`bgi`]'s VRAM map at `map` (0x800 words when `wide`, else 0x400) is aligned,
+/// ends by 0x8000 and is clear of the placements scene `owner` sees.
+fn map_room(
+    rec: &DmaRecorder,
+    map: i64,
+    wide: bool,
+    bgi: usize,
+    owner: &Option<String>,
+) -> Result<(), String> {
+    let end = map + if wide { 0x800 } else { 0x400 };
+    if map & 0x3ff != 0 || map < 0 || end > 0x8000 {
+        return Err(format!(
+            "bg[{bgi}].map_base must be a multiple of 0x400 with room for the {} map before 0x8000",
+            if wide { "64x32" } else { "32x32" }
+        ));
+    }
+    let shared =
+        |o: &Option<String>| !rec.overlaps.get() && (owner.is_none() || o.is_none() || o == owner);
+    // shortcut: checked one way only; a dma() in init() after the bind may land on the map unnoticed. Record the map as a VRAM range if that bites.
+    if let Some((other, ..)) = rec
+        .vram_ranges
+        .borrow()
+        .iter()
+        .find(|(_, a, b, o)| (map as usize) < *b && *a < end as usize && shared(o))
+    {
+        return Err(format!("the map at {map:#06x}..{end:#06x} overlaps '{other}' in VRAM: set bg[{bgi}].map_base clear of it"));
+    }
+    Ok(())
+}
+
+/// Refused unless Mode 7 layer `li`'s `m7` source is placed with `dma()` in scene `owner` or the
+/// program: binding loads only the plane's map; its tiles and colours are the placement's.
+fn m7_layer(
+    placements: &[DmaPlacement],
+    world: &World,
+    li: usize,
+    owner: &Option<String>,
+) -> Result<(), String> {
+    let l = &world.map.layers[li];
+    let source = l.source.as_deref().unwrap_or("?");
+    if placements
+        .iter()
+        .any(|p| p.name == source && (p.owner.is_none() || p.owner == *owner))
+    {
+        Ok(())
+    } else {
+        Err(format!("layer {} draws from m7 source {source}: place its tiles first, at file level, with dma(\"{source}\")", l.name))
+    }
+}
+
+/// One `world.load` map as the program loaded it ([`LuaEngine::worlds`]).
+#[derive(Clone, Debug)]
+pub struct WorldView {
+    pub name: String,
+    /// The scene module whose load made it; `None` is the whole program's.
+    pub owner: Option<String>,
+    pub map: crate::tiled::Map,
+    /// Per tile layer of `map`: what binding it draws, or why it cannot be bound.
+    pub layers: Vec<Result<WorldLayerView, String>>,
+}
+
+/// A layer as binding it draws: what `w:bind` and the strips it presents use. A Mode 7 layer's
+/// `words` are its row-major tile numbers (the 128x128 plane, or a streamed map's own width x
+/// height), `char_base` and `palettes` 0.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WorldLayerView {
+    /// Row-major BG map words, empty cells resolved, the sheet's palette band added.
+    pub words: Vec<u16>,
+    /// The sheet's char base in VRAM (the background's `char_base`).
+    pub char_base: u16,
+    /// The sheet's palette count.
+    pub palettes: usize,
+    /// A Mode 7 layer from an EXTBG source: binding it turns on `m7.extbg`.
+    pub extbg: bool,
+    /// The background palette the sheet's first palette lands on, already in `words` (0 for Mode 7).
+    pub pal: u16,
+    /// The words of one of the sheet's chars (its bit depth x 4; 0 for a Mode 7 layer): where a tile animation's
+    /// chars lie in VRAM from `char_base`.
+    pub char_words: usize,
+}
+
+/// A Tiled property value as Lua: class properties become tables.
+fn json_value<'gc>(ctx: piccolo::Context<'gc>, v: &serde_json::Value) -> Value<'gc> {
+    use serde_json::Value as J;
+    match v {
+        J::Null => Value::Nil,
+        J::Bool(b) => Value::Boolean(*b),
+        J::Number(n) => match n.as_i64() {
+            Some(i) => Value::Integer(i),
+            None => Value::Number(n.as_f64().unwrap_or(0.0)),
+        },
+        J::String(s) => Value::String(ctx.intern(s.as_bytes())),
+        J::Array(a) => {
+            let t = Table::new(&ctx);
+            for (i, x) in a.iter().enumerate() {
+                t.set(ctx, i as i64 + 1, json_value(ctx, x)).unwrap();
+            }
+            Value::Table(t)
+        }
+        J::Object(o) => {
+            let t = Table::new(&ctx);
+            for (k, x) in o {
+                t.set(ctx, ctx.intern(k.as_bytes()), json_value(ctx, x))
+                    .unwrap();
+            }
+            Value::Table(t)
+        }
+    }
+}
+
+/// A pixel coordinate as Lua: whole numbers stay integers.
+fn coordinate<'gc>(v: f64) -> Value<'gc> {
+    if v.fract() == 0.0 && v.abs() < 1e15 {
+        Value::Integer(v as i64)
+    } else {
+        Value::Number(v)
+    }
+}
+
+/// The engine half of `@ppu/world` (lib/world.luau): `__ppu_world_load` reads a project's Tiled
+/// map, `__ppu_world_bind` ties one of its layers to a background, `__ppu_world_strip` presents
+/// one row or column of a bound layer, and `__ppu_world_kind` answers collision. The library
+/// never writes a cell itself: `__ppu_world_strip` is the one VRAM primitive, so a cartridge can
+/// stream the same strips its own way without changing the library.
+fn install_world(
+    ctx: piccolo::Context<'_>,
+    store: Rc<RefCell<HashMap<String, crate::source::SourcePayload>>>,
+    pals: Rc<RefCell<HashMap<String, Vec<u8>>>>,
+    project: Rc<RefCell<HashMap<String, String>>>,
+    rec: Rc<DmaRecorder>,
+) {
+    use crate::source::SourcePayload;
+    use crate::tiled::{read_map, sheet_words, Binding};
+    let world_of =
+        |ctx: piccolo::Context<'_>, rec: &DmaRecorder, v: Value<'_>| -> Result<usize, String> {
+            let i = v
+                .to_int()
+                .filter(|&i| i >= 1 && i as usize <= rec.worlds.borrow().len());
+            let i = i.ok_or("not a world: call this on what world.load returned")? as usize - 1;
+            // A scene's world shows only in its scene, as its placements do.
+            if let Some(owner) = &rec.worlds.borrow()[i].owner {
+                if scene_owner(ctx).as_ref() != Some(owner) {
+                    return Err(format!(
+                        "world {} belongs to scene {owner}: load it in the scene that uses it",
+                        rec.worlds.borrow()[i].name
+                    ));
+                }
+            }
+            Ok(i)
+        };
+
+    let load_rec = rec.clone();
+    let load = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
+        let rec = &load_rec;
+        if !rec.active.get() || !ctx.get_global("__ppu_scenes_open").to_bool() {
+            return Err(lua_err(ctx, "error[snes.world]: world.load runs at file level, while the program loads, like dma(): move it out of init() and frame()"));
+        }
+        let Value::String(name) = stack.get(0) else {
+            return Err(lua_err(
+                ctx,
+                "error[snes.world]: world.load: the first argument is the map's name, \"level1\" for level1.tmj",
+            ));
+        };
+        let name = String::from_utf8_lossy(name.as_bytes()).into_owned();
+        // Only a view world takes speed (1..8, default 8, as on the cartridge), the most px a
+        // frame its window keeps up with; every other world's camera moves as far as it likes, so speed there is
+        // ignored below (toys from before views wrote one).
+        let speed_arg = stack.get(1);
+        let speed = match speed_arg {
+            Value::Nil => None,
+            Value::Integer(s) if (1..=8).contains(&s) => Some(s),
+            Value::Number(s) if s.fract() == 0.0 && (1.0..=8.0).contains(&s) => Some(s as i64),
+            _ => None,
+        };
+        let bad_speed = !matches!(speed_arg, Value::Nil) && speed.is_none();
+        let radius = match stack.get(2) {
+            Value::Nil => None,
+            Value::Integer(r) => Some(r),
+            Value::Number(r) if r.fract() == 0.0 && r.abs() < 1e9 => Some(r as i64),
+            v => {
+                return Err(lua_err(
+                    ctx,
+                    &format!(
+                        "error[snes.world]: world.load(\"{name}\"): radius must be a whole number of cells (got {v})"
+                    ),
+                ))
+            }
+        };
+        // view = {ahead = A, behind = B}: cells of the plane ahead of and behind the follow point.
+        let view = match stack.get(3) {
+            Value::Nil => None,
+            Value::Table(t) => {
+                if let Some((k, _)) = t.iter().find(|(k, _)| !matches!(k, Value::String(s) if matches!(s.as_bytes(), b"ahead" | b"behind"))) {
+                    return Err(lua_err(ctx, &format!("error[snes.world]: world.load(\"{name}\"): view takes ahead and behind only (got {k})")));
+                }
+                let cells = |key: &'static str| {
+                    match t.get(ctx, key) {
+                    Value::Integer(n) if (0..=1_000_000).contains(&n) => Ok(n),
+                    Value::Number(n) if n.fract() == 0.0 && (0.0..=1e6).contains(&n) => Ok(n as i64),
+                    v => Err(lua_err(ctx, &format!(
+                        "error[snes.world]: world.load(\"{name}\"): view.{key} must be a whole number of cells, 0 or more (got {})",
+                        if matches!(v, Value::Nil) { "none".to_string() } else { v.to_string() }))),
+                }
+                };
+                Some((cells("ahead")?, cells("behind")?))
+            }
+            v => {
+                return Err(lua_err(
+                    ctx,
+                    &format!(
+                    "error[snes.world]: world.load(\"{name}\"): view is a table, {{ahead = A, behind = B}} (got {v})"
+                ),
+                ))
+            }
+        };
+        if view.is_some() && radius.is_some() {
+            return Err(lua_err(
+                ctx,
+                &format!("error[snes.world]: world.load(\"{name}\"): view sets the window: drop radius"),
+            ));
+        }
+        // period = P: a generated world, P cells round on each axis (world.luau holds its pick).
+        let period = match stack.get(4) {
+            Value::Nil => None,
+            Value::Integer(p) if (256..=4096).contains(&p) && p & (p - 1) == 0 => Some(p),
+            Value::Number(p) if p.fract() == 0.0 && (256.0..=4096.0).contains(&p) && (p as i64) & (p as i64 - 1) == 0 => Some(p as i64),
+            v => return Err(lua_err(ctx, &format!(
+                "error[snes.world]: world.load(\"{name}\"): period must be 256, 512, 1024, 2048 or 4096 cells (got {v}): the ground repeats after that many cells on each axis"))),
+        };
+        let generated = period.is_some();
+        // chunk = {w, h}: a generated world's template size in cells, 16 or 32 each (16x16 when none).
+        let chunk = match stack.get(5) {
+            Value::Nil => (16, 16),
+            Value::Table(t) => {
+                let side = |i: i64| match t.get(ctx, i) {
+                    Value::Integer(n) if n == 16 || n == 32 => Some(n),
+                    Value::Number(n) if n == 16.0 || n == 32.0 => Some(n as i64),
+                    _ => None,
+                };
+                match (side(1), side(2), t.length()) {
+                    (Some(w), Some(h), 2) => (w, h),
+                    _ => return Err(lua_err(ctx, &format!("error[snes.world]: world.load(\"{name}\"): chunk is a template's width and height in cells, 16 or 32 each: {{32, 16}}"))),
+                }
+            }
+            v => return Err(lua_err(ctx, &format!("error[snes.world]: world.load(\"{name}\"): chunk is a table of a template's width and height in cells, {{32, 16}} (got {v})"))),
+        };
+        if !generated && !matches!(stack.get(5), Value::Nil) {
+            return Err(lua_err(ctx, &format!("error[snes.world]: world.load(\"{name}\"): chunk sizes a generated world's templates: load it with period and pick too")));
+        }
+        if let Some(p) = period.filter(|p| p / chunk.0 < 16 || p / chunk.1 < 16) {
+            return Err(lua_err(ctx, &format!("error[snes.world]: world.load(\"{name}\"): period {p} is under 16 chunks of {}x{} cells on an axis: use a period of at least {}", chunk.0, chunk.1, 16 * chunk.0.max(chunk.1))));
+        }
+        let files = project.borrow();
+        let fail = |m: String| lua_err(ctx, &format!("error[snes.world]: world.load(\"{name}\"): {m}"));
+        let text = match files.get(&format!("{name}.tmj")) {
+            Some(t) => t,
+            None if files.contains_key(&format!("{name}.tmx")) => {
+                return Err(fail(format!(
+                    "{name}.tmx is an XML map: save it as JSON ({name}.tmj) in Tiled"
+                )))
+            }
+            None => return Err(fail(format!("the project has no file named {name}.tmj"))),
+        };
+        let sources = store.borrow();
+        let pals = pals.borrow();
+        let file = format!("{name}.tmj");
+        let fail = |m: String| -> piccolo::Error<'_> {
+            ProjectFileFailure {
+                file: file.clone(),
+                message: format!("error[snes.world]: world.load(\"{name}\"): {m}"),
+            }
+            .into()
+        };
+        let map = read_map(
+            text,
+            |path| {
+                let base = path.rsplit(['/', '\\']).next().unwrap_or(path);
+                files
+                    .get(path)
+                    .or_else(|| files.get(base))
+                    .cloned()
+                    .ok_or(format!("the project has no file named {base}"))
+            },
+            |source| match sources.get(source) {
+                Some(SourcePayload::Sheet(sheet)) => Some(Binding::Sheet {
+                    source: sheet,
+                    pals: pals.get(source).map_or(&[], |p| p.as_slice()),
+                }),
+                Some(SourcePayload::M7(m7)) => Some(Binding::M7(m7)),
+                _ => None,
+            },
+        )
+        .map_err(fail)?;
+        let (cw, ch) = (chunk.0 as usize, chunk.1 as usize);
+        if generated
+            && (map.width % cw != 0 || map.height % ch != 0 || map.width > 512 || map.height > 512)
+        {
+            return Err(fail(format!(
+                "a generated world's map is its templates, {cw}x{ch} cells each: its width is a multiple of {cw} cells and its height of {ch}, at most 512 (this map is {}x{})",
+                map.width, map.height)));
+        }
+        // A generated world streams whatever its templates' map measures.
+        let big = generated || map.width > 128 || map.height > 128;
+        let mode7 = map.layers.iter().any(|l| l.mode7 && l.source.is_some());
+        // A view world: (ahead, behind, near, catch_up); its window is the whole plane, radius 64.
+        // A speed without a view does nothing (the camera moves as far as you like): ignored, as toys
+        // from before views wrote one; the cartridge check warns about it.
+        if view.is_some() && bad_speed {
+            return Err(fail(format!(
+                "a view's speed is a whole number of pixels per frame from 1 to 8 (got {speed_arg}): \
+                 the most the camera moves a frame while the window keeps up (a faster move redraws it whole)"
+            )));
+        }
+        let speed = if view.is_some() { speed.unwrap_or(8) } else { 8 };
+        let view = match view {
+            None => None,
+            Some(_) if !mode7 => return Err(fail("view streams a Mode 7 map and this map has no Mode 7 layer: drop view".into())),
+            Some(_) if !big => return Err(fail("a map up to 128x128 cells loads whole: drop view".into())),
+            Some(_) if !generated && (map.width.min(map.height) < 128 || map.width.max(map.height) > 512) => return Err(fail(format!(
+                "a map with a view is at least 128 and at most 512 cells on each side (it streams the whole 128x128 plane): this map is {}x{}",
+                map.width, map.height))),
+            Some((a, b)) if a + b > 120 => return Err(fail(format!(
+                "view ahead + behind is {} cells, past 120: the view must fit the 128-cell plane with margin", a + b))),
+            Some((a, b)) => {
+                let d = ((a - b).abs() + 1) / 2;
+                let catch_up = (16 * d + 7 + (16 - speed) - 1) / (16 - speed);
+                if catch_up > 60 {
+                    return Err(fail(format!(
+                        "the far rows could lag more than a second ({catch_up} updates): shorten ahead, lengthen behind, or lower speed")));
+                }
+                Some((a, b, 64 - d, catch_up))
+            }
+        };
+        // A generated world streams through the Mode 7 plane (a radius or a view, 16x16 templates) or to backgrounds.
+        if generated && mode7 && view.is_none() && radius.is_none() {
+            return Err(fail("a generated world on the Mode 7 plane streams through it: load it with a radius or a view".into()));
+        }
+        if mode7 && view.is_none() {
+            match radius {
+                None if big => return Err(fail(format!(
+                    "the map is {}x{} cells, past the 128x128 a Mode 7 plane holds: stream it with world.load(\"{name}\", {{radius = r}})",
+                    map.width, map.height))),
+                Some(_) if !big => return Err(fail("a map up to 128x128 cells loads whole: drop radius".into())),
+                // The window, 2 * radius cells a side, must fit the 128-cell plane; what streaming costs is the frame budget's.
+                Some(r) if !(1..=64).contains(&r) => return Err(fail(format!(
+                    "radius must be a whole number from 1 to 64 (got {r}): the window, 2 * radius cells a side, must fit the 128x128 plane"))),
+                Some(r) if !generated && (map.width > 512 || map.height > 512 || (map.width.min(map.height) as i64) < 2 * r) => return Err(fail(format!(
+                    "a streamed map is at most 512x512 cells and at least 2 * radius = {} cells on each side (the window must fit it): this map is {}x{}",
+                    2 * r, map.width, map.height))),
+                _ => {}
+            }
+        } else if radius.is_some() {
+            return Err(fail(
+                "radius streams a Mode 7 map and this map has no Mode 7 layer: drop radius".into(),
+            ));
+        }
+        if generated && mode7 && chunk != (16, 16) {
+            return Err(fail("a generated world on the Mode 7 plane has 16x16-cell templates: drop chunk".into()));
+        }
+        // A view streams the whole plane.
+        let radius = if view.is_some() { Some(64) } else { radius };
+        let (mut words, mut palettes, mut extbg) = (Vec::new(), Vec::new(), Vec::new());
+        for layer in &map.layers {
+            extbg.push(false);
+            words.push(match (&layer.source, layer.mode7) {
+                (Some(source), true) => {
+                    let Some(SourcePayload::M7(m7)) = sources.get(source) else { unreachable!("read_map bound it") };
+                    palettes.push(0);
+                    *extbg.last_mut().unwrap() = m7.options.extbg;
+                    let plane = crate::tiled::m7_plane(layer, map.width, map.height, m7).map_err(fail)?;
+                    // Templates that fit the plane keep their own width x height, as a streamed map's cells do.
+                    let plane: Vec<u8> = if generated && map.width <= 128 && map.height <= 128 {
+                        plane.chunks(128).take(map.height).flat_map(|r| r[..map.width].iter().copied()).collect()
+                    } else {
+                        plane
+                    };
+                    Some(plane.into_iter().map(u16::from).collect())
+                }
+                (Some(source), false) => {
+                    let Some(SourcePayload::Sheet(sheet)) = sources.get(source) else { unreachable!("read_map bound it") };
+                    palettes.push(sheet.palettes.len());
+                    if sheet.palettes.len() > 1 && !pals.contains_key(source) {
+                        return Err(fail(format!(
+                            "sheet {source} has {} palettes but the engine was not given which palette each tile uses: \
+                             pass its cells' palettes with setSheetPalettes",
+                            sheet.palettes.len()
+                        )));
+                    }
+                    Some(sheet_words(layer, sheet).map_err(fail)?)
+                }
+                _ => {
+                    palettes.push(0);
+                    None
+                }
+            });
+        }
+        drop((sources, pals));
+
+        let ret = Table::new(&ctx);
+        mark_setup_handle(ctx, rec, ret);
+        let kinds = Table::new(&ctx);
+        for (i, k) in map.kinds.iter().enumerate() {
+            kinds
+                .set(ctx, ctx.intern(k.as_bytes()), i as i64 + 1)
+                .unwrap();
+        }
+        let layers = Table::new(&ctx);
+        for (i, l) in map.layers.iter().enumerate() {
+            layers
+                .set(ctx, ctx.intern(l.name.as_bytes()), i as i64 + 1)
+                .unwrap();
+        }
+        let objects = Table::new(&ctx);
+        for (i, o) in map
+            .object_layers
+            .iter()
+            .flat_map(|l| &l.objects)
+            .enumerate()
+        {
+            let t = Table::new(&ctx);
+            t.set(ctx, "name", ctx.intern(o.name.as_bytes())).unwrap();
+            t.set(ctx, "type", ctx.intern(o.kind.as_bytes())).unwrap();
+            for (k, v) in [("x", o.x), ("y", o.y), ("w", o.w), ("h", o.h)] {
+                t.set(ctx, k, coordinate(v)).unwrap();
+            }
+            let props = Table::new(&ctx);
+            for (k, v) in &o.props {
+                props
+                    .set(ctx, ctx.intern(k.as_bytes()), json_value(ctx, v))
+                    .unwrap();
+            }
+            t.set(ctx, "props", props).unwrap();
+            objects.set(ctx, i as i64 + 1, t).unwrap();
+        }
+        let mut worlds = rec.worlds.borrow_mut();
+        ret.set(ctx, "id", worlds.len() as i64 + 1).unwrap();
+        ret.set(ctx, "name", ctx.intern(name.as_bytes())).unwrap();
+        if view.is_some() {
+            ret.set(ctx, "speed", speed).unwrap();
+        }
+        if let Some(r) = radius {
+            ret.set(ctx, "radius", r).unwrap();
+        }
+        if let Some((a, b, near, catch_up)) = view {
+            for (k, v) in [
+                ("ahead", a),
+                ("behind", b),
+                ("near", near),
+                ("catch_up", catch_up),
+            ] {
+                ret.set(ctx, k, v).unwrap();
+            }
+            // The lead per heading (256ths of a turn, ahead = (sin, -cos)), in f64 here: in a makeFixed
+            // program world.luau's own math would be fixed point, and a cartridge bakes these in f64.
+            let (lead_x, lead_y) = (Table::new(&ctx), Table::new(&ctx));
+            let d = (4 * (a - b)) as f64;
+            for h in 0..256i64 {
+                let turn = h as f64 * std::f64::consts::PI / 128.0;
+                lead_x
+                    .set(ctx, h + 1, (d * turn.sin() + 0.5).floor() as i64)
+                    .unwrap();
+                lead_y
+                    .set(ctx, h + 1, (-d * turn.cos() + 0.5).floor() as i64)
+                    .unwrap();
+            }
+            ret.set(ctx, "lead_x", lead_x).unwrap();
+            ret.set(ctx, "lead_y", lead_y).unwrap();
+        }
+        // A generated world is `period` cells round; its map is `templates` templates, `columns` to a row.
+        let (width, height) = period.map_or((map.width as i64, map.height as i64), |p| (p, p));
+        if let Some(p) = period {
+            ret.set(ctx, "period", p).unwrap();
+            ret.set(ctx, "columns", (map.width / cw) as i64).unwrap();
+            ret.set(
+                ctx,
+                "templates",
+                (map.width / cw * (map.height / ch)) as i64,
+            )
+            .unwrap();
+            ret.set(ctx, "cw", chunk.0).unwrap();
+            ret.set(ctx, "ch", chunk.1).unwrap();
+        }
+        ret.set(ctx, "width", width).unwrap();
+        ret.set(ctx, "height", height).unwrap();
+        ret.set(ctx, "kinds", kinds).unwrap();
+        ret.set(ctx, "layers", layers).unwrap();
+        ret.set(ctx, "objects", objects).unwrap();
+        let layer_count = map.layers.len();
+        worlds.push(World {
+            name,
+            owner: scene_owner(ctx),
+            map,
+            words,
+            extbg,
+            palettes,
+            bound: [None; 4],
+            plane: None,
+            radius,
+            period,
+            chunk,
+            chunks: vec![None; 256],
+            live: vec![None; layer_count],
+        });
+        stack.replace(ctx, ret);
+        Ok(CallbackReturn::Return)
+    });
+    ctx.set_global("__ppu_world_load", load).unwrap();
+
+    // (world, layer name, bg number, map address, wrap, priority 1) -> char_base, wide
+    let bind_rec = rec.clone();
+    let bind = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
+        let rec = &bind_rec;
+        if !rec.active.get() || ctx.get_global("__ppu_scenes_open").to_bool() {
+            return Err(lua_err(ctx, "error[snes.world]: w:bind runs in init(), where a scene sets up its backgrounds: a cold boot undoes registers set at file level"));
+        }
+        let w =
+            world_of(ctx, rec, stack.get(0)).map_err(|m| lua_err(ctx, &format!("error[snes.world]: w:bind: {m}")))?;
+        let mut worlds = rec.worlds.borrow_mut();
+        let world = &mut worlds[w];
+        let fail = |m: String| lua_err(ctx, &format!("error[snes.world]: w:bind (world {}): {m}", world.name));
+        let Value::String(layer) = stack.get(1) else {
+            return Err(fail("the first argument is a tile layer's name".into()));
+        };
+        let layer = String::from_utf8_lossy(layer.as_bytes()).into_owned();
+        let names: Vec<&str> = world.map.layers.iter().map(|l| l.name.as_str()).collect();
+        let Some(li) = names.iter().position(|n| *n == layer) else {
+            return Err(fail(format!(
+                "the map has no tile layer named {layer}; it has {}",
+                names.join(", ")
+            )));
+        };
+        let l = &world.map.layers[li];
+        if l.source.is_none() {
+            return Err(fail(format!("layer {layer} has no tiles")));
+        }
+        // Background 0 is the Mode 7 plane (world.luau passes it for `m7`).
+        if stack.get(2).to_int() == Some(0) {
+            if !l.mode7 {
+                return Err(fail(format!("layer {layer} draws from a sheet: bind it to a background, w:bind(\"{layer}\", bg[1])")));
+            }
+            m7_layer(&rec.placements.borrow(), world, li, &scene_owner(ctx)).map_err(fail)?;
+            world.plane = Some(li);
+            stack.replace(ctx, (0i64, world.extbg[li]));
+            return Ok(CallbackReturn::Return);
+        }
+        if l.mode7 {
+            return Err(fail(format!("layer {layer} draws from a Mode 7 tileset: bind it to the plane, w:bind(\"{layer}\", m7)")));
+        }
+        let bgi = stack
+            .get(2)
+            .to_int()
+            .filter(|n| (1..=4).contains(n))
+            .ok_or_else(|| {
+                fail("the second argument is a background, bg[1] to bg[4], or m7".into())
+            })? as usize;
+        let map = stack.get(3).to_int().unwrap_or(0);
+        // Generated ground has no edge: its window always needs the 64x32 map.
+        let wide = world.map.width > 32 || world.period.is_some();
+        let owner = scene_owner(ctx);
+        map_room(rec, map, wide, bgi, &owner).map_err(fail)?;
+        // Two backgrounds of one world on one map would each overwrite the other's cells.
+        let size = |wide: bool| if wide { 0x800 } else { 0x400 };
+        if let Some((other, b)) = world.bound.iter().enumerate().find_map(|(i, b)| {
+            b.as_ref()
+                .filter(|b| {
+                    i + 1 != bgi
+                        && map < i64::from(b.map) + size(b.wide)
+                        && i64::from(b.map) < map + size(wide)
+                })
+                .map(|b| (i + 1, b))
+        }) {
+            return Err(fail(format!(
+                "bg[{bgi}]'s map at {map:#06x} overlaps bg[{other}]'s at {:#06x}: give each background of a world its own map, {{map = 0x0400}}",
+                b.map
+            )));
+        }
+        let (char_base, pal) =
+            sheet_layer(&rec.placements.borrow(), world, li, &owner).map_err(fail)?;
+        // A bind starts the layer over as authored: w:set's changes go.
+        world.live[li] = None;
+        let wrap = if stack.get(4).to_bool() {
+            let (w, h) = crate::tiled::painted(&world.map, li)
+                .ok_or_else(|| fail(format!("layer {layer} has no tiles to repeat (wrap)")))?;
+            Some((w as i64, h as i64))
+        } else {
+            None
+        };
+        world.bound[bgi - 1] = Some(WorldBinding {
+            layer: li,
+            map: map as u16,
+            wide,
+            pal,
+            wrap,
+            priority: if stack.get(5).to_bool() { 0x2000 } else { 0 },
+        });
+        stack.replace(ctx, (char_base as i64, wide));
+        Ok(CallbackReturn::Return)
+    });
+    ctx.set_global("__ppu_world_bind", bind).unwrap();
+
+    // (world, map name, x, y) -> target world, wide, char_base per bg[1..4] (nil where unbound): w:enter's
+    // checks and its one change, all checks first. The slot's bindings (bg, layer name, map_base) move onto
+    // the first same-owner world loaded as that map; the library swaps its fields and redraws.
+    let enter_rec = rec.clone();
+    let enter = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
+        let rec = &enter_rec;
+        let w =
+            world_of(ctx, rec, stack.get(0)).map_err(|m| lua_err(ctx, &format!("error[snes.world]: w:enter: {m}")))?;
+        let mut worlds = rec.worlds.borrow_mut();
+        let from = &worlds[w];
+        let fail = |m: String| lua_err(ctx, &format!("error[snes.world]: w:enter (world {}): {m}", from.name));
+        if !ctx.get_global("force_blank").to_bool() && !rec.hot_swap.get() {
+            return Err(fail("w:enter redraws the whole screen, so the screen must be off: set force_blank = true before it, and false on a later update (fade how you like)".into()));
+        }
+        let Value::String(name) = stack.get(1) else {
+            return Err(fail(format!(
+                "the first argument is a map's name, \"level2\" for level2.tmj (got {})",
+                stack.get(1)
+            )));
+        };
+        let name = String::from_utf8_lossy(name.as_bytes()).into_owned();
+        if from.radius.is_some() || from.plane.is_some() {
+            return Err(fail("w:enter swaps maps on backgrounds; a world on the Mode 7 plane (or loaded with radius or view) cannot enter another map".into()));
+        }
+        let whose = match &from.owner {
+            Some(s) => format!("scene {s}"),
+            None => "the program".to_string(),
+        };
+        let Some(t) = worlds
+            .iter()
+            .position(|o| o.name == name && o.owner == from.owner)
+        else {
+            return Err(fail(format!("{whose} loads no map named {name}: load it at file level there, local {name} = world.load(\"{name}\")")));
+        };
+        let to = &worlds[t];
+        if to.radius.is_some() {
+            return Err(fail(format!("map {name} streams through the Mode 7 plane (radius or view): enter maps drawn on backgrounds")));
+        }
+        if from.period.is_some() || to.period.is_some() {
+            return Err(fail("a generated world has no edge to leave by: w:enter swaps maps of fixed size".into()));
+        }
+        let pixel = |v: Value<'_>| match v {
+            Value::Integer(i) => Some(i),
+            Value::Number(n) if n.is_finite() => Some(n.floor() as i64),
+            _ => None,
+        };
+        let (Some(x), Some(y), Value::Nil) =
+            (pixel(stack.get(2)), pixel(stack.get(3)), stack.get(4))
+        else {
+            return Err(fail("w:enter(name, x, y) takes the map's name and the camera's map pixel position, two finite numbers".into()));
+        };
+        let (right, bottom) = (
+            (to.map.width as i64 * 8 - 256).max(0),
+            (to.map.height as i64 * 8 - 224).max(0),
+        );
+        if x < 0 || x > right || y < 0 || y > bottom {
+            return Err(fail(format!("the camera at {x}, {y} leaves map {name}: keep x in 0..{right} and y in 0..{bottom} (clamp it)")));
+        }
+        let owner = from.owner.clone();
+        let wide = to.map.width > 32;
+        let placements = rec.placements.borrow();
+        let mut moved = [None; 4];
+        let mut chars = [Value::Nil; 4];
+        for (i, b) in from.bound.iter().enumerate() {
+            let Some(b) = b else { continue };
+            let layer = &from.map.layers[b.layer].name;
+            let Some(li) = to.map.layers.iter().position(|l| l.name == *layer) else {
+                return Err(fail(format!(
+                    "map {name} has no tile layer named {layer}, which bg[{}] shows",
+                    i + 1
+                )));
+            };
+            if to.map.layers[li].mode7 {
+                return Err(fail(format!(
+                    "layer {layer} of map {name} draws from a Mode 7 tileset, not a sheet"
+                )));
+            }
+            let (char_base, pal) = sheet_layer(&placements, to, li, &owner).map_err(fail)?;
+            let (old_char, _) = sheet_layer(&placements, from, b.layer, &owner).map_err(fail)?;
+            if (char_base, pal) != (old_char, b.pal) {
+                return Err(fail(format!(
+                    "layer {layer} of map {name} draws from a sheet placed at char {char_base:#06x}, palette {pal}, but bg[{}] shows one at char {old_char:#06x}, palette {}: draw both maps' {layer} from the same placement",
+                    i + 1, b.pal)));
+            }
+            map_room(rec, b.map as i64, wide, i + 1, &owner).map_err(fail)?;
+            // A wrapping binding repeats the entered map's own painted part.
+            let wrap = match b.wrap {
+                None => None,
+                Some(_) => {
+                    let (w, h) = crate::tiled::painted(&to.map, li).ok_or_else(|| {
+                        fail(format!("layer {layer} of map {name} has no tiles to repeat (wrap)"))
+                    })?;
+                    Some((w as i64, h as i64))
+                }
+            };
+            moved[i] = Some(WorldBinding {
+                layer: li,
+                map: b.map,
+                wide,
+                pal,
+                wrap,
+                priority: b.priority,
+            });
+            chars[i] = Value::Integer(char_base as i64);
+        }
+        drop(placements);
+        // The one change: these backgrounds now show map `name` (clear first, so a same-map jump keeps them),
+        // drawn as authored: w:set's changes to it go.
+        worlds[t].live.iter_mut().for_each(|l| *l = None);
+        for (i, m) in moved.iter().enumerate() {
+            if m.is_some() {
+                worlds[w].bound[i] = None;
+                worlds[t].bound[i] = *m;
+            }
+        }
+        stack.replace(
+            ctx,
+            (t as i64 + 1, wide, chars[0], chars[1], chars[2], chars[3]),
+        );
+        Ok(CallbackReturn::Return)
+    });
+    ctx.set_global("__ppu_world_enter", enter).unwrap();
+
+    // (world, bg number, x, y, cells, column): present a row (or a column, down from x, y) of
+    // the layer bound to that background into its VRAM map.
+    let strip_rec = rec.clone();
+    let strip = Callback::from_fn(&ctx, move |ctx, _, stack| {
+        let rec = &strip_rec;
+        let w = world_of(ctx, rec, stack.get(0))
+            .map_err(|m| lua_err(ctx, &format!("error[snes.world]: world strip: {m}")))?;
+        let worlds = rec.worlds.borrow();
+        let world = &worlds[w];
+        if stack.get(1).to_int() == Some(0) {
+            // The Mode 7 plane: a row of tile numbers into m7.map, which changes only each VRAM word's low byte
+            // (the high byte is the tiles' pixels).
+            let li = world
+                .plane
+                .ok_or_else(|| lua_err(ctx, "error[snes.world]: world strip: the plane has no bound layer"))?;
+            let [x, y, n] = [2, 3, 4].map(|i| stack.get(i).to_int().unwrap_or(-1));
+            let column = stack.get(5).to_bool();
+            let (width, height) = if world.radius.is_some() {
+                (world.map.width as i64, world.map.height as i64)
+            } else {
+                (128, 128)
+            };
+            let (ex, ey) = if column {
+                (x + 1, y + n)
+            } else {
+                (x + n, y + 1)
+            };
+            if world.period.is_some() {
+                // A generated world: (x, y) is a cell of the ground, and each cell comes from the template its
+                // chunk shows (`__ppu_world_chunk`), at the cell's place in the chunk.
+                if x < 0 || y < 0 || n < 1 {
+                    return Err(lua_err(
+                        ctx,
+                        &format!("error[snes.world]: world strip {x},{y} of {n} cells is not on the generated ground"),
+                    ));
+                }
+                let plane = world.words[li]
+                    .as_ref()
+                    .expect("a bound plane has its cells");
+                let Value::Table(m7) = ctx.get_global("m7") else {
+                    return Err(lua_err(ctx, "error[snes.world]: m7 is not a table"));
+                };
+                let Value::Table(map) = m7.get(ctx, "map") else {
+                    return Err(lua_err(ctx, "error[snes.world]: m7.map is not a table"));
+                };
+                for i in 0..n {
+                    let (cx, cy) = if column { (x, y + i) } else { (x + i, y) };
+                    let Some((sx, sy)) = world.chunks[(cy / 16 % 16 * 16 + cx / 16 % 16) as usize]
+                    else {
+                        return Err(lua_err(ctx, &format!("error[snes.world]: world strip: no template was picked for the chunk of cell {cx},{cy}")));
+                    };
+                    let row = match map.get(ctx, cy % 128) {
+                        Value::Table(t) => t,
+                        _ => {
+                            let t = Table::new(&ctx);
+                            map.set(ctx, cy % 128, t).unwrap();
+                            t
+                        }
+                    };
+                    row.set(
+                        ctx,
+                        cx % 128,
+                        plane[((sy + cy % 16) * width + sx + cx % 16) as usize] as i64,
+                    )
+                    .unwrap();
+                }
+                return Ok(CallbackReturn::Return);
+            }
+            if x < 0 || y < 0 || n < 1 || ex > width || ey > height {
+                return Err(lua_err(ctx, &format!("error[snes.world]: world strip {x},{y} of {n} cells is outside the {width}x{height} plane map")));
+            }
+            let plane = world.words[li]
+                .as_ref()
+                .expect("a bound plane has its cells");
+            let Value::Table(m7) = ctx.get_global("m7") else {
+                return Err(lua_err(ctx, "error[snes.world]: m7 is not a table"));
+            };
+            let Value::Table(map) = m7.get(ctx, "map") else {
+                return Err(lua_err(ctx, "error[snes.world]: m7.map is not a table"));
+            };
+            for i in 0..n {
+                let (cx, cy) = if column { (x, y + i) } else { (x + i, y) };
+                let row = match map.get(ctx, cy % 128) {
+                    Value::Table(t) => t,
+                    _ => {
+                        let t = Table::new(&ctx);
+                        map.set(ctx, cy % 128, t).unwrap();
+                        t
+                    }
+                };
+                row.set(ctx, cx % 128, plane[(cy * width + cx) as usize] as i64)
+                    .unwrap();
+            }
+            return Ok(CallbackReturn::Return);
+        }
+        let b = stack
+            .get(1)
+            .to_int()
+            .filter(|n| (1..=4).contains(n))
+            .and_then(|n| world.bound[n as usize - 1]);
+        let b = b.ok_or_else(|| lua_err(ctx, "error[snes.world]: world strip: that background has no bound layer"))?;
+        // The layer streamed into a VRAM map plays its tile animations there from now on (a cartridge's
+        // ppu_world_anim_on does the same), so a map entered over it stops its old layer's.
+        {
+            let animated = !world.map.layers[b.layer].animations.is_empty();
+            let char_base = if animated {
+                sheet_layer(&rec.placements.borrow(), world, b.layer, &scene_owner(ctx))
+                    .map_or(0, |(c, _)| c)
+            } else {
+                0
+            };
+            let mut on = rec.world_animated.borrow_mut();
+            on.retain(|&(m, ..)| m != b.map);
+            on.push((b.map, w, b.layer, char_base));
+        }
+        let [x, y, n] = [2, 3, 4].map(|i| stack.get(i).to_int().unwrap_or(-1));
+        let column = stack.get(5).to_bool();
+        let (width, height) = (world.map.width as i64, world.map.height as i64);
+        if let Some(p) = world.period {
+            // Generated ground on a background: (x, y) is a cell of the ground (wrapped at the period), each cell
+            // from the template its chunk shows (`__ppu_world_chunk`), into the 64x32 map at the cell's place.
+            if x < 0 || y < 0 || !(1..=64).contains(&n) {
+                return Err(lua_err(ctx, &format!("error[snes.world]: world strip {x},{y} of {n} cells is not on the generated ground")));
+            }
+            let (cw, ch) = world.chunk;
+            let words = world.words[b.layer].as_ref().expect("a bound layer has words");
+            let Value::Table(vram) = ctx.get_global("vram") else {
+                return Err(lua_err(ctx, "error[snes.world]: vram is not a table"));
+            };
+            for i in 0..n {
+                let (cx, cy) = if column { (x, (y + i) % p) } else { ((x + i) % p, y % p) };
+                let cx = cx % p;
+                let Some((sx, sy)) = world.chunks[(cy / ch % 16 * 16 + cx / cw % 16) as usize] else {
+                    return Err(lua_err(ctx, &format!("error[snes.world]: world strip: no template was picked for the chunk of cell {cx},{cy}")));
+                };
+                let at = b.map as i64 + if cx % 64 >= 32 { 0x400 } else { 0 } + (cy % 32) * 32 + cx % 32;
+                let word = words[((sy + cy % ch) * width + sx + cx % cw) as usize];
+                vram.set(ctx, at, (word + (b.pal << 10) + b.priority) as i64).unwrap();
+            }
+            return Ok(CallbackReturn::Return);
+        }
+        let (ex, ey) = if column {
+            (x + 1, y + n)
+        } else {
+            (x + n, y + 1)
+        };
+        if x < 0 || y < 0 || n < 1 || ex > width || ey > height {
+            return Err(lua_err(
+                ctx,
+                &format!("error[snes.world]: world strip {x},{y} of {n} cells is outside the {width}x{height} map"),
+            ));
+        }
+        let words = world.words_of(b.layer).expect("a bound layer has words");
+        let Value::Table(vram) = ctx.get_global("vram") else {
+            return Err(lua_err(ctx, "error[snes.world]: vram is not a table"));
+        };
+        for i in 0..n {
+            let (cx, cy) = if column { (x, y + i) } else { (x + i, y) };
+            let (wx, wy) = b.wrap.map_or((cx, cy), |(w, h)| (cx % w, cy % h));
+            let at = b.map as i64
+                + if b.wide && cx % 64 >= 32 { 0x400 } else { 0 }
+                + (cy % 32) * 32
+                + cx % 32;
+            vram.set(
+                ctx,
+                at,
+                (words[(wy * width + wx) as usize] + (b.pal << 10) + b.priority) as i64,
+            )
+            .unwrap();
+        }
+        Ok(CallbackReturn::Return)
+    });
+    ctx.set_global("__ppu_world_strip", strip).unwrap();
+
+    // (world, slot, x, y): a generated world's chunk in grid slot `slot` (chunk y % 16 * 16 + chunk x % 16)
+    // shows the template that starts at map cell (x, y). The strips after it read the grid.
+    let chunk_rec = rec.clone();
+    let chunk = Callback::from_fn(&ctx, move |ctx, _, stack| {
+        let rec = &chunk_rec;
+        let w = world_of(ctx, rec, stack.get(0))
+            .map_err(|m| lua_err(ctx, &format!("error[snes.world]: world chunk: {m}")))?;
+        let mut worlds = rec.worlds.borrow_mut();
+        let world = &mut worlds[w];
+        let [slot, x, y] = [1, 2, 3].map(|i| stack.get(i).to_int().unwrap_or(-1));
+        let (width, height) = (world.map.width as i64, world.map.height as i64);
+        if world.period.is_none()
+            || !(0..256).contains(&slot)
+            || x < 0
+            || y < 0
+            || x % world.chunk.0 != 0
+            || y % world.chunk.1 != 0
+            || x >= width
+            || y >= height
+        {
+            return Err(lua_err(
+                ctx,
+                &format!(
+                    "error[snes.world]: world chunk {slot}: {x},{y} is not a template of the {width}x{height} map"
+                ),
+            ));
+        }
+        world.chunks[slot as usize] = Some((x, y));
+        Ok(CallbackReturn::Return)
+    });
+    ctx.set_global("__ppu_world_chunk", chunk).unwrap();
+
+    // (world, layer number, px, py, tile) -> cell x, cell y, cells a side: w:set's one change. The Tiled tile under
+    // the pixel (k x k cells, k the map's tile size / 8) becomes tile id `tile` of the layer's tileset, its words
+    // and its kinds; world.luau redraws what the camera shows.
+    let set_rec = rec.clone();
+    let set = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
+        let rec = &set_rec;
+        let w = world_of(ctx, rec, stack.get(0)).map_err(|m| lua_err(ctx, &format!("error[snes.world]: w:set: {m}")))?;
+        let mut worlds = rec.worlds.borrow_mut();
+        let world = &mut worlds[w];
+        let fail = |m: String| lua_err(ctx, &format!("error[snes.world]: w:set (world {}): {m}", world.name));
+        if world.radius.is_some() || world.period.is_some() {
+            return Err(fail("w:set changes maps drawn on backgrounds; a world streamed through the Mode 7 plane (radius, view or period) has no cells to change".into()));
+        }
+        let li = stack.get(1).to_int().filter(|&i| i >= 1 && i as usize <= world.map.layers.len());
+        let li = li.ok_or_else(|| fail("no such layer".into()))? as usize - 1;
+        let layer = &world.map.layers[li];
+        if layer.mode7 {
+            return Err(fail(format!("layer {} draws from a Mode 7 tileset: w:set changes sheet layers on backgrounds", layer.name)));
+        }
+        if world.bound.iter().flatten().any(|b| b.layer == li && b.wrap.is_some()) {
+            return Err(fail(format!("layer {} is bound with wrap, which repeats it as Tiled drew it: w:set changes layers bound without wrap", layer.name)));
+        }
+        if layer.tile_kinds.is_empty() {
+            return Err(fail(format!("layer {} draws no tiles, so it has no tileset to set a tile from: draw at least one tile on it in Tiled", layer.name)));
+        }
+        let (Some(px), Some(py), Some(tile)) = (stack.get(2).to_int(), stack.get(3).to_int(), stack.get(4).to_int()) else {
+            return Err(fail(format!("w:set(layer, x, y, tile) takes a map pixel position and a tile id, whole numbers (got {}, {}, {})", stack.get(2), stack.get(3), stack.get(4))));
+        };
+        let (width, height) = (world.map.width as i64, world.map.height as i64);
+        if !(0..width * 8).contains(&px) || !(0..height * 8).contains(&py) {
+            return Err(fail(format!("the pixel {px}, {py} is off the {}x{} px map", width * 8, height * 8)));
+        }
+        let count = layer.tile_kinds.len() as i64;
+        if !(0..count).contains(&tile) {
+            return Err(fail(format!("tile {tile} is not in layer {}'s tileset, whose ids are 0 to {} (Tiled's tileset panel shows each tile's ID)", layer.name, count - 1)));
+        }
+        let k = world.map.tile_size as i64 / 8;
+        let per = (k * k) as usize;
+        let Some(cells) = layer.tiles[tile as usize * per..][..per].iter().copied().collect::<Option<Vec<u16>>>() else {
+            return Err(fail(format!("tile {tile} of layer {}'s tileset is past the chars of sheet {}: the tileset image is larger than the source", layer.name, layer.source.as_deref().unwrap_or("?"))));
+        };
+        let kind = layer.tile_kinds[tile as usize];
+        let (cx, cy) = (px / 8 / k * k, py / 8 / k * k);
+        if world.live[li].is_none() {
+            let words = world.words[li].clone().expect("a sheet layer with tiles has words");
+            world.live[li] = Some((words, world.map.layers[li].kinds.clone()));
+        }
+        let (words, kinds) = world.live[li].as_mut().expect("just made");
+        for dy in 0..k {
+            for dx in 0..k {
+                let at = ((cy + dy) * width + cx + dx) as usize;
+                words[at] = cells[(dy * k + dx) as usize];
+                kinds[at] = kind;
+            }
+        }
+        stack.replace(ctx, (cx, cy, k));
+        Ok(CallbackReturn::Return)
+    });
+    ctx.set_global("__ppu_world_set", set).unwrap();
+
+    // (world, layer number, px, py) -> the kind at that pixel; 0 off the map.
+    let kind = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
+        let w =
+            world_of(ctx, &rec, stack.get(0)).map_err(|m| lua_err(ctx, &format!("error[snes.world]: w:tile: {m}")))?;
+        let worlds = rec.worlds.borrow();
+        let map = &worlds[w].map;
+        let li = stack
+            .get(1)
+            .to_int()
+            .filter(|&i| i >= 1 && i as usize <= map.layers.len());
+        let li = li.ok_or_else(|| lua_err(ctx, "error[snes.world]: w:tile: no such layer"))? as usize - 1;
+        let kinds = worlds[w].kinds_of(li);
+        let (Some(px), Some(py)) = (stack.get(2).to_int(), stack.get(3).to_int()) else {
+            return Err(lua_err(
+                ctx,
+                "error[snes.world]: w:tile needs a pixel position: w:tile(layer, x, y)",
+            ));
+        };
+        let (cx, cy) = (px.div_euclid(8), py.div_euclid(8));
+        let k = if (0..map.width as i64).contains(&cx) && (0..map.height as i64).contains(&cy) {
+            kinds[cy as usize * map.width + cx as usize] as i64
+        } else {
+            0
+        };
+        stack.replace(ctx, k);
+        Ok(CallbackReturn::Return)
+    });
+    ctx.set_global("__ppu_world_kind", kind).unwrap();
+}
+
+/// The palette source `pn` as art `art_name` (`art`) takes it: it exists, is a palette, and fits
+/// (`source::palette_fits`). The one place dma and sprites.art ask; the error is the refusal text.
+fn palette_for(
+    store: &HashMap<String, crate::source::SourcePayload>,
+    art_name: &str,
+    art: &crate::source::SourcePayload,
+    pn: &str,
+) -> Result<crate::source::PaletteSource, String> {
+    match store.get(pn) {
+        None => Err(format!("no palette source named '{pn}'")),
+        Some(crate::source::SourcePayload::Palette(p)) => crate::source::palette_fits(art, p)
+            .map(|_| p.clone())
+            .map_err(|e| format!("'{art_name}' with palette '{pn}': {e}")),
+        Some(other) => Err(format!("'{pn}' is a {} source, not a palette", other.kind().name())),
+    }
 }
 
 /// Install the `dma(name, opts?)` global — the init-stage VRAM placement
@@ -3929,6 +6033,7 @@ fn install_dma(
     use crate::source::SourceKind;
     crate::lua_raster::install(ctx, rec.raster.clone());
     let timer_rec = rec.clone();
+    let hold_rec = rec.clone();
     let song_store = store.clone();
     let song_rec = rec.clone();
     let dma = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
@@ -3936,17 +6041,19 @@ fn install_dma(
         let runtime = !rec.active.get();
         let owner = scene_owner(ctx);
         // Two scenes never run together, so their setups never conflict.
-        let shared = |other: &Option<String>| owner.is_none() || other.is_none() || *other == owner;
+        let shared = |other: &Option<String>| {
+            !rec.overlaps.get() && (owner.is_none() || other.is_none() || *other == owner)
+        };
         if runtime && !rec.in_frame.get() {
             return Err(lua_err(
                 ctx,
-                "dma runs during setup — call it from top-level code, init() or frame(), not hooks",
+                "error[snes.dma]: dma runs during setup — call it from top-level code, init() or frame(), not hooks",
             ));
         }
         if runtime && !ctx.get_global("force_blank").to_bool() {
             return Err(lua_err(
                 ctx,
-                "dma runs during setup, or in frame() while force_blank is true — set force_blank = true before loading",
+                "error[snes.dma]: dma runs during setup, or in frame() while force_blank is true — set force_blank = true before loading",
             ));
         }
         let name = match stack.get(0) {
@@ -3954,7 +6061,7 @@ fn install_dma(
             _ => {
                 return Err(lua_err(
                     ctx,
-                    "dma: first argument must be a source name (string)",
+                    "error[snes.dma]: dma: first argument must be a source name (string)",
                 ))
             }
         };
@@ -3965,74 +6072,106 @@ fn install_dma(
             .or_else(|| crate::bank::get(&name))
         {
             Some(p) => p,
-            None => return Err(lua_err(ctx, &format!("dma: no source named '{name}'"))),
+            None => return Err(lua_err(ctx, &format!("error[snes.dma]: dma: no source named '{name}'"))),
         };
         let kind = source.kind();
         let opts = match stack.get(1) {
             Value::Table(t) => Some(t),
             Value::Nil => None,
-            _ => return Err(lua_err(ctx, "dma: opts must be a table")),
+            _ => return Err(lua_err(ctx, "error[snes.dma]: dma: opts must be a table")),
         };
         let opt = |key: &'static str| opts.map_or(Value::Nil, |t| t.get(ctx, key));
-        let (char_base, map_base, cgram_base) =
-            if kind == SourceKind::M7 || kind == SourceKind::Sample {
-                for k in ["char", "map", "pal"] {
-                    if !matches!(opt(k), Value::Nil) {
-                        let msg = if kind == SourceKind::M7 {
-                            format!(
-                                "dma: '{name}' is an m7 source — chars+map always live \
-                             interleaved at 0x0000 (palette at CGRAM 1), so it takes no '{k}' opt"
-                            )
-                        } else {
-                            format!(
-                            "dma: '{name}' is a sample source — it takes only 'addr', not '{k}'"
-                        )
-                        };
-                        return Err(lua_err(ctx, &msg));
-                    }
+        let int_opt = |key: &'static str, default: i64, max: i64| match opt(key) {
+            Value::Nil => Ok(default),
+            v => match v.to_int() {
+                Some(n) if (0..=max).contains(&n) => Ok(n),
+                _ => Err(lua_err(
+                    ctx,
+                    &format!("error[snes.dma]: dma: opts.{key} must be an integer in 0..{max:#x}"),
+                )),
+            },
+        };
+        let (char_base, map_base, cgram_base) = if kind == SourceKind::Palette {
+            for k in ["char", "map", "palette"] {
+                if !matches!(opt(k), Value::Nil) {
+                    return Err(lua_err(
+                        ctx,
+                        &format!(
+                            "error[snes.dma]: dma: '{name}' is a palette source — it takes only 'pal', not '{k}'"
+                        ),
+                    ));
                 }
-                (0, 0, 0)
-            } else {
-                let int_opt = |key: &'static str, default: i64, max: i64| match opt(key) {
-                    Value::Nil => Ok(default),
-                    v => match v.to_int() {
-                        Some(n) if (0..=max).contains(&n) => Ok(n),
-                        _ => Err(lua_err(
-                            ctx,
-                            &format!("dma: opts.{key} must be an integer in 0..{max:#x}"),
-                        )),
-                    },
-                };
-                (
-                    int_opt("char", 0x1000, 0x7fff)?,
-                    int_opt("map", 0x0000, 0x7fff)?,
-                    int_opt("pal", 0, if kind == SourceKind::Obj { 7 } else { 0xff })?,
-                )
-            };
+            }
+            (0, 0, int_opt("pal", 0, 0xff)?)
+        } else if kind == SourceKind::M7 || kind == SourceKind::Sample {
+            for k in ["char", "map", "pal"]
+                .into_iter()
+                .chain((kind == SourceKind::Sample).then_some("palette"))
+            {
+                if !matches!(opt(k), Value::Nil) {
+                    let msg = if kind == SourceKind::M7 {
+                        format!(
+                            "'{name}' is an m7 source — chars+map always live \
+                             interleaved at 0x0000 (palette at CGRAM 1), so it takes no '{k}' opt"
+                        )
+                    } else {
+                        format!(
+                            "'{name}' is a sample source — it takes only 'addr', not '{k}'"
+                        )
+                    };
+                    return Err(lua_err(ctx, &format!("error[snes.dma]: dma: {msg}")));
+                }
+            }
+            (0, 0, 0)
+        } else {
+            (
+                int_opt("char", 0x1000, 0x7fff)?,
+                int_opt("map", 0x0000, 0x7fff)?,
+                int_opt("pal", 0, if kind == SourceKind::Obj { 7 } else { 0xff })?,
+            )
+        };
+
+        // `palette = "name"`: the named palette's rows replace the art's own colours.
+        let palette_name = match opt("palette") {
+            Value::Nil => None,
+            Value::String(s) => Some(String::from_utf8_lossy(s.as_bytes()).into_owned()),
+            _ => {
+                return Err(lua_err(
+                    ctx,
+                    "error[snes.dma]: dma: opts.palette must be a palette source name (string)",
+                ))
+            }
+        };
+        let palette = match (&palette_name, crate::source::art_row_size(&source)) {
+            (Some(pn), Some(_)) => Some(
+                palette_for(&store.borrow(), &name, &source, pn)
+                    .map_err(|e| lua_err(ctx, &format!("error[snes.dma]: dma: {e}")))?,
+            ),
+            _ => None,
+        };
+        // A Song takes no palette either; its arm below refuses it.
+        let palette_name = palette_name.filter(|_| palette.is_some());
+        let palette_rows = palette.as_ref().map(|p| p.rows.len());
 
         let align_up = |n: usize, align: usize| (n + align - 1) & !(align - 1);
         let mut vram = Vec::<(usize, usize)>::new();
         let cgram;
         let cgram_end;
         let ret = Table::new(&ctx);
+        mark_setup_handle(ctx, &rec, ret);
         match &source {
             crate::source::SourcePayload::Bg(src) => {
                 if char_base & 0x0fff != 0 || map_base & 0x03ff != 0 {
                     return Err(lua_err(
                         ctx,
-                        "dma: bg char must align to 0x1000 and map to 0x400",
+                        "error[snes.dma]: dma: bg char must align to 0x1000 and map to 0x400",
                     ));
                 }
                 let char_end = char_base as usize + src.char_words.len();
                 let map_end = map_base as usize + src.tilemap_words.len();
-                let stride = if src.bit_depth == 2 {
-                    4
-                } else if src.bit_depth == 8 {
-                    256
-                } else {
-                    16
-                };
-                let pal_end = cgram_base as usize + stride * src.palettes.len();
+                let stride = crate::source::row_size_of(src.bit_depth) as usize;
+                let pal_end =
+                    cgram_base as usize + stride * palette_rows.unwrap_or(src.palettes.len());
                 vram.extend([(char_base as usize, char_end), (map_base as usize, map_end)]);
                 cgram_end = pal_end;
                 cgram = (cgram_base as usize, pal_end);
@@ -4049,17 +6188,12 @@ fn install_dma(
             }
             crate::source::SourcePayload::Sheet(src) => {
                 if char_base & 0x0fff != 0 {
-                    return Err(lua_err(ctx, "dma: sheet char must align to 0x1000"));
+                    return Err(lua_err(ctx, "error[snes.dma]: dma: sheet char must align to 0x1000"));
                 }
                 let char_end = char_base as usize + src.char_words.len();
-                let stride = if src.bit_depth == 2 {
-                    4
-                } else if src.bit_depth == 8 {
-                    256
-                } else {
-                    16
-                };
-                let pal_end = cgram_base as usize + stride * src.palettes.len();
+                let stride = crate::source::row_size_of(src.bit_depth) as usize;
+                let pal_end =
+                    cgram_base as usize + stride * palette_rows.unwrap_or(src.palettes.len());
                 vram.push((char_base as usize, char_end));
                 cgram_end = pal_end;
                 cgram = (cgram_base as usize, pal_end);
@@ -4080,7 +6214,7 @@ fn install_dma(
                     Some(base) => base,
                     None => {
                         if char_base & 0x1fff != 0 {
-                            return Err(lua_err(ctx, "dma: first obj char must align to 0x2000"));
+                            return Err(lua_err(ctx, "error[snes.dma]: dma: first obj char must align to 0x2000"));
                         }
                         // A load is measured from the setup's base; with none, from its own char.
                         if !runtime {
@@ -4090,16 +6224,18 @@ fn install_dma(
                     }
                 };
                 let char_end = char_base as usize + src.char_words.len();
-                if char_base < base as i64
-                    || (char_base - base as i64) % 16 != 0
-                    || char_end > base as usize + 0x2000
+                if !rec.overlaps.get()
+                    && (char_base < base as i64
+                        || (char_base - base as i64) % 16 != 0
+                        || char_end > base as usize + 0x2000)
                 {
                     return Err(lua_err(
                         ctx,
-                        "dma: obj chars must fit the shared 512-tile region",
+                        "error[snes.dma]: dma: obj chars must fit the shared 512-tile region: OBSEL (obj.char_base) points at one 8K-word region, \
+                         so place every sprite sheet in the first one's (from its char, chaining by next_char)",
                     ));
                 }
-                let pal_end = cgram_base as usize + src.palettes.len();
+                let pal_end = cgram_base as usize + palette_rows.unwrap_or(src.palettes.len());
                 vram.push((char_base as usize, char_end));
                 cgram_end = 128 + pal_end * 16;
                 cgram = (128 + cgram_base as usize * 16, cgram_end);
@@ -4107,6 +6243,7 @@ fn install_dma(
                 ret.set(ctx, "pal", cgram_base).unwrap();
                 ret.set(ctx, "tile", (char_base - base as i64) / 16)
                     .unwrap();
+                ret.set(ctx, "name", ctx.intern(name.as_bytes())).unwrap();
                 ret.set(ctx, "next_char", align_up(char_end, 16) as i64)
                     .unwrap();
                 ret.set(ctx, "next_pal", pal_end as i64).unwrap();
@@ -4140,10 +6277,13 @@ fn install_dma(
             }
             crate::source::SourcePayload::M7(src) => {
                 vram.push((0, 0x4000));
-                // The plane is 8bpp, but it only WRITES entries 1..=colors;
-                // OBJ palettes (128+) and offset BG bases past that end can
-                // coexist with it, exactly as on hardware.
-                cgram_end = 1 + src.palette.len();
+                // The plane is 8bpp, but it only WRITES entries 1..=colors (its own, or
+                // the named palette's real count); OBJ palettes (128+) and offset BG
+                // bases past that end can coexist with it, exactly as on hardware.
+                cgram_end = match &palette {
+                    Some(p) => p.rows[0].len(),
+                    None => 1 + src.palette.len(),
+                };
                 cgram = (0, cgram_end);
                 ret.set(ctx, "char", 0).unwrap();
                 ret.set(ctx, "map", 0).unwrap();
@@ -4159,7 +6299,7 @@ fn install_dma(
             crate::source::SourcePayload::Sample(_) if runtime => {
                 return Err(lua_err(
                     ctx,
-                    &format!("dma runs during setup for samples: '{name}' goes to sound RAM in setup only"),
+                    &format!("error[snes.dma]: dma runs during setup for samples: '{name}' goes to sound RAM in setup only"),
                 ))
             }
             crate::source::SourcePayload::Sample(src) => {
@@ -4167,7 +6307,7 @@ fn install_dma(
                 if recorded >= 256 {
                     return Err(lua_err(
                         ctx,
-                        &format!("dma: '{name}' exceeds the 256-entry sample directory"),
+                        &format!("error[snes.dma]: dma: '{name}' exceeds the 256-entry sample directory"),
                     ));
                 }
                 let id = recorded as u8;
@@ -4187,7 +6327,7 @@ fn install_dma(
                         _ => {
                             return Err(lua_err(
                                 ctx,
-                                "dma: opts.addr must be an integer in 0..0xffff",
+                                "error[snes.dma]: dma: opts.addr must be an integer in 0..0xffff",
                             ))
                         }
                     },
@@ -4197,7 +6337,7 @@ fn install_dma(
                 if end > 0x10000 {
                     return Err(lua_err(
                         ctx,
-                        &format!("dma: '{name}' placement exceeds sound RAM"),
+                        &format!("error[snes.dma]: dma: '{name}' placement exceeds sound RAM"),
                     ));
                 }
                 // Reserved sample directory page: [SAMPLE_DIR, SAMPLE_DIR_END).
@@ -4205,7 +6345,7 @@ fn install_dma(
                     return Err(lua_err(
                         ctx,
                         &format!(
-                            "dma: '{name}' overlaps the sample directory page (0x{SAMPLE_DIR:04x}-0x{:04x})",
+                            "error[snes.dma]: dma: '{name}' overlaps the sample directory page (0x{SAMPLE_DIR:04x}-0x{:04x})",
                             SAMPLE_DIR_END - 1
                         ),
                     ));
@@ -4226,7 +6366,7 @@ fn install_dma(
                     return Err(lua_err(
                         ctx,
                         &format!(
-                            "dma: '{name}' overlaps the echo region (0x{echo_lo:04x}-0x{hi:04x}, \
+                            "error[snes.dma]: dma: '{name}' overlaps the echo region (0x{echo_lo:04x}-0x{hi:04x}, \
                              dsp.echo.delay = {delay})",
                             hi = echo_hi - 1
                         ),
@@ -4241,7 +6381,7 @@ fn install_dma(
                     return Err(lua_err(
                         ctx,
                         &format!(
-                            "dma: '{name}' overlaps sample '{}' in sound RAM",
+                            "error[snes.dma]: dma: '{name}' overlaps sample '{}' in sound RAM",
                             other.name
                         ),
                     ));
@@ -4256,6 +6396,7 @@ fn install_dma(
                     addr: addr as u16,
                     end,
                     loop_addr,
+                    loops: src.loop_block.is_some(),
                 });
                 ret.set(ctx, "id", id as i64).unwrap();
                 ret.set(ctx, "addr", addr as i64).unwrap();
@@ -4264,6 +6405,18 @@ fn install_dma(
                 stack.replace(ctx, ret);
                 return Ok(CallbackReturn::Return);
             }
+            crate::source::SourcePayload::Palette(src) => {
+                // A 256 block claims only its real colours, as it does lent to art.
+                let pal_end = cgram_base as usize
+                    + match src.row_size {
+                        256 => src.rows[0].len(),
+                        n => n as usize * src.rows.len(),
+                    };
+                cgram_end = pal_end;
+                cgram = (cgram_base as usize, pal_end);
+                ret.set(ctx, "pal", cgram_base).unwrap();
+                ret.set(ctx, "next_pal", pal_end as i64).unwrap();
+            }
             // A song is authored data played natively by `score{ song = }`
             // (see `install_dma`'s `__song_load`), never `dma()`'s — same
             // refusal shape as the sample-specific opts check above.
@@ -4271,7 +6424,7 @@ fn install_dma(
                 return Err(lua_err(
                     ctx,
                     &format!(
-                        "dma: '{name}' is a song source — score{{ song = \"{name}\" }} plays it, not dma()"
+                        "error[snes.dma]: dma: '{name}' is a song source — score{{ song = \"{name}\" }} plays it, not dma()"
                     ),
                 ))
             }
@@ -4279,7 +6432,7 @@ fn install_dma(
         if vram.iter().any(|&(s, e)| e > 0x8000 || s >= e) || cgram_end > 256 {
             return Err(lua_err(
                 ctx,
-                &format!("dma: '{name}' placement exceeds PPU memory"),
+                &format!("error[snes.dma]: dma: '{name}' placement exceeds PPU memory"),
             ));
         }
         let fields = [
@@ -4303,6 +6456,7 @@ fn install_dma(
             char_base: char_base as u16,
             map_base: map_base as u16,
             cgram_base: cgram_base as u8,
+            palette: palette_name,
             fields,
         };
         if runtime {
@@ -4359,24 +6513,22 @@ fn install_dma(
             {
                 return Err(lua_err(
                     ctx,
-                    &format!("dma: '{name}' overlaps VRAM already in use"),
+                    &format!("error[snes.dma]: dma: '{name}' overlaps VRAM already in use"),
                 ));
             }
         }
-        if rec
-            .cgram_ranges
-            .borrow()
-            .iter()
-            .any(|(_, start, end, o)| cgram.0 != *start && cgram.0 < *end && *start < cgram.1 && shared(o))
-        {
+        if rec.cgram_ranges.borrow().iter().any(|(_, start, end, o)| {
+            cgram.0 != *start && cgram.0 < *end && *start < cgram.1 && shared(o)
+        }) {
             return Err(lua_err(
                 ctx,
-                &format!("dma: '{name}' conflicts with CGRAM already in use"),
+                &format!("error[snes.dma]: dma: '{name}' conflicts with CGRAM already in use"),
             ));
         }
-        rec.vram_ranges
-            .borrow_mut()
-            .extend(vram.into_iter().map(|(s, e)| (name.clone(), s, e, owner.clone())));
+        rec.vram_ranges.borrow_mut().extend(
+            vram.into_iter()
+                .map(|(s, e)| (name.clone(), s, e, owner.clone())),
+        );
         rec.cgram_ranges
             .borrow_mut()
             .push((name.clone(), cgram.0, cgram.1, owner.clone()));
@@ -4386,6 +6538,108 @@ fn install_dma(
         Ok(CallbackReturn::Return)
     });
     ctx.set_global("dma", dma).unwrap();
+
+    // __sfx_hold(v, sample, len, pitch) -> v: kit.lua's sfx() arms voice v's key-off before
+    // keying it on. `len` is seconds, false (no key-off: the note sustains until koff()) or nil:
+    // SFX_LEN on a looping sample, none on a one-shot, which ends on its own. Counted in frames by
+    // `tick_sfx_holds`. The effect borrows the voice from any song until it ends: its hold, the
+    // one-shot's own length at `pitch`, or (len = false) a koff(). With `v` nil the voice is the
+    // one `ppu_rules::voices::choose` picks; nil back when every voice is held by explicit effects.
+    // __sfx_hold(v, false) releases voice v (no key-off armed, no borrow): a compiled cold boot's
+    // power-on, where the cartridge's driver holds nothing.
+    let sfx_hold = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
+        if let (Some(v), Value::Boolean(false)) = (stack.get(0).to_int().filter(|v| (0..=7).contains(v)), stack.get(1)) {
+            let v = v as usize;
+            let mut hold = hold_rec.sfx_hold.get();
+            hold[v] = 0;
+            hold_rec.sfx_hold.set(hold);
+            let mut owns = hold_rec.sfx_own.get();
+            owns[v] = 0;
+            hold_rec.sfx_own.set(owns);
+            hold_rec.sfx_auto.set(hold_rec.sfx_auto.get() & !(1 << v));
+            hold_rec.sfx_armed.set(hold_rec.sfx_armed.get() & !(1 << v));
+            stack.clear();
+            return Ok(CallbackReturn::Return);
+        }
+        let v = match stack.get(0) {
+            Value::Nil => None,
+            v => match v.to_int().filter(|v| (0..=7).contains(v)) {
+                Some(v) => Some(v as usize),
+                None => {
+                    return Err(lua_err(
+                        ctx,
+                        "error[snes.bank]: sfx: voice numbers must be 0..7",
+                    ))
+                }
+            },
+        };
+        let sample = stack.get(1).to_int();
+        let placed = {
+            let samples = hold_rec.samples.borrow();
+            samples
+                .iter()
+                .rev()
+                .find(|s| Some(s.id as i64) == sample)
+                .map(|s| (s.loops, (s.end.saturating_sub(s.addr as u32) / 9) as f64))
+        };
+        let sustain = matches!(stack.get(2), Value::Boolean(false));
+        let seconds = match stack.get(2) {
+            Value::Nil => placed.is_some_and(|(loops, _)| loops).then_some(SFX_LEN),
+            Value::Boolean(false) => None,
+            len => match len.to_number() {
+                Some(s) if s > 0.0 && s.is_finite() => Some(s),
+                _ => {
+                    return Err(lua_err(
+                        ctx,
+                        "error[snes.bank]: sfx: len must be seconds above 0, or false to sustain until koff()",
+                    ))
+                }
+            },
+        };
+        let frames = |s: f64| (s * 60.0).round().clamp(1.0, u16::MAX as f64 - 1.0) as u16;
+        let own = match (seconds, placed) {
+            _ if sustain => u16::MAX,
+            (Some(s), _) => frames(s),
+            // A one-shot plays its 16-sample blocks once, at 32 kHz scaled by its pitch.
+            (None, Some((_, blocks))) => {
+                let pitch = stack.get(3).to_number().unwrap_or(4096.0).max(1.0);
+                frames(blocks * 16.0 * 4096.0 / (32000.0 * pitch))
+            }
+            (None, None) => 1,
+        };
+        let v = match v {
+            Some(v) => v,
+            None => {
+                let ticks = ppu_rules::voices::ticks(own).min(u16::MAX as u32) as u16;
+                match ppu_rules::voices::choose(&hold_rec.voice_view(), hold_rec.keep_mask(), ticks) {
+                    Some(v) => v as usize,
+                    None => {
+                        stack.clear();
+                        return Ok(CallbackReturn::Return);
+                    }
+                }
+            }
+        };
+        let auto = stack.get(0).is_nil();
+        let mut hold = hold_rec.sfx_hold.get();
+        hold[v] = seconds.map_or(0, frames);
+        hold_rec.sfx_hold.set(hold);
+        let mut owns = hold_rec.sfx_own.get();
+        owns[v] = own;
+        hold_rec.sfx_own.set(owns);
+        let mut since = hold_rec.sfx_since.get();
+        since[v] = hold_rec.sfx_seq.get();
+        hold_rec.sfx_since.set(since);
+        hold_rec.sfx_seq.set(since[v].wrapping_add(1));
+        hold_rec
+            .sfx_auto
+            .set(hold_rec.sfx_auto.get() & !(1 << v) | (auto as u8) << v);
+        hold_rec.sfx_armed.set(hold_rec.sfx_armed.get() | 1 << v);
+        hold_rec.kon_open.set(hold_rec.kon_open.get() & !(1 << v));
+        stack.replace(ctx, v as i64);
+        Ok(CallbackReturn::Return)
+    });
+    ctx.set_global("__sfx_hold", sfx_hold).unwrap();
 
     // timer(n, div, fn): register an SPC700 timer hook (M12/audio). Same
     // init-window gate as `dma` — top-level chunks + `init()` only; a call
@@ -4397,30 +6651,55 @@ fn install_dma(
         if !timer_rec.active.get() {
             return Err(lua_err(
                 ctx,
-                "timer runs during setup — call it from top-level code, not frame() or hooks",
+                "error[snes.timer]: timer runs during setup — call it from top-level code, not frame() or hooks",
             ));
         }
         let n = match stack.get(0).to_int() {
             Some(n) if (0..=2).contains(&n) => n as u8,
-            _ => return Err(lua_err(ctx, "timer: n must be an integer in 0..2")),
+            _ => return Err(lua_err(ctx, "error[snes.timer]: timer: n must be an integer in 0..2")),
         };
         let div = match stack.get(1).to_int() {
             Some(d) if (1..=255).contains(&d) => d as u8,
-            _ => return Err(lua_err(ctx, "timer: div must be an integer in 1..255")),
+            _ => return Err(lua_err(ctx, "error[snes.timer]: timer: div must be an integer in 1..255")),
         };
         let f = match stack.get(2) {
             Value::Function(f) => f,
-            _ => return Err(lua_err(ctx, "timer: third argument must be a function")),
+            _ => return Err(lua_err(ctx, "error[snes.timer]: timer: third argument must be a function")),
         };
         let file = function_chunk_name(&f);
         stack.clear();
-        timer_rec
-            .timers
-            .borrow_mut()
-            .push((n, div, Hook::Lua(ctx.stash(f)), file, scene_owner(ctx)));
+        timer_rec.timers.borrow_mut().push((
+            n,
+            div,
+            Hook::Lua(ctx.stash(f)),
+            file,
+            scene_owner(ctx),
+        ));
         Ok(CallbackReturn::Return)
     });
     ctx.set_global("timer", timer).unwrap();
+
+    // `__ppu_palette_fits(art, palette)`: dma's own palette rule for engine Lua, before anything is
+    // placed. Returns the palette's row count, or raises the refusal dma would.
+    let fit_store = song_store.clone();
+    let palette_fits = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
+        let (Value::String(art), Value::String(pal)) = (stack.get(0), stack.get(1)) else {
+            return Err(lua_err(ctx, "error[snes.dma]: __ppu_palette_fits: arguments must be source names (strings)"));
+        };
+        let (art, pal) = (
+            String::from_utf8_lossy(art.as_bytes()).into_owned(),
+            String::from_utf8_lossy(pal.as_bytes()).into_owned(),
+        );
+        stack.clear();
+        let store = fit_store.borrow();
+        let Some(source) = store.get(&art) else {
+            return Err(lua_err(ctx, &format!("error[snes.dma]: no source named '{art}'")));
+        };
+        let p = palette_for(&store, &art, source, &pal).map_err(|e| lua_err(ctx, &format!("error[snes.dma]: {e}")))?;
+        stack.push_back(Value::Integer(p.rows.len() as i64));
+        Ok(CallbackReturn::Return)
+    });
+    ctx.set_global("__ppu_palette_fits", palette_fits).unwrap();
 
     install_song_natives(ctx, song_store, song_rec);
 }
@@ -4453,7 +6732,7 @@ fn install_song_natives(
         if !load_rec.active.get() {
             return Err(lua_err(
                 ctx,
-                "__song_load runs during setup — call it from top-level code, not frame() or hooks",
+                "error[snes.song]: __song_load runs during setup — call it from top-level code, not frame() or hooks",
             ));
         }
         let name = match stack.get(0) {
@@ -4461,7 +6740,7 @@ fn install_song_natives(
             _ => {
                 return Err(lua_err(
                     ctx,
-                    "__song_load: first argument must be a source name (string)",
+                    "error[snes.song]: __song_load: first argument must be a source name (string)",
                 ))
             }
         };
@@ -4474,9 +6753,9 @@ fn install_song_natives(
             }
         };
         let song = crate::song::decode(&bytes)
-            .map_err(|e| lua_err(ctx, &format!("score: song '{name}': {e}")))?;
+            .map_err(|e| lua_err(ctx, &format!("error[snes.score]: score: song '{name}': {e}")))?;
         let compiled = crate::song::compile(&song)
-            .map_err(|e| lua_err(ctx, &format!("score: song '{name}': {e}")))?;
+            .map_err(|e| lua_err(ctx, &format!("error[snes.score]: score: song '{name}': {e}")))?;
         let id = load_rec.songs.borrow().len();
         let rows = song_rows(ctx, &song);
         load_rec.songs.borrow_mut().push(SongPlayer {
@@ -4510,7 +6789,7 @@ fn install_song_natives(
         if !start_rec.active.get() {
             return Err(lua_err(
                 ctx,
-                "__song_start runs during setup — call it from top-level code, not frame() or hooks",
+                "error[snes.song]: __song_start runs during setup — call it from top-level code, not frame() or hooks",
             ));
         }
         let id = match stack.get(0).to_int() {
@@ -4518,17 +6797,17 @@ fn install_song_natives(
             _ => {
                 return Err(lua_err(
                     ctx,
-                    "__song_start: id must be a non-negative integer",
+                    "error[snes.song]: __song_start: id must be a non-negative integer",
                 ))
             }
         };
         let insts_t = match stack.get(1) {
             Value::Table(t) => t,
-            _ => return Err(lua_err(ctx, "__song_start: insts must be a table")),
+            _ => return Err(lua_err(ctx, "error[snes.song]: __song_start: insts must be a table")),
         };
         let pitches_t = match stack.get(2) {
             Value::Table(t) => t,
-            _ => return Err(lua_err(ctx, "__song_start: pitches must be a table")),
+            _ => return Err(lua_err(ctx, "error[snes.song]: __song_start: pitches must be a table")),
         };
         let looping = stack.get(3).to_bool();
         // Seconds from t = 0, or false/nil: set up, not playing.
@@ -4542,7 +6821,7 @@ fn install_song_natives(
         for i in 1..=n {
             let inst = match insts_t.get(ctx, i) {
                 Value::Table(t) => t,
-                _ => return Err(lua_err(ctx, "__song_start: insts must hold tables")),
+                _ => return Err(lua_err(ctx, "error[snes.song]: __song_start: insts must hold tables")),
             };
             insts.push(ctx.stash(inst));
             pitches.push(pitches_t.get(ctx, i).to_int().unwrap_or(0x1000));
@@ -4593,12 +6872,21 @@ fn install_song_natives(
     let play_rec = rec.clone();
     // Restart from the top, anchored at the start of the span being
     // rendered next (see `LuaEngine::realign`). A restart keys off what
-    // the song had sounding, as `stop()` does.
+    // the song had sounding, as `stop()` does. One score plays at a time:
+    // playing one stops any other playing, as the cartridge's sound driver
+    // does (the cartridge sound driver's `score_play`).
     let song_play = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
         if let Some(id) = stack.get(0).to_int().and_then(|n| usize::try_from(n).ok()) {
-            if let Some(p) = play_rec.songs.borrow_mut().get_mut(id) {
+            let mut songs = play_rec.songs.borrow_mut();
+            for (_, p) in songs.iter_mut().enumerate().filter(|(i, p)| *i != id && p.playing) {
+                p.set_anchor(Anchor::Stopped);
+                p.playing = false;
+                song_koff(ctx, p.mask & !play_rec.owned());
+                p.ends = [None; 8];
+            }
+            if let Some(p) = songs.get_mut(id) {
                 if p.anchor != Anchor::Stopped {
-                    song_koff(ctx, p.mask);
+                    song_koff(ctx, p.mask & !play_rec.owned());
                 }
                 p.set_anchor(Anchor::Pending);
                 p.playing = true;
@@ -4616,7 +6904,7 @@ fn install_song_natives(
                 p.set_anchor(Anchor::Stopped);
                 p.playing = false;
                 p.at_false = false;
-                song_koff(ctx, p.mask);
+                song_koff(ctx, p.mask & !rec.owned());
                 p.ends = [None; 8];
             }
         }
@@ -4633,39 +6921,94 @@ fn install_song_natives(
 /// `add_source` under a placed name flows in next frame; a removed one
 /// degrades to a Mismatch report (mirrors the old binding-path UX) and places
 /// nothing.
+/// The tile animations playing at frame counter `f` (the scene's): over the placed sheets, each animated tile's chars
+/// hold its frame's chars, for the layer last streamed into each VRAM map (`DmaRecorder::world_animated`). Before the
+/// program's own `vram[]` writes, which win, as on a cartridge (its present copies the frames before the stage).
+fn animate_worlds(
+    rec: &DmaRecorder,
+    store: &HashMap<String, crate::source::SourcePayload>,
+    f: u32,
+    mem: &mut Memory,
+) {
+    use crate::source::SourcePayload;
+    let worlds = rec.worlds.borrow();
+    for &(_, w, li, char_base) in rec.world_animated.borrow().iter() {
+        let layer = &worlds[w].map.layers[li];
+        let Some(SourcePayload::Sheet(sheet)) = layer.source.as_ref().and_then(|s| store.get(s)) else {
+            continue;
+        };
+        let per = sheet.bit_depth as usize * 4;
+        for a in &layer.animations {
+            let (from, _) = &a.frames[a.frame_at(u64::from(f))];
+            for (&to, &from) in a.chars.iter().zip(from) {
+                let src = &sheet.char_words[from as usize * per..][..per];
+                for (i, &word) in src.iter().enumerate() {
+                    mem.vram[(char_base as usize + to as usize * per + i) & 0x7fff] = word;
+                }
+            }
+        }
+    }
+}
+
 fn replay_dma<'a>(
     placements: impl Iterator<Item = &'a DmaPlacement>,
     store: &HashMap<String, crate::source::SourcePayload>,
     reports: &mut Vec<ImportBudget>,
     mem: &mut Memory,
 ) {
-    use crate::source::SourcePayload;
+    use crate::source::{palette_fits, SourcePayload};
     for p in placements {
-        match store.get(&p.name) {
-            Some(SourcePayload::Bg(src)) => {
-                crate::source::place_bg(src, mem, p.map_base, p.char_base, p.cgram_base as usize)
-            }
-            Some(SourcePayload::Sheet(src)) => {
-                crate::source::place_sheet(src, mem, p.char_base, p.cgram_base as usize)
-            }
-            Some(SourcePayload::M7(src)) => crate::source::place_m7(src, mem),
-            Some(SourcePayload::Obj(src)) => {
-                crate::source::place_obj(src, mem, p.char_base, p.cgram_base as usize)
-            }
-            // Samples are written once by `LuaEngine::set_sources` after
-            // `init()`, never replayed per frame — a `dma()` placement
-            // naming one is a no-op here.
-            Some(SourcePayload::Sample(_)) => {}
-            // Songs are never `dma()`'d (the `dma` callback refuses the
-            // kind), so a placement can't name one — kept only so this
-            // match stays exhaustive over `SourcePayload`.
-            Some(SourcePayload::Song(_)) => {}
-            None => reports.push(ImportBudget::Mismatch {
+        let Some(art) = store.get(&p.name) else {
+            reports.push(ImportBudget::Mismatch {
                 layer: None,
                 slot: p.name.clone(),
                 expected: "dma placement".into(),
                 found: MISSING_SOURCE.into(),
-            }),
+            });
+            continue;
+        };
+        // The named palette, live like the art; one that is gone, changed kind or row size
+        // reports and leaves the art its own colours.
+        let palette = p.palette.as_ref().and_then(|pn| {
+            let fit = match store.get(pn) {
+                Some(SourcePayload::Palette(pal)) => palette_fits(art, pal).map(|_| pal),
+                Some(other) => Err(format!("a {} source, not a palette", other.kind().name())),
+                None => Err(MISSING_SOURCE.into()),
+            };
+            match fit {
+                Ok(pal) => Some(pal),
+                Err(found) => {
+                    reports.push(ImportBudget::Mismatch {
+                        layer: None,
+                        slot: p.name.clone(),
+                        expected: format!("palette '{pn}'"),
+                        found,
+                    });
+                    None
+                }
+            }
+        });
+        let cgram = p.cgram_base as usize;
+        match art {
+            SourcePayload::Bg(src) => {
+                crate::source::place_bg_in(src, mem, p.map_base, p.char_base, cgram, palette)
+            }
+            SourcePayload::Sheet(src) => {
+                crate::source::place_sheet_in(src, mem, p.char_base, cgram, palette)
+            }
+            SourcePayload::M7(src) => crate::source::place_m7_in(src, mem, palette),
+            SourcePayload::Obj(src) => {
+                crate::source::place_obj_in(src, mem, p.char_base, cgram, palette)
+            }
+            SourcePayload::Palette(src) => crate::source::place_palette(src, mem, cgram),
+            // Samples are written once by `LuaEngine::set_sources` after
+            // `init()`, never replayed per frame — a `dma()` placement
+            // naming one is a no-op here.
+            SourcePayload::Sample(_) => {}
+            // Songs are never `dma()`'d (the `dma` callback refuses the
+            // kind), so a placement can't name one — kept only so this
+            // match stays exhaustive over `SourcePayload`.
+            SourcePayload::Song(_) => {}
         }
     }
 }
@@ -4682,8 +7025,54 @@ fn function_chunk_name(f: &Function<'_>) -> Option<String> {
     }
 }
 
+/// A refusal that belongs to a project file (a Tiled map), not to the Luau line that loaded it:
+/// the error names the map's file, so the Studio shows it on the map.
+#[derive(Debug)]
+struct ProjectFileFailure {
+    file: String,
+    message: String,
+}
+impl std::fmt::Display for ProjectFileFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl std::error::Error for ProjectFileFailure {}
+
+/// `e`, the error `ex` ended with, placed at the innermost line of the author's own files it passed
+/// (not an engine library's) when it names no place of its own: a refusal from `dma` or
+/// `sprites.art` points at the line that called it, not at the file that holds `frame`.
+fn located(lua: &mut Lua, ex: &piccolo::StashedExecutor, e: StaticError) -> LuaError {
+    let mut err = static_error_to_lua(e);
+    if err.line.is_some() || err.file.is_some() {
+        return err;
+    }
+    let author = |f: &str| !f.starts_with('@') && (f.ends_with(".luau") || f.ends_with(".lua"));
+    let at = lua.enter(|ctx| {
+        ctx.fetch(ex)
+            .error_trace()
+            .into_iter()
+            .find_map(|(chunk, line)| {
+                let file = String::from_utf8_lossy(chunk.as_bytes()).into_owned();
+                author(&file).then_some((file, line.0 as u32 + 1))
+            })
+    });
+    if let Some((file, line)) = at {
+        err.file = Some(file);
+        err.line = Some(line);
+    }
+    err
+}
+
 fn static_error_to_lua(e: StaticError) -> LuaError {
     if let StaticError::Runtime(rt) = &e {
+        if let Some(failure) = rt.downcast::<ProjectFileFailure>() {
+            return LuaError {
+                file: Some(failure.file.clone()),
+                line: None,
+                message: failure.message.clone(),
+            };
+        }
         if let Some(failure) = rt.downcast::<crate::precision::Failure>() {
             return LuaError {
                 file: Some(failure.file.clone()),
@@ -5908,27 +8297,13 @@ fn write_state<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>, m: &mut Mirror, r
 /// a loud `dma` error; this covers removal AFTER placement.)
 const MISSING_SOURCE: &str = "no source with this name";
 
-/// VRAM word address of the tilemap entry for tile column `tx`, row `ty` at a
-/// layer's snapped `map_base` and screen size. Mirrors `bg::map_entry_addr`
-/// (private there) so a `bg[n].map` poke lands exactly where the rasterizer
-/// reads it; the two must stay in lockstep.
-fn tilemap_addr(map_base: u16, screen_size: u8, tx: u32, ty: u32) -> usize {
-    let screen = match screen_size {
-        1 => tx / 32,
-        2 => ty / 32,
-        3 => (ty / 32) * 2 + tx / 32,
-        _ => 0,
-    };
-    ((map_base as u32 + screen * 0x400 + (ty % 32) * 32 + (tx % 32)) & 0x7fff) as usize
-}
-
 /// Flush the DSL memory-poke surfaces into `Memory`. Runs AFTER the dma replay
 /// has laid down the init placements, so manual pokes compose on top under
 /// last-write-wins. Order: structured tilemap/char pokes, then the raw `vram[]`
 /// table as the FINAL authority (a raw word write always wins). `cgram[]` is
 /// applied as an override on top of the placed palette (only set entries).
 /// VRAM is NOT zeroed here — `frame()` zeroes it before the replay.
-fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
+fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) -> Result<(), String> {
     // cgram[] overrides the placed palette: apply only the entries the user
     // actually set, so a dma placement's colors survive where unpoked.
     // (mem.cgram was zeroed and any placed palette written before this runs.)
@@ -6005,7 +8380,9 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
                     let hf = cell.get(ctx, "flip_x").to_bool() as u16;
                     let vf = cell.get(ctx, "flip_y").to_bool() as u16;
                     let word = tile | (pal << 10) | (prio << 13) | (hf << 14) | (vf << 15);
-                    let addr = tilemap_addr(map_base, screen_size, col as u32, row_i as u32);
+                    let addr =
+                        crate::bg::map_entry_addr(map_base, screen_size, col as u32, row_i as u32)
+                            as usize;
                     mem.vram[addr] = word;
                 }
             }
@@ -6047,6 +8424,9 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
         }
     }
 
+    // bg[n].columns -> BG3's offset table: after the structured pokes, before raw vram[].
+    write_columns(ctx, mem)?;
+
     // Raw `vram[addr] = word` pokes — the FINAL authority (applied after imports
     // and structured pokes, so a raw word write always wins). Iterate only the
     // set entries (sparse) rather than scanning 0..0x8000.
@@ -6059,6 +8439,72 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) {
             }
         }
     }
+    Ok(())
+}
+
+/// `bg[n].columns[c] = dy`: derive Mode 2's offset table (BG3's map at `bg[3].map_base`) from
+/// the set columns and this frame's scroll. No column set: the table is left alone, so raw
+/// `vram[]` tables keep working. Anything the rule can't serve is refused with its fix.
+fn write_columns<'gc>(ctx: piccolo::Context<'gc>, mem: &mut Memory) -> Result<(), String> {
+    use crate::quantize::{bg_map_base, bg_screen_size, bg_tile_size, scroll_reg};
+    let Value::Table(bg) = ctx.get_global("bg") else { return Ok(()) };
+    let layer = |n: i64| match bg.get(ctx, n) {
+        Value::Table(t) => Some(t),
+        _ => None,
+    };
+    let num = |t: Option<Table<'gc>>, k: &'static str| t.map_or(0.0, |t| t.get(ctx, k).to_number().unwrap_or(0.0));
+    let scroll = |t: Option<Table<'gc>>| match t.map(|t| t.get(ctx, "scroll")) {
+        Some(Value::Table(s)) => (num(Some(s), "x"), num(Some(s), "y")),
+        _ => (0.0, 0.0),
+    };
+    let mut used = vec![];
+    for n in 1..=4i64 {
+        if let Some(Value::Table(c)) = layer(n).map(|t| t.get(ctx, "columns")) {
+            if c.iter().next().is_some() {
+                used.push((n, c));
+            }
+        }
+    }
+    let Some(&(n, cols)) = used.first() else { return Ok(()) };
+    if n > 2 {
+        return Err(format!("bg[{n}].columns: only bg[1] and bg[2] can move columns (BG3 holds the table in Mode 2)"));
+    }
+    if used.len() > 1 {
+        return Err("bg[1].columns and bg[2].columns are both set: Mode 2 moves the columns of one layer at a time; clear one".into());
+    }
+    let mode = ctx.get_global("mode").to_int().unwrap_or(0);
+    if mode != 2 {
+        return Err(format!("bg[{n}].columns needs mode = 2 (offset-per-tile), but mode is {mode}"));
+    }
+    let lt = layer(n);
+    if bg_tile_size(num(lt, "tile_size") as u8) != 8 {
+        return Err(format!("bg[{n}].columns needs bg[{n}].tile_size = 8"));
+    }
+    let t3 = layer(3);
+    if bg_tile_size(num(t3, "tile_size") as u8) != 8 || scroll(t3) != (0.0, 0.0) {
+        return Err(format!("bg[{n}].columns reads the table at bg[3]: leave bg[3].tile_size 8 and bg[3].scroll at 0, 0"));
+    }
+    // The table is two map rows (64 words) at bg[3].map_base. Sitting on BG1's or BG2's map is
+    // allowed here, as on hardware: the Studio warns and offers a free block, the cart compiler refuses.
+    let table = bg_map_base(num(t3, "map_base") as u32) as u32;
+    let width = if bg_screen_size(num(lt, "screen_size") as u8) & 1 != 0 { 64 } else { 32 };
+    let mut dy = [0i16; 64];
+    for (k, v) in cols {
+        let (Some(c), Some(d)) = (k.to_int(), v.to_number()) else {
+            return Err(format!("bg[{n}].columns[{k:?}] = {v:?}: use a map column number and a whole number of pixels"));
+        };
+        if !(0..width as i64).contains(&c) {
+            return Err(format!("bg[{n}].columns[{c}]: the map is {width} columns wide (0 to {})", width - 1));
+        }
+        dy[c as usize] = scroll_reg(d as f32);
+    }
+    let (sx, sy) = scroll(lt);
+    let words = crate::bg::columns_vertical_words((n - 1) as u8, width, scroll_reg(sx as f32), scroll_reg(sy as f32), |c| dy[c as usize]);
+    for (k, w) in words.into_iter().enumerate() {
+        mem.vram[(table as usize + k) & 0x7fff] = 0; // row 0: horizontal entries, unarmed
+        mem.vram[(table as usize + 32 + k) & 0x7fff] = w;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

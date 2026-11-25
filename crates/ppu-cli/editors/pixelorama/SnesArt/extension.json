@@ -1,0 +1,10 @@
+{
+	"name": "SnesArt",
+	"display_name": "SNES art",
+	"description": "Opens ppu.toys project PNGs as indexed SNES art, flags bad tiles live with `ppu art check`, and saves the indexed PNG.",
+	"author": "ppu.toys",
+	"version": "0.1.0",
+	"license": "MIT",
+	"supported_api_versions": [10],
+	"nodes": ["main.tscn"]
+}

@@ -99,7 +99,7 @@
 //! and stays silent for 5 samples before its envelope and BRR decoding
 //! begin. SRCN/DIR/PITCH/ADSR writes before the poll are seen by the KON.
 //! The polls fall on the samples after which `clock` is even, measured against
-//! bsnes and Snes9x (ppu-cart's tests/apu_timing.rs).
+//! bsnes and Snes9x (ppu-console's tests/apu_timing.rs).
 //!
 //! shortcut: hosts that write a whole tick at once (the Studio's song player,
 //! its frame flush) can write several KON/KOFF values within one poll, where
@@ -169,6 +169,21 @@ static COUNTER_OFFSETS: [i32; 32] = [
     1, 0, 1040, 536, 0, 1040, 536, 0, 1040, 536, 0, 1040, 536, 0, 1040, 536, 0, 1040, 536, 0, 1040,
     536, 0, 1040, 536, 0, 1040, 536, 0, 1040, 0, 0,
 ];
+
+/// Seconds an ADSR envelope's sustain phase takes to fall from sustain level `s` to silence at
+/// sustain rate `r` (the exponential step `Envelope::tick` takes); infinite for `r = 0`.
+pub(crate) fn sustain_seconds(s: u8, r: u8) -> f64 {
+    if r == 0 {
+        return f64::INFINITY;
+    }
+    let (mut env, mut steps) = (((((s & 7) as i32) + 1) << 8).min(0x7ff), 0u32);
+    while env > 0 {
+        env -= 1;
+        env -= env >> 8;
+        steps += 1;
+    }
+    (steps * COUNTER_RATES[(r & 0x1f) as usize] as u32) as f64 / SAMPLE_RATE as f64
+}
 
 pub(crate) fn read_counter(counter: i32, rate: i32) -> bool {
     ((counter + COUNTER_OFFSETS[rate as usize]) % COUNTER_RATES[rate as usize]) != 0
@@ -351,7 +366,7 @@ impl Dsp {
 
     /// `write` as the SPC700 makes it `cycle` (0..31) cycles into the sample period being
     /// rendered next: the poll reads KON and KOFF in the sample's last cycle (fullsnes puts both
-    /// at T31; measured against bsnes and Snes9x in ppu-cart's tests/apu_timing.rs), so a write
+    /// at T31; measured against bsnes and Snes9x in ppu-console's tests/apu_timing.rs), so a write
     /// in that cycle waits for the next poll.
     pub fn write_at(&mut self, reg: u8, val: u8, cycle: u32) {
         if matches!(reg & 0x7f, 0x4c | 0x5c) && cycle >= 31 {
@@ -365,7 +380,7 @@ impl Dsp {
     /// last `render`d sample: each voice writes its ENVX and OUTX at its own slot of the 32-cycle
     /// pipeline (fullsnes "SNES APU Low Level Timings": V0ENVX at T2, then every 3 cycles a voice),
     /// so earlier reads still see the previous sample's. The slots' offset from the sample
-    /// boundary, 5 + 3 * voice, is measured against bsnes and Snes9x (ppu-cart's
+    /// boundary, 5 + 3 * voice, is measured against bsnes and Snes9x (ppu-console's
     /// tests/apu_timing.rs).
     pub fn read_at(&self, reg: u8, cycle: u32) -> u8 {
         let reg = reg & 0x7f;

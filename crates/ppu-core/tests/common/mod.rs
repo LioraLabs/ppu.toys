@@ -41,8 +41,10 @@ pub fn add_sheet(e: &mut LuaEngine, name: &str, rgba: Vec<u8>, w: u32, h: u32, b
         bit_depth: Some(bit_depth),
         ..Default::default()
     };
-    let (payload, _) = convert_source(SourceKind::Sheet, &opts, &rgba, w, h).unwrap();
+    let (payload, meta) = convert_source(SourceKind::Sheet, &opts, &rgba, w, h).unwrap();
     e.add_source(name, &payload.encode()).unwrap();
+    let pals: Vec<u8> = meta.cells.unwrap().iter().map(|c| c.pal).collect();
+    e.set_sheet_palettes(name, &pals);
 }
 
 /// 40 BRR blocks × 9 bytes.

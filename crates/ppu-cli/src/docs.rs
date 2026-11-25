@@ -1,33 +1,14 @@
 use anyhow::{bail, Result};
 
-// Embed the maintained application docs: installed binaries need no checkout.
-const TOPICS: &[(&str, &str)] = &[
-    ("cli", include_str!("../docs/cli.md")),
-    ("luau", include_str!("../docs/luau.md")),
-    ("registers", include_str!("../docs/registers.md")),
-    ("display", include_str!("../docs/display.md")),
-    ("backgrounds", include_str!("../docs/backgrounds.md")),
-    ("sprites", include_str!("../docs/sprites.md")),
-    ("mode7", include_str!("../docs/mode7.md")),
-    ("scanlines", include_str!("../docs/scanlines.md")),
-    ("windows", include_str!("../docs/windows.md")),
-    ("color-math", include_str!("../docs/color-math.md")),
-    ("sources", include_str!("../docs/sources.md")),
-    ("pixel-art", include_str!("../docs/pixel-art.md")),
-    ("dma", include_str!("../docs/dma.md")),
-    ("pad", include_str!("../docs/pad.md")),
-    ("sram", include_str!("../docs/sram.md")),
-    ("scenes", include_str!("../docs/scenes.md")),
-    ("audio", include_str!("../docs/audio.md")),
-];
-
-pub fn docs(topic: Option<&str>) -> Result<String> {
-    match topic {
-        None => Ok(format!("Offline documentation bundled with ppu {}.\nUse ppu docs <topic> (Markdown links refer to other topics).\nTopics: {}, all\n", env!("CARGO_PKG_VERSION"), TOPICS.iter().map(|t| t.0).collect::<Vec<_>>().join(", "))),
-        Some("all") => Ok(TOPICS.iter().map(|t| t.1).collect::<Vec<_>>().join("\n\n")),
-        Some(name) => match TOPICS.iter().find(|t| t.0 == name) {
-            Some((_, text)) => Ok((*text).into()),
-            None => bail!("unknown documentation topic {name:?}; use ppu docs"),
-        },
+/// `ppu docs [query] [--links]`: a note (by id, code, error text or words) or a map's note list;
+/// no query lists the maps.
+pub fn docs(query: Option<&str>, links: bool) -> Result<String> {
+    let notes = ppu_docs::graph();
+    let Some(query) = query else {
+        return Ok(format!("Offline documentation bundled with ppu {}.\nUse ppu docs <note id|diagnostic code|error text|words> for one note, or a map for its notes:\n{}", env!("CARGO_PKG_VERSION"), notes.contents()));
+    };
+    match notes.answer(query, links, ppu_docs::Reader::Shell) {
+        Some(text) => Ok(text),
+        None => bail!("no note matches {query:?}; ppu docs lists the maps"),
     }
 }

@@ -24,6 +24,7 @@ fn steps() -> Song {
                 note: Some(48 + i),
                 vol: 100,
                 pan: 0,
+                keep: false,
             })
             .collect(),
         patterns: vec![Pattern {
@@ -169,26 +170,17 @@ fn a_seek_into_a_later_pass_of_a_looping_song_wraps() {
 }
 
 #[test]
-fn at_names_a_marker() {
-    let mut e = engine("markers = { intro = 0.75 }\nh = score{ song = \"steps\", at = \"intro\" }");
-    let sram = run(&mut e, 0..50);
-    assert_eq!(e.score_view().unwrap().anchor, Some(0.75));
-    // 0.75 s is frame 45's start.
-    assert_eq!(heard(&sram, 0, 0).first(), Some(&(46, 0)), "{sram}");
-}
-
-#[test]
-fn an_unknown_marker_is_a_setup_error_naming_it() {
+fn a_marker_name_is_a_setup_error() {
     let mut e = LuaEngine::new();
     common::add_song_source(&mut e, "steps", &steps());
     let err = e
         .set_sources(&[(
             "main.lua",
-            &program("markers = { intro = 1 }\nh = score{ song = \"steps\", at = \"outro\" }"),
+            &program("markers = { intro = 1 }\nh = score{ song = \"steps\", at = \"intro\" }"),
         )])
         .unwrap_err();
     assert!(
-        err.message.contains("no marker named 'outro'"),
+        err.message.contains("score: at must be seconds or false"),
         "{}",
         err.message
     );
@@ -273,6 +265,7 @@ fn a_jump_keys_off_the_notes_sounding() {
         note: None,
         vol: 100,
         pan: 0,
+        keep: false,
     }];
     held.patterns[0].notes = vec![Note {
         at: 0,
@@ -423,6 +416,7 @@ fn held_engine(main: &str) -> LuaEngine {
         note: None,
         vol: 100,
         pan: 0,
+        keep: false,
     }];
     held.patterns[0].notes = vec![Note {
         at: 0,

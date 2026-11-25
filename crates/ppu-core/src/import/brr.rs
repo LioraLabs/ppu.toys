@@ -13,7 +13,7 @@ use crate::dsp::brr::{decode_sample, BrrBlockDecoder};
 /// Quality/shape report for one `encode_brr` call. See field docs for exact
 /// semantics; `snr_db` and `max_error` are computed against the DSP core's
 /// own decoder output, not the encoder's internal bookkeeping.
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SampleReport {
     /// Input PCM frames (before zero-padding to a block boundary).
     pub samples: usize,
@@ -27,7 +27,7 @@ pub struct SampleReport {
     /// Max `|x - y|` over the unpadded samples.
     pub max_error: u16,
     /// Block-aligned loop point actually encoded, in samples.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_start: Option<usize>,
     /// True when the requested `loop_start` was not already block-aligned.
     pub loop_moved: bool,

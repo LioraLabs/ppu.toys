@@ -6,7 +6,9 @@ fn run(files: &[(&str, &str)], frames: u32, n: usize) -> Vec<i32> {
     let mut engine = LuaEngine::new();
     engine.set_sources(files).unwrap();
     for f in 0..frames {
-        engine.frame(f as f64 / 60., f).unwrap_or_else(|e| panic!("frame {f}: {}", e.message));
+        engine
+            .frame(f as f64 / 60., f)
+            .unwrap_or_else(|e| panic!("frame {f}: {}", e.message));
     }
     (0..n).map(|i| engine.memory().oam[i].x as i32).collect()
 }
@@ -37,7 +39,14 @@ local pool = Pools.new(3, make)
 "#;
 
 fn pool_run(body: &str, n: usize) -> Vec<i32> {
-    run(&[("main.luau", &format!("{POOL_HEAD}function frame(t, f)\n{body}\nend"))], 1, n)
+    run(
+        &[(
+            "main.luau",
+            &format!("{POOL_HEAD}function frame(t, f)\n{body}\nend"),
+        )],
+        1,
+        n,
+    )
 }
 
 #[test]

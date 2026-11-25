@@ -26,7 +26,7 @@ mismatched_lifetime_syntaxes = "allow"
 [package]
 edition = "2021"
 name = "piccolo-ppu"
-version = "0.3.4"
+version = "0.3.6"
 authors = ["kyren <catherine@kyju.org>"]
 description = "Stackless Lua VM implemented in pure Rust: piccolo 0.3.3 plus the unreleased RawTable::set fix, as used by ppu.toys"
 readme = "README.md"

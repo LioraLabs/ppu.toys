@@ -1,0 +1,9 @@
+{
+  "name": "ppu-art",
+  "displayName": "SNES art (ppu)",
+  "description": "Opens a ppu project PNG as SNES art and flags bad tiles live with `ppu art check`.",
+  "version": "0.1.0",
+  "author": { "name": "ppu.toys" },
+  "license": "MIT",
+  "contributes": { "scripts": [ { "path": "./snes-art.lua" } ] }
+}

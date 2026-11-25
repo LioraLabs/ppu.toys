@@ -7,12 +7,13 @@
 //! Byte layout v1 (little-endian):
 //!
 //! ```text
-//! common:  u8 version=3 | u8 kind (0=bg 1=m7 2=obj 3=sheet 4=sample 5=song)
+//! common:  u8 version=3 | u8 kind (0=bg 1=m7 2=obj 3=sheet 4=sample 5=song 6=palette)
 //! bg:      u8 bit_depth (2|4|8) | u8 tile_size (8)
 //!          u8 pal_count, per palette: u8 len + len*u16 BGR555
 //!          u16 tile_count, tile_count*(bit_depth*4)*u16 char words (bitplane-packed, tile 0 blank)
 //!          u8 screen_size (0..=3), then n_screens(screen_size)*0x400 u16 tilemap words
-//! m7:      u8 opts_len (1 in v2) + u8 extbg
+//! m7:      u8 opts_len (1 in v2, 3 when the image overflowed 256 tiles) + u8 extbg
+//!          [+ u16 distinct tiles in the image, only when over 256]
 //!          u8 pal_len + pal_len*u16 BGR555 (flat, CGRAM 0 implicit transparent)
 //!          u16 tile_count (<=256), tile_count*64 chunky 8bpp bytes
 //!          u8 tiles_w (<=128) | u8 tiles_h (<=128), tiles_w*tiles_h map bytes
@@ -33,6 +34,12 @@
 //!          UNDECODED — a bad song is a setup error at `score{}` time, not
 //!          an add_source error, so this kind's own decode never parses
 //!          them (an empty body is accepted here).
+//! palette: u8 row_size (4|16) | u8 row_count (1..=256/row_size), row_count*row_size
+//!          u16 BGR555: whole rows with entry 0 of each stored (placement never writes
+//!          it: it is the transparent colour); padding repeats the row's colour 0.
+//!          Or the 256-colour block, unpadded: u8 0 | u8 count-1 (1..=256 colours,
+//!          entry 0 included), count*u16 BGR555; placement writes and claims only
+//!          entries 1..count, like an m7 source's own palette.
 //! ```
 //!
 //! Tilemap/map tile numbers are relative to the payload's own char block;
@@ -43,7 +50,7 @@ use crate::import::obj::ObjCell;
 use crate::import::BudgetReport;
 use crate::import_m7::Mode7ImportReport;
 use crate::memory::Memory;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub const PAYLOAD_VERSION: u8 = 3;
 
@@ -62,6 +69,24 @@ pub enum SourceKind {
     /// song is authored data, not an image to quantize), so it has no
     /// `FromStr` string and no `convert_source` conversion path.
     Song,
+    /// Colours only, from a `.gpl` (see `crate::gpl`): `dma("name", { pal })` writes
+    /// them, `dma(art, { palette = "name" })` writes them in place of the art's own.
+    Palette,
+}
+
+impl SourceKind {
+    /// The kind as a user names it, for messages.
+    pub fn name(self) -> &'static str {
+        match self {
+            SourceKind::Bg => "bg",
+            SourceKind::M7 => "m7",
+            SourceKind::Obj => "obj",
+            SourceKind::Sheet => "sheet",
+            SourceKind::Sample => "sample",
+            SourceKind::Song => "song",
+            SourceKind::Palette => "palette",
+        }
+    }
 }
 
 /// The kind strings the JS surface names a source by (`convertSource`).
@@ -74,6 +99,7 @@ impl std::str::FromStr for SourceKind {
             "obj" => Ok(SourceKind::Obj),
             "sheet" => Ok(SourceKind::Sheet),
             "sample" => Ok(SourceKind::Sample),
+            "palette" => Ok(SourceKind::Palette),
             other => Err(format!("unknown source kind '{other}'")),
         }
     }
@@ -83,6 +109,9 @@ impl std::str::FromStr for SourceKind {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct M7Options {
     pub extbg: bool,
+    /// Distinct 8x8 tiles the image had when more than the 256 kept (their cells fell back to
+    /// tile 0); 0 when every tile fit. Carried so a Tiled tileset can be refused with the count.
+    pub overflowed_tiles: u16,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -150,6 +179,146 @@ pub struct SampleSource {
     pub loop_block: Option<u16>,
 }
 
+/// Palette rows as BGR555: `row_size` colours each (4 or 16), every row whole; or, when
+/// `row_size` is 256, one row of its real colour count (1..=256, entry 0 included).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PaletteSource {
+    pub row_size: u16,
+    pub rows: Vec<Vec<u16>>,
+}
+
+impl PaletteSource {
+    /// The rows as an art source's sub-palettes: entry 0 of each row is the
+    /// transparent one placement never writes, so it is left off.
+    pub fn sub_palettes(&self) -> Vec<Vec<u16>> {
+        self.rows.iter().map(|r| r[1..].to_vec()).collect()
+    }
+
+    /// The inverse of [`sub_palettes`](Self::sub_palettes): whole rows of `row_size` from an art
+    /// source's sub-palettes. Entry 0 of every row is chosen here, once (0x0000), and unused
+    /// slots repeat it, so a rendered PNG's PLTE and a written `.gpl` never disagree. A 256 row is
+    /// the exception: it holds entry 0 and the real colours only, `1 +
+    /// sub.len()` long, so it claims no more CGRAM than the art uses. Panics if a sub-palette has
+    /// `row_size` or more colours (entry 0 takes a slot).
+    pub fn from_sub_palettes(row_size: u16, subs: &[Vec<u16>]) -> PaletteSource {
+        let rows = subs
+            .iter()
+            .map(|sub| {
+                assert!(
+                    sub.len() < row_size as usize,
+                    "from_sub_palettes: {} colours do not fit a row of {row_size} beside entry 0",
+                    sub.len()
+                );
+                let len = if row_size == 256 {
+                    1 + sub.len()
+                } else {
+                    row_size as usize
+                };
+                let mut row = vec![0u16; len];
+                row[1..=sub.len()].copy_from_slice(sub);
+                row
+            })
+            .collect();
+        PaletteSource { row_size, rows }
+    }
+}
+
+/// Write a palette source's rows from CGRAM entry `cgram_base`, one row per
+/// `row_size` entries, never entry 0 of a row.
+pub fn place_palette(src: &PaletteSource, mem: &mut Memory, cgram_base: usize) {
+    for (ri, row) in src.rows.iter().enumerate() {
+        for (ci, &c) in row.iter().enumerate().skip(1) {
+            mem.cgram[(cgram_base + ri * src.row_size as usize + ci) & 0xff] = c;
+        }
+    }
+}
+
+/// The palette row size (colours) a placed art source takes, or `None` for a
+/// kind that has no art palette.
+pub fn art_row_size(art: &SourcePayload) -> Option<u16> {
+    match art {
+        SourcePayload::Bg(s) => row_size_for(SourceKind::Bg, s.bit_depth),
+        SourcePayload::Sheet(s) => row_size_for(SourceKind::Sheet, s.bit_depth),
+        SourcePayload::Obj(_) => row_size_for(SourceKind::Obj, 4),
+        SourcePayload::M7(_) => row_size_for(SourceKind::M7, 8),
+        _ => None,
+    }
+}
+
+/// The palette row size (colours) of an art kind at a bit depth (ignored for obj and Mode 7),
+/// or `None` for a kind that has no art palette.
+pub fn row_size_for(kind: SourceKind, bit_depth: u8) -> Option<u16> {
+    match kind {
+        SourceKind::Bg | SourceKind::Sheet => Some(row_size_of(bit_depth)),
+        SourceKind::Obj => Some(16),
+        SourceKind::M7 => Some(256),
+        _ => None,
+    }
+}
+
+/// How many palette rows a placed art source uses (Mode 7 takes one 256-colour block).
+pub fn art_palette_rows(art: &SourcePayload) -> Option<usize> {
+    art_sub_palettes(art).map(|subs| subs.len())
+}
+
+/// The colours an art payload holds, one list per palette row (Mode 7: its one 256-colour
+/// block), or `None` for a kind that has no art palette.
+pub fn art_sub_palettes(art: &SourcePayload) -> Option<&[Vec<u16>]> {
+    match art {
+        SourcePayload::Bg(s) => Some(&s.palettes),
+        SourcePayload::Sheet(s) => Some(&s.palettes),
+        SourcePayload::Obj(s) => Some(&s.palettes),
+        SourcePayload::M7(s) => Some(std::slice::from_ref(&s.palette)),
+        _ => None,
+    }
+}
+
+/// Whether palette `pal` can stand in for `art`'s own colours: the same row size, at least
+/// the rows the art uses, and for a 256-colour block at least the colours the art uses. The error
+/// names the problem for a caller to prefix with the art and palette names.
+pub fn palette_fits(art: &SourcePayload, pal: &PaletteSource) -> Result<(), String> {
+    let (Some(want), Some(used)) = (art_row_size(art), art_palette_rows(art)) else {
+        return Err(format!("a {} source takes no palette", art.kind().name()));
+    };
+    if pal.row_size != want {
+        return Err(format!(
+            "the art takes {want}-colour palette rows but the palette has {}-colour rows",
+            pal.row_size
+        ));
+    }
+    if pal.rows.len() < used {
+        return Err(format!(
+            "the art uses {used} palette rows but the palette has {}",
+            pal.rows.len()
+        ));
+    }
+    // A 256 block holds only its real colours, so it must reach every colour the art uses.
+    if want == 256 {
+        let own = match art {
+            SourcePayload::M7(m) => m.palette.len(),
+            SourcePayload::Bg(b) => b.palettes.first().map_or(0, Vec::len),
+            SourcePayload::Sheet(b) => b.palettes.first().map_or(0, Vec::len),
+            _ => 0,
+        };
+        let (need, have) = (1 + own, pal.rows[0].len());
+        if have < need {
+            return Err(format!(
+                "the art uses {need} colours but the palette has {have}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The colours one palette row holds at a bit depth: 4 at 2bpp, 256 at 8bpp, else 16.
+pub fn row_size_of(bit_depth: u8) -> u16 {
+    match bit_depth {
+        2 => 4,
+        8 => 256,
+        _ => 16,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum SourcePayload {
     Bg(BgSource),
@@ -160,6 +329,7 @@ pub enum SourcePayload {
     /// Raw PSNG bytes (`crate::song::encode`'s output), carried undecoded —
     /// see the module doc's `song` byte layout.
     Song(Vec<u8>),
+    Palette(PaletteSource),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -186,18 +356,18 @@ impl std::fmt::Display for PayloadError {
 /// What travels ALONGSIDE a payload (never inside it): source dims, the
 /// authoring-time budget snapshot, and (obj) the per-cell attribute map that
 /// makes source cells addressable via obj[i].
-#[derive(Clone, Debug, Serialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SourceMeta {
     pub width: u32,
     pub height: u32,
     pub report: SourceReport,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cells: Option<Vec<ObjCell>>,
 }
 
 /// Budget snapshot, tagged like the ImportReport shape the UI already consumes
 /// (minus `layer`, which is a placement-time concept).
-#[derive(Clone, Debug, Serialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "mode")]
 pub enum SourceReport {
     #[serde(rename = "tile")]
@@ -212,6 +382,15 @@ pub enum SourceReport {
     Sample {
         report: crate::import::brr::SampleReport,
     },
+    #[serde(rename = "palette")]
+    Palette { report: PaletteReport },
+}
+
+/// A palette source's shape: whole rows of `row_size` colours.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PaletteReport {
+    pub rows: usize,
+    pub row_size: u16,
 }
 
 /// Tilemap length in words for a BGnSC screen-size field.
@@ -304,6 +483,7 @@ impl SourcePayload {
             SourcePayload::Sheet(_) => SourceKind::Sheet,
             SourcePayload::Sample(_) => SourceKind::Sample,
             SourcePayload::Song(_) => SourceKind::Song,
+            SourcePayload::Palette(_) => SourceKind::Palette,
         }
     }
 
@@ -355,8 +535,13 @@ impl SourcePayload {
                     "m7: map length doesn't match tiles_w*tiles_h"
                 );
                 b.push(1);
-                b.push(1);
+                // Payloads that fit 256 tiles stay byte-identical to v2's one-byte options block.
+                let over = s.options.overflowed_tiles > 256;
+                b.push(if over { 3 } else { 1 });
                 b.push(s.options.extbg as u8);
+                if over {
+                    push_u16(&mut b, s.options.overflowed_tiles);
+                }
                 b.push(s.palette.len() as u8);
                 for &c in &s.palette {
                     push_u16(&mut b, c);
@@ -451,6 +636,31 @@ impl SourcePayload {
                 b.push(5);
                 b.extend_from_slice(bytes);
             }
+            SourcePayload::Palette(s) => {
+                let block = s.row_size == 256;
+                debug_assert!(
+                    if block {
+                        s.rows.len() == 1 && (1..=256).contains(&s.rows[0].len())
+                    } else {
+                        matches!(s.row_size, 4 | 16)
+                            && (1..=256 / s.row_size as usize).contains(&s.rows.len())
+                            && s.rows.iter().all(|r| r.len() == s.row_size as usize)
+                    },
+                    "palette: not whole rows of 4 or 16, nor one block of 1..=256"
+                );
+                // 256 wraps to 0; the 256 block keeps its real colour count in place
+                // of a row count of 1.
+                b.push(6);
+                b.push(s.row_size as u8);
+                b.push(if block {
+                    s.rows[0].len() - 1
+                } else {
+                    s.rows.len()
+                } as u8);
+                for &c in s.rows.iter().flatten() {
+                    push_u16(&mut b, c);
+                }
+            }
         }
         b
     }
@@ -497,16 +707,19 @@ impl SourcePayload {
             }
             1 => {
                 let opts_len = r.u8()?;
-                if opts_len > 1 || (version == 1 && opts_len != 0) {
+                if !matches!(opts_len, 0 | 1 | 3) || (version == 1 && opts_len != 0) {
                     return Err(PayloadError::BadParam("m7_options"));
                 }
+                let extbg = opts_len >= 1
+                    && match r.u8()? {
+                        0 => false,
+                        1 => true,
+                        _ => return Err(PayloadError::BadParam("m7_options")),
+                    };
+                let overflowed_tiles = if opts_len == 3 { r.u16()? } else { 0 };
                 let options = M7Options {
-                    extbg: opts_len == 1
-                        && match r.u8()? {
-                            0 => false,
-                            1 => true,
-                            _ => return Err(PayloadError::BadParam("m7_options")),
-                        },
+                    extbg,
+                    overflowed_tiles,
                 };
                 let pal_len = r.u8()? as usize;
                 if pal_len > if options.extbg { 127 } else { 255 } {
@@ -630,6 +843,27 @@ impl SourcePayload {
                 let rest = r.b.len() - r.i;
                 SourcePayload::Song(r.bytes(rest)?.to_vec())
             }
+            6 => {
+                let row_size = match r.u8()? {
+                    4 => 4,
+                    16 => 16,
+                    0 => 256,
+                    _ => return Err(PayloadError::BadParam("row_size")),
+                };
+                let n = r.u8()? as usize;
+                let rows = if row_size == 256 {
+                    vec![r.u16s(n + 1)?]
+                } else {
+                    if !(1..=256 / row_size).contains(&n) {
+                        return Err(PayloadError::BadParam("row_count"));
+                    }
+                    (0..n).map(|_| r.u16s(row_size)).collect::<Result<_, _>>()?
+                };
+                SourcePayload::Palette(PaletteSource {
+                    row_size: row_size as u16,
+                    rows,
+                })
+            }
             k => return Err(PayloadError::BadKind(k)),
         };
         r.done()?;
@@ -651,12 +885,26 @@ pub fn place_bg(
     char_base: u16,
     cgram_base: usize,
 ) {
+    place_bg_in(src, mem, map_base, char_base, cgram_base, None);
+}
+
+/// [`place_bg`] with a named palette's rows in place of the source's own.
+pub fn place_bg_in(
+    src: &BgSource,
+    mem: &mut Memory,
+    map_base: u16,
+    char_base: u16,
+    cgram_base: usize,
+    palette: Option<&PaletteSource>,
+) {
+    let own = palette.map(PaletteSource::sub_palettes);
+    let palettes = own.as_deref().unwrap_or(&src.palettes);
     place_chars_and_palettes(
         mem,
         char_base,
         cgram_base,
         src.bit_depth,
-        &src.palettes,
+        palettes,
         &src.char_words,
     );
     // The tilemap's palette bits count from the source's own first palette;
@@ -688,11 +936,7 @@ fn place_chars_and_palettes(
     for (o, &w) in char_words.iter().enumerate() {
         mem.vram[(char_base as usize + o) & 0x7fff] = w;
     }
-    let stride = match bit_depth {
-        2 => 4,
-        8 => 256,
-        _ => 16,
-    };
+    let stride = row_size_of(bit_depth) as usize;
     for (pi, p) in palettes.iter().enumerate() {
         for (ci, &c) in p.iter().enumerate() {
             mem.cgram[(cgram_base + pi * stride + ci + 1) & 0xff] = c;
@@ -705,12 +949,25 @@ fn place_chars_and_palettes(
 /// `screen_size` / `map`), so placement deliberately leaves the map region and
 /// the layer's registers alone.
 pub fn place_sheet(src: &SheetSource, mem: &mut Memory, char_base: u16, cgram_base: usize) {
+    place_sheet_in(src, mem, char_base, cgram_base, None);
+}
+
+/// [`place_sheet`] with a named palette's rows in place of the source's own.
+pub fn place_sheet_in(
+    src: &SheetSource,
+    mem: &mut Memory,
+    char_base: u16,
+    cgram_base: usize,
+    palette: Option<&PaletteSource>,
+) {
+    let own = palette.map(PaletteSource::sub_palettes);
+    let palettes = own.as_deref().unwrap_or(&src.palettes);
     place_chars_and_palettes(
         mem,
         char_base,
         cgram_base,
         src.bit_depth,
-        &src.palettes,
+        palettes,
         &src.char_words,
     );
 }
@@ -723,6 +980,12 @@ pub fn place_sheet(src: &SheetSource, mem: &mut Memory, char_base: u16, cgram_ba
 /// `src` must be decode-valid: an out-of-range struct (e.g. `map` shorter
 /// than `tiles_w*tiles_h`) may panic or alias VRAM cells outside its map.
 pub fn place_m7(src: &M7Source, mem: &mut Memory) {
+    place_m7_in(src, mem, None);
+}
+
+/// [`place_m7`] with a named palette's colours 1..count (entry 0 stays transparent) in
+/// place of the source's own.
+pub fn place_m7_in(src: &M7Source, mem: &mut Memory, palette: Option<&PaletteSource>) {
     for (t, tile) in src.tiles.iter().enumerate() {
         for (j, &px) in tile.iter().enumerate() {
             let i = t * 64 + j;
@@ -736,8 +999,13 @@ pub fn place_m7(src: &M7Source, mem: &mut Memory) {
             mem.vram[i] = (mem.vram[i] & 0xff00) | src.map[ty * tw + tx] as u16;
         }
     }
-    for (i, &c) in src.palette.iter().enumerate() {
-        mem.cgram[(i + 1) & 0xff] = c;
+    match palette {
+        Some(p) => place_palette(p, mem, 0),
+        None => {
+            for (i, &c) in src.palette.iter().enumerate() {
+                mem.cgram[(i + 1) & 0xff] = c;
+            }
+        }
     }
 }
 
@@ -748,10 +1016,23 @@ pub fn place_m7(src: &M7Source, mem: &mut Memory) {
 /// a palette longer than 15 colors) may alias CGRAM entries outside its
 /// intended band.
 pub fn place_obj(src: &ObjSource, mem: &mut Memory, char_base: u16, pal_base: usize) {
+    place_obj_in(src, mem, char_base, pal_base, None);
+}
+
+/// [`place_obj`] with a named palette's rows in place of the source's own.
+pub fn place_obj_in(
+    src: &ObjSource,
+    mem: &mut Memory,
+    char_base: u16,
+    pal_base: usize,
+    palette: Option<&PaletteSource>,
+) {
     for (i, &w) in src.char_words.iter().enumerate() {
         mem.vram[(char_base as usize + i) & 0x7fff] = w;
     }
-    for (pi, p) in src.palettes.iter().enumerate() {
+    let own = palette.map(PaletteSource::sub_palettes);
+    let palettes = own.as_deref().unwrap_or(&src.palettes);
+    for (pi, p) in palettes.iter().enumerate() {
         for (ci, &c) in p.iter().enumerate() {
             mem.cgram[(128 + (pal_base + pi) * 16 + ci + 1) & 0xff] = c;
         }
@@ -760,23 +1041,32 @@ pub fn place_obj(src: &ObjSource, mem: &mut Memory, char_base: u16, pal_base: us
 
 /// Client-facing conversion options; per-kind fields, absent = default.
 /// Extensible: fields irrelevant to a kind are ignored.
-#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct ConvertOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub bit_depth: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tile_size: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cell_size: Option<u8>,
     /// obj: the cell's height when it is not `cell_size` (a rectangular cell).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cell_height: Option<u8>,
     /// Mode 7: reserve pixel bit 7 for an external black/white priority mask.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub extbg: Option<bool>,
     /// "none" (default) | "bayer" | "diffusion". bg + obj; ignored for m7.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dither: Option<String>,
     /// Dither intensity 0-100 (default 50).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dither_strength: Option<u8>,
     /// Source alpha >= this is opaque, 0-255 (default 128). bg + obj.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub alpha_threshold: Option<u8>,
     /// bg + sheet: sub-palette cap 1-8 (default 8); lower merges harder.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_palettes: Option<u8>,
 }
 
@@ -896,17 +1186,136 @@ pub fn convert_source_with_priority(
             Ok((SourcePayload::Sheet(src), meta))
         }
         SourceKind::Sample => Err("sample sources are PCM, not images: use convertSample".into()),
+        SourceKind::Palette => {
+            Err("palette sources are .gpl text, not images: use convertPalette".into())
+        }
         SourceKind::Song => {
             Err("song sources are PSNG bytes, not images: add them directly".into())
         }
     }
 }
 
+/// The cells of a generated obj source: their size in pixels, and each cell's tile (from the
+/// source's first) and palette, as `sprites.art` reads them.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+pub struct GeneratedCells {
+    pub cell_w: u8,
+    pub cell_h: u8,
+    pub cells: Vec<ObjCell>,
+}
+
+/// A source made from tiles already in VRAM (Apply's painted tiles): `char_words` exactly as VRAM
+/// holds them, tile 0 first, so placing it at the same char base writes the same words back. No
+/// palettes: the colours stay where they are, written as `cgram[i]` lines. A BG `Sheet` takes no
+/// cells; an `Obj` source (4bpp, OBJ name-table order) takes `cells`, which `sprites.art` draws.
+pub fn generated_source(
+    kind: SourceKind,
+    bit_depth: u8,
+    char_words: &[u16],
+    cells: Option<&GeneratedCells>,
+) -> Result<(SourcePayload, SourceMeta), String> {
+    let (max_tiles, max_depth) = match (kind, cells) {
+        (SourceKind::Sheet, None) => (1024, 8),
+        (SourceKind::Obj, Some(_)) => (512, 4),
+        (SourceKind::Sheet | SourceKind::Obj, _) => {
+            return Err(format!(
+                "a generated {kind:?} source takes cells only when it is Obj"
+            ))
+        }
+        _ => return Err(format!("Apply makes no generated {kind:?} source")),
+    };
+    if !matches!(bit_depth, 2 | 4 | 8)
+        || bit_depth > max_depth
+        || (kind == SourceKind::Obj && bit_depth != 4)
+    {
+        return Err(format!(
+            "a generated {kind:?} source's bit depth cannot be {bit_depth}"
+        ));
+    }
+    let per_tile = bit_depth as usize * 4;
+    let tiles = char_words.len() / per_tile;
+    if char_words.is_empty() || !char_words.len().is_multiple_of(per_tile) || tiles > max_tiles {
+        return Err(format!(
+            "a generated source holds 1 to {max_tiles} whole {bit_depth}bpp tiles ({per_tile} words each), not {} words",
+            char_words.len()
+        ));
+    }
+    let report = BudgetReport {
+        colors_used: 0,
+        palettes_used: 0,
+        tile_cells: tiles,
+        unique_tiles: tiles,
+        vram_words: char_words.len(),
+        overflows: vec![],
+    };
+    let cols = tiles.min(16);
+    let (width, height) = (cols as u32 * 8, tiles.div_ceil(16) as u32 * 8);
+    let Some(c) = cells else {
+        let payload = SourcePayload::Sheet(SheetSource {
+            bit_depth,
+            palettes: vec![],
+            char_words: char_words.to_vec(),
+        });
+        return Ok((
+            payload,
+            SourceMeta {
+                width,
+                height,
+                report: SourceReport::Sheet { report },
+                cells: None,
+            },
+        ));
+    };
+    for (name, n) in [("cell width", c.cell_w), ("cell height", c.cell_h)] {
+        if n % 8 != 0 || !(8..=128).contains(&n) {
+            return Err(format!(
+                "a generated obj source's {name} must be a multiple of 8 from 8 to 128 (got {n})"
+            ));
+        }
+    }
+    if c.cells.is_empty() || c.cells.len() > 1024 {
+        return Err(format!(
+            "a generated obj source holds 1 to 1024 cells, not {}",
+            c.cells.len()
+        ));
+    }
+    // A cell's last tile: its bottom row, OBJ name-table rows 16 tiles apart.
+    let last = |t: &ObjCell| {
+        t.tile as usize + (c.cell_h as usize / 8 - 1) * 16 + c.cell_w as usize / 8 - 1
+    };
+    if let Some(bad) = c.cells.iter().find(|t| {
+        last(t) >= tiles || t.pal > 7 || (t.tile as usize % 16) + c.cell_w as usize / 8 > 16
+    }) {
+        return Err(format!(
+            "a generated obj cell at tile {} (palette {}) does not fit its {tiles} tiles, a 16-tile row or palettes 0..7",
+            bad.tile, bad.pal
+        ));
+    }
+    let payload = SourcePayload::Obj(ObjSource {
+        cell_size: c.cell_w,
+        cell_height: c.cell_h,
+        palettes: vec![],
+        char_words: char_words.to_vec(),
+        cells: c.cells.clone(),
+    });
+    Ok((
+        payload,
+        SourceMeta {
+            width,
+            height,
+            report: SourceReport::Obj { report },
+            cells: Some(c.cells.clone()),
+        },
+    ))
+}
+
 /// Options for [`convert_sample`].
+
 #[derive(Clone, Debug, Default, serde::Deserialize)]
 #[serde(default)]
 pub struct ConvertSampleOptions {
     /// Loop point in input PCM frames; block-aligned by the encoder.
+    #[serde(alias = "loopStart")]
     pub loop_start: Option<usize>,
 }
 
@@ -1395,6 +1804,79 @@ mod tests {
         assert_eq!(mem.vram[128] & 0x00ff, 1); // row 1, col 0 = map[2]
         assert_eq!(mem.vram[129] & 0x00ff, 0); // row 1, col 1 = map[3]
         assert_eq!(mem.vram[2] & 0x00ff, 0); // not aliased to a stride-2 write
+    }
+
+    #[test]
+    fn a_generated_sheet_places_the_words_it_was_made_from() {
+        let words: Vec<u16> = (0..40).map(|i| 0x1234u16.wrapping_mul(i + 1)).collect();
+        let (payload, meta) = generated_source(SourceKind::Sheet, 2, &words[..32], None).unwrap();
+        assert_eq!((meta.width, meta.height), (32, 8));
+        let decoded = SourcePayload::decode(&payload.encode()).unwrap();
+        assert_eq!(decoded, payload);
+        let SourcePayload::Sheet(sheet) = decoded else {
+            panic!("a sheet")
+        };
+        assert!(sheet.palettes.is_empty());
+        let mut mem = Memory::new();
+        place_sheet(&sheet, &mut mem, 0x2000, 0);
+        assert_eq!(&mem.vram[0x2000..0x2020], &words[..32]);
+        assert!(
+            mem.cgram.iter().all(|&c| c == 0),
+            "no palettes: CGRAM untouched"
+        );
+        let (_, wide) = generated_source(SourceKind::Sheet, 4, &vec![0; 16 * 17], None).unwrap();
+        assert_eq!((wide.width, wide.height), (128, 16));
+        assert!(generated_source(SourceKind::Sheet, 4, &words[..20], None)
+            .unwrap_err()
+            .contains("whole 4bpp tiles"));
+        assert!(generated_source(SourceKind::Sheet, 3, &words, None).is_err());
+        assert!(generated_source(SourceKind::Sheet, 2, &[], None).is_err());
+        assert!(generated_source(SourceKind::Obj, 4, &words[..32], None).is_err());
+    }
+
+    #[test]
+    fn a_generated_obj_source_keeps_its_cells_and_words() {
+        let words: Vec<u16> = (0..16 * 19).map(|i| i as u16 * 3 + 1).collect();
+        let cell = |tile, pal| ObjCell {
+            tile,
+            pal,
+            flip_x: false,
+            flip_y: false,
+        };
+        let shape = GeneratedCells {
+            cell_w: 16,
+            cell_h: 16,
+            cells: vec![cell(0, 0), cell(1, 5)],
+        };
+        let (payload, meta) = generated_source(SourceKind::Obj, 4, &words, Some(&shape)).unwrap();
+        assert_eq!(SourcePayload::decode(&payload.encode()).unwrap(), payload);
+        let SourcePayload::Obj(obj) = payload else {
+            panic!("an obj source")
+        };
+        assert_eq!(
+            (obj.cell_size, obj.cell_height, obj.char_words.len()),
+            (16, 16, words.len())
+        );
+        assert!(obj.palettes.is_empty());
+        assert_eq!(meta.cells.as_deref(), Some(&shape.cells[..]));
+        let too_low = GeneratedCells {
+            cells: vec![cell(2, 0)],
+            ..shape.clone()
+        };
+        assert!(generated_source(SourceKind::Obj, 4, &words, Some(&too_low))
+            .unwrap_err()
+            .contains("does not fit"));
+        let wraps = GeneratedCells {
+            cells: vec![cell(15, 0)],
+            ..shape.clone()
+        };
+        assert!(
+            generated_source(SourceKind::Obj, 4, &vec![0; 16 * 40], Some(&wraps))
+                .unwrap_err()
+                .contains("16-tile row")
+        );
+        assert!(generated_source(SourceKind::Obj, 8, &words, Some(&shape)).is_err());
+        assert!(generated_source(SourceKind::Sheet, 4, &words, Some(&shape)).is_err());
     }
 
     // PPU-93: a sheet places chars + palettes and NOTHING else — no tilemap.

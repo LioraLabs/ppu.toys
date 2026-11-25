@@ -1,0 +1,36 @@
+---
+id: sprites
+title: Sprites
+order: 4
+description: Cut art once, draw groups every frame, and keep many actors cheap.
+---
+- [[sprites-group-draw-every-frame]]
+- [[obj-pal-is-a-sprite-palette]]
+- [[sprite-groups-stack-in-creation-order]]
+- [[sorted-group-draws-lower-in-front]]
+- [[sprite-group-slots-for-nested-art]]
+- [[sprite-groups-live-in-groups-luau]]
+- [[keyed-draws-and-keep]]
+- [[sprites-hold-for-a-pause]]
+- [[sprite-palette-variants]]
+- [[eight-facings-from-three-drawings]]
+- [[blink-an-invulnerable-sprite]]
+- [[actors-that-come-and-go-are-a-fixed-list]]
+- [[only-update-actors-near-the-screen]]
+- [[hit-tests-on-alternate-frames]]
+- [[enemy-think-move-bump]]
+- [[knockback-then-invulnerability]]
+- [[sprite-priority-under-overhead-layer]]
+- [[sprite-line-limits-drop-the-top-group-first]]
+- [[art-in-three-sizes-needs-a-size-pair]]
+- [[odd-sized-cells-are-several-sprites]]
+- [[flip-mirrors-the-whole-art]]
+- [[level-pal-is-free-draw-pal-costs]]
+- [[sprite-levels-draw-by-size]]
+- [[tall-sprites-hide-near-the-screen-edges]]
+- [[sprite-keys-are-per-group-one-use-a-frame]]
+- [[split-screen-sprites-stay-in-their-half]]
+- [[sprites-on-palettes-0-to-3-never-blend]]
+- [[a-key-holds-the-slots-of-its-first-art]]
+- [[a-keyed-animation-restarts-when-its-key-is-skipped]]
+- [[animation-frames-count-video-frames]]

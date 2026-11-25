@@ -157,18 +157,18 @@ end
 
 #[test]
 fn hooks_registered_from_different_functions_compose() {
-    // The generated-pokes shape: apply_pokes() registers one hook, the sketch
+    // The generated-pokes shape: one function registers one hook, the sketch
     // registers others from its own functions. All of them land.
     let t = frame_of(
         r#"
-function apply_pokes()
+function overrides()
   hdma(0, 223, function(y) win.w1.lo = 11 end)
 end
 function other()
   hdma(0, 223, function(y) win.w1.hi = 22 end)
 end
 function frame(t, f)
-  apply_pokes()
+  overrides()
   other()
   mode = 1
 end

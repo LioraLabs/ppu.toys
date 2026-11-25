@@ -79,7 +79,7 @@ local function midi_of(x)
       return m
     end
   end
-  error("note: bad note '" .. tostring(x) .. "'")
+  error("error[snes.note]: note: bad note '" .. tostring(x) .. "'")
 end
 
 -- note(n [, base]) -> 14-bit pitch for a sample recorded at `base`
@@ -90,12 +90,13 @@ function note(n, base)
 end
 
 -- instrument{ sample=, adsr=?, gain=?, vol=127?, pan=0?, base="C4"?,
--- pitch=?, noise=?, pmod=?, echo=? } -> the same table, defaults filled in.
+-- pitch=?, noise=?, pmod=?, echo=?, len=? } -> the same table, defaults filled in.
+-- `len` is how long sfx() lets a note sound (see sfx below).
 -- `pitch` is what sfx() plays when it is given no note (default 0x1000):
 -- a drum recorded at 16 kHz sets pitch = 0x0800.
 function instrument(t)
   if t == nil or t.sample == nil then
-    error("instrument: sample is required")
+    error("error[snes.bank]: instrument: sample is required")
   end
   t.vol = t.vol or 127
   t.pan = t.pan or 0
@@ -103,8 +104,28 @@ function instrument(t)
   return t
 end
 
--- sfx(inst, v [, n]) -> apply preset `inst` to voice[v] and key it on.
-function sfx(inst, v, n)
+-- sfx(inst [, n [, {len=}]]) -> play preset `inst` on a voice the driver picks (returned:
+-- nil when every voice is held by an effect that named its voice).
+-- sfx(inst, v [, n [, {len=}]]) -> the same on voice[v].
+-- The voice keys off `len` seconds later: the call's len, else the preset's. With
+-- neither, a looping sample stops after 0.15 s and a one-shot plays to its end;
+-- len = false sustains until koff(). Keying the voice again restarts the count.
+-- The effect borrows its voice from any song until it ends: the song's notes there are
+-- silent meanwhile, and its next note after the effect plays.
+function sfx(inst, v, n, o)
+  if type(v) ~= "number" then
+    v, n, o = nil, v, n
+  end
+  local len = inst.len
+  if o ~= nil and o.len ~= nil then
+    len = o.len
+  end
+  -- o.pitch is the compiled program's note, already a pitch (the cartridge compiler emits it).
+  local pitch = n and note(n, inst.base) or o ~= nil and o.pitch or inst.pitch or 0x1000
+  v = __sfx_hold(v, inst.sample, len, pitch)
+  if v == nil then
+    return nil
+  end
   local vo = voice[v]
   vo.sample = inst.sample
   if inst.adsr then
@@ -131,8 +152,9 @@ function sfx(inst, v, n)
     l = math.floor(vol * math.min(1, 1 - pan) + 0.5),
     r = math.floor(vol * math.min(1, 1 + pan) + 0.5),
   }
-  vo.pitch = n and note(n, inst.base) or inst.pitch or 0x1000
+  vo.pitch = pitch
   kon(v)
+  return v
 end
 
 -- A song is meant to be heard: power-on master volume is silence, so a
@@ -148,7 +170,7 @@ end
 -- song{} was retired in favor of song sources played with score{}. Level 2
 -- attributes the error to the user's chunk, like the old validation errors.
 function song()
-  error('song{} is gone: make a song source (the Studio sequencer, or a .mid) and play it with score{ song = "<name>" }', 2)
+  error('error[snes.song]: song{} is gone: make a song source (the Studio sequencer, or a .mid) and play it with score{ song = "<name>" }', 2)
 end
 
 -- Built-in sample presets (see crates/ppu-core/src/bank.rs for the sounds).
@@ -171,19 +193,30 @@ BANK = {
   crash   = { adsr = { a = 15, d = 7, s = 7, r = 0 }, pitch = 0x0800, vol = 100 },
 }
 
--- bank(name [, opts]) -> an instrument{} over the built-in sample `name`,
+-- bank(name [, opts]) -> an instrument{} over the built-in or uploaded sample `name`,
 -- placed in sound RAM by dma() (which chains placements upward on its
 -- own; opts.addr pins one). Any other opts field (vol, pan, adsr, ...)
--- overrides the preset. Setup-only, like dma().
+-- overrides the preset. Setup-only, like dma(). Presets of one name share its
+-- placed sample, so they cost a directory entry each and no more sound RAM.
+local banked = {}
 function bank(name, opts)
-  local preset = BANK[name]
-  if preset == nil then
-    error("bank: no built-in sample '" .. tostring(name) .. "'")
-  end
+  local preset = BANK[name] or {}
   opts = opts or {}
-  local placed = dma(name, opts.addr and { addr = opts.addr } or nil)
+  local placed = banked[name]
+  if opts.addr then
+    placed = dma(name, { addr = opts.addr })
+  elseif placed == nil then
+    local ok, result = pcall(dma, name)
+    if not ok and BANK[name] == nil then
+      error("error[snes.bank]: bank: no built-in sample '" .. tostring(name) .. "' and none uploaded")
+    elseif not ok then
+      error(result, 0)
+    end
+    placed = result
+    banked[name] = placed
+  end
   local inst = { sample = placed.id, addr = placed.addr, next_addr = placed.next_addr }
-  for _, k in ipairs({ "adsr", "gain", "vol", "pan", "base", "pitch", "noise", "pmod", "echo" }) do
+  for _, k in ipairs({ "adsr", "gain", "vol", "pan", "base", "pitch", "noise", "pmod", "echo", "len" }) do
     if opts[k] ~= nil then
       inst[k] = opts[k]
     elseif preset[k] ~= nil then
@@ -209,8 +242,7 @@ end
 -- The song is anchored to the timeline: its position is (t - anchor) * 250
 -- ticks, so seeking t seeks the song (silent before the anchor; a finished
 -- loop = false song stays silent). `at` is the anchor in seconds (default
--- 0), a marker name looked up in the toy's `markers` table, or false: set
--- up but not playing until play().
+-- 0) or false: set up but not playing until play().
 --
 -- Returns { tick, length, playing, loop, song, play(), stop() }, all but
 -- `song` read live through __song_get; stop() keys the song's own voices
@@ -233,13 +265,13 @@ local function place(name, i)
     if BANK[name] ~= nil then
       local ok, inst = pcall(bank, name)
       if not ok then
-        error("score: row " .. i .. " sound '" .. name .. "': " .. tostring(inst))
+        error("error[snes.score]: score: row " .. i .. " sound '" .. name .. "': " .. tostring(inst))
       end
       score_insts[name] = inst
     else
       local ok, placed = pcall(dma, name)
       if not ok then
-        error("score: row " .. i .. " sound '" .. name .. "': " .. tostring(placed))
+        error("error[snes.score]: score: row " .. i .. " sound '" .. name .. "': " .. tostring(placed))
       end
       score_insts[name] = instrument{ sample = placed.id, adsr = FLAT }
     end
@@ -255,7 +287,7 @@ local function row_pitch(row, inst, i)
   end
   local ok, p = pcall(note, row.note, inst.base)
   if not ok then
-    error("score: row " .. i .. " bad note '" .. tostring(row.note) .. "'")
+    error("error[snes.note]: score: row " .. i .. " bad note '" .. tostring(row.note) .. "'")
   end
   return p
 end
@@ -285,11 +317,11 @@ __scores = {}
 function score(cfg)
   cfg = cfg or {}
   if cfg.song == nil then
-    error("score: give song = \"<name>\" (a song source)")
+    error("error[snes.score]: score: give song = \"<name>\" (a song source)")
   end
   local id, song_rows = __song_load(tostring(cfg.song))
   if id == nil then
-    error("score: no song source named '" .. tostring(cfg.song) .. "'")
+    error("error[snes.score]: score: no song source named '" .. tostring(cfg.song) .. "'")
   end
   local insts, pitches = {}, {}
   for i = 1, #song_rows do
@@ -301,14 +333,8 @@ function score(cfg)
   local at = cfg.at
   if at == nil then
     at = 0
-  elseif type(at) == "string" then
-    local m = type(markers) == "table" and markers[at] or nil
-    if type(m) ~= "number" then
-      error("score: no marker named '" .. at .. "'")
-    end
-    at = m
   elseif at ~= false and type(at) ~= "number" then
-    error("score: at must be seconds, a marker name, or false")
+    error("error[snes.score]: score: at must be seconds or false")
   end
   ensure_audible()
   __song_start(id, insts, pitches, cfg.loop ~= false, at)
