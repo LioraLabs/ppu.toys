@@ -30,7 +30,7 @@ full_moon = { version = "=3.0.0", features = ["luau"] }
 # Only the Lua to Luau converter reads Lua 5.3 operators. A separate major keeps lua53 off the
 # version above: with it on, a Luau-only parse of `a & b` panics in full_moon 3.0.0.
 full_moon_lua53 = { package = "full_moon", version = "=2.0.0", features = ["luau", "lua53"] }
-ppu-rules = { path = "../ppu-rules", version = "0.2.2" }
+ppu-rules = { path = "../ppu-rules", version = "0.2.3" }
 # Render a source to an indexed PNG and read PNGs back (cli and wasm both import art).
 png = "0.17"
 # Read WAV sample sources and write WAVs (cli: sample files, render --wav, sfx).

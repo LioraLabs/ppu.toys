@@ -795,18 +795,17 @@ fn an_edited_song_beside_its_mid_lands_as_song_json() {
     studio(&site, |b| {
         b["sources"][1]["payload"] = payload(&faster).into()
     });
-    until("the studio's song beside the .mid", || {
+    // Connect writes the song, then the manifest that points at it: wait for both.
+    let theme_file = || {
+        let m: Value = serde_json::from_str(&std::fs::read_to_string(&manifest).ok()?).ok()?;
+        let theme = m["sources"].as_array()?.iter().find(|s| s["name"] == "theme")?;
+        theme["file"].as_str().map(str::to_owned)
+    };
+    until("the studio's song beside the .mid, and the manifest on it", || {
         std::fs::read_to_string(&json_file).is_ok_and(|t| from_json(&t).is_ok_and(|s| s == faster))
+            && theme_file().as_deref() == Some("songs/theme.song.json")
     });
-    let m: Value = serde_json::from_str(&std::fs::read_to_string(&manifest).unwrap()).unwrap();
-    let theme = m["sources"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|s| s["name"] == "theme")
-        .unwrap()
-        .clone();
-    assert_eq!(theme["file"], "songs/theme.song.json", "{}", out.text());
+    assert_eq!(theme_file().as_deref(), Some("songs/theme.song.json"), "{}", out.text());
     assert_eq!(std::fs::read(folder.join("songs/theme.mid")).unwrap(), mid);
     assert!(!folder.join("music/theme.song.json").exists());
     assert!(!running.is_finished());
