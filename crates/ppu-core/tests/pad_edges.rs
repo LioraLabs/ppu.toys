@@ -25,7 +25,8 @@ fn edges_follow_the_button_and_a_scene_starts_with_none() {
     let a = format!("SWITCH = true\n{SCENE}");
     let b = SCENE.replace("SWITCH and", "false and");
     let mut e = LuaEngine::new();
-    e.set_sources(&[("main.lua", MAIN), ("a.lua", &a), ("b.lua", &b)]).unwrap();
+    e.set_sources(&[("main.lua", MAIN), ("a.lua", &a), ("b.lua", &b)])
+        .unwrap();
     // A held from update 2 to 5 (the switch lands on update 4), released at 6.
     let pads = [0, 0, A, A, A, A, 0, 0];
     for (f, &p) in pads.iter().enumerate() {

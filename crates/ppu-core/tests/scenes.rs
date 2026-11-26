@@ -379,7 +379,7 @@ fn a_scene_view_entry_runs_the_scenes_preview_after_file_level_and_before_init()
     e.frame(0.0, 0).unwrap();
     // File level, every scenes.add, the preview (its State.hp = 1 seen by init), init, frame.
     assert_eq!(ints(&mut e, "probe"), vec![1, 2, 3, 20, 21, 31, 22]);
-    // A reload into the chosen scene (an edit, Restart) is another Scene view entry.
+    // A reload into the chosen scene (Restart; an edit stays in the running scene) is another Scene view entry.
     e.reset().unwrap();
     e.frame(0.0, 0).unwrap();
     assert_eq!(ints(&mut e, "probe"), vec![1, 2, 3, 20, 21, 31, 22]);
@@ -559,7 +559,8 @@ fn a_faded_switch_darkens_the_old_scene_and_brightens_the_new() {
         ("b.luau", "local function frame(t, f)\n  brightness = 9\nend\nreturn {frame = frame}\n"),
     ])
     .unwrap();
-    let level = |e: &mut LuaEngine, f: u32| e.frame(f as f64 / 60.0, f).unwrap().rows[100].brightness;
+    let level =
+        |e: &mut LuaEngine, f: u32| e.frame(f as f64 / 60.0, f).unwrap().rows[100].brightness;
     let seen: Vec<u8> = (0..13).map(|f| level(&mut e, f)).collect();
     assert_eq!(seen, vec![15, 15, 11, 7, 3, 0, 0, 3, 7, 11, 15, 9, 9]);
     assert_eq!(e.current_scene(), 1);
@@ -583,13 +584,38 @@ fn a_faded_switch_darkens_the_old_scene_and_brightens_the_new() {
 
 #[test]
 fn a_fade_is_a_whole_number_of_frames_asked_while_the_game_runs() {
-    for (go, file_level) in [("scenes.go(B, {fade = 0})", false), ("scenes.go(B, {fade = 2.5})", false), ("scenes.go(B, {fade = 4, x = 1})", false), ("scenes.go(B, {fade = 4})", true)] {
+    for (go, file_level) in [
+        ("scenes.go(B, {fade = 0})", false),
+        ("scenes.go(B, {fade = 2.5})", false),
+        ("scenes.go(B, {fade = 4, x = 1})", false),
+        ("scenes.go(B, {fade = 4})", true),
+    ] {
         let mut e = LuaEngine::new();
-        let main = format!("A = scenes.add(require(\"./a\"))\nB = scenes.add(require(\"./b\"))\n{}", if file_level { go } else { "" });
-        let a = format!("local function frame(t, f)\n  {}\nend\nreturn {{frame = frame}}\n", if file_level { "" } else { go });
-        let loaded = e.set_sources(&[("main.luau", main.as_str()), ("a.luau", a.as_str()), ("b.luau", "local function frame(t, f) end\nreturn {frame = frame}\n")]);
-        let failed = loaded.err().or_else(|| e.frame(0.0, 0).err()).unwrap_or_else(|| panic!("{go} must fail"));
-        assert!(failed.message.contains("scenes.go"), "{go}: {}", failed.message);
+        let main = format!(
+            "A = scenes.add(require(\"./a\"))\nB = scenes.add(require(\"./b\"))\n{}",
+            if file_level { go } else { "" }
+        );
+        let a = format!(
+            "local function frame(t, f)\n  {}\nend\nreturn {{frame = frame}}\n",
+            if file_level { "" } else { go }
+        );
+        let loaded = e.set_sources(&[
+            ("main.luau", main.as_str()),
+            ("a.luau", a.as_str()),
+            (
+                "b.luau",
+                "local function frame(t, f) end\nreturn {frame = frame}\n",
+            ),
+        ]);
+        let failed = loaded
+            .err()
+            .or_else(|| e.frame(0.0, 0).err())
+            .unwrap_or_else(|| panic!("{go} must fail"));
+        assert!(
+            failed.message.contains("scenes.go"),
+            "{go}: {}",
+            failed.message
+        );
     }
 }
 
@@ -629,7 +655,9 @@ fn a_fade_counts_video_frames_at_30_hz() {
         ("b.luau", "local function frame(t, f)\n  brightness = 9\nend\nreturn {frame = frame}\n"),
     ])
     .unwrap();
-    let seen: Vec<u8> = (0..14).map(|f| e.frame(f as f64 / 60.0, f).unwrap().rows[100].brightness).collect();
+    let seen: Vec<u8> = (0..14)
+        .map(|f| e.frame(f as f64 / 60.0, f).unwrap().rows[100].brightness)
+        .collect();
     assert_eq!(seen, vec![15, 15, 7, 7, 0, 0, 0, 0, 7, 7, 15, 15, 9, 9]);
 }
 
@@ -645,6 +673,8 @@ fn an_odd_fade_at_30_hz_ends_at_full_brightness() {
         ("b.luau", "local function frame(t, f)\nend\nreturn {frame = frame}\n"),
     ])
     .unwrap();
-    let seen: Vec<u8> = (0..20).map(|f| e.frame(f as f64 / 60.0, f).unwrap().rows[100].brightness).collect();
+    let seen: Vec<u8> = (0..20)
+        .map(|f| e.frame(f as f64 / 60.0, f).unwrap().rows[100].brightness)
+        .collect();
     assert_eq!(seen[16..], [15, 15, 15, 15], "{seen:?}");
 }

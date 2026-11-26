@@ -996,3 +996,27 @@ pub fn analyze_song(bytes: &[u8]) -> Result<JsValue, JsValue> {
     )?;
     song_result(Ok(out.into()))
 }
+
+/// `crate::sync::hashes` of a project body (`{title, files: [{name, source}], sources, ...}`): an
+/// object of entry key (`file main.luau`, `source ship`, `meta title`) to hash, as connect links store.
+#[wasm_bindgen(js_name = syncHashes)]
+pub fn sync_hashes(body: JsValue) -> Result<JsValue, JsValue> {
+    let body: serde_json::Value = serde_wasm_bindgen::from_value(body)?;
+    to_object(&crate::sync::hashes(&body))
+}
+
+/// `crate::sync::compare` of three key-to-hash objects (base, mine, theirs; an absent key is an
+/// absent entry): `{take: string[], clashes: string[]}`, the entries to take from theirs and the
+/// ones both sides changed differently.
+#[wasm_bindgen(js_name = syncCompare)]
+pub fn sync_compare(base: JsValue, mine: JsValue, theirs: JsValue) -> Result<JsValue, JsValue> {
+    type Hashes = std::collections::BTreeMap<String, String>;
+    let read = |v: JsValue| serde_wasm_bindgen::from_value::<Hashes>(v);
+    to_object(&crate::sync::compare(&read(base)?, &read(mine)?, &read(theirs)?))
+}
+
+/// Maps as plain JS objects (serde_wasm_bindgen's default is a `Map`).
+fn to_object<T: serde::Serialize>(v: &T) -> Result<JsValue, JsValue> {
+    v.serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+        .map_err(Into::into)
+}

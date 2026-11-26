@@ -75,7 +75,10 @@ fn pick(cx: i64, cy: i64, templates: i64) -> i64 {
 }
 
 fn main_luau(cw: i64, ch: i64) -> String {
-    let segs: Vec<String> = PATH.iter().map(|(dx, dy, n)| format!("{{{dx}, {dy}, {n}}}")).collect();
+    let segs: Vec<String> = PATH
+        .iter()
+        .map(|(dx, dy, n)| format!("{{{dx}, {dy}, {n}}}"))
+        .collect();
     format!(
         r#"local world = require("@ppu/world")
 local tiles = dma("tiles", {{char = 0x2000, pal = 32}})
@@ -121,7 +124,13 @@ end
 }
 
 /// The ground's colour at pixel (x, y): its chunk's template's cell, from the sheet.
-fn reference(sheet: &[u8], gids: &[u32], (cw, ch, columns): (i64, i64, i64), x: i64, y: i64) -> [u8; 3] {
+fn reference(
+    sheet: &[u8],
+    gids: &[u32],
+    (cw, ch, columns): (i64, i64, i64),
+    x: i64,
+    y: i64,
+) -> [u8; 3] {
     let t = pick(x / 8 / cw, y / 8 / ch, 6);
     let (cx, cy) = (t % columns * cw + x / 8 % cw, t / columns * ch + y / 8 % ch);
     let c = gids[(cy * columns * cw + cx) as usize] as usize - 1;
@@ -142,11 +151,14 @@ fn runs(cw: i64, ch: i64) {
     add_sheet(&mut e, "tiles", sheet.clone(), 64, 16, 4);
     let main = main_luau(cw, ch);
     let map = tmj(width, height, &gids);
-    e.set_sources(&[("main.luau", main.as_str()), ("shaft.tmj", map.as_str())]).unwrap_or_else(|err| panic!("{}", err.message));
+    e.set_sources(&[("main.luau", main.as_str()), ("shaft.tmj", map.as_str())])
+        .unwrap_or_else(|err| panic!("{}", err.message));
     let total: i64 = PATH.iter().map(|p| p.2).sum();
     let mut checked = 0;
     for f in 0..=total {
-        let lt = e.frame(f as f64 / 60.0, f as u32).unwrap_or_else(|err| panic!("frame {f}: {err:?}"));
+        let lt = e
+            .frame(f as f64 / 60.0, f as u32)
+            .unwrap_or_else(|err| panic!("frame {f}: {err:?}"));
         if f % 17 != 0 && f != total {
             continue;
         }
@@ -156,8 +168,17 @@ fn runs(cw: i64, ch: i64) {
             for sx in 0..WIDTH as i64 {
                 let p = &fb[((sy as usize) * WIDTH + sx as usize) * 4..][..3];
                 let got = [p[0] >> 3, p[1] >> 3, p[2] >> 3];
-                let want = reference(&sheet, &gids, (cw, ch, columns), (cx + sx) % SIZE, (cy + sy) % SIZE);
-                assert_eq!(got, want, "{cw}x{ch}: frame {f}, camera {cx},{cy}: screen pixel {sx},{sy}");
+                let want = reference(
+                    &sheet,
+                    &gids,
+                    (cw, ch, columns),
+                    (cx + sx) % SIZE,
+                    (cy + sy) % SIZE,
+                );
+                assert_eq!(
+                    got, want,
+                    "{cw}x{ch}: frame {f}, camera {cx},{cy}: screen pixel {sx},{sy}"
+                );
             }
         }
         checked += 1;

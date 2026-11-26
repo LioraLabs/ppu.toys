@@ -395,13 +395,20 @@ fn read_tileset<'a>(
                 ))?;
                 let shown = uint(fr, "tileid", "animation frame")?;
                 let from = tile_chars(shown)?;
-                if let Some((a, b)) = chars.iter().zip(&from).find(|(a, b)| pal_of(**a) != pal_of(**b)) {
+                if let Some((a, b)) = chars
+                    .iter()
+                    .zip(&from)
+                    .find(|(a, b)| pal_of(**a) != pal_of(**b))
+                {
                     return Err(format!(
                         "tileset {name}: tile {id} animates through tile {shown}, whose colours are palette {} where tile {id}'s are palette {}: a frame keeps the tile's palette, so draw its frames in the same colours",
                         pal_of(*b), pal_of(*a)
                     ));
                 }
-                out.push((from, duration_frames(uint(fr, "duration", "animation frame")?)));
+                out.push((
+                    from,
+                    duration_frames(uint(fr, "duration", "animation frame")?),
+                ));
             }
             if !out.is_empty() {
                 animations.push(Animation {
@@ -553,7 +560,13 @@ fn read_tile_layer(
 
     // The tileset by tile id, as a cell of each would draw unflipped (w:set's tiles).
     let (mut tiles, mut tile_kinds) = (vec![], vec![]);
-    if let Some(ts @ Tileset { binding: Binding::Sheet { source, pals }, .. }) = used {
+    if let Some(
+        ts @ Tileset {
+            binding: Binding::Sheet { source, pals },
+            ..
+        },
+    ) = used
+    {
         let chars = (source.char_words.len() / (source.bit_depth as usize * 4)).min(1024);
         for id in 0..ts.tilecount {
             let (col, row) = ((id % ts.columns) as usize, (id / ts.columns) as usize);
@@ -586,7 +599,11 @@ fn read_tile_layer(
 /// columns up to its last with a tile and the rows up to its last with a tile, as (columns, rows); `None` when the
 /// layer has no tile. The preview's strips and the cartridge's baked words both repeat this.
 pub fn painted(map: &Map, li: usize) -> Option<(usize, usize)> {
-    let cells = map.layers[li].cells.iter().enumerate().filter(|(_, c)| c.is_some());
+    let cells = map.layers[li]
+        .cells
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.is_some());
     cells.fold(None, |a, (i, _)| {
         let (x, y) = (i % map.width + 1, i / map.width + 1);
         Some(a.map_or((x, y), |(w, h): (usize, usize)| (w.max(x), h.max(y))))

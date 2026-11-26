@@ -40,6 +40,7 @@ pub mod bounded;
 pub mod convert;
 pub mod frontend;
 pub mod save;
+pub mod sync;
 
 /// Luau type declarations for the authoring surface (`declare` statements), for editors and
 /// type checkers; `tests/luau_declarations.rs` holds them to the runtime's globals.
@@ -74,8 +75,8 @@ pub mod codes {
     pub const WORLD: &str = "snes.world";
     /// Every engine code.
     pub const ALL: &[&str] = &[
-        BANK, BIT32, BOUNDED, CLAMP, DIVISION, DMA, HDMA_BAKE, HUD, LOOKUP, MAP, MODE7, NOTE, RAMP, REQUIRE, ROUTINE, SAVE, SCENES, SCORE,
-        SONG, SPRITES, TARGET, TIMER, WORLD,
+        BANK, BIT32, BOUNDED, CLAMP, DIVISION, DMA, HDMA_BAKE, HUD, LOOKUP, MAP, MODE7, NOTE, RAMP,
+        REQUIRE, ROUTINE, SAVE, SCENES, SCORE, SONG, SPRITES, TARGET, TIMER, WORLD,
     ];
 }
 
@@ -94,7 +95,10 @@ pub fn engine_code(message: &str) -> Option<&'static str> {
 /// code beside the message (the cart's diagnostics).
 pub fn split_code(message: &str) -> (Option<&'static str>, String) {
     match engine_code(message) {
-        Some(code) => (Some(code), message.replacen(&format!("error[{code}]: "), "", 1)),
+        Some(code) => (
+            Some(code),
+            message.replacen(&format!("error[{code}]: "), "", 1),
+        ),
         None => (None, message.to_string()),
     }
 }
@@ -373,7 +377,11 @@ mod tests {
             .collect();
         let sources = sources.into_iter().chain(libs.iter().map(String::as_str));
         let raised: BTreeSet<&str> = sources
-            .flat_map(|s| s.split("error[").skip(1).map(|r| r.split(']').next().unwrap()))
+            .flat_map(|s| {
+                s.split("error[")
+                    .skip(1)
+                    .map(|r| r.split(']').next().unwrap())
+            })
             .collect();
         assert_eq!(raised, codes::ALL.iter().copied().collect::<BTreeSet<_>>());
         // Every native callback error names its code at the call: a literal, or a format! whose literal starts with it.
@@ -381,13 +389,20 @@ mod tests {
             .split("lua_err(")
             .skip(1)
             .filter(|r| {
-                let arg = r.trim_start().strip_prefix("ctx,").unwrap_or(r).trim_start();
+                let arg = r
+                    .trim_start()
+                    .strip_prefix("ctx,")
+                    .unwrap_or(r)
+                    .trim_start();
                 let arg = arg.strip_prefix("&format!(").unwrap_or(arg).trim_start();
                 !arg.starts_with("\"error[")
             })
             .map(|r| &r[..r.len().min(60)])
             .collect();
-        assert!(uncoded.is_empty(), "native errors without a code: {uncoded:#?}");
+        assert!(
+            uncoded.is_empty(),
+            "native errors without a code: {uncoded:#?}"
+        );
         // Every Luau library error names its code.
         let uncoded: Vec<&str> = libs
             .iter()
@@ -395,12 +410,24 @@ mod tests {
             .filter(|r| !r.starts_with("\"error["))
             .map(|r| &r[..r.len().min(60)])
             .collect();
-        assert!(uncoded.is_empty(), "Luau library errors without a code: {uncoded:#?}");
-        assert_eq!(engine_code("main.luau:3: error[snes.lookup]: lookup grid ..."), Some("snes.lookup"));
-        assert_eq!(engine_code("evaluating lookups: error[snes.lookup]: x"), Some("snes.lookup"));
+        assert!(
+            uncoded.is_empty(),
+            "Luau library errors without a code: {uncoded:#?}"
+        );
+        assert_eq!(
+            engine_code("main.luau:3: error[snes.lookup]: lookup grid ..."),
+            Some("snes.lookup")
+        );
+        assert_eq!(
+            engine_code("evaluating lookups: error[snes.lookup]: x"),
+            Some("snes.lookup")
+        );
         assert_eq!(engine_code("error[snes.nope]: x"), None);
         assert_eq!(engine_code("no code here"), None);
-        assert_eq!(split_code("main.luau:3: error[snes.dma]: dma: x"), (Some("snes.dma"), "main.luau:3: dma: x".into()));
+        assert_eq!(
+            split_code("main.luau:3: error[snes.dma]: dma: x"),
+            (Some("snes.dma"), "main.luau:3: dma: x".into())
+        );
     }
 
     #[test]

@@ -536,7 +536,9 @@ impl<'a, 'gc> Apply<'a, 'gc> {
             }
             for (i, (k, v)) in ot.pairs.iter().enumerate() {
                 let v = match v {
-                    _ if swapped.contains(&i) => self.host_slot(id, k).flatten().unwrap_or(Value::Nil),
+                    _ if swapped.contains(&i) => {
+                        self.host_slot(id, k).flatten().unwrap_or(Value::Nil)
+                    }
                     Owned::Fresh => match self.host_slot(id, k) {
                         Some(new) => new.unwrap_or(Value::Nil),
                         None => {

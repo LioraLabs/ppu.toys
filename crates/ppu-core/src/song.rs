@@ -452,7 +452,12 @@ pub fn decode(bytes: &[u8]) -> Result<Song, SongError> {
     let mut rows = rows.ok_or_else(|| SongError("missing ROWS chunk".into()))?;
     for r in kept.unwrap_or_default() {
         rows.get_mut(r as usize)
-            .ok_or_else(|| SongError(format!("KEEP chunk names row {}, which does not exist", r + 1)))?
+            .ok_or_else(|| {
+                SongError(format!(
+                    "KEEP chunk names row {}, which does not exist",
+                    r + 1
+                ))
+            })?
             .keep = true;
     }
     let (arrangement, loop_start) =
@@ -701,7 +706,9 @@ pub fn encode(song: &Song) -> Vec<u8> {
     }
     write_chunk(&mut out, b"ROWS", &rows_body);
 
-    let kept: Vec<u32> = (0..song.rows.len() as u32).filter(|&r| song.rows[r as usize].keep).collect();
+    let kept: Vec<u32> = (0..song.rows.len() as u32)
+        .filter(|&r| song.rows[r as usize].keep)
+        .collect();
     if !kept.is_empty() {
         let mut keep_body = Vec::new();
         write_varint(&mut keep_body, kept.len() as u32);
@@ -1262,13 +1269,17 @@ pub fn compile(song: &Song) -> Result<Compiled, SongError> {
     }
 
     // Kept parts first, alone, so they take the lowest voices; the other parts share what they leave.
-    let (mut kept, mut rest): (Vec<Event>, Vec<Event>) =
-        events.into_iter().partition(|e| song.rows[e.row as usize].keep);
+    let (mut kept, mut rest): (Vec<Event>, Vec<Event>) = events
+        .into_iter()
+        .partition(|e| song.rows[e.row as usize].keep);
     kept.sort_by_key(|e| e.start); // stable: ties keep (slot, note) order
     rest.sort_by_key(|e| e.start);
     allocate(&mut kept, song.voice_mask);
     let keep = keep_mask(song, &kept);
-    if let Some(e) = rest.first().filter(|_| keep != 0 && song.voice_mask & !keep == 0) {
+    if let Some(e) = rest
+        .first()
+        .filter(|_| keep != 0 && song.voice_mask & !keep == 0)
+    {
         let pat = &song.patterns[song.arrangement[e.slot as usize] as usize];
         return Err(SongError(format!(
             "pattern '{}' note {}: kept parts use every voice the song may take, so other parts have none (keep fewer parts)",
@@ -1276,7 +1287,10 @@ pub fn compile(song: &Song) -> Result<Compiled, SongError> {
             e.note + 1
         )));
     }
-    if let Some(e) = rest.iter().find(|e| e.pin.is_some_and(|v| keep & 1 << v != 0)) {
+    if let Some(e) = rest
+        .iter()
+        .find(|e| e.pin.is_some_and(|v| keep & 1 << v != 0))
+    {
         let pat = &song.patterns[song.arrangement[e.slot as usize] as usize];
         return Err(SongError(format!(
             "pattern '{}' note {}: pinned to voice {}, which a kept part plays",
@@ -1285,11 +1299,22 @@ pub fn compile(song: &Song) -> Result<Compiled, SongError> {
             e.pin.unwrap()
         )));
     }
-    allocate(&mut rest, if keep == 0 { song.voice_mask } else { song.voice_mask & !keep });
+    allocate(
+        &mut rest,
+        if keep == 0 {
+            song.voice_mask
+        } else {
+            song.voice_mask & !keep
+        },
+    );
     let mut events = kept;
     events.append(&mut rest);
     events.sort_by_key(|e| (e.start, e.slot, e.note));
-    Ok(Compiled { events, timing, keep })
+    Ok(Compiled {
+        events,
+        timing,
+        keep,
+    })
 }
 
 /// The voices `song`'s kept parts play among `events`: no automatic sound effect takes them.

@@ -221,7 +221,10 @@ fn plan_error(program: &str, line: u32, message: &str) {
         .unwrap_err();
     assert_eq!(
         (err.message.as_str(), err.line),
-        (format!("error[snes.sprites]: {message}").as_str(), Some(line)),
+        (
+            format!("error[snes.sprites]: {message}").as_str(),
+            Some(line)
+        ),
         "{program}"
     );
 }
@@ -535,11 +538,18 @@ fn groups_set_up_obsel_and_the_sprite_layer_the_program_leaves() {
 /// The tile of slot 0 over `frames` frames: cell n is tile 2n.
 fn tiles(program: &str, frames: u32) -> Vec<u16> {
     let mut engine = LuaEngine::new();
-    engine.set_sources(&[("source", &format!("{SHEET}{program}"))]).unwrap();
+    engine
+        .set_sources(&[("source", &format!("{SHEET}{program}"))])
+        .unwrap();
     (0..frames)
         .map(|f| {
             engine.frame(f as f64 / 60., f).unwrap();
-            engine.memory().oam.iter().find(|o| o.on).map_or(0, |o| o.tile)
+            engine
+                .memory()
+                .oam
+                .iter()
+                .find(|o| o.on)
+                .map_or(0, |o| o.tile)
         })
         .collect()
 }
@@ -577,12 +587,19 @@ local g = sprites.group()
 function frame(t, f)
   g:draw(walk, 50, 50, {key = 0})
 end"#;
-    engine.set_sources(&[("source", &format!("{SHEET}{program}"))]).unwrap();
+    engine
+        .set_sources(&[("source", &format!("{SHEET}{program}"))])
+        .unwrap();
     let t: Vec<u16> = [0, 1, 2, 2, 2, 2, 2, 3]
         .iter()
         .map(|&f| {
             engine.frame(f as f64 / 60., f).unwrap();
-            engine.memory().oam.iter().find(|o| o.on).map_or(0, |o| o.tile)
+            engine
+                .memory()
+                .oam
+                .iter()
+                .find(|o| o.on)
+                .map_or(0, |o| o.tile)
         })
         .collect();
     assert_eq!(t, [2, 4, 6, 6, 6, 6, 6, 8]);
@@ -598,11 +615,23 @@ fn a_keys_animation_clock_restarts_at_a_scenes_entry() {
     let b = "local S = require(\"./shared\")\nlocal function frame(t, f)\n  S.g:draw(S.walk, 50, 50, {key = 0})\nend\nreturn {frame = frame}\n";
     let main = "scenes.add(require(\"./a\"))\nB = scenes.add(require(\"./b\"))\n";
     let mut engine = LuaEngine::new();
-    engine.set_sources(&[("main.luau", main), ("shared.luau", &shared), ("a.luau", a), ("b.luau", b)]).unwrap();
+    engine
+        .set_sources(&[
+            ("main.luau", main),
+            ("shared.luau", &shared),
+            ("a.luau", a),
+            ("b.luau", b),
+        ])
+        .unwrap();
     let t: Vec<u16> = (0..6)
         .map(|f| {
             engine.frame(f as f64 / 60., f).unwrap();
-            engine.memory().oam.iter().find(|o| o.on).map_or(0, |o| o.tile)
+            engine
+                .memory()
+                .oam
+                .iter()
+                .find(|o| o.on)
+                .map_or(0, |o| o.tile)
         })
         .collect();
     assert_eq!(t, [2, 4, 6, 2, 4, 6]);
@@ -639,7 +668,12 @@ fn an_unkeyed_draw_of_an_animation_needs_at() {
         )])
         .unwrap();
     let e = engine.frame(0., 0).unwrap_err();
-    assert!(e.message.contains("needs a key, whose clock it plays on, or {at = frames}"), "{}", e.message);
+    assert!(
+        e.message
+            .contains("needs a key, whose clock it plays on, or {at = frames}"),
+        "{}",
+        e.message
+    );
 }
 
 #[test]
@@ -656,11 +690,18 @@ end"#;
     // At 30 Hz an update spans two video frames: the clock goes 0, 2, 4 (0 again), 6 (2)...
     let mut engine = LuaEngine::new();
     engine.set_target_hz(Some(30)).unwrap();
-    engine.set_sources(&[("source", &format!("{SHEET}{program}"))]).unwrap();
+    engine
+        .set_sources(&[("source", &format!("{SHEET}{program}"))])
+        .unwrap();
     let t: Vec<u16> = (0..8)
         .map(|f| {
             engine.frame(f as f64 / 60., f).unwrap();
-            engine.memory().oam.iter().find(|o| o.on).map_or(0, |o| o.tile)
+            engine
+                .memory()
+                .oam
+                .iter()
+                .find(|o| o.on)
+                .map_or(0, |o| o.tile)
         })
         .collect();
     assert_eq!(t, [2, 2, 4, 4, 2, 2, 4, 4]);
@@ -677,13 +718,21 @@ return {HERO = HERO, walk = walk, group = sprites.group({slots = 4})}
 "#;
 
 fn plan(main: &str) -> ppu_core::sprites::Plan {
-    ppu_core::sprites::plan(&[("shared.luau", HERO), ("main.luau", main)]).unwrap().unwrap()
+    ppu_core::sprites::plan(&[("shared.luau", HERO), ("main.luau", main)])
+        .unwrap()
+        .unwrap()
 }
 
 #[test]
 fn an_animation_names_its_arts_through_nested_tables_and_modules() {
     let p = plan("local S = require(\"./shared\")\nlocal run = sprites.animation({S.HERO.down[2], S.HERO.still}, 4)\nfunction frame(t, f)\n  S.group:draw(run, 1, 1, {at = f})\nend\n");
-    assert_eq!(p.animations.iter().map(|a| a.arts.clone()).collect::<Vec<_>>(), [vec![1, 2], vec![2, 3]]);
+    assert_eq!(
+        p.animations
+            .iter()
+            .map(|a| a.arts.clone())
+            .collect::<Vec<_>>(),
+        [vec![1, 2], vec![2, 3]]
+    );
     assert_eq!(p.calls[0].animations, Some(vec![2]));
 }
 
@@ -694,8 +743,19 @@ fn art_no_animation_can_reach_draws_as_plain_art() {
         "local S = require(\"./shared\")\nlocal function pick(f) return if f % 2 == 0 then S.HERO.still else S.HERO.down[1] end\nlocal function show(art, f)\n  S.group:draw(art, 2, 2, {at = f})\nend\nfunction frame(t, f)\n  S.group:draw(pick(f), 1, 1)\n  show(S.walk, f)\nend\n",
     );
     assert!(p.escapes.is_empty(), "{:?}", p.escapes);
-    let by_line = |l: u32| p.calls.iter().find(|c| c.line == l).unwrap().animations.clone();
-    assert_eq!(by_line(7), Some(vec![]), "pick() never returns an animation");
+    let by_line = |l: u32| {
+        p.calls
+            .iter()
+            .find(|c| c.line == l)
+            .unwrap()
+            .animations
+            .clone()
+    };
+    assert_eq!(
+        by_line(7),
+        Some(vec![]),
+        "pick() never returns an animation"
+    );
     assert_eq!(by_line(4), None, "show's art can be the walk");
 }
 
@@ -715,9 +775,15 @@ fn an_animation_stored_where_the_plan_loses_it_is_an_escape() {
 /// The draw at `file`:`line` can show the walk: it keeps the machinery (`animations: None`), or the plan refuses it.
 fn sound(files: &[(&str, &str)], file: &str, line: u32) -> bool {
     // A plan that refuses the program is sound too.
-    let Ok(p) = ppu_core::sprites::plan(files) else { return true };
+    let Ok(p) = ppu_core::sprites::plan(files) else {
+        return true;
+    };
     let p = p.unwrap();
-    let draw = p.calls.iter().find(|c| c.file == file && c.line == line).unwrap_or_else(|| panic!("no draw at {file}:{line}"));
+    let draw = p
+        .calls
+        .iter()
+        .find(|c| c.file == file && c.line == line)
+        .unwrap_or_else(|| panic!("no draw at {file}:{line}"));
     !p.escapes.is_empty() || draw.animations.is_none()
 }
 
@@ -727,26 +793,46 @@ fn every_shape_an_animation_reaches_a_draw_through_keeps_it_or_is_refused() {
     let player = "local S = require(\"./shared\")\nlocal function show(a, f)\n  S.group:draw(a, 1, 1, {at = f})\nend\nreturn {show = show}\n";
     let main = "local S = require(\"./shared\")\nlocal P = require(\"./player\")\nfunction frame(t, f)\n  P.show(S.walk, f)\nend\n";
     let mut unsound = vec![];
-    if !sound(&[("shared.luau", HERO), ("player.luau", player), ("main.luau", main)], "player.luau", 3) {
+    if !sound(
+        &[
+            ("shared.luau", HERO),
+            ("player.luau", player),
+            ("main.luau", main),
+        ],
+        "player.luau",
+        3,
+    ) {
         unsound.push("a main wiring modules");
     }
-    let main = |body: &str| format!("local S = require(\"./shared\")\nlocal function show(o)\n  S.group:draw(o.art, 1, 1, {{at = o.f}})\nend\nlocal function shown(a, f)\n  S.group:draw(a, 2, 2, {{at = f}})\nend\nlocal A = {{S.walk}}\nfunction frame(t, f)\n{body}\nend\n");
+    let main = |body: &str| {
+        format!("local S = require(\"./shared\")\nlocal function show(o)\n  S.group:draw(o.art, 1, 1, {{at = o.f}})\nend\nlocal function shown(a, f)\n  S.group:draw(a, 2, 2, {{at = f}})\nend\nlocal A = {{S.walk}}\nfunction frame(t, f)\n{body}\nend\n")
+    };
     for (body, line, what) in [
         // b. A table-call argument.
         ("  show{art = S.walk, f = f}", 3, "show{...}"),
         // c. Type assertions, passed on and drawn from a local.
         ("  shown(S.walk :: any, f)", 6, "an asserted argument"),
-        ("  local a = S.walk :: any\n  S.group:draw(a, 3, 3, {at = f})", 11, "an asserted local"),
+        (
+            "  local a = S.walk :: any\n  S.group:draw(a, 3, 3, {at = f})",
+            11,
+            "an asserted local",
+        ),
         // d. A parenthesised prefix.
         ("  S.group:draw((A)[1], 4, 4, {at = f})", 10, "(A)[1]"),
     ] {
-        if !sound(&[("shared.luau", HERO), ("main.luau", &main(body))], "main.luau", line) {
+        if !sound(
+            &[("shared.luau", HERO), ("main.luau", &main(body))],
+            "main.luau",
+            line,
+        ) {
             unsound.push(what);
         }
     }
     // e. A module's returned table holding a named animation beside a leaf its tree can't name.
     let main = "local S = require(\"./shared\")\nlocal A = require(\"./actor\")\nfunction frame(t, f)\n  S.group:draw(A.ANIMS.walk, 1, 1, {at = f})\nend\n";
-    let actor = |body: &str| format!("local S = require(\"./shared\")\nlocal hop = sprites.animation({{S.HERO.down[1], S.HERO.still}}, 5)\nlocal hop2 = sprites.animation({{S.HERO.still, S.HERO.down[2]}}, 3)\nlocal FAST = true\n{body}\n");
+    let actor = |body: &str| {
+        format!("local S = require(\"./shared\")\nlocal hop = sprites.animation({{S.HERO.down[1], S.HERO.still}}, 5)\nlocal hop2 = sprites.animation({{S.HERO.still, S.HERO.down[2]}}, 3)\nlocal FAST = true\n{body}\n")
+    };
     for (body, what) in [
         ("return {ANIMS = {hop = hop, walk = S.walk}}", "a re-exported field"),
         ("local run = if FAST then hop2 else hop\nreturn {ANIMS = {hop = hop, walk = run}}", "an if-expression"),
@@ -794,7 +880,12 @@ fn every_shape_an_animation_reaches_a_draw_through_keeps_it_or_is_refused() {
     // its draw keeps the machinery, or names the animation the inner name holds, never the file-level still.
     let shows = |files: &[(&str, &str)], line: u32| {
         sound(files, "main.luau", line)
-            || ppu_core::sprites::plan(files).unwrap().unwrap().calls.iter().any(|c| c.line == line && c.animations.as_ref().is_some_and(|a| !a.is_empty()))
+            || ppu_core::sprites::plan(files)
+                .unwrap()
+                .unwrap()
+                .calls
+                .iter()
+                .any(|c| c.line == line && c.animations.as_ref().is_some_and(|a| !a.is_empty()))
     };
     for (body, what) in [
         ("local cur = one\nfunction frame(t, f)\n  local cur = hop\n  g:draw(cur, 60, 80, {at = f})\nend\n", "a local in frame, at"),
@@ -815,7 +906,8 @@ fn every_shape_an_animation_reaches_a_draw_through_keeps_it_or_is_refused() {
             unsound.push(what);
         }
     }
-    let module = format!("{art}return {{still = one, hop = hop, group = sprites.group({{slots = 4}})}}\n");
+    let module =
+        format!("{art}return {{still = one, hop = hop, group = sprites.group({{slots = 4}})}}\n");
     for (main, line, what) in [
         ("local H = require(\"./art\")\nlocal cur = H.still\nfunction frame(t, f)\n  local cur = H.hop\n  H.group:draw(cur, 60, 80, {at = f})\nend\n", 5, "an importer's local shadowing its alias"),
         ("local H = require(\"./art\")\nlocal cur = H.still\nlocal function d(cur, f)\n  H.group:draw(cur, 60, 80, {at = f})\nend\nfunction frame(t, f)\n  d(H.hop, f)\nend\n", 4, "an importer's parameter shadowing its alias"),
@@ -852,7 +944,10 @@ fn every_shape_an_animation_reaches_a_draw_through_keeps_it_or_is_refused() {
             unsound.push(what);
         }
     }
-    assert!(unsound.is_empty(), "the walk reaches a draw marked plain through: {unsound:?}");
+    assert!(
+        unsound.is_empty(),
+        "the walk reaches a draw marked plain through: {unsound:?}"
+    );
 }
 
 #[test]
@@ -861,7 +956,9 @@ fn a_constant_local_names_its_art_whatever_else_shares_its_name() {
     let main = format!(
         "{SHEET}local one = sprites.art({{{{size = 16, columns = 1, cells = {{1}}}}}}, sheet)\nlocal two = sprites.art({{{{size = 16, columns = 1, cells = {{2}}}}}}, sheet)\nlocal g = sprites.group({{slots = 4}})\nlocal function a()\n  local cur = one\n  g:draw(cur, 1, 1)\nend\nfunction frame(t, f)\n  local cur = two\n  g:draw(cur, 2, 2)\n  a()\nend\n"
     );
-    let p = ppu_core::sprites::plan(&[("main.luau", &main)]).unwrap().unwrap();
+    let p = ppu_core::sprites::plan(&[("main.luau", &main)])
+        .unwrap()
+        .unwrap();
     let arts: Vec<_> = p.calls.iter().map(|c| c.arts.clone()).collect();
     assert_eq!(arts, [Some(vec![1]), Some(vec![2])]);
 }
@@ -871,9 +968,23 @@ fn a_modules_returned_table_of_animations_and_numbers_is_followed_without_refusa
     // Leaves the tree can't name but that hold no animation (a number, a string) are not escapes.
     let actor = "local S = require(\"./shared\")\nlocal hop = sprites.animation({S.HERO.down[1], S.HERO.still}, 5)\nlocal ANIMS = {hop = hop, speed = 3}\nreturn {ANIMS = ANIMS, MORE = {hop = hop, name = \"hop\", still = S.HERO.still, hero = S.HERO}}\n";
     let main = "local S = require(\"./shared\")\nlocal A = require(\"./actor\")\nfunction frame(t, f)\n  S.group:draw(A.ANIMS.hop, 1, 1, {at = f})\n  S.group:draw(S.HERO.still, A.ANIMS.speed, 1)\nend\n";
-    let p = ppu_core::sprites::plan(&[("shared.luau", HERO), ("actor.luau", actor), ("main.luau", main)]).unwrap().unwrap();
+    let p = ppu_core::sprites::plan(&[
+        ("shared.luau", HERO),
+        ("actor.luau", actor),
+        ("main.luau", main),
+    ])
+    .unwrap()
+    .unwrap();
     assert!(p.escapes.is_empty(), "{:?}", p.escapes);
-    assert!(p.calls.iter().find(|c| c.line == 4).unwrap().animations.is_some(), "ANIMS.hop is named exactly");
+    assert!(
+        p.calls
+            .iter()
+            .find(|c| c.line == 4)
+            .unwrap()
+            .animations
+            .is_some(),
+        "ANIMS.hop is named exactly"
+    );
 }
 
 /// A draw on a parameter draws into every group its callers give it, through the functions that pass it on; each
@@ -882,17 +993,34 @@ fn a_modules_returned_table_of_animations_and_numbers_is_followed_without_refusa
 fn a_draw_on_a_parameter_draws_into_each_group_its_callers_give_it() {
     let row = format!("{SHEET}local dot = sprites.art({{{{size = 16, columns = 1, cells = {{1}}}}}}, sheet)\nlocal function one(g, x)\n  g:draw(dot, x, 1)\nend\nlocal function row(g)\n  for i = 1, 2 do one(g, i * 8) end\nend\nreturn {{row = row}}\n");
     let main = "local Row = require(\"./row\")\nlocal top = sprites.group({slots = 2})\nlocal low = sprites.group({slots = 2})\nfunction frame(t, f)\n  Row.row(top)\n  Row.row(low)\nend\n";
-    let p = ppu_core::sprites::plan(&[("row.luau", &row), ("main.luau", main)]).unwrap().unwrap();
-    let draws: Vec<_> = p.calls.iter().map(|c| (c.file.as_str(), c.group, c.through.as_deref())).collect();
-    assert_eq!(draws, [("row.luau", 0, Some("g")), ("row.luau", 1, Some("g"))]);
-    let args: Vec<_> = p.group_args.iter().map(|a| (a.file.as_str(), &main[a.arg.clone()], a.group)).collect();
+    let p = ppu_core::sprites::plan(&[("row.luau", &row), ("main.luau", main)])
+        .unwrap()
+        .unwrap();
+    let draws: Vec<_> = p
+        .calls
+        .iter()
+        .map(|c| (c.file.as_str(), c.group, c.through.as_deref()))
+        .collect();
+    assert_eq!(
+        draws,
+        [("row.luau", 0, Some("g")), ("row.luau", 1, Some("g"))]
+    );
+    let args: Vec<_> = p
+        .group_args
+        .iter()
+        .map(|a| (a.file.as_str(), &main[a.arg.clone()], a.group))
+        .collect();
     assert_eq!(args, [("main.luau", "top", 0), ("main.luau", "low", 1)]);
     // A call that gives it something else is refused on the draw, naming the call.
     let main = main.replace("Row.row(low)", "Row.row(f)");
     let e = ppu_core::sprites::plan(&[("row.luau", &row), ("main.luau", &main)]).unwrap_err();
     let draw = row.lines().position(|l| l.contains("g:draw")).unwrap() as u32 + 1;
     assert_eq!((e.file.as_str(), e.line), ("row.luau", draw), "{e:?}");
-    assert!(e.message.contains("the call at main.luau:6 gives it something other than a sprites group"), "{e:?}");
+    assert!(
+        e.message
+            .contains("the call at main.luau:6 gives it something other than a sprites group"),
+        "{e:?}"
+    );
 }
 
 #[test]
@@ -906,7 +1034,10 @@ fn a_modules_own_table_of_functions_is_followed() {
     let player = player.replace("function M.show(a, f)", "M.show = function(a, f)");
     let p = ppu_core::sprites::plan(&[("shared.luau", HERO), ("player.luau", &player), ("main.luau", "local S = require(\"./shared\")\nlocal P = require(\"./player\")\nfunction frame(t, f)\n  P.show(S.walk, f)\nend\n")]).unwrap().unwrap();
     assert!(p.escapes.is_empty(), "{:?}", p.escapes);
-    assert_eq!(p.calls[0].animations, None, "an assigned M.show's art can be the walk");
+    assert_eq!(
+        p.calls[0].animations, None,
+        "an assigned M.show's art can be the walk"
+    );
 }
 
 #[test]
@@ -928,14 +1059,27 @@ fn shapes_other_refusals_shield_today_keep_the_animation_or_are_refused_in_the_p
             unsound.push(what);
         }
     }
-    assert!(unsound.is_empty(), "the walk reaches a draw marked plain through: {unsound:?}");
+    assert!(
+        unsound.is_empty(),
+        "the walk reaches a draw marked plain through: {unsound:?}"
+    );
 }
 
 #[test]
 fn the_defences_refuse_nothing_that_holds_no_animation() {
     // A table holding an animation, a forward-declared function, plain art from an inline require.
     let main = "local S = require(\"./shared\")\nlocal A = {walk = S.walk}\nlocal show\nfunction show(a, f)\n  S.group:draw(a, 1, 1, {at = f})\nend\nfunction frame(t, f)\n  show(A.walk, f)\n  S.group:draw(require(\"./shared\").HERO.still, 2, 2)\nend\n";
-    let p = ppu_core::sprites::plan(&[("shared.luau", HERO), ("main.luau", main)]).unwrap().unwrap();
+    let p = ppu_core::sprites::plan(&[("shared.luau", HERO), ("main.luau", main)])
+        .unwrap()
+        .unwrap();
     assert!(p.escapes.is_empty(), "{:?}", p.escapes);
-    assert!(p.calls.iter().find(|c| c.line == 9).unwrap().animations.is_some(), "plain art through an inline require");
+    assert!(
+        p.calls
+            .iter()
+            .find(|c| c.line == 9)
+            .unwrap()
+            .animations
+            .is_some(),
+        "plain art through an inline require"
+    );
 }

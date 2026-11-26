@@ -285,17 +285,38 @@ fn a_parallax_factor_is_sixteenths_from_one_sixteenth_to_one() {
 /// background of the same world uses, is refused, by the option or by map_base set before the bind.
 #[test]
 fn the_map_option_places_the_map_and_one_world_never_shares_a_map() {
-    let main = format!("{}function frame() end", BOUND.replace("bg[1])", "bg[1], {map = 0x0400, parallax = 0.5})"));
+    let main = format!(
+        "{}function frame() end",
+        BOUND.replace("bg[1])", "bg[1], {map = 0x0400, parallax = 0.5})")
+    );
     let mut e = engine(&main, &tmj(32, 32, &vec![2u32; 32 * 32])).unwrap();
     assert_eq!(e.frame(0.0, 0).unwrap().rows[100].bg[0].map_base, 0x400);
     let vram = &e.memory().vram;
-    assert!(vram[0x400..0x800].iter().any(|&w| w != 0) && vram[..0x400].iter().all(|&w| w == 0), "the map should be at 0x0400");
+    assert!(
+        vram[0x400..0x800].iter().any(|&w| w != 0) && vram[..0x400].iter().all(|&w| w == 0),
+        "the map should be at 0x0400"
+    );
     for bad in ["0x0200", "0x8000", "\"low\""] {
-        fails(&format!("{}function frame() end", BOUND.replace("bg[1])", &format!("bg[1], {{map = {bad}}})"))), "map is the background map's VRAM word address");
+        fails(
+            &format!(
+                "{}function frame() end",
+                BOUND.replace("bg[1])", &format!("bg[1], {{map = {bad}}})"))
+            ),
+            "map is the background map's VRAM word address",
+        );
     }
-    for second in ["w:bind(\"ground\", bg[2], {map = 0x0000})", "bg[2].map_base = 0x0000 w:bind(\"ground\", bg[2])"] {
-        let main = BOUND.replace("bg[1])\n", &format!("bg[1], {{map = 0x0000}})\n  {second}\n"));
-        fails(&format!("{main}function frame() end"), "bg[2]'s map at 0x0000 overlaps bg[1]'s at 0x0000");
+    for second in [
+        "w:bind(\"ground\", bg[2], {map = 0x0000})",
+        "bg[2].map_base = 0x0000 w:bind(\"ground\", bg[2])",
+    ] {
+        let main = BOUND.replace(
+            "bg[1])\n",
+            &format!("bg[1], {{map = 0x0000}})\n  {second}\n"),
+        );
+        fails(
+            &format!("{main}function frame() end"),
+            "bg[2]'s map at 0x0000 overlaps bg[1]'s at 0x0000",
+        );
     }
 }
 
@@ -313,22 +334,36 @@ fn a_wrapping_layer_repeats_its_painted_part() {
     }
     // The part's last column and row hold a tile, so it is exactly pw x ph.
     painted[(ph - 1) * MAP_W + pw - 1] = 1;
-    let repeated: Vec<u32> = (0..MAP_W * MAP_H).map(|i| painted[(i / MAP_W % ph) * MAP_W + i % MAP_W % pw]).collect();
-    let main = main_luau().replace("w:bind(\"ground\", bg[1])", "w:bind(\"ground\", bg[1], {parallax = 0.75, wrap = true})");
+    let repeated: Vec<u32> = (0..MAP_W * MAP_H)
+        .map(|i| painted[(i / MAP_W % ph) * MAP_W + i % MAP_W % pw])
+        .collect();
+    let main = main_luau().replace(
+        "w:bind(\"ground\", bg[1])",
+        "w:bind(\"ground\", bg[1], {parallax = 0.75, wrap = true})",
+    );
     let mut e = engine(&main, &tmj(MAP_W, MAP_H, &painted)).unwrap();
     let total: i64 = PATH.iter().map(|p| p.2).sum();
     for f in 0..=total {
-        let lt = e.frame(f as f64 / 60.0, f as u32).unwrap_or_else(|err| panic!("frame {f}: {err:?}"));
+        let lt = e
+            .frame(f as f64 / 60.0, f as u32)
+            .unwrap_or_else(|err| panic!("frame {f}: {err:?}"));
         if f % 17 != 0 && f != total {
             continue;
         }
         let (cx, cy) = camera(f);
-        let (lx, ly) = ((cx * 12).div_euclid(16) as usize, (cy * 12).div_euclid(16) as usize);
+        let (lx, ly) = (
+            (cx * 12).div_euclid(16) as usize,
+            (cy * 12).div_euclid(16) as usize,
+        );
         let fb = render_frame(&lt, e.memory());
         for sy in 0..HEIGHT {
             for sx in 0..WIDTH {
                 let p = &fb[(sy * WIDTH + sx) * 4..][..3];
-                assert_eq!([p[0] >> 3, p[1] >> 3, p[2] >> 3], reference(&sheet, &repeated, lx + sx, ly + sy), "frame {f}, layer camera {lx},{ly}: screen pixel {sx},{sy}");
+                assert_eq!(
+                    [p[0] >> 3, p[1] >> 3, p[2] >> 3],
+                    reference(&sheet, &repeated, lx + sx, ly + sy),
+                    "frame {f}, layer camera {lx},{ly}: screen pixel {sx},{sy}"
+                );
             }
         }
     }
@@ -336,9 +371,20 @@ fn a_wrapping_layer_repeats_its_painted_part() {
 
 #[test]
 fn wrap_is_true_or_false_and_needs_a_painted_layer() {
-    fails(&format!("{}function frame() end", BOUND.replace("bg[1])", "bg[1], {wrap = 1})")), "wrap is true or false (got 1)");
-    let main = format!("{}function frame() end", BOUND.replace("bg[1])", "bg[1], {wrap = true})"));
-    let err = engine(&main, &tmj(64, 32, &vec![0u32; 64 * 32])).err().unwrap_or_default();
+    fails(
+        &format!(
+            "{}function frame() end",
+            BOUND.replace("bg[1])", "bg[1], {wrap = 1})")
+        ),
+        "wrap is true or false (got 1)",
+    );
+    let main = format!(
+        "{}function frame() end",
+        BOUND.replace("bg[1])", "bg[1], {wrap = true})")
+    );
+    let err = engine(&main, &tmj(64, 32, &vec![0u32; 64 * 32]))
+        .err()
+        .unwrap_or_default();
     assert!(err.contains("layer ground has no tiles"), "{err}");
 }
 
@@ -374,7 +420,10 @@ fn find_refuses_a_name_the_map_lacks_or_shares() {
     let map = tmj(64, 32, &vec![1u32; 64 * 32]).replace("\"door\"", "\"start\"");
     let main = "local world = require(\"@ppu/world\")\nlocal w = world.load(\"level1\")\nlocal o = w:find(\"start\")\nfunction frame() end\n";
     let err = engine(main, &map).err().expect("a shared name is refused");
-    assert!(err.contains("map level1 has two or more objects named start"), "{err}");
+    assert!(
+        err.contains("map level1 has two or more objects named start"),
+        "{err}"
+    );
 }
 
 fn fails(main: &str, needle: &str) {
@@ -406,9 +455,14 @@ fn speed_without_a_view_is_ignored_and_the_camera_stays_on_the_map() {
     );
     // Toys from before views wrote a speed (any number): it does nothing, and the toy runs.
     for speed in ["4", "12"] {
-        let main = BOUND.replace("world.load(\"level1\")", &format!("world.load(\"level1\", {{speed = {speed}}})"));
+        let main = BOUND.replace(
+            "world.load(\"level1\")",
+            &format!("world.load(\"level1\", {{speed = {speed}}})"),
+        );
         let mut e = engine(&main, &tmj(64, 32, &vec![1u32; 64 * 32])).unwrap();
-        (0..3).for_each(|f| { e.frame(f as f64 / 60.0, f).unwrap(); });
+        (0..3).for_each(|f| {
+            e.frame(f as f64 / 60.0, f).unwrap();
+        });
     }
     fails(
         &format!("{BOUND}function frame(t, f) w:follow(0, 0, {{cut = 1}}) end"),
@@ -423,8 +477,26 @@ fn speed_without_a_view_is_ignored_and_the_camera_stays_on_the_map() {
 /// Camera stops reached in one frame each: moves of 8, 16 and 40 px on each axis and diagonally, reversals, jumps
 /// past the whole window both ways, and a teleport with {cut = true} to where the camera already is.
 const JUMPS: &[(i64, i64)] = &[
-    (0, 0), (8, 0), (24, 0), (64, 0), (64, 8), (64, 24), (64, 64), (104, 104), (64, 64), (48, 48), (8, 8),
-    (900, 200), (1500, 260), (300, 0), (296, 3), (1200, 288), (0, 288), (0, 0), (40, 16), (40, 16),
+    (0, 0),
+    (8, 0),
+    (24, 0),
+    (64, 0),
+    (64, 8),
+    (64, 24),
+    (64, 64),
+    (104, 104),
+    (64, 64),
+    (48, 48),
+    (8, 8),
+    (900, 200),
+    (1500, 260),
+    (300, 0),
+    (296, 3),
+    (1200, 288),
+    (0, 288),
+    (0, 0),
+    (40, 16),
+    (40, 16),
 ];
 
 #[test]
@@ -441,14 +513,20 @@ fn a_follow_streams_every_row_and_column_a_move_of_any_length_uncovers() {
     );
     let mut e = engine(&main, &tmj(MAP_W, MAP_H, &gids)).unwrap();
     for f in 0..JUMPS.len() as u32 * 2 {
-        let lt = e.frame(f as f64 / 60.0, f).unwrap_or_else(|err| panic!("frame {f}: {err:?}"));
+        let lt = e
+            .frame(f as f64 / 60.0, f)
+            .unwrap_or_else(|err| panic!("frame {f}: {err:?}"));
         let (cx, cy) = JUMPS[f as usize % JUMPS.len()];
         let fb = render_frame(&lt, e.memory());
         for sy in 0..HEIGHT {
             for sx in 0..WIDTH {
                 let p = &fb[(sy * WIDTH + sx) * 4..][..3];
                 let want = reference(&sheet, &gids, cx as usize + sx, cy as usize + sy);
-                assert_eq!([p[0] >> 3, p[1] >> 3, p[2] >> 3], want, "frame {f}, camera {cx},{cy}, pixel {sx},{sy}");
+                assert_eq!(
+                    [p[0] >> 3, p[1] >> 3, p[2] >> 3],
+                    want,
+                    "frame {f}, camera {cx},{cy}, pixel {sx},{sy}"
+                );
             }
         }
     }
@@ -458,9 +536,7 @@ fn a_follow_streams_every_row_and_column_a_move_of_any_length_uncovers() {
 fn world_load_is_a_file_level_placement() {
     let lib = "local world = require(\"@ppu/world\")\n";
     fails(
-        &format!(
-            "{lib}function init() world.load(\"level1\") end function frame() end"
-        ),
+        &format!("{lib}function init() world.load(\"level1\") end function frame() end"),
         "world.load runs at file level",
     );
     fails(
@@ -471,7 +547,12 @@ fn world_load_is_a_file_level_placement() {
         &format!("{lib}local w = world.load(\"level2\") function frame() end"),
         "no file named level2.tmj",
     );
-    fails(&format!("{lib}local w = world.load(\"level1\") w:bind(\"ground\", bg[1]) function frame() end"), "w:bind runs in init()");
+    fails(
+        &format!(
+            "{lib}local w = world.load(\"level1\") w:bind(\"ground\", bg[1]) function frame() end"
+        ),
+        "w:bind runs in init()",
+    );
     fails(&format!("{lib}local w = world.load(\"level1\") function init() w:bind(\"ground\", bg[1]) end function frame() end"), "place it first, at file level, with dma(\"tiles\"");
     fails(
         &BOUND.replace("bind(\"ground\"", "bind(\"sky\""),
@@ -528,9 +609,15 @@ fn a_multi_palette_sheet_without_its_palettes_is_refused() {
     .unwrap();
     e.add_source("tiles", &payload.encode()).unwrap();
     let map = tmj(64, 32, &vec![1u32; 64 * 32]);
-    e.set_sources(&[("main.luau", BOUND), ("level1.tmj", &map)]).unwrap();
-    let ppu_core::SourcePayload::Sheet(sheet) = &mut payload else { panic!("a sheet") };
-    assert!(sheet.palettes.len() > 1, "the fixture needs several palettes");
+    e.set_sources(&[("main.luau", BOUND), ("level1.tmj", &map)])
+        .unwrap();
+    let ppu_core::SourcePayload::Sheet(sheet) = &mut payload else {
+        panic!("a sheet")
+    };
+    assert!(
+        sheet.palettes.len() > 1,
+        "the fixture needs several palettes"
+    );
     sheet.pals.clear();
     let mut e = LuaEngine::new();
     e.add_source("tiles", &payload.encode()).unwrap();
@@ -1232,10 +1319,9 @@ fn sets_at(f: i64) -> Vec<(i64, i64, u32)> {
 #[test]
 fn a_set_cell_shows_now_and_stays_when_it_scrolls_back() {
     let (sheet, mut gids) = (sheet(), gids());
-    let main = main_luau()
-        .replace(
-            "  w:follow(x, y)\nend",
-            r#"  w:follow(x, y)
+    let main = main_luau().replace(
+        "  w:follow(x, y)\nend",
+        r#"  w:follow(x, y)
   if f > 0 and f % 7 == 0 then
     local t = 1 + f % 15
     local KIND = {[3] = 1, [4] = 1, [9] = 2}
@@ -1245,7 +1331,7 @@ fn a_set_cell_shows_now_and_stays_when_it_scrolls_back() {
     if x + 300 < w.width * 8 then w:set("ground", x + 300, y + f % 200, 16 - t) end
   end
 end"#,
-        );
+    );
     assert!(main.contains("w:set"));
     let mut e = engine(&main, &tmj(MAP_W, MAP_H, &gids)).unwrap();
     let total: i64 = PATH.iter().map(|p| p.2).sum();
@@ -1265,7 +1351,11 @@ end"#,
             for sx in 0..WIDTH {
                 let p = &fb[(sy * WIDTH + sx) * 4..][..3];
                 let want = reference(&sheet, &gids, cx as usize + sx, cy as usize + sy);
-                assert_eq!([p[0] >> 3, p[1] >> 3, p[2] >> 3], want, "frame {f}, camera {cx},{cy}: screen pixel {sx},{sy}");
+                assert_eq!(
+                    [p[0] >> 3, p[1] >> 3, p[2] >> 3],
+                    want,
+                    "frame {f}, camera {cx},{cy}: screen pixel {sx},{sy}"
+                );
             }
         }
     }
@@ -1320,9 +1410,18 @@ function frame() end
 "#;
     engine(main, &tmj(64, 32, &vec![1u32; 64 * 32])).unwrap();
     for (call, needle) in [
-        ("w:set(\"ground\", 0, 0, 16)", "tile 16 is not in layer ground's tileset, whose ids are 0 to 15"),
-        ("w:set(\"ground\", 0, 9999, 1)", "the pixel 0, 9999 is off the 512x256 px map"),
-        ("w:set(\"nope\", 0, 0, 1)", "the map has no tile layer named nope"),
+        (
+            "w:set(\"ground\", 0, 0, 16)",
+            "tile 16 is not in layer ground's tileset, whose ids are 0 to 15",
+        ),
+        (
+            "w:set(\"ground\", 0, 9999, 1)",
+            "the pixel 0, 9999 is off the 512x256 px map",
+        ),
+        (
+            "w:set(\"nope\", 0, 0, 1)",
+            "the map has no tile layer named nope",
+        ),
     ] {
         fails(&format!("{BOUND}{call}\nfunction frame() end"), needle);
     }

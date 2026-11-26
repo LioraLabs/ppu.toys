@@ -2129,7 +2129,10 @@ fn art_whose_stored_meta_is_not_what_its_file_imports_as_is_named_on_pull() {
     let folder = dir.path().join("demo");
     let mut said = Capture::default();
     connect::pull(&creds, "p1", &folder, &mut said).unwrap();
-    assert_eq!(source(&manifest(&folder), "hero")["file"], "assets/hero.png");
+    assert_eq!(
+        source(&manifest(&folder), "hero")["file"],
+        "assets/hero.png"
+    );
     let said = said.text();
     assert!(
         said.contains(
@@ -2525,7 +2528,8 @@ fn a_site_palette_change_writes_the_gpl_and_the_pngs_follow_it() {
             _ => panic!("not indexed"),
         };
     until("both PNGs to follow", || {
-        plte_of("assets/sky.png")[1] == pal.rows[0][1] && plte_of("assets/sea.png")[1] == pal.rows[0][1]
+        plte_of("assets/sky.png")[1] == pal.rows[0][1]
+            && plte_of("assets/sea.png")[1] == pal.rows[0][1]
     });
     assert_eq!(
         std::fs::read(folder.join(".ppu-backup/3/assets/sky.png")).unwrap(),
@@ -2724,7 +2728,9 @@ fn new_site_art_with_the_colours_of_a_folder_palette_names_it_and_makes_none() {
         bands(&[RED, GREEN, BLUE, CLEAR]),
     );
     studio(&site, |b| b["sources"].as_array_mut().unwrap().push(twin));
-    until("sky2 on disk", || dir.path().join("assets/sky2.png").exists());
+    until("sky2 on disk", || {
+        dir.path().join("assets/sky2.png").exists()
+    });
     until("sky2 listed", || {
         manifest(dir.path())["sources"]
             .as_array()
@@ -2852,13 +2858,20 @@ fn a_follow_never_replaces_a_copy_already_kept_in_that_revisions_backup() {
     let folder = dir.path();
     // A copy kept earlier in this revision (a clash the site's side won) is the one worth having.
     std::fs::create_dir_all(folder.join(".ppu-backup/2/assets")).unwrap();
-    std::fs::write(folder.join(".ppu-backup/2/assets/sky.png"), b"kept by a clash").unwrap();
+    std::fs::write(
+        folder.join(".ppu-backup/2/assets/sky.png"),
+        b"kept by a clash",
+    )
+    .unwrap();
     let old_sea = std::fs::read(folder.join("assets/sea.png")).unwrap();
     let (text, colour) = recoloured_gpl(folder);
     std::fs::write(folder.join("palettes/sky_pal.gpl"), text).unwrap();
     until("the save", || site.lock().unwrap().puts.len() == 2);
     assert_eq!(plte_of(folder, "assets/sky.png")[1], colour);
-    assert_eq!(read(folder, ".ppu-backup/2/assets/sky.png"), "kept by a clash");
+    assert_eq!(
+        read(folder, ".ppu-backup/2/assets/sky.png"),
+        "kept by a clash"
+    );
     assert_eq!(
         std::fs::read(folder.join(".ppu-backup/2/assets/sea.png")).unwrap(),
         old_sea
@@ -2940,8 +2953,14 @@ fn a_gpl_that_does_not_parse_or_fit_is_refused_and_no_png_is_touched() {
         out.text().matches("Not saved").count() >= 2
     });
     std::thread::sleep(Duration::from_millis(1200));
-    assert_eq!(std::fs::read(folder.join("assets/sky.png")).unwrap(), old_sky);
-    assert_eq!(std::fs::read(folder.join("assets/sea.png")).unwrap(), old_sea);
+    assert_eq!(
+        std::fs::read(folder.join("assets/sky.png")).unwrap(),
+        old_sky
+    );
+    assert_eq!(
+        std::fs::read(folder.join("assets/sea.png")).unwrap(),
+        old_sea
+    );
     assert!(!folder.join(".ppu-backup/2").exists());
     let said = out.text();
     assert!(

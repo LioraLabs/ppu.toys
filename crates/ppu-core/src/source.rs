@@ -1443,7 +1443,10 @@ mod tests {
         assert_eq!(b.len(), 14 + 16 * 2 + 1 + 2);
         assert_eq!(&b[14 + 16 * 2..], &[1, 0, 1]);
         // A sheet that does not say its chars' palettes carries only the flag.
-        let none = SourcePayload::Sheet(SheetSource { pals: vec![], ..sample_sheet() });
+        let none = SourcePayload::Sheet(SheetSource {
+            pals: vec![],
+            ..sample_sheet()
+        });
         assert_eq!(SourcePayload::decode(&none.encode()).unwrap(), none);
         assert_eq!(none.encode().len(), 14 + 16 * 2 + 1);
     }
@@ -1486,10 +1489,16 @@ mod tests {
         // A char's palette must be one of the sheet's.
         let mut past = SourcePayload::Sheet(sample_sheet()).encode();
         *past.last_mut().unwrap() = 2;
-        assert_eq!(SourcePayload::decode(&past), Err(PayloadError::BadParam("pals")));
+        assert_eq!(
+            SourcePayload::decode(&past),
+            Err(PayloadError::BadParam("pals"))
+        );
         let mut flag = SourcePayload::Sheet(sample_sheet()).encode();
         flag[14 + 16 * 2] = 2;
-        assert_eq!(SourcePayload::decode(&flag), Err(PayloadError::BadParam("has_pals")));
+        assert_eq!(
+            SourcePayload::decode(&flag),
+            Err(PayloadError::BadParam("has_pals"))
+        );
     }
 
     fn sample_obj() -> ObjSource {
@@ -1523,7 +1532,10 @@ mod tests {
     #[test]
     fn decode_accepts_every_earlier_payload_version() {
         // Before v4 a sheet ended with its char words and did not say its chars' palettes.
-        let old = SourcePayload::Sheet(SheetSource { pals: vec![], ..sample_sheet() });
+        let old = SourcePayload::Sheet(SheetSource {
+            pals: vec![],
+            ..sample_sheet()
+        });
         for version in [2, 3] {
             let mut b = old.encode();
             b.pop();

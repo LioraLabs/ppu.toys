@@ -127,7 +127,13 @@ fn offset_per_tile(layer: &RegBg, mem: &Memory, screen_x: usize) -> ColumnOffset
 /// `scroll_x // 8 + k + 1` (mod the map's width in tiles); a column with a nonzero `dy` arms the
 /// entry with `scroll_y + dy`, as an armed vertical entry replaces VOFS. Pinned frame by frame by
 /// tests/fixtures/columns_table.json, the same fixture the cartridge lowering checks against.
-pub fn columns_vertical_words(layer: u8, width: u32, scroll_x: i16, scroll_y: i16, dy: impl Fn(u32) -> i16) -> [u16; 32] {
+pub fn columns_vertical_words(
+    layer: u8,
+    width: u32,
+    scroll_x: i16,
+    scroll_y: i16,
+    dy: impl Fn(u32) -> i16,
+) -> [u16; 32] {
     let first = (scroll_x as i64).div_euclid(8) + 1;
     std::array::from_fn(|k| {
         let d = dy((first + k as i64).rem_euclid(width as i64) as u32);

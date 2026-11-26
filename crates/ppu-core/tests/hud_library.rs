@@ -255,7 +255,11 @@ end"
         "new text rewrites from the start and blanks what was shown beyond it"
     );
     e.frame(0., 3).unwrap();
-    assert_eq!(vram(&e, 0, 0, 4), [P, P, P, 0], "a count of 0 shows nothing");
+    assert_eq!(
+        vram(&e, 0, 0, 4),
+        [P, P, P, 0],
+        "a count of 0 shows nothing"
+    );
 }
 
 #[test]
@@ -336,8 +340,16 @@ fn an_aligned_line_places_each_text_in_its_width_and_typing_keeps_its_place() {
     // ABCD took cells 3..6; AB sits at 4..5 and the cells only ABCD covered are blank again.
     assert_eq!(vram(&e, 0, 0, 10), [0, 0, 0, P, 33 + P, 34 + P, P, 0, 0, 0]);
     assert_eq!(vram(&e, 1, 7, 3), [33 + P, 34 + P, 35 + P]);
-    let e = run(&format!("{MID}local l"), "if f == 0 then l = hud.line(MID, 0, 0, 10) end\nl:set(\"ABCD\", 1)\nl:set(\"ABCD\", 2)").unwrap();
-    assert_eq!(vram(&e, 0, 3, 4), [33 + P, 34 + P, 0, 0], "typed from the full text's place");
+    let e = run(
+        &format!("{MID}local l"),
+        "if f == 0 then l = hud.line(MID, 0, 0, 10) end\nl:set(\"ABCD\", 1)\nl:set(\"ABCD\", 2)",
+    )
+    .unwrap();
+    assert_eq!(
+        vram(&e, 0, 3, 4),
+        [33 + P, 34 + P, 0, 0],
+        "typed from the full text's place"
+    );
 }
 
 #[test]
@@ -353,7 +365,11 @@ fn big_glyphs_take_their_tiles_from_a_sheet_of_16x16_or_8x16_cells() {
     // 8x16: glyph g at 512 + g % 16 + g // 16 * 32, digits on the sheet's second glyph row; zero padding.
     assert_eq!(vram(&e, 0, 10, 3), [544 + P, 548 + P, 546 + P]);
     assert_eq!(vram(&e, 1, 10, 3), [560 + P, 564 + P, 562 + P]);
-    let e = run(&format!("{BIG}local l"), "if f == 0 then l = hud.line(BIG, 0, 0, 3) end\nl:set(if f == 0 then \"AB\" else \"A\")").unwrap();
+    let e = run(
+        &format!("{BIG}local l"),
+        "if f == 0 then l = hud.line(BIG, 0, 0, 3) end\nl:set(if f == 0 then \"AB\" else \"A\")",
+    )
+    .unwrap();
     assert_eq!(vram(&e, 0, 0, 4), [258 + P, 259 + P, 260 + P, 261 + P]);
 }
 
@@ -361,17 +377,41 @@ fn big_glyphs_take_their_tiles_from_a_sheet_of_16x16_or_8x16_cells() {
 fn aligned_and_big_shapes_refuse_what_they_cannot_draw() {
     let big = "local BIG = {map = 0x7000, width = 32, height = 4, glyph = \"16x16\"}\n";
     fails(big, "hud.text(BIG, 0, 3, \"A\")", "outside its map");
-    fails(big, "hud.text(BIG, 16, 0, \"ABCDEFGHI\")", "outside its map");
+    fails(
+        big,
+        "hud.text(BIG, 16, 0, \"ABCDEFGHI\")",
+        "outside its map",
+    );
     fails(big, "hud.line(BIG, 0, 0, 17)", "outside its map");
     fails(MID, "hud.field(MID, 0, 0, 3)", "right-aligned");
-    fails(MID, "hud.text(MID, 0, 0, \"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\")", "outside its map");
-    fails("local H = {map = 0x7000, width = 32, height = 4, glyph = \"12x12\"}", "hud.text(H, 0, 0, \"A\")", "glyph");
-    fails("local H = {map = 0x7000, width = 32, height = 4, align = \"middle\"}", "hud.text(H, 0, 0, \"A\")", "align");
-    fails("local H = {map = 0x7000, width = 32, height = 4, glyph = \"16x16\", font = 700}", "hud.text(H, 0, 0, \"A\")", "font");
+    fails(
+        MID,
+        "hud.text(MID, 0, 0, \"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\")",
+        "outside its map",
+    );
+    fails(
+        "local H = {map = 0x7000, width = 32, height = 4, glyph = \"12x12\"}",
+        "hud.text(H, 0, 0, \"A\")",
+        "glyph",
+    );
+    fails(
+        "local H = {map = 0x7000, width = 32, height = 4, align = \"middle\"}",
+        "hud.text(H, 0, 0, \"A\")",
+        "align",
+    );
+    fails(
+        "local H = {map = 0x7000, width = 32, height = 4, glyph = \"16x16\", font = 700}",
+        "hud.text(H, 0, 0, \"A\")",
+        "font",
+    );
 }
 
 #[test]
 fn clearing_a_full_width_right_aligned_line_blanks_it() {
-    let e = run(&format!("{MID}local r"), "if f == 0 then r = hud.line(RIGHT, 0, 1, 32) end\nr:set(\"HI\")\nr:set(\"\")").unwrap();
+    let e = run(
+        &format!("{MID}local r"),
+        "if f == 0 then r = hud.line(RIGHT, 0, 1, 32) end\nr:set(\"HI\")\nr:set(\"\")",
+    )
+    .unwrap();
     assert_eq!(vram(&e, 1, 29, 3), [0, P, P]);
 }

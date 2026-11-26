@@ -93,7 +93,9 @@ fn a_pending_build_is_polled_until_its_image_arrives() {
         .any(|f| f["name"] == "main.luau"));
     assert!(post["sources"].is_array());
     assert!(seen[1].starts_with("GET /api/rom/j1 Bearer tok1"));
-    assert!(String::from_utf8(out).unwrap().contains("/api/rom/j1; waiting"));
+    assert!(String::from_utf8(out)
+        .unwrap()
+        .contains("/api/rom/j1; waiting"));
 }
 
 #[test]
@@ -123,7 +125,9 @@ fn a_failed_build_prints_its_diagnostics_as_file_lines() {
     );
     let out = String::from_utf8(out).unwrap();
     assert!(
-        out.contains("/toy/game.luau:180: error[snes.bound]: x has no bound\n  docs: ppu docs snes.bound\n"),
+        out.contains(
+            "/toy/game.luau:180: error[snes.bound]: x has no bound\n  docs: ppu docs snes.bound\n"
+        ),
         "{out}"
     );
     assert!(

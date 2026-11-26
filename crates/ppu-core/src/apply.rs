@@ -281,16 +281,26 @@ pub fn apply(file: &str, source: &str, edits: &[Edit]) -> Result<Applied, String
     for (key, lvalue, expr) in assigns {
         scene.assign(&key, lvalue, expr, &mut plan);
     }
-    for &Rect { layer, x, y, w, h, word } in &rects {
+    for &Rect {
+        layer,
+        x,
+        y,
+        w,
+        h,
+        word,
+    } in &rects
+    {
         let lvalue = format!("bg[{layer}].map[{x}][{y}]");
         let expr = cell_entry(word);
         // A new cell is a fill too: it makes its column, so no guard line. One init already sets is updated in place.
         if (w, h) != (1, 1) || !scene.init_writes(&poke_key(&lvalue, &expr)?) {
-            plan.init_tail.push(format!("bg[{layer}].map:fill({x}, {y}, {w}, {h}, {expr})"));
+            plan.init_tail
+                .push(format!("bg[{layer}].map:fill({x}, {y}, {w}, {h}, {expr})"));
             continue;
         }
         // A fill already in init may cover the cell after its own line: the cell goes after it.
-        if matches!(&scene.init, Func::Body(b) if b.block().to_string().contains(&format!("bg[{layer}].map:fill("))) {
+        if matches!(&scene.init, Func::Body(b) if b.block().to_string().contains(&format!("bg[{layer}].map:fill(")))
+        {
             plan.init_tail.push(format!("{lvalue} = {expr}"));
         } else {
             scene.assign(&poke_key(&lvalue, &expr)?, &lvalue, &expr, &mut plan);
@@ -377,16 +387,22 @@ struct Rect {
 /// down over equal uncovered cells, then right while the next column holds the same run. A painted
 /// pipe of columns is one rectangle per column, and adjacent equal columns merge.
 fn map_rects(cells: &[(u8, u16, u16, u16)]) -> Vec<Rect> {
-    let mut left: std::collections::BTreeMap<(u8, u16, u16), u16> = cells.iter().map(|&(l, x, y, w)| ((l, x, y), w)).collect();
+    let mut left: std::collections::BTreeMap<(u8, u16, u16), u16> =
+        cells.iter().map(|&(l, x, y, w)| ((l, x, y), w)).collect();
     let mut out = vec![];
     while let Some((&(layer, x, y), &word)) = left.iter().next() {
-        let same = |left: &std::collections::BTreeMap<_, u16>, cx: u16, cy: u16| left.get(&(layer, cx, cy)) == Some(&word);
+        let same = |left: &std::collections::BTreeMap<_, u16>, cx: u16, cy: u16| {
+            left.get(&(layer, cx, cy)) == Some(&word)
+        };
         let mut h = 1;
         while y.checked_add(h).is_some_and(|cy| same(&left, x, cy)) {
             h += 1;
         }
         let mut w = 1;
-        while x.checked_add(w).is_some_and(|cx| (y..y + h).all(|cy| same(&left, cx, cy))) {
+        while x
+            .checked_add(w)
+            .is_some_and(|cx| (y..y + h).all(|cy| same(&left, cx, cy)))
+        {
             w += 1;
         }
         for cx in x..x + w {
@@ -394,7 +410,14 @@ fn map_rects(cells: &[(u8, u16, u16, u16)]) -> Vec<Rect> {
                 left.remove(&(layer, cx, cy));
             }
         }
-        out.push(Rect { layer, x, y, w, h, word });
+        out.push(Rect {
+            layer,
+            x,
+            y,
+            w,
+            h,
+            word,
+        });
     }
     out
 }
@@ -1280,7 +1303,14 @@ return {init = init, frame = frame}
     #[test]
     fn a_column_offset_is_one_field_per_map_column() {
         let src = "local function init()\n  bg[2].columns[6] = -24\nend\nreturn {init = init}\n";
-        let a = run("a.luau", src, &[assign("bg[2].columns[6]", "-8"), assign("bg[2].columns[0x7]", "-8")]);
+        let a = run(
+            "a.luau",
+            src,
+            &[
+                assign("bg[2].columns[6]", "-8"),
+                assign("bg[2].columns[0x7]", "-8"),
+            ],
+        );
         assert_eq!(a.source, "local function init()\n  bg[2].columns[6] = -8\n  bg[2].columns[0x7] = -8\nend\nreturn {init = init}\n");
         assert_eq!(a.written, [2, 3]);
     }
@@ -1424,7 +1454,15 @@ return {init = init, frame = frame}
 
     #[test]
     fn new_map_cells_are_fills_and_a_written_cell_updates_in_place() {
-        let a = run("a.luau", "return {}", &[cell(1, 3, 4, 0x0405), cell(1, 3, 5, 0xE001), cell(2, 0, 0, 7)]);
+        let a = run(
+            "a.luau",
+            "return {}",
+            &[
+                cell(1, 3, 4, 0x0405),
+                cell(1, 3, 5, 0xE001),
+                cell(2, 0, 0, 7),
+            ],
+        );
         assert_eq!(
             a.source,
             "local function init()\n  bg[1].map:fill(3, 4, 1, 1, {tile = 5, pal = 1})\n  \
@@ -1434,18 +1472,34 @@ return {init = init, frame = frame}
         assert_eq!(a.written, [2, 3, 4]);
         let src = "local function init()\n  if bg[1].map[3] == nil then bg[1].map[3] = {} end\n  bg[1].map[3][4] = {tile = 5, pal = 1}\nend\nreturn {init = init}\n";
         let again = run("a.luau", src, &[cell(1, 3, 4, 9)]);
-        assert_eq!(again.source, src.replace("{tile = 5, pal = 1}", "{tile = 9, pal = 0}"), "a cell init writes is updated in place");
+        assert_eq!(
+            again.source,
+            src.replace("{tile = 5, pal = 1}", "{tile = 9, pal = 0}"),
+            "a cell init writes is updated in place"
+        );
         assert!(again.notes.is_empty(), "{:?}", again.notes);
     }
 
     #[test]
     fn more_cells_than_the_cap_refuse_toward_a_bg_source() {
-        let many: Vec<Edit> = (0..=MAX_CELLS as u16).map(|i| cell(1, i % 32, i / 32, i)).collect();
-        assert!(apply("a.luau", "return {}", &many).unwrap_err().contains("bg source"));
+        let many: Vec<Edit> = (0..=MAX_CELLS as u16)
+            .map(|i| cell(1, i % 32, i / 32, i))
+            .collect();
+        assert!(apply("a.luau", "return {}", &many)
+            .unwrap_err()
+            .contains("bg source"));
         assert!(apply("a.luau", "return {}", &many[..MAX_CELLS]).is_ok());
         let same: Vec<Edit> = (0..32 * 32).map(|i| cell(1, i % 32, i / 32, 1)).collect();
-        assert!(apply("a.luau", "return {}", &same).unwrap().source.contains("bg[1].map:fill(0, 0, 32, 32, {tile = 1, pal = 0})"), "the cap counts lines, not cells");
-        assert!(apply("a.luau", "return {}", &[cell(5, 0, 0, 1)]).unwrap_err().contains("bg[1] to bg[4]"));
+        assert!(
+            apply("a.luau", "return {}", &same)
+                .unwrap()
+                .source
+                .contains("bg[1].map:fill(0, 0, 32, 32, {tile = 1, pal = 0})"),
+            "the cap counts lines, not cells"
+        );
+        assert!(apply("a.luau", "return {}", &[cell(5, 0, 0, 1)])
+            .unwrap_err()
+            .contains("bg[1] to bg[4]"));
     }
 
     #[test]
@@ -1561,16 +1615,43 @@ return {init = init, frame = frame}
 
     #[test]
     fn equal_cells_group_into_rectangles_greedily_down_then_right() {
-        let r = |layer, x, y, w, h, word| Rect { layer, x, y, w, h, word };
+        let r = |layer, x, y, w, h, word| Rect {
+            layer,
+            x,
+            y,
+            w,
+            h,
+            word,
+        };
         // a 2x3 block of 5 with a 7 beside its top, and another layer's equal cell apart
-        let cells = [(1, 0, 0, 5), (1, 0, 1, 5), (1, 0, 2, 5), (1, 1, 0, 5), (1, 1, 1, 5), (1, 1, 2, 5), (1, 2, 0, 7), (2, 0, 0, 5)];
-        assert_eq!(map_rects(&cells), [r(1, 0, 0, 2, 3, 5), r(1, 2, 0, 1, 1, 7), r(2, 0, 0, 1, 1, 5)]);
+        let cells = [
+            (1, 0, 0, 5),
+            (1, 0, 1, 5),
+            (1, 0, 2, 5),
+            (1, 1, 0, 5),
+            (1, 1, 1, 5),
+            (1, 1, 2, 5),
+            (1, 2, 0, 7),
+            (2, 0, 0, 5),
+        ];
+        assert_eq!(
+            map_rects(&cells),
+            [
+                r(1, 0, 0, 2, 3, 5),
+                r(1, 2, 0, 1, 1, 7),
+                r(2, 0, 0, 1, 1, 5)
+            ]
+        );
         // an L: the column grows down first, the rest of the row is its own
         let l = [(1, 0, 0, 1), (1, 0, 1, 1), (1, 1, 1, 1)];
         assert_eq!(map_rects(&l), [r(1, 0, 0, 1, 2, 1), r(1, 1, 1, 1, 1, 1)]);
         let mut shuffled = cells;
         shuffled.reverse();
-        assert_eq!(map_rects(&shuffled), map_rects(&cells), "the order cells come in does not matter");
+        assert_eq!(
+            map_rects(&shuffled),
+            map_rects(&cells),
+            "the order cells come in does not matter"
+        );
     }
 
     /// The video's pipe: 3 columns of a 64-row map, body tiles 1..3 above and below a gap at rows
@@ -1588,10 +1669,19 @@ return {init = init, frame = frame}
 
     #[test]
     fn a_painted_pipe_applies_as_a_handful_of_fills() {
-        let edits: Vec<Edit> = pipe().into_iter().map(|(x, y, w)| cell(2, x, y, w)).collect();
+        let edits: Vec<Edit> = pipe()
+            .into_iter()
+            .map(|(x, y, w)| cell(2, x, y, w))
+            .collect();
         assert_eq!(edits.len(), 171);
         let a = run("a.luau", "return {}", &edits);
-        let lines: Vec<&str> = a.source.lines().skip(1).take_while(|l| *l != "end").map(str::trim).collect();
+        let lines: Vec<&str> = a
+            .source
+            .lines()
+            .skip(1)
+            .take_while(|l| *l != "end")
+            .map(str::trim)
+            .collect();
         assert_eq!(
             lines,
             [
@@ -1617,7 +1707,13 @@ return {init = init, frame = frame}
     fn a_cell_under_an_applied_fill_goes_after_the_fill() {
         let src = "local function init()\n  bg[1].map[3][4] = {tile = 1, pal = 0}\n  bg[1].map:fill(3, 0, 1, 9, {tile = 2, pal = 0})\nend\nreturn {init = init}\n";
         let a = run("a.luau", src, &[cell(1, 3, 4, 7)]);
-        assert_eq!(a.source, src.replace("pal = 0})\nend", "pal = 0})\n  bg[1].map[3][4] = {tile = 7, pal = 0}\nend"));
+        assert_eq!(
+            a.source,
+            src.replace(
+                "pal = 0})\nend",
+                "pal = 0})\n  bg[1].map[3][4] = {tile = 7, pal = 0}\nend"
+            )
+        );
     }
 
     /// The applied pipe and a painted block of one entry run on the engine as the VRAM the pokes made.
@@ -1629,7 +1725,11 @@ return {init = init, frame = frame}
         let a = run("t.luau", "local function init()\n  bg[2].map_base = 0x4000\n  bg[2].screen_size = 2\nend\nreturn {init = init, frame = function(t, f) end}\n", &edits);
         assert!(a.source.contains("bg[2].map:fill(20, 5, 4, 3, {tile = 1023, pal = 0, prio = 1, flip_x = true, flip_y = true})"), "{}", a.source);
         let mut e = crate::LuaEngine::new();
-        e.set_sources(&[("main.luau", "T = scenes.add(require(\"./t\"))\n"), ("t.luau", a.source.as_str())]).unwrap();
+        e.set_sources(&[
+            ("main.luau", "T = scenes.add(require(\"./t\"))\n"),
+            ("t.luau", a.source.as_str()),
+        ])
+        .unwrap();
         e.frame(0.0, 0).unwrap();
         let mut want = vec![0u16; 0x800];
         for &(x, y, w) in &painted {

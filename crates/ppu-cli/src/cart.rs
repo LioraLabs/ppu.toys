@@ -33,7 +33,12 @@ pub fn stamp(secs: u64) -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + i64::from(m <= 2);
-    format!("{y:04}{m:02}{d:02}-{:02}{:02}{:02}", rem / 3600, rem / 60 % 60, rem % 60)
+    format!(
+        "{y:04}{m:02}{d:02}-{:02}{:02}{:02}",
+        rem / 3600,
+        rem / 60 % 60,
+        rem % 60
+    )
 }
 
 /// A diagnostic's file as the agent can open it from where the command ran: the folder's own
@@ -64,7 +69,13 @@ pub fn build(creds: &Credentials, dir: &Path, out: &mut dyn Write) -> Result<Vec
     let deadline = started + GIVE_UP_AFTER;
     let mut said = started;
     if status == 202 {
-        writeln!(out, "Queued as {}{}; waiting (up to {} minutes).", creds.site, v["job"].as_str().unwrap_or("?"), GIVE_UP_AFTER.as_secs() / 60)?;
+        writeln!(
+            out,
+            "Queued as {}{}; waiting (up to {} minutes).",
+            creds.site,
+            v["job"].as_str().unwrap_or("?"),
+            GIVE_UP_AFTER.as_secs() / 60
+        )?;
         out.flush()?;
     }
     while status == 202 {
@@ -108,7 +119,11 @@ pub fn build(creds: &Credentials, dir: &Path, out: &mut dyn Write) -> Result<Vec
             d["code"].as_str().unwrap_or(""),
             d["message"].as_str().unwrap_or("")
         )?;
-        writeln!(out, "{}", ppu_rules::docs::pointer(d["code"].as_str().unwrap_or("")))?;
+        writeln!(
+            out,
+            "{}",
+            ppu_rules::docs::pointer(d["code"].as_str().unwrap_or(""))
+        )?;
     }
     if v["ok"] != true {
         match v["error"].as_str() {

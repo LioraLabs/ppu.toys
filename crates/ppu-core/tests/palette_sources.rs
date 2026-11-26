@@ -42,7 +42,10 @@ fn payload_round_trips_and_decode_is_strict() {
     for (cols, text) in [(4, FOUR), (16, FIFTEEN)] {
         let p = gpl::parse(&format!("GIMP Palette\nColumns: {cols}\n{text}")).unwrap();
         let bytes = SourcePayload::Palette(p.clone()).encode();
-        assert_eq!(&bytes[..4], [ppu_core::PAYLOAD_VERSION, 6, cols as u8, p.rows.len() as u8]);
+        assert_eq!(
+            &bytes[..4],
+            [ppu_core::PAYLOAD_VERSION, 6, cols as u8, p.rows.len() as u8]
+        );
         assert_eq!(SourcePayload::decode(&bytes), Ok(SourcePayload::Palette(p)));
     }
     // The 256 block is stored at its real colour count (count - 1 in the row-count byte).
@@ -388,7 +391,11 @@ fn two_row_obj(e: &mut LuaEngine) {
     for y in 0..8usize {
         for x in 0..16usize {
             let c = ((y * 8 + x % 8) % 15) as u8 * 8;
-            let rgb = if x < 8 { [c, 255 - c, 100] } else { [100, c, 255 - c] };
+            let rgb = if x < 8 {
+                [c, 255 - c, 100]
+            } else {
+                [100, c, 255 - c]
+            };
             rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
         }
     }

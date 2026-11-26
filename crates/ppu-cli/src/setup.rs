@@ -147,7 +147,10 @@ mod platform {
             .filter(|s| !s.trim().is_empty());
         let site_arg = match &site {
             Some(site) => {
-                ensure!(!site.contains(['"', ' ']), "PPU_SITE {site:?} is not a site address");
+                ensure!(
+                    !site.contains(['"', ' ']),
+                    "PPU_SITE {site:?} is not a site address"
+                );
                 format!(" --site={site}")
             }
             None => String::new(),

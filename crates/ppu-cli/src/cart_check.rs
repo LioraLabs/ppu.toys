@@ -509,11 +509,7 @@ fn report(path: &Path, v: &Value, out: &mut dyn Write) -> Result<()> {
             }
         }
         if !code.is_empty() {
-            writeln!(
-                out,
-                "{}",
-                ppu_rules::docs::pointer(code)
-            )?;
+            writeln!(out, "{}", ppu_rules::docs::pointer(code))?;
         }
     }
     if v["ok"] != true {
@@ -540,11 +536,7 @@ fn report(path: &Path, v: &Value, out: &mut dyn Write) -> Result<()> {
             crate::cart::shown(base, file),
             stop["line"].as_u64().unwrap_or(1)
         )?;
-        writeln!(
-            out,
-            "{}",
-            ppu_rules::docs::pointer(code)
-        )?;
+        writeln!(out, "{}", ppu_rules::docs::pointer(code))?;
         bail!("a cartridge stops there, where the preview runs on");
     }
     writeln!(

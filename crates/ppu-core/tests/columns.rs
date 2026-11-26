@@ -17,13 +17,26 @@ fn round(v: &serde_json::Value) -> i16 {
 fn the_rule_matches_the_fixture() {
     for case in fixture()["cases"].as_array().unwrap() {
         let layer = case["layer"].as_u64().unwrap() as u8 - 1;
-        let width = if case["screen_size"].as_u64().unwrap() & 1 != 0 { 64 } else { 32 };
+        let width = if case["screen_size"].as_u64().unwrap() & 1 != 0 {
+            64
+        } else {
+            32
+        };
         let cols = case["columns"].as_object().unwrap();
         for fr in case["frames"].as_array().unwrap() {
-            let got = columns_vertical_words(layer, width, round(&fr["scroll_x"]), round(&fr["scroll_y"]), |c| {
-                cols.get(&c.to_string()).map_or(0, round)
-            });
-            let want: Vec<u16> = fr["vertical"].as_array().unwrap().iter().map(|w| w.as_u64().unwrap() as u16).collect();
+            let got = columns_vertical_words(
+                layer,
+                width,
+                round(&fr["scroll_x"]),
+                round(&fr["scroll_y"]),
+                |c| cols.get(&c.to_string()).map_or(0, round),
+            );
+            let want: Vec<u16> = fr["vertical"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|w| w.as_u64().unwrap() as u16)
+                .collect();
             assert_eq!(got.to_vec(), want, "{} at {fr}", case["name"]);
         }
     }
@@ -41,7 +54,10 @@ fn the_preview_writes_the_fixture_words() {
             .map(|(c, dy)| format!("  bg[{n}].columns[{c}] = {dy}\n"))
             .collect();
         let frames = case["frames"].as_array().unwrap();
-        let scrolls: String = frames.iter().map(|f| format!("{{{}, {}}}, ", f["scroll_x"], f["scroll_y"])).collect();
+        let scrolls: String = frames
+            .iter()
+            .map(|f| format!("{{{}, {}}}, ", f["scroll_x"], f["scroll_y"]))
+            .collect();
         let src = format!(
             "local S = {{{scrolls}}}\nfunction init()\n  mode = 2\n  bg[3].map_base = {TABLE:#x}\n  bg[{n}].screen_size = {}\n{sets}end\n\
              function frame(t, f)\n  bg[{n}].scroll.x = S[f + 1][1]\n  bg[{n}].scroll.y = S[f + 1][2]\nend\n",
@@ -52,9 +68,23 @@ fn the_preview_writes_the_fixture_words() {
         for (f, fr) in frames.iter().enumerate() {
             e.frame(f as f64 / 60.0, f as u32).unwrap();
             let vram = &e.memory().vram;
-            let want: Vec<u16> = fr["vertical"].as_array().unwrap().iter().map(|w| w.as_u64().unwrap() as u16).collect();
-            assert_eq!(vram[TABLE + 32..TABLE + 64].to_vec(), want, "{} frame {f}", case["name"]);
-            assert!(vram[TABLE..TABLE + 32].iter().all(|&w| w == 0), "{} frame {f}: row 0 unarmed", case["name"]);
+            let want: Vec<u16> = fr["vertical"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|w| w.as_u64().unwrap() as u16)
+                .collect();
+            assert_eq!(
+                vram[TABLE + 32..TABLE + 64].to_vec(),
+                want,
+                "{} frame {f}",
+                case["name"]
+            );
+            assert!(
+                vram[TABLE..TABLE + 32].iter().all(|&w| w == 0),
+                "{} frame {f}: row 0 unarmed",
+                case["name"]
+            );
         }
     }
 }
@@ -74,7 +104,11 @@ const SETUP: &str = "mode = 2\nbg[3].map_base = 0x7800\n";
 fn columns_are_retained_and_nil_or_zero_puts_a_column_back() {
     let e = run(&format!("function init()\n{SETUP}bg[2].columns[1] = 5\nbg[2].columns[2] = 6\nend\n\
         function frame(t, f)\n  if f == 2 then bg[2].columns[1] = nil; bg[2].columns[2] = 0 end\nend\n"), 2).unwrap();
-    assert_eq!(e.memory().vram[TABLE + 32..TABLE + 34], [0x4005, 0x4006], "set in init, still there on frame 1");
+    assert_eq!(
+        e.memory().vram[TABLE + 32..TABLE + 34],
+        [0x4005, 0x4006],
+        "set in init, still there on frame 1"
+    );
     let e = run(&format!("function init()\n{SETUP}bg[2].columns[1] = 5\nbg[2].columns[2] = 6\nend\n\
         function frame(t, f)\n  if f == 2 then bg[2].columns[1] = nil; bg[2].columns[2] = 0 end\nend\n"), 3).unwrap();
     assert_eq!(e.memory().vram[TABLE + 32..TABLE + 34], [0, 0]);
@@ -86,7 +120,11 @@ fn no_columns_leave_a_hand_written_table_alone() {
     assert_eq!(e.memory().vram[TABLE + 32], 0x4123);
     // ...and outside Mode 2 an unused columns table is no error.
     // A table on a map's words runs (the Studio warns, the cart compiler refuses).
-    run("function frame(t, f)\n  mode = 2\n  bg[2].columns[1] = 4\nend\n", 1).unwrap();
+    run(
+        "function frame(t, f)\n  mode = 2\n  bg[2].columns[1] = 4\nend\n",
+        1,
+    )
+    .unwrap();
     run("function frame(t, f) mode = 1 end\n", 1).unwrap();
 }
 
@@ -97,7 +135,8 @@ fn a_scene_cold_boot_clears_the_columns() {
     let b = "local function frame(t, f) left = next(bg[2].columns) end\nreturn {frame = frame}\n";
     let main = "scenes.add(require(\"./a\"))\nB = scenes.add(require(\"./b\"))\nfunction probe() return {left == nil and 1 or 0} end";
     let mut e = LuaEngine::new();
-    e.set_sources(&[("main.luau", main), ("a.luau", &a), ("b.luau", b)]).unwrap();
+    e.set_sources(&[("main.luau", main), ("a.luau", &a), ("b.luau", b)])
+        .unwrap();
     for f in 0..4 {
         e.frame(f as f64 / 60.0, f).unwrap();
     }
@@ -107,19 +146,45 @@ fn a_scene_cold_boot_clears_the_columns() {
 #[test]
 fn what_the_rule_cannot_serve_is_refused_with_its_fix() {
     let refused = |body: &str, says: &str| {
-        let err = run(&format!("function frame(t, f)\n{body}\nend\n"), 1).err().unwrap_or_else(|| panic!("{body}: ran"));
+        let err = run(&format!("function frame(t, f)\n{body}\nend\n"), 1)
+            .err()
+            .unwrap_or_else(|| panic!("{body}: ran"));
         assert!(err.contains(says), "{body}: {err}");
     };
     refused("bg[2].columns[1] = 4", "needs mode = 2");
-    refused("mode = 4\nbg[3].map_base = 0x7800\nbg[2].columns[1] = 4", "needs mode = 2");
-    refused(&format!("{SETUP}bg[1].columns[1] = 4\nbg[2].columns[1] = 4"), "one layer at a time");
-    refused(&format!("{SETUP}bg[3].columns[1] = 4"), "only bg[1] and bg[2]");
+    refused(
+        "mode = 4\nbg[3].map_base = 0x7800\nbg[2].columns[1] = 4",
+        "needs mode = 2",
+    );
+    refused(
+        &format!("{SETUP}bg[1].columns[1] = 4\nbg[2].columns[1] = 4"),
+        "one layer at a time",
+    );
+    refused(
+        &format!("{SETUP}bg[3].columns[1] = 4"),
+        "only bg[1] and bg[2]",
+    );
     refused(&format!("{SETUP}bg[2].columns[32] = 4"), "32 columns wide");
-    refused(&format!("{SETUP}bg[2].tile_size = 16\nbg[2].columns[1] = 4"), "tile_size = 8");
-    refused(&format!("{SETUP}bg[3].scroll.x = 8\nbg[2].columns[1] = 4"), "bg[3].scroll at 0, 0");
-    refused(&format!("{SETUP}bg[2].columns[1] = \"up\""), "whole number of pixels");
+    refused(
+        &format!("{SETUP}bg[2].tile_size = 16\nbg[2].columns[1] = 4"),
+        "tile_size = 8",
+    );
+    refused(
+        &format!("{SETUP}bg[3].scroll.x = 8\nbg[2].columns[1] = 4"),
+        "bg[3].scroll at 0, 0",
+    );
+    refused(
+        &format!("{SETUP}bg[2].columns[1] = \"up\""),
+        "whole number of pixels",
+    );
     // A 64-wide map takes columns up to 63.
-    run(&format!("function frame(t, f)\n{SETUP}bg[2].screen_size = 1\nbg[2].columns[63] = 4\nend\n"), 1).unwrap();
+    run(
+        &format!(
+            "function frame(t, f)\n{SETUP}bg[2].screen_size = 1\nbg[2].columns[63] = 4\nend\n"
+        ),
+        1,
+    )
+    .unwrap();
 }
 
 /// A scrolling pipe wall: every map row is pipe except a gap at rows 10..13 (map y 80..111).
@@ -175,8 +240,14 @@ fn a_scrolling_pipe_moves_each_column_its_own_way() {
     assert!(!pipe(4, 90) && pipe(4, 130), "leftmost column unmoved");
     // Scrolled 20 px: column 8 is now at screen x 44..51 and keeps its offset.
     let scrolled = picture(PIPES, 1);
-    assert!(!scrolled(46, 70) && scrolled(46, 100), "column 8 carries its offset while scrolling");
+    assert!(
+        !scrolled(46, 70) && scrolled(46, 100),
+        "column 8 carries its offset while scrolling"
+    );
     // The window fix: win.w1 0..7 on BG2 hides the leftmost column.
     let hidden = picture(&format!("HIDE = true\n{PIPES}"), 0);
-    assert!(!hidden(4, 130) && hidden(12, 90), "leftmost column hidden, the rest still drawn");
+    assert!(
+        !hidden(4, 130) && hidden(12, 90),
+        "leftmost column hidden, the rest still drawn"
+    );
 }

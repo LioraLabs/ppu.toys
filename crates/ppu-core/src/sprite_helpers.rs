@@ -31,7 +31,10 @@ pub fn expand(files: &[(&str, &str)]) -> Option<Vec<(String, String)>> {
     if !files.iter().any(|(_, s)| s.contains("sprites.")) {
         return None;
     }
-    let mut out: Vec<(String, String)> = files.iter().map(|(f, s)| (f.to_string(), s.to_string())).collect();
+    let mut out: Vec<(String, String)> = files
+        .iter()
+        .map(|(f, s)| (f.to_string(), s.to_string()))
+        .collect();
     let mut changed = false;
     for _ in 0..ROUNDS {
         match round(&out) {
@@ -85,7 +88,11 @@ struct File<'a> {
 impl File<'_> {
     /// The file-level declaration `name` reads at `at` (a file-level place): none for a global.
     fn at(&self, name: &str, at: usize) -> Option<usize> {
-        self.tops.iter().rev().find(|(n, open, _)| n == name && *open <= at).and_then(|t| t.2)
+        self.tops
+            .iter()
+            .rev()
+            .find(|(n, open, _)| n == name && *open <= at)
+            .and_then(|t| t.2)
     }
 }
 
@@ -101,11 +108,16 @@ struct Site {
 fn constant(e: &Expression) -> bool {
     match e {
         Expression::Number(_) | Expression::String(_) | Expression::Symbol(_) => true,
-        Expression::UnaryOperator { unop: ast::UnOp::Minus(_), expression } => matches!(**expression, Expression::Number(_)),
+        Expression::UnaryOperator {
+            unop: ast::UnOp::Minus(_),
+            expression,
+        } => matches!(**expression, Expression::Number(_)),
         Expression::Parentheses { expression, .. } => constant(expression),
         Expression::Var(ast::Var::Name(_)) => true,
         Expression::Var(ast::Var::Expression(v)) => {
-            matches!(v.prefix(), ast::Prefix::Name(_)) && v.suffixes().all(|s| matches!(s, ast::Suffix::Index(ast::Index::Dot { .. })))
+            matches!(v.prefix(), ast::Prefix::Name(_))
+                && v.suffixes()
+                    .all(|s| matches!(s, ast::Suffix::Index(ast::Index::Dot { .. })))
         }
         Expression::TableConstructor(t) => t.fields().iter().all(|f| match f {
             ast::Field::NoKey(v) => constant(v),
@@ -140,7 +152,13 @@ fn ordered(node: &impl Node) -> Vec<&TokenReference> {
 }
 
 fn flat(node: &impl Node) -> String {
-    one_line(ordered(node).into_iter().map(|t| (t.leading_trivia().next().is_some(), t.token().to_string(), t.trailing_trivia().next().is_some())))
+    one_line(ordered(node).into_iter().map(|t| {
+        (
+            t.leading_trivia().next().is_some(),
+            t.token().to_string(),
+            t.trailing_trivia().next().is_some(),
+        )
+    }))
 }
 
 /// An argument's text where its parameter stood: a negative number in parentheses (`a-n` must not become `a--1`);
@@ -153,7 +171,13 @@ fn arg(e: &Expression) -> String {
 }
 
 /// The helper a top-level statement defines, if its body is one `return E` naming a sprites constructor.
-fn helper(file: usize, f: &File, stmt: &ast::Stmt, module: Option<usize>, exports: &HashMap<usize, (String, Range<usize>)>) -> Option<Helper> {
+fn helper(
+    file: usize,
+    f: &File,
+    stmt: &ast::Stmt,
+    module: Option<usize>,
+    exports: &HashMap<usize, (String, Range<usize>)>,
+) -> Option<Helper> {
     let mut export = None;
     let (body, local, field, table, field_at) = match stmt {
         ast::Stmt::LocalFunction(l) => {
@@ -171,23 +195,43 @@ fn helper(file: usize, f: &File, stmt: &ast::Stmt, module: Option<usize>, export
             if d.name().method_name().is_some() || f.names.of(t) != Some(m) {
                 return None;
             }
-            (d.body(), None, Some(name.token().to_string()), Some(m), Some(start(name)))
+            (
+                d.body(),
+                None,
+                Some(name.token().to_string()),
+                Some(m),
+                Some(start(name)),
+            )
         }
         _ => return None,
     };
-    if !body.parameters().iter().all(|p| matches!(p, ast::Parameter::Name(_))) {
+    if !body
+        .parameters()
+        .iter()
+        .all(|p| matches!(p, ast::Parameter::Name(_)))
+    {
         return None;
     }
     if body.block().stmts().next().is_some() {
         return None;
     }
-    let Some(ast::LastStmt::Return(r)) = body.block().last_stmt() else { return None };
-    let [e] = r.returns().iter().collect::<Vec<_>>()[..] else { return None };
-    if !matches!(e, Expression::FunctionCall(_) | Expression::TableConstructor(_)) {
+    let Some(ast::LastStmt::Return(r)) = body.block().last_stmt() else {
+        return None;
+    };
+    let [e] = r.returns().iter().collect::<Vec<_>>()[..] else {
+        return None;
+    };
+    if !matches!(
+        e,
+        Expression::FunctionCall(_) | Expression::TableConstructor(_)
+    ) {
         return None;
     }
     let text = &f.source[span(e)];
-    if !["sprites.art", "sprites.animation", "sprites.group"].iter().any(|c| text.contains(c)) {
+    if !["sprites.art", "sprites.animation", "sprites.group"]
+        .iter()
+        .any(|c| text.contains(c))
+    {
         return None;
     }
     // Name tokens E reads as variables, and whether it opens a function (whose locals would need renaming).
@@ -239,28 +283,50 @@ fn helper(file: usize, f: &File, stmt: &ast::Stmt, module: Option<usize>, export
         if s.contains('\n') {
             return None;
         }
-        tokens.push((t.leading_trivia().next().is_some(), s, t.trailing_trivia().next().is_some(), by_start.get(&start(t)).copied()));
+        tokens.push((
+            t.leading_trivia().next().is_some(),
+            s,
+            t.trailing_trivia().next().is_some(),
+            by_start.get(&start(t)).copied(),
+        ));
     }
-    Some(Helper { file, local, field, table, def: span(stmt), field_at, export, tokens, free })
+    Some(Helper {
+        file,
+        local,
+        field,
+        table,
+        def: span(stmt),
+        field_at,
+        export,
+        tokens,
+        free,
+    })
 }
 
 fn round(files: &[(String, String)]) -> Option<Vec<(String, String)>> {
     let parsed: Vec<File> = files
         .iter()
         .map(|(_, s)| {
-            let ast = full_moon::parse_fallible(s, full_moon::LuaVersion::luau()).into_result().ok()?;
+            let ast = full_moon::parse_fallible(s, full_moon::LuaVersion::luau())
+                .into_result()
+                .ok()?;
             let names = scope::resolve(&ast);
             let mut tops = vec![];
             let mut requires = HashMap::new();
             for stmt in ast.nodes().stmts() {
                 match stmt {
-                    ast::Stmt::LocalFunction(l) => tops.push((l.name().token().to_string(), start(l.name()), names.of(l.name()))),
+                    ast::Stmt::LocalFunction(l) => tops.push((
+                        l.name().token().to_string(),
+                        start(l.name()),
+                        names.of(l.name()),
+                    )),
                     ast::Stmt::LocalAssignment(a) => {
                         let open = span(a).end;
                         let exprs: Vec<_> = a.expressions().iter().collect();
                         for (i, n) in a.names().iter().enumerate() {
                             let d = names.of(n);
-                            if let (Some(d), Some(Expression::FunctionCall(c))) = (d, exprs.get(i)) {
+                            if let (Some(d), Some(Expression::FunctionCall(c))) = (d, exprs.get(i))
+                            {
                                 if let Some(m) = required(c) {
                                     requires.insert(d, m);
                                 }
@@ -271,7 +337,13 @@ fn round(files: &[(String, String)]) -> Option<Vec<(String, String)>> {
                     _ => {}
                 }
             }
-            Some(File { source: s, ast, names, tops, requires })
+            Some(File {
+                source: s,
+                ast,
+                names,
+                tops,
+                requires,
+            })
         })
         .collect::<Option<_>>()?;
     // Every helper, by file.
@@ -357,12 +429,16 @@ fn round(files: &[(String, String)]) -> Option<Vec<(String, String)>> {
                                 _ => continue,
                             };
                             match args {
-                                ast::FunctionArgs::Parentheses { arguments, .. } => arguments.iter().for_each(|a| self.walk(a)),
+                                ast::FunctionArgs::Parentheses { arguments, .. } => {
+                                    arguments.iter().for_each(|a| self.walk(a))
+                                }
                                 ast::FunctionArgs::TableConstructor(t) => self.table(t),
                                 _ => {}
                             }
                         }
-                        ast::Suffix::Index(ast::Index::Brackets { expression, .. }) => self.walk(expression),
+                        ast::Suffix::Index(ast::Index::Brackets { expression, .. }) => {
+                            self.walk(expression)
+                        }
                         _ => {}
                     }
                 }
@@ -380,18 +456,25 @@ fn round(files: &[(String, String)]) -> Option<Vec<(String, String)>> {
             r.returns().iter().for_each(|e| calls.walk(e));
         }
         for c in calls.0 {
-            let Some((name, args)) = path(c) else { continue };
-            let ast::Prefix::Name(p) = c.prefix() else { continue };
+            let Some((name, args)) = path(c) else {
+                continue;
+            };
+            let ast::Prefix::Name(p) = c.prefix() else {
+                continue;
+            };
             let d = f.names.of(p);
             let at = start(p);
-            let h = helpers.iter().position(|h| match (h.local, &h.field, name.split_once('.')) {
-                (Some(l), _, None) => h.file == i && d == Some(l),
-                (_, Some(field), Some((_, n))) if n == field && !n.contains('.') => {
-                    (h.file == i && h.table.is_some() && d == h.table)
-                        || d.and_then(|d| f.requires.get(&d)).is_some_and(|m| m == stem(&files[h.file].0))
-                }
-                _ => false,
-            });
+            let h = helpers
+                .iter()
+                .position(|h| match (h.local, &h.field, name.split_once('.')) {
+                    (Some(l), _, None) => h.file == i && d == Some(l),
+                    (_, Some(field), Some((_, n))) if n == field && !n.contains('.') => {
+                        (h.file == i && h.table.is_some() && d == h.table)
+                            || d.and_then(|d| f.requires.get(&d))
+                                .is_some_and(|m| m == stem(&files[h.file].0))
+                    }
+                    _ => false,
+                });
             let Some(k) = h else { continue };
             let h = &helpers[k];
             let hygienic = h.free.iter().all(|(n, decl)| match decl {
@@ -399,7 +482,13 @@ fn round(files: &[(String, String)]) -> Option<Vec<(String, String)>> {
                 None => f.at(n, at).is_none(),
             });
             if hygienic && args.iter().all(|a| constant(a)) {
-                sites.push(Site { file: i, call: span(c), prefix: at, helper: k, args: args.iter().map(|a| arg(a)).collect() });
+                sites.push(Site {
+                    file: i,
+                    call: span(c),
+                    prefix: at,
+                    helper: k,
+                    args: args.iter().map(|a| arg(a)).collect(),
+                });
             }
         }
     }
@@ -415,9 +504,18 @@ fn round(files: &[(String, String)]) -> Option<Vec<(String, String)>> {
                 let ident = matches!(t.token().token_type(), TokenType::Identifier { .. });
                 let s = start(t);
                 let local = h.local.is_some_and(|l| {
-                    ident && i == h.file && f.names.of(t) == Some(l) && !h.def.contains(&s) && !h.export.as_ref().is_some_and(|e| e.contains(&s))
+                    ident
+                        && i == h.file
+                        && f.names.of(t) == Some(l)
+                        && !h.def.contains(&s)
+                        && !h.export.as_ref().is_some_and(|e| e.contains(&s))
                 });
-                let field = h.field.as_ref().is_some_and(|field| ident && previous_dot && t.token().to_string() == *field && Some(s) != h.field_at);
+                let field = h.field.as_ref().is_some_and(|field| {
+                    ident
+                        && previous_dot
+                        && t.token().to_string() == *field
+                        && Some(s) != h.field_at
+                });
                 if local || field {
                     refs.push((i, s, field));
                 }
@@ -426,7 +524,9 @@ fn round(files: &[(String, String)]) -> Option<Vec<(String, String)>> {
         }
         let sited = |&(i, s, field): &(usize, usize, bool)| match field {
             false => site_at.contains(&(i, s)),
-            true => sites.iter().any(|x| x.helper == k && x.file == i && x.call.contains(&s)),
+            true => sites
+                .iter()
+                .any(|x| x.helper == k && x.file == i && x.call.contains(&s)),
         };
         whole[k] = !refs.is_empty() && refs.iter().all(sited);
     }
@@ -442,8 +542,16 @@ fn round(files: &[(String, String)]) -> Option<Vec<(String, String)>> {
         }));
         edits[s.file].push((s.call.clone(), text));
     }
-    for h in helpers.iter().zip(&whole).filter(|(_, w)| **w).map(|(h, _)| h) {
-        let blank: String = files[h.file].1[h.def.clone()].chars().map(|c| if c == '\n' { '\n' } else { ' ' }).collect();
+    for h in helpers
+        .iter()
+        .zip(&whole)
+        .filter(|(_, w)| **w)
+        .map(|(h, _)| h)
+    {
+        let blank: String = files[h.file].1[h.def.clone()]
+            .chars()
+            .map(|c| if c == '\n' { '\n' } else { ' ' })
+            .collect();
         edits[h.file].push((h.def.clone(), blank));
         if let Some(e) = &h.export {
             edits[h.file].push((e.clone(), "nil".into()));

@@ -31,7 +31,11 @@ pub(super) struct Program<'a> {
 
 /// The draws (file, call span) whose art can be an animation the plan could not name, and the escapes.
 pub(super) fn follow(program: &Program) -> (HashSet<(String, Range<usize>)>, Vec<Error>) {
-    let stem = |f: &str| f.trim_end_matches(".luau").trim_end_matches(".lua").to_string();
+    let stem = |f: &str| {
+        f.trim_end_matches(".luau")
+            .trim_end_matches(".lua")
+            .to_string()
+    };
     // Each file's functions by name (their parameters) and the functions its returned table exports by field.
     let mut functions: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
     let mut exported: HashMap<String, HashMap<String, String>> = HashMap::new();
@@ -45,18 +49,30 @@ pub(super) fn follow(program: &Program) -> (HashSet<(String, Range<usize>)>, Vec
     }
     let mut state = State::default();
     loop {
-        let before = (state.decls.values().map(HashSet::len).sum::<usize>(), state.params.len());
+        let before = (
+            state.decls.values().map(HashSet::len).sum::<usize>(),
+            state.params.len(),
+        );
         for (file, ast, facts) in &program.files {
-            let mut v = Flow::new(program, &functions, &exported, &methods, &mut state, file, ast, facts, false);
+            let mut v = Flow::new(
+                program, &functions, &exported, &methods, &mut state, file, ast, facts, false,
+            );
             v.visit_ast(ast);
         }
-        if before == (state.decls.values().map(HashSet::len).sum::<usize>(), state.params.len()) {
+        if before
+            == (
+                state.decls.values().map(HashSet::len).sum::<usize>(),
+                state.params.len(),
+            )
+        {
             break;
         }
     }
     let (mut draws, mut escapes) = (HashSet::new(), vec![]);
     for (file, ast, facts) in &program.files {
-        let mut v = Flow::new(program, &functions, &exported, &methods, &mut state, file, ast, facts, true);
+        let mut v = Flow::new(
+            program, &functions, &exported, &methods, &mut state, file, ast, facts, true,
+        );
         v.visit_ast(ast);
         draws.extend(v.draws.into_iter().map(|d| (file.to_string(), d)));
         escapes.extend(v.escapes);
@@ -102,12 +118,19 @@ impl Visitor for Functions {
 
 /// `f = function ... end` or `M.f = function ... end`: the name it is keyed by, as `declared`, and its body.
 fn assigned_function(a: &ast::Assignment) -> Option<(String, &ast::FunctionBody)> {
-    let (vars, exprs): (Vec<_>, Vec<_>) = (a.variables().iter().collect(), a.expressions().iter().collect());
-    let ([v], [Expression::Function(f)]) = (&vars[..], &exprs[..]) else { return None };
+    let (vars, exprs): (Vec<_>, Vec<_>) = (
+        a.variables().iter().collect(),
+        a.expressions().iter().collect(),
+    );
+    let ([v], [Expression::Function(f)]) = (&vars[..], &exprs[..]) else {
+        return None;
+    };
     let name = match v {
         ast::Var::Name(n) => text(n),
         ast::Var::Expression(e) => match (e.prefix(), &e.suffixes().collect::<Vec<_>>()[..]) {
-            (ast::Prefix::Name(m), [ast::Suffix::Index(ast::Index::Dot { name, .. })]) => format!("{}.{}", text(m), text(name)),
+            (ast::Prefix::Name(m), [ast::Suffix::Index(ast::Index::Dot { name, .. })]) => {
+                format!("{}.{}", text(m), text(name))
+            }
             _ => return None,
         },
         _ => return None,
@@ -123,17 +146,22 @@ fn declared(f: &ast::FunctionDeclaration) -> Option<String> {
 }
 
 fn params(body: &ast::FunctionBody) -> Vec<String> {
-    body.parameters().iter().map(|p| match p {
-        ast::Parameter::Name(n) => text(n),
-        _ => String::new(),
-    }).collect()
+    body.parameters()
+        .iter()
+        .map(|p| match p {
+            ast::Parameter::Name(n) => text(n),
+            _ => String::new(),
+        })
+        .collect()
 }
 
 /// `return {field = name, ...}`: the fields that are names (of functions, the caller checks). `return M`, M a
 /// file-level `local M = {...}` never assigned again: its `function M.f` declarations, by field.
 fn exported_functions(ast: &ast::Ast, names: &super::scope::Names) -> HashMap<String, String> {
     let mut out = HashMap::new();
-    let Some(ast::LastStmt::Return(r)) = ast.nodes().last_stmt() else { return out };
+    let Some(ast::LastStmt::Return(r)) = ast.nodes().last_stmt() else {
+        return out;
+    };
     match r.returns().iter().collect::<Vec<_>>()[..] {
         [Expression::TableConstructor(t)] => {
             for f in t.fields() {
@@ -145,7 +173,9 @@ fn exported_functions(ast: &ast::Ast, names: &super::scope::Names) -> HashMap<St
             }
         }
         [Expression::Var(ast::Var::Name(returned))] => {
-            let Some(d) = names.constant(returned).filter(|&d| names.top(d)) else { return out };
+            let Some(d) = names.constant(returned).filter(|&d| names.top(d)) else {
+                return out;
+            };
             let m = text(returned);
             let table = ast.nodes().stmts().any(|s| matches!(s, ast::Stmt::LocalAssignment(l)
                 if l.names().len() == 1 && l.names().iter().all(|n| names.of(n) == Some(d))
@@ -154,7 +184,9 @@ fn exported_functions(ast: &ast::Ast, names: &super::scope::Names) -> HashMap<St
                 for s in ast.nodes().stmts() {
                     // The statement's table name, which must read the returned declaration.
                     let (root, name) = match s {
-                        ast::Stmt::FunctionDeclaration(f) => (f.name().names().iter().next(), declared(f)),
+                        ast::Stmt::FunctionDeclaration(f) => {
+                            (f.name().names().iter().next(), declared(f))
+                        }
                         ast::Stmt::Assignment(a) => (
                             a.variables().iter().next().and_then(|v| match v {
                                 ast::Var::Expression(e) => match e.prefix() {
@@ -219,39 +251,78 @@ impl<'a> Flow<'a> {
         facts: &'a Facts,
         last: bool,
     ) -> Self {
-        let stem = file.trim_end_matches(".luau").trim_end_matches(".lua").to_string();
+        let stem = file
+            .trim_end_matches(".luau")
+            .trim_end_matches(".lua")
+            .to_string();
         let mut tables = HashMap::new();
         for s in ast.nodes().stmts() {
             if let ast::Stmt::LocalAssignment(l) = s {
-                if let ([n], [e @ Expression::TableConstructor(_)]) = (&l.names().iter().collect::<Vec<_>>()[..], &l.expressions().iter().collect::<Vec<_>>()[..]) {
+                if let ([n], [e @ Expression::TableConstructor(_)]) = (
+                    &l.names().iter().collect::<Vec<_>>()[..],
+                    &l.expressions().iter().collect::<Vec<_>>()[..],
+                ) {
                     if let Some(d) = facts.names.constant(n) {
                         tables.insert(d, (*e).clone());
                     }
                 }
             }
         }
-        Flow { program, functions, exported, methods, state, file, stem, facts, function_decls: HashSet::new(), tables, last, next: None, functions_open: 0, judged: HashSet::new(), draws: vec![], escapes: vec![] }
+        Flow {
+            program,
+            functions,
+            exported,
+            methods,
+            state,
+            file,
+            stem,
+            facts,
+            function_decls: HashSet::new(),
+            tables,
+            last,
+            next: None,
+            functions_open: 0,
+            judged: HashSet::new(),
+            draws: vec![],
+            escapes: vec![],
+        }
     }
 
     fn carry(&mut self, d: usize) {
-        self.state.decls.entry(self.file.into()).or_default().insert(d);
+        self.state
+            .decls
+            .entry(self.file.into())
+            .or_default()
+            .insert(d);
     }
     fn carries(&self, d: usize) -> bool {
-        self.state.decls.get(self.file).is_some_and(|s| s.contains(&d))
+        self.state
+            .decls
+            .get(self.file)
+            .is_some_and(|s| s.contains(&d))
     }
     /// The declaration a name reads, and whether it is a file-level one.
     fn resolve(&self, name: &TokenReference) -> Option<(usize, bool)> {
-        self.facts.names.of(name).map(|d| (d, self.facts.names.top(d)))
+        self.facts
+            .names
+            .of(name)
+            .map(|d| (d, self.facts.names.top(d)))
     }
     fn escape(&mut self, node: &impl Node) {
         if self.last {
-            self.escapes.push(Error { file: self.file.into(), line: super::line(node), message: ESCAPE.into() });
+            self.escapes.push(Error {
+                file: self.file.into(),
+                line: super::line(node),
+                message: ESCAPE.into(),
+            });
         }
     }
 
     /// A module's returned art at `field` then `path`: whether an animation lies there (any field for `None`).
     fn exports_animate(&self, stem: &str, field: Option<&str>, path: &[Step]) -> bool {
-        let Some(fields) = self.program.exports.get(stem) else { return false };
+        let Some(fields) = self.program.exports.get(stem) else {
+            return false;
+        };
         match field {
             None => fields.values().any(Tree::animates),
             Some(f) => fields.get(f).is_some_and(|t| within(t, path)),
@@ -282,12 +353,18 @@ impl<'a> Flow<'a> {
             Expression::IfExpression(i) => {
                 self.may(i.if_expression())
                     || self.may(i.else_expression())
-                    || i.else_if_expressions().is_some_and(|ei| ei.iter().any(|x| self.may(x.expression())))
+                    || i.else_if_expressions()
+                        .is_some_and(|ei| ei.iter().any(|x| self.may(x.expression())))
             }
             // `require` anywhere: the module's table, holding whatever animations it returns.
-            Expression::FunctionCall(c) => is_animation_call(c) || required(c).is_some_and(|m| self.exports_animate(&m, None, &[])),
+            Expression::FunctionCall(c) => {
+                is_animation_call(c)
+                    || required(c).is_some_and(|m| self.exports_animate(&m, None, &[]))
+            }
             Expression::TableConstructor(t) => t.fields().iter().any(|f| match f {
-                ast::Field::NameKey { value, .. } | ast::Field::ExpressionKey { value, .. } => self.may(value),
+                ast::Field::NameKey { value, .. } | ast::Field::ExpressionKey { value, .. } => {
+                    self.may(value)
+                }
                 ast::Field::NoKey(value) => self.may(value),
                 _ => false,
             }),
@@ -309,14 +386,18 @@ impl<'a> Flow<'a> {
                     None if text(root) == "require" => {
                         let module = match suffixes.first() {
                             Some(ast::Suffix::Call(ast::Call::AnonymousCall(a))) => match &**a {
-                                ast::FunctionArgs::Parentheses { arguments, .. } => super::required_path(&arguments.iter().collect::<Vec<_>>()),
+                                ast::FunctionArgs::Parentheses { arguments, .. } => {
+                                    super::required_path(&arguments.iter().collect::<Vec<_>>())
+                                }
                                 _ => None,
                             },
                             _ => None,
                         };
                         match (module, steps(&suffixes[1..])) {
                             (Some(m), Some(path)) => match path.split_first() {
-                                Some((Step::Key(f), rest)) => self.exports_animate(&m, Some(f), rest),
+                                Some((Step::Key(f), rest)) => {
+                                    self.exports_animate(&m, Some(f), rest)
+                                }
                                 _ => self.exports_animate(&m, None, &[]),
                             },
                             _ => true,
@@ -326,7 +407,11 @@ impl<'a> Flow<'a> {
                     None => false,
                 }
             }
-            Expression::Number(_) | Expression::String(_) | Expression::Symbol(_) | Expression::InterpolatedString(_) | Expression::Function(_) => false,
+            Expression::Number(_)
+            | Expression::String(_)
+            | Expression::Symbol(_)
+            | Expression::InterpolatedString(_)
+            | Expression::Function(_) => false,
             // A shape the pass doesn't model: it may hold one (the draw keeps the machinery, a call escapes).
             _ => true,
         }
@@ -337,13 +422,19 @@ impl<'a> Flow<'a> {
         match (e, tree) {
             (Expression::Parentheses { expression, .. }, _) => self.lost(expression, tree),
             // tree_of builds a constructor's table field for field, in order.
-            (Expression::TableConstructor(t), Some(Tree::Table(fields))) => t.fields().iter().zip(fields).any(|(f, (_, sub))| match f {
-                ast::Field::NameKey { value, .. } => self.lost(value, Some(sub)),
-                ast::Field::NoKey(value) => self.lost(value, Some(sub)),
-                ast::Field::ExpressionKey { value, .. } => self.may(value),
-                _ => false,
-            }),
-            (Expression::Var(ast::Var::Name(n)), Some(Tree::Table(_))) if self.resolve(n).is_some_and(|(d, _)| self.tables.contains_key(&d)) => {
+            (Expression::TableConstructor(t), Some(Tree::Table(fields))) => {
+                t.fields().iter().zip(fields).any(|(f, (_, sub))| match f {
+                    ast::Field::NameKey { value, .. } => self.lost(value, Some(sub)),
+                    ast::Field::NoKey(value) => self.lost(value, Some(sub)),
+                    ast::Field::ExpressionKey { value, .. } => self.may(value),
+                    _ => false,
+                })
+            }
+            (Expression::Var(ast::Var::Name(n)), Some(Tree::Table(_)))
+                if self
+                    .resolve(n)
+                    .is_some_and(|(d, _)| self.tables.contains_key(&d)) =>
+            {
                 self.lost(&self.tables[&self.resolve(n).unwrap().0], tree)
             }
             (_, Some(t)) if exact(t) => false,
@@ -368,7 +459,11 @@ impl<'a> Flow<'a> {
                 // Art by name, or anything an assignment handed it.
                 self.carries(d)
                     || self.facts.art_names.get(&d).is_some_and(|&a| a > ANIMATION)
-                    || self.facts.art_tables.get(&d).is_some_and(|t| within(t, path))
+                    || self
+                        .facts
+                        .art_tables
+                        .get(&d)
+                        .is_some_and(|t| within(t, path))
             }
             // A method's `self` is whatever its receiver was.
             None => text(name) == "self",
@@ -381,7 +476,9 @@ impl<'a> Flow<'a> {
             return;
         }
         let suffixes: Vec<_> = call.suffixes().collect();
-        let Some(ast::Suffix::Call(last)) = suffixes.last() else { return };
+        let Some(ast::Suffix::Call(last)) = suffixes.last() else {
+            return;
+        };
         let a = match last {
             ast::Call::AnonymousCall(a) => a,
             ast::Call::MethodCall(m) => m.args(),
@@ -399,20 +496,26 @@ impl<'a> Flow<'a> {
         };
         // `t:m(...)`: a method the plan doesn't follow, handed whatever t holds as `self` (a group's `:draw` judges
         // only its art, below), or one of the program's own methods handed an animation at all.
-        let own = matches!(last, ast::Call::MethodCall(m) if self.methods.contains(&text(m.name())));
+        let own =
+            matches!(last, ast::Call::MethodCall(m) if self.methods.contains(&text(m.name())));
         if let ast::Call::MethodCall(m) = last {
             let receiver = match call.prefix() {
-                ast::Prefix::Name(n) => steps(&suffixes[..suffixes.len() - 1]).is_some_and(|p| self.name_may(n, &p)),
+                ast::Prefix::Name(n) => {
+                    steps(&suffixes[..suffixes.len() - 1]).is_some_and(|p| self.name_may(n, &p))
+                }
                 ast::Prefix::Expression(e) => self.may(e),
                 _ => true,
             };
-            if (receiver && (own || text(m.name()) != "draw")) || (own && args.iter().any(|a| self.may(a))) {
+            if (receiver && (own || text(m.name()) != "draw"))
+                || (own && args.iter().any(|a| self.may(a)))
+            {
                 self.escape(call);
                 return;
             }
         }
         let callee = callee(call);
-        let draw = (!own && matches!(last, ast::Call::MethodCall(m) if text(m.name()) == "draw")) || callee.as_deref() == Some("sprites.draw");
+        let draw = (!own && matches!(last, ast::Call::MethodCall(m) if text(m.name()) == "draw"))
+            || callee.as_deref() == Some("sprites.draw");
         if draw {
             if args.first().is_some_and(|a| self.may(a)) {
                 self.draws.push(span(call));
@@ -434,21 +537,36 @@ impl<'a> Flow<'a> {
         let target = match (&callee, matches!(last, ast::Call::AnonymousCall(_))) {
             (Some(c), true) => match c.split_once('.') {
                 None => match root.and_then(|(d, _)| self.facts.module_fields.get(&d)) {
-                    Some((m, f)) => self.exported.get(m).and_then(|e| e.get(f)).map(|n| (m.clone(), n.clone())),
+                    Some((m, f)) => self
+                        .exported
+                        .get(m)
+                        .and_then(|e| e.get(f))
+                        .map(|n| (m.clone(), n.clone())),
                     None if root.is_some_and(|(d, _)| !self.function_decls.contains(&d)) => None,
                     None => Some((self.stem.clone(), c.clone())),
                 },
-                Some((_, f)) if !f.contains('.') => match root.and_then(|(d, _)| self.facts.requires.get(&d)) {
-                    Some(s) => self.exported.get(s).and_then(|e| e.get(f)).map(|n| (s.clone(), n.clone())),
-                    // `M.f` of a file-level table here, never assigned again: its `function M.f`.
-                    None if root.is_some_and(|(d, top)| top && self.facts.names.decl_constant(d)) => Some((self.stem.clone(), c.clone())),
-                    None => None,
-                },
+                Some((_, f)) if !f.contains('.') => {
+                    match root.and_then(|(d, _)| self.facts.requires.get(&d)) {
+                        Some(s) => self
+                            .exported
+                            .get(s)
+                            .and_then(|e| e.get(f))
+                            .map(|n| (s.clone(), n.clone())),
+                        // `M.f` of a file-level table here, never assigned again: its `function M.f`.
+                        None if root
+                            .is_some_and(|(d, top)| top && self.facts.names.decl_constant(d)) =>
+                        {
+                            Some((self.stem.clone(), c.clone()))
+                        }
+                        None => None,
+                    }
+                }
                 _ => None,
             },
             _ => None,
         };
-        let target = target.filter(|(s, n)| self.functions.get(s).is_some_and(|f| f.contains_key(n)));
+        let target =
+            target.filter(|(s, n)| self.functions.get(s).is_some_and(|f| f.contains_key(n)));
         match target {
             Some((s, n)) => {
                 // A named parameter takes it (`...` is one the plan can't follow).
@@ -489,12 +607,16 @@ fn is_animation_call(c: &ast::FunctionCall) -> bool {
 
 /// A call's callee as a dotted name (`f`, `M.f`, `sprites.draw`), without its arguments.
 fn callee(c: &ast::FunctionCall) -> Option<String> {
-    let ast::Prefix::Name(root) = c.prefix() else { return None };
+    let ast::Prefix::Name(root) = c.prefix() else {
+        return None;
+    };
     let mut name = text(root);
     let suffixes: Vec<_> = c.suffixes().collect();
     for s in &suffixes[..suffixes.len().saturating_sub(1)] {
         match s {
-            ast::Suffix::Index(ast::Index::Dot { name: n, .. }) => name = format!("{name}.{}", text(n)),
+            ast::Suffix::Index(ast::Index::Dot { name: n, .. }) => {
+                name = format!("{name}.{}", text(n))
+            }
             _ => return None,
         }
     }
@@ -507,7 +629,11 @@ impl Visitor for Flow<'_> {
         let name = self.next.take();
         for (i, p) in body.parameters().iter().enumerate() {
             let ast::Parameter::Name(p) = p else { continue };
-            let carries = name.as_ref().is_some_and(|n| self.state.params.contains(&(self.stem.clone(), n.clone(), i)));
+            let carries = name.as_ref().is_some_and(|n| {
+                self.state
+                    .params
+                    .contains(&(self.stem.clone(), n.clone(), i))
+            });
             if let (true, Some((d, _))) = (carries, self.resolve(p)) {
                 self.carry(d);
             }
@@ -533,7 +659,10 @@ impl Visitor for Flow<'_> {
         }
     }
     fn visit_local_assignment(&mut self, a: &ast::LocalAssignment) {
-        if let ([n], [Expression::Function(_)]) = (&a.names().iter().collect::<Vec<_>>()[..], &a.expressions().iter().collect::<Vec<_>>()[..]) {
+        if let ([n], [Expression::Function(_)]) = (
+            &a.names().iter().collect::<Vec<_>>()[..],
+            &a.expressions().iter().collect::<Vec<_>>()[..],
+        ) {
             self.next = Some(text(n));
         }
     }
@@ -541,7 +670,9 @@ impl Visitor for Flow<'_> {
         let exprs: Vec<_> = a.expressions().iter().collect();
         for (i, n) in a.names().iter().enumerate() {
             let carries = exprs.get(i).is_some_and(|e| self.may(e));
-            let Some((d, _)) = self.resolve(n) else { continue };
+            let Some((d, _)) = self.resolve(n) else {
+                continue;
+            };
             if matches!(exprs.get(i), Some(Expression::Function(_))) {
                 self.function_decls.insert(d);
             }
@@ -586,11 +717,19 @@ impl Visitor for Flow<'_> {
         let mut carries = false;
         for e in f.expressions().iter() {
             match e {
-                Expression::FunctionCall(c) if matches!(callee(c).as_deref(), Some("ipairs" | "pairs")) => {
-                    if let Some(ast::Suffix::Call(ast::Call::AnonymousCall(args))) = c.suffixes().last() {
+                Expression::FunctionCall(c)
+                    if matches!(callee(c).as_deref(), Some("ipairs" | "pairs")) =>
+                {
+                    if let Some(ast::Suffix::Call(ast::Call::AnonymousCall(args))) =
+                        c.suffixes().last()
+                    {
                         match &**args {
-                            ast::FunctionArgs::Parentheses { arguments, .. } => carries |= arguments.iter().any(|a| self.may(a)),
-                            ast::FunctionArgs::TableConstructor(t) => carries |= self.may(&Expression::TableConstructor(t.clone())),
+                            ast::FunctionArgs::Parentheses { arguments, .. } => {
+                                carries |= arguments.iter().any(|a| self.may(a))
+                            }
+                            ast::FunctionArgs::TableConstructor(t) => {
+                                carries |= self.may(&Expression::TableConstructor(t.clone()))
+                            }
                             _ => {}
                         }
                     }
@@ -621,7 +760,13 @@ impl Visitor for Flow<'_> {
         // A module's returned table: its fields are followed as trees; a field the tree loses escapes.
         let lost = match returns[..] {
             [Expression::TableConstructor(t)] => t.fields().iter().any(|f| match f {
-                ast::Field::NameKey { key, value, .. } => self.lost(value, self.program.exports.get(&self.stem).and_then(|e| e.get(&text(key)))),
+                ast::Field::NameKey { key, value, .. } => self.lost(
+                    value,
+                    self.program
+                        .exports
+                        .get(&self.stem)
+                        .and_then(|e| e.get(&text(key))),
+                ),
                 ast::Field::ExpressionKey { value, .. } => self.may(value),
                 ast::Field::NoKey(value) => self.may(value),
                 _ => false,

@@ -1860,7 +1860,10 @@ fn kept_song(mask: u8, notes: Vec<Note>) -> Song {
 }
 
 fn lead_at(at: u32, len: u32) -> Note {
-    Note { row: 1, ..note_at(at, len, None) }
+    Note {
+        row: 1,
+        ..note_at(at, len, None)
+    }
 }
 
 #[test]
@@ -1905,19 +1908,32 @@ fn kept_parts_take_the_lowest_voices_and_the_others_never_share_them() {
     );
     let compiled = compile(&song).expect("compiles");
     let voice = |row, at| {
-        compiled.events.iter().find(|e| e.row == row && e.start == at).unwrap().voice
+        compiled
+            .events
+            .iter()
+            .find(|e| e.row == row && e.start == at)
+            .unwrap()
+            .voice
     };
     assert_eq!(voice(1, 10), 0);
     assert_eq!((voice(0, 0), voice(0, 40), voice(0, 50)), (1, 2, 1));
     assert_eq!(compiled.keep, 0b1);
     assert_eq!(keep_mask(&song, &compiled.events), 0b1);
-    assert_eq!(compile(&tick_song(0b0111, 200, vec![note_at(0, 10, None)])).unwrap().keep, 0);
+    assert_eq!(
+        compile(&tick_song(0b0111, 200, vec![note_at(0, 10, None)]))
+            .unwrap()
+            .keep,
+        0
+    );
 }
 
 #[test]
 fn kept_parts_that_leave_no_voice_for_the_rest_are_refused() {
     let full = kept_song(0b1, vec![lead_at(0, 10), note_at(20, 10, None)]);
-    assert!(compile(&full).unwrap_err().0.contains("kept parts use every voice"));
+    assert!(compile(&full)
+        .unwrap_err()
+        .0
+        .contains("kept parts use every voice"));
     let pinned = kept_song(0b11, vec![lead_at(0, 10), note_at(20, 10, Some(0))]);
     assert_eq!(
         compile(&pinned).unwrap_err().0,

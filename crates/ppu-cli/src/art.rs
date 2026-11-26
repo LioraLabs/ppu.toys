@@ -1688,7 +1688,10 @@ fn take_option(args: &mut Vec<String>, flag: &str) -> Result<Option<String>> {
     let Some(i) = args.iter().position(|a| a == flag) else {
         return Ok(None);
     };
-    ensure!(i + 1 < args.len(), bad_usage(format!("{flag} requires a value")));
+    ensure!(
+        i + 1 < args.len(),
+        bad_usage(format!("{flag} requires a value"))
+    );
     args.remove(i);
     Ok(Some(args.remove(i)))
 }
@@ -1710,7 +1713,7 @@ fn take_stdin_image(args: &mut Vec<String>) -> Result<(u32, u32, Vec<u8>)> {
         take_option(args, "--width")?,
         take_option(args, "--height")?,
     ) else {
-        return Err(bad_usage("this command needs --width and --height"))
+        return Err(bad_usage("this command needs --width and --height"));
     };
     Ok((
         number(&w, "--width")?,
@@ -1750,7 +1753,10 @@ fn take_art_flags(args: &mut Vec<String>) -> Result<(Option<SourceKind>, Option<
         v.map(|v| number(&v, flag)).transpose()
     };
     let kind = take_option(args, "--kind")?
-        .map(|k| k.parse().map_err(|e: String| bad_usage(format!("--kind: {e}"))))
+        .map(|k| {
+            k.parse()
+                .map_err(|e: String| bad_usage(format!("--kind: {e}")))
+        })
         .transpose()?;
     let bpp = num(take_option(args, "--bpp")?, "--bpp")?;
     let cell = num(take_option(args, "--cell")?, "--cell")?;
@@ -1966,7 +1972,7 @@ fn run_inner(args: &mut Vec<String>, json: bool) -> Result<i32> {
                     .collect::<Result<_, _>>()
                     .map_err(|_| bad_usage(format!("--rect wants X,Y,W,H, got {rect:?}")))?;
                 let [x, y, w, h] = n[..] else {
-                    return Err(bad_usage(format!("--rect wants X,Y,W,H, got {rect:?}")))
+                    return Err(bad_usage(format!("--rect wants X,Y,W,H, got {rect:?}")));
                 };
                 RowsOp::Set {
                     row: number(&row, "--set")?,
@@ -1995,12 +2001,9 @@ fn run_inner(args: &mut Vec<String>, json: bool) -> Result<i32> {
     ensure!(args.len() == 1, usage());
     let pixels = if stdin {
         let (Some(w), Some(h)) = dims else {
-            return Err(bad_usage("--stdin needs --width and --height"))
+            return Err(bad_usage("--stdin needs --width and --height"));
         };
-        let (w, h): (u32, u32) = (
-            number(&w, "--width")?,
-            number(&h, "--height")?,
-        );
+        let (w, h): (u32, u32) = (number(&w, "--width")?, number(&h, "--height")?);
         let bytes = read_stdin()?;
         Some((w, h, bytes))
     } else {

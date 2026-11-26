@@ -370,7 +370,14 @@ struct Scene {
 
 /// luau.lua's fade state (`scenes.go(s, {fade = n})`) and its pending switch (set the update a fade-out ends),
 /// which an edit that stays in the running scene carries.
-const SCENE_FADE: [&str; 6] = ["__ppu_scene_next", "__ppu_scene_out", "__ppu_scene_in", "__ppu_scene_fade", "__ppu_scene_after", "__ppu_scene_shown"];
+const SCENE_FADE: [&str; 6] = [
+    "__ppu_scene_next",
+    "__ppu_scene_out",
+    "__ppu_scene_in",
+    "__ppu_scene_fade",
+    "__ppu_scene_after",
+    "__ppu_scene_shown",
+];
 
 /// A program of scenes. Entering one is a cold boot (see [`LuaEngine::enter_scene`]): its frame()
 /// and the audio timeline count from the update it was entered on, `f0`.
@@ -1941,7 +1948,12 @@ end
             .map(|sc| (sc.list[sc.current].file.clone(), sc.f0, sc.t0));
         // A fade under way goes on through an edit that stays in the running scene (restored after its entry).
         let prev_fade: Option<Vec<Option<i64>>> = prev_scene.as_ref().map(|_| {
-            self.lua.borrow_mut().enter(|ctx| SCENE_FADE.iter().map(|n| ctx.get_global(*n).to_int()).collect())
+            self.lua.borrow_mut().enter(|ctx| {
+                SCENE_FADE
+                    .iter()
+                    .map(|n| ctx.get_global(*n).to_int())
+                    .collect()
+            })
         });
         let mut stayed = false;
         let scenes = lua.enter(|ctx| {
@@ -1976,10 +1988,10 @@ end
             let chosen = start_scene
                 .as_ref()
                 .and_then(|file| list.iter().position(|s| s.file == *file));
-            // A recompile of the running program stays in the running scene, on its own clock.
+            // A recompile of the running program stays in the running scene, on its own clock,
+            // whatever the switcher selected: only a boot (reset, no prev_run) enters `chosen`.
             let carried = prev_scene
                 .as_ref()
-                .filter(|_| chosen.is_none())
                 .and_then(|(file, ..)| list.iter().position(|s| s.file == *file));
             stayed = carried.is_some();
             let (f0, t0) = carried
@@ -2082,7 +2094,8 @@ end
             if let (Ok(()), true, Some(fade)) = (&res, stayed, &prev_fade) {
                 self.lua.borrow_mut().enter(|ctx| {
                     for (name, v) in SCENE_FADE.iter().zip(fade) {
-                        ctx.set_global(*name, v.map_or(Value::Nil, Value::Integer)).unwrap();
+                        ctx.set_global(*name, v.map_or(Value::Nil, Value::Integer))
+                            .unwrap();
                     }
                 });
             }
@@ -2450,7 +2463,11 @@ end
                 power_on(ctx, &keys.fetch(ctx));
                 ctx.set_global("__ppu_scene_next", Value::Nil).unwrap();
                 if unfaded {
-                    for (name, v) in [("__ppu_scene_out", 0), ("__ppu_scene_in", 1), ("__ppu_scene_fade", 0)] {
+                    for (name, v) in [
+                        ("__ppu_scene_out", 0),
+                        ("__ppu_scene_in", 1),
+                        ("__ppu_scene_fade", 0),
+                    ] {
                         ctx.set_global(name, v).unwrap();
                     }
                     ctx.set_global("__ppu_scene_after", Value::Nil).unwrap();
@@ -2889,7 +2906,15 @@ end
                     unreachable!("luau.lua defines the fade step")
                 };
                 // The step in video frames this update spans; a paused repeat takes none.
-                ctx.stash(Executor::start(ctx, func, if again { 0 } else { self.update_frames() as i64 }))
+                ctx.stash(Executor::start(
+                    ctx,
+                    func,
+                    if again {
+                        0
+                    } else {
+                        self.update_frames() as i64
+                    },
+                ))
             });
             l.execute::<()>(&ex).map_err(static_error_to_lua)?;
         }
@@ -2917,14 +2942,22 @@ end
                     &mut self.memory,
                 );
                 animate_worlds(&self.dma, &self.source_store.borrow(), f, &mut self.memory);
-                let columns = if self.picture_memory { read_memory(ctx, &mut self.memory) } else { Ok(()) };
+                let columns = if self.picture_memory {
+                    read_memory(ctx, &mut self.memory)
+                } else {
+                    Ok(())
+                };
                 (columns, read_state(ctx, &keys.fetch(ctx), &mut mirror))
             })
         };
         let (columns, defaults) = defaults;
         if let Err(message) = columns {
             self.restore_controls();
-            return Err(LuaError { message, line: None, file: self.frame_file.clone() });
+            return Err(LuaError {
+                message,
+                line: None,
+                file: self.frame_file.clone(),
+            });
         }
 
         // M12/audio: walk this frame's audio span sample-accurately against
@@ -3007,7 +3040,11 @@ end
             if self.picture_memory {
                 if let Err(message) = l.enter(|ctx| read_memory(ctx, &mut self.memory)) {
                     call_controls_hook::<()>(&mut l, "__ppu_controls_restore");
-                    return Err(LuaError { message, line: None, file: Some(POKES.to_string()) });
+                    return Err(LuaError {
+                        message,
+                        line: None,
+                        file: Some(POKES.to_string()),
+                    });
                 }
             }
             n_program
@@ -4133,7 +4170,10 @@ fn map_fill<'gc>(ctx: piccolo::Context<'gc>, layer: Table<'gc>) -> Callback<'gc>
     Callback::from_fn_with(&ctx, layer, |layer, ctx, _, mut stack| {
         let usage = "bg[n].map:fill(x, y, w, h, {tile = .., pal = .., prio = .., flip_x = .., flip_y = ..})";
         let Value::Table(map) = stack.get(0) else {
-            return Err(lua_err(ctx, &format!("error[snes.map]: call fill with a colon: {usage}")));
+            return Err(lua_err(
+                ctx,
+                &format!("error[snes.map]: call fill with a colon: {usage}"),
+            ));
         };
         let mut n = [0i64; 4];
         for (i, name) in ["x", "y", "w", "h"].iter().enumerate() {
@@ -4148,7 +4188,10 @@ fn map_fill<'gc>(ctx: piccolo::Context<'gc>, layer: Table<'gc>) -> Callback<'gc>
         }
         let [x, y, w, h] = n;
         let Value::Table(entry) = stack.get(5) else {
-            return Err(lua_err(ctx, &format!("error[snes.map]: bg[n].map:fill: the entry must be a table: {usage}")));
+            return Err(lua_err(
+                ctx,
+                &format!("error[snes.map]: bg[n].map:fill: the entry must be a table: {usage}"),
+            ));
         };
         const FIELDS: [&str; 5] = ["tile", "pal", "prio", "flip_x", "flip_y"];
         for (k, _) in entry {
@@ -4157,8 +4200,13 @@ fn map_fill<'gc>(ctx: piccolo::Context<'gc>, layer: Table<'gc>) -> Callback<'gc>
                 return Err(lua_err(ctx, &format!("error[snes.map]: bg[n].map:fill: a map entry has no field {k}: its fields are tile, pal, prio, flip_x, flip_y")));
             }
         }
-        let size = crate::quantize::bg_screen_size(layer.get(ctx, "screen_size").to_int().unwrap_or(0) as u8);
-        let (cols, rows) = (if size & 1 == 1 { 64 } else { 32 }, if size & 2 == 2 { 64 } else { 32 });
+        let size = crate::quantize::bg_screen_size(
+            layer.get(ctx, "screen_size").to_int().unwrap_or(0) as u8,
+        );
+        let (cols, rows) = (
+            if size & 1 == 1 { 64 } else { 32 },
+            if size & 2 == 2 { 64 } else { 32 },
+        );
         if x + w > cols || y + h > rows {
             return Err(lua_err(ctx, &format!("error[snes.map]: bg[n].map:fill({x}, {y}, {w}, {h}) reaches past the layer's map of {cols}x{rows} cells (columns 0..{}, rows 0..{})", cols - 1, rows - 1)));
         }
@@ -4395,9 +4443,15 @@ fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
         match v {
             Value::Integer(_) | Value::Number(_) => match v.to_number() {
                 Some(n) if n.is_finite() => Ok(n),
-                _ => Err(lua_err(ctx, &format!("error[snes.mode7]: {name} must be a finite number"))),
+                _ => Err(lua_err(
+                    ctx,
+                    &format!("error[snes.mode7]: {name} must be a finite number"),
+                )),
             },
-            _ => Err(lua_err(ctx, &format!("error[snes.mode7]: {name} must be a finite number"))),
+            _ => Err(lua_err(
+                ctx,
+                &format!("error[snes.mode7]: {name} must be a finite number"),
+            )),
         }
     }
     /// Degrees + texture position -> (cos, sin, wrapped cx, wrapped cy).
@@ -4429,7 +4483,10 @@ fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
     let mode7_transform = Callback::from_fn(&ctx, |ctx, _, mut stack| {
         let zoom = finite(ctx, stack.get(1), "zoom")?;
         if zoom < 1.0 / 127.0 {
-            return Err(lua_err(ctx, "error[snes.mode7]: zoom must be at least 1/127"));
+            return Err(lua_err(
+                ctx,
+                "error[snes.mode7]: zoom must be at least 1/127",
+            ));
         }
         let angle = finite(ctx, stack.get(0), "angle")?;
         let x = finite(ctx, stack.get(2), "x")?;
@@ -4566,7 +4623,12 @@ fn install_bindings<'gc>(ctx: piccolo::Context<'gc>, k: &Keys<'gc>) {
             for i in 0..stack.len() {
                 match stack.get(i).to_int() {
                     Some(n) if (0..=7).contains(&n) => mask |= 1 << n,
-                    _ => return Err(lua_err(ctx, &format!("error[snes.bank]: {name}: voice numbers must be 0..7"))),
+                    _ => {
+                        return Err(lua_err(
+                            ctx,
+                            &format!("error[snes.bank]: {name}: voice numbers must be 0..7"),
+                        ))
+                    }
                 }
             }
             stack.clear();
@@ -5212,7 +5274,9 @@ fn install_world(
         if view.is_some() && radius.is_some() {
             return Err(lua_err(
                 ctx,
-                &format!("error[snes.world]: world.load(\"{name}\"): view sets the window: drop radius"),
+                &format!(
+                    "error[snes.world]: world.load(\"{name}\"): view sets the window: drop radius"
+                ),
             ));
         }
         // period = P: a generated world, P cells round on each axis (world.luau holds its pick).
@@ -5247,7 +5311,12 @@ fn install_world(
             return Err(lua_err(ctx, &format!("error[snes.world]: world.load(\"{name}\"): period {p} is under 16 chunks of {}x{} cells on an axis: use a period of at least {}", chunk.0, chunk.1, 16 * chunk.0.max(chunk.1))));
         }
         let files = project.borrow();
-        let fail = |m: String| lua_err(ctx, &format!("error[snes.world]: world.load(\"{name}\"): {m}"));
+        let fail = |m: String| {
+            lua_err(
+                ctx,
+                &format!("error[snes.world]: world.load(\"{name}\"): {m}"),
+            )
+        };
         let text = match files.get(&format!("{name}.tmj")) {
             Some(t) => t,
             None if files.contains_key(&format!("{name}.tmx")) => {
@@ -5307,7 +5376,11 @@ fn install_world(
                  the most the camera moves a frame while the window keeps up (a faster move redraws it whole)"
             )));
         }
-        let speed = if view.is_some() { speed.unwrap_or(8) } else { 8 };
+        let speed = if view.is_some() {
+            speed.unwrap_or(8)
+        } else {
+            8
+        };
         let view = match view {
             None => None,
             Some(_) if !mode7 => return Err(fail("view streams a Mode 7 map and this map has no Mode 7 layer: drop view".into())),
@@ -5351,7 +5424,9 @@ fn install_world(
             ));
         }
         if generated && mode7 && chunk != (16, 16) {
-            return Err(fail("a generated world on the Mode 7 plane has 16x16-cell templates: drop chunk".into()));
+            return Err(fail(
+                "a generated world on the Mode 7 plane has 16x16-cell templates: drop chunk".into(),
+            ));
         }
         // A view streams the whole plane.
         let radius = if view.is_some() { Some(64) } else { radius };
@@ -5509,11 +5584,16 @@ fn install_world(
         if !rec.active.get() || ctx.get_global("__ppu_scenes_open").to_bool() {
             return Err(lua_err(ctx, "error[snes.world]: w:bind runs in init(), where a scene sets up its backgrounds: a cold boot undoes registers set at file level"));
         }
-        let w =
-            world_of(ctx, rec, stack.get(0)).map_err(|m| lua_err(ctx, &format!("error[snes.world]: w:bind: {m}")))?;
+        let w = world_of(ctx, rec, stack.get(0))
+            .map_err(|m| lua_err(ctx, &format!("error[snes.world]: w:bind: {m}")))?;
         let mut worlds = rec.worlds.borrow_mut();
         let world = &mut worlds[w];
-        let fail = |m: String| lua_err(ctx, &format!("error[snes.world]: w:bind (world {}): {m}", world.name));
+        let fail = |m: String| {
+            lua_err(
+                ctx,
+                &format!("error[snes.world]: w:bind (world {}): {m}", world.name),
+            )
+        };
         let Value::String(layer) = stack.get(1) else {
             return Err(fail("the first argument is a tile layer's name".into()));
         };
@@ -5600,11 +5680,16 @@ fn install_world(
     let enter_rec = rec.clone();
     let enter = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
         let rec = &enter_rec;
-        let w =
-            world_of(ctx, rec, stack.get(0)).map_err(|m| lua_err(ctx, &format!("error[snes.world]: w:enter: {m}")))?;
+        let w = world_of(ctx, rec, stack.get(0))
+            .map_err(|m| lua_err(ctx, &format!("error[snes.world]: w:enter: {m}")))?;
         let mut worlds = rec.worlds.borrow_mut();
         let from = &worlds[w];
-        let fail = |m: String| lua_err(ctx, &format!("error[snes.world]: w:enter (world {}): {m}", from.name));
+        let fail = |m: String| {
+            lua_err(
+                ctx,
+                &format!("error[snes.world]: w:enter (world {}): {m}", from.name),
+            )
+        };
         if !ctx.get_global("force_blank").to_bool() && !rec.hot_swap.get() {
             return Err(fail("w:enter redraws the whole screen, so the screen must be off: set force_blank = true before it, and false on a later update (fade how you like)".into()));
         }
@@ -5633,7 +5718,10 @@ fn install_world(
             return Err(fail(format!("map {name} streams through the Mode 7 plane (radius or view): enter maps drawn on backgrounds")));
         }
         if from.period.is_some() || to.period.is_some() {
-            return Err(fail("a generated world has no edge to leave by: w:enter swaps maps of fixed size".into()));
+            return Err(fail(
+                "a generated world has no edge to leave by: w:enter swaps maps of fixed size"
+                    .into(),
+            ));
         }
         let pixel = |v: Value<'_>| match v {
             Value::Integer(i) => Some(i),
@@ -5684,7 +5772,9 @@ fn install_world(
                 None => None,
                 Some(_) => {
                     let (w, h) = crate::tiled::painted(&to.map, li).ok_or_else(|| {
-                        fail(format!("layer {layer} of map {name} has no tiles to repeat (wrap)"))
+                        fail(format!(
+                            "layer {layer} of map {name} has no tiles to repeat (wrap)"
+                        ))
                     })?;
                     Some((w as i64, h as i64))
                 }
@@ -5729,9 +5819,12 @@ fn install_world(
         if stack.get(1).to_int() == Some(0) {
             // The Mode 7 plane: a row of tile numbers into m7.map, which changes only each VRAM word's low byte
             // (the high byte is the tiles' pixels).
-            let li = world
-                .plane
-                .ok_or_else(|| lua_err(ctx, "error[snes.world]: world strip: the plane has no bound layer"))?;
+            let li = world.plane.ok_or_else(|| {
+                lua_err(
+                    ctx,
+                    "error[snes.world]: world strip: the plane has no bound layer",
+                )
+            })?;
             let [x, y, n] = [2, 3, 4].map(|i| stack.get(i).to_int().unwrap_or(-1));
             let column = stack.get(5).to_bool();
             let (width, height) = if world.radius.is_some() {
@@ -5817,7 +5910,12 @@ fn install_world(
             .to_int()
             .filter(|n| (1..=4).contains(n))
             .and_then(|n| world.bound[n as usize - 1]);
-        let b = b.ok_or_else(|| lua_err(ctx, "error[snes.world]: world strip: that background has no bound layer"))?;
+        let b = b.ok_or_else(|| {
+            lua_err(
+                ctx,
+                "error[snes.world]: world strip: that background has no bound layer",
+            )
+        })?;
         // The layer streamed into a VRAM map plays its tile animations there from now on (a cartridge's
         // ppu_world_anim_on does the same), so a map entered over it stops its old layer's.
         {
@@ -5842,19 +5940,28 @@ fn install_world(
                 return Err(lua_err(ctx, &format!("error[snes.world]: world strip {x},{y} of {n} cells is not on the generated ground")));
             }
             let (cw, ch) = world.chunk;
-            let words = world.words[b.layer].as_ref().expect("a bound layer has words");
+            let words = world.words[b.layer]
+                .as_ref()
+                .expect("a bound layer has words");
             let Value::Table(vram) = ctx.get_global("vram") else {
                 return Err(lua_err(ctx, "error[snes.world]: vram is not a table"));
             };
             for i in 0..n {
-                let (cx, cy) = if column { (x, (y + i) % p) } else { ((x + i) % p, y % p) };
+                let (cx, cy) = if column {
+                    (x, (y + i) % p)
+                } else {
+                    ((x + i) % p, y % p)
+                };
                 let cx = cx % p;
-                let Some((sx, sy)) = world.chunks[(cy / ch % 16 * 16 + cx / cw % 16) as usize] else {
+                let Some((sx, sy)) = world.chunks[(cy / ch % 16 * 16 + cx / cw % 16) as usize]
+                else {
                     return Err(lua_err(ctx, &format!("error[snes.world]: world strip: no template was picked for the chunk of cell {cx},{cy}")));
                 };
-                let at = b.map as i64 + if cx % 64 >= 32 { 0x400 } else { 0 } + (cy % 32) * 32 + cx % 32;
+                let at =
+                    b.map as i64 + if cx % 64 >= 32 { 0x400 } else { 0 } + (cy % 32) * 32 + cx % 32;
                 let word = words[((sy + cy % ch) * width + sx + cx % cw) as usize];
-                vram.set(ctx, at, (word + (b.pal << 10) + b.priority) as i64).unwrap();
+                vram.set(ctx, at, (word + (b.pal << 10) + b.priority) as i64)
+                    .unwrap();
             }
             return Ok(CallbackReturn::Return);
         }
@@ -5929,31 +6036,56 @@ fn install_world(
     let set_rec = rec.clone();
     let set = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
         let rec = &set_rec;
-        let w = world_of(ctx, rec, stack.get(0)).map_err(|m| lua_err(ctx, &format!("error[snes.world]: w:set: {m}")))?;
+        let w = world_of(ctx, rec, stack.get(0))
+            .map_err(|m| lua_err(ctx, &format!("error[snes.world]: w:set: {m}")))?;
         let mut worlds = rec.worlds.borrow_mut();
         let world = &mut worlds[w];
-        let fail = |m: String| lua_err(ctx, &format!("error[snes.world]: w:set (world {}): {m}", world.name));
+        let fail = |m: String| {
+            lua_err(
+                ctx,
+                &format!("error[snes.world]: w:set (world {}): {m}", world.name),
+            )
+        };
         if world.radius.is_some() || world.period.is_some() {
             return Err(fail("w:set changes maps drawn on backgrounds; a world streamed through the Mode 7 plane (radius, view or period) has no cells to change".into()));
         }
-        let li = stack.get(1).to_int().filter(|&i| i >= 1 && i as usize <= world.map.layers.len());
+        let li = stack
+            .get(1)
+            .to_int()
+            .filter(|&i| i >= 1 && i as usize <= world.map.layers.len());
         let li = li.ok_or_else(|| fail("no such layer".into()))? as usize - 1;
         let layer = &world.map.layers[li];
         if layer.mode7 {
-            return Err(fail(format!("layer {} draws from a Mode 7 tileset: w:set changes sheet layers on backgrounds", layer.name)));
+            return Err(fail(format!(
+                "layer {} draws from a Mode 7 tileset: w:set changes sheet layers on backgrounds",
+                layer.name
+            )));
         }
-        if world.bound.iter().flatten().any(|b| b.layer == li && b.wrap.is_some()) {
+        if world
+            .bound
+            .iter()
+            .flatten()
+            .any(|b| b.layer == li && b.wrap.is_some())
+        {
             return Err(fail(format!("layer {} is bound with wrap, which repeats it as Tiled drew it: w:set changes layers bound without wrap", layer.name)));
         }
         if layer.tile_kinds.is_empty() {
             return Err(fail(format!("layer {} draws no tiles, so it has no tileset to set a tile from: draw at least one tile on it in Tiled", layer.name)));
         }
-        let (Some(px), Some(py), Some(tile)) = (stack.get(2).to_int(), stack.get(3).to_int(), stack.get(4).to_int()) else {
+        let (Some(px), Some(py), Some(tile)) = (
+            stack.get(2).to_int(),
+            stack.get(3).to_int(),
+            stack.get(4).to_int(),
+        ) else {
             return Err(fail(format!("w:set(layer, x, y, tile) takes a map pixel position and a tile id, whole numbers (got {}, {}, {})", stack.get(2), stack.get(3), stack.get(4))));
         };
         let (width, height) = (world.map.width as i64, world.map.height as i64);
         if !(0..width * 8).contains(&px) || !(0..height * 8).contains(&py) {
-            return Err(fail(format!("the pixel {px}, {py} is off the {}x{} px map", width * 8, height * 8)));
+            return Err(fail(format!(
+                "the pixel {px}, {py} is off the {}x{} px map",
+                width * 8,
+                height * 8
+            )));
         }
         let count = layer.tile_kinds.len() as i64;
         if !(0..count).contains(&tile) {
@@ -5961,13 +6093,19 @@ fn install_world(
         }
         let k = world.map.tile_size as i64 / 8;
         let per = (k * k) as usize;
-        let Some(cells) = layer.tiles[tile as usize * per..][..per].iter().copied().collect::<Option<Vec<u16>>>() else {
+        let Some(cells) = layer.tiles[tile as usize * per..][..per]
+            .iter()
+            .copied()
+            .collect::<Option<Vec<u16>>>()
+        else {
             return Err(fail(format!("tile {tile} of layer {}'s tileset is past the chars of sheet {}: the tileset image is larger than the source", layer.name, layer.source.as_deref().unwrap_or("?"))));
         };
         let kind = layer.tile_kinds[tile as usize];
         let (cx, cy) = (px / 8 / k * k, py / 8 / k * k);
         if world.live[li].is_none() {
-            let words = world.words[li].clone().expect("a sheet layer with tiles has words");
+            let words = world.words[li]
+                .clone()
+                .expect("a sheet layer with tiles has words");
             world.live[li] = Some((words, world.map.layers[li].kinds.clone()));
         }
         let (words, kinds) = world.live[li].as_mut().expect("just made");
@@ -5985,15 +6123,17 @@ fn install_world(
 
     // (world, layer number, px, py) -> the kind at that pixel; 0 off the map.
     let kind = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
-        let w =
-            world_of(ctx, &rec, stack.get(0)).map_err(|m| lua_err(ctx, &format!("error[snes.world]: w:tile: {m}")))?;
+        let w = world_of(ctx, &rec, stack.get(0))
+            .map_err(|m| lua_err(ctx, &format!("error[snes.world]: w:tile: {m}")))?;
         let worlds = rec.worlds.borrow();
         let map = &worlds[w].map;
         let li = stack
             .get(1)
             .to_int()
             .filter(|&i| i >= 1 && i as usize <= map.layers.len());
-        let li = li.ok_or_else(|| lua_err(ctx, "error[snes.world]: w:tile: no such layer"))? as usize - 1;
+        let li = li.ok_or_else(|| lua_err(ctx, "error[snes.world]: w:tile: no such layer"))?
+            as usize
+            - 1;
         let kinds = worlds[w].kinds_of(li);
         let (Some(px), Some(py)) = (stack.get(2).to_int(), stack.get(3).to_int()) else {
             return Err(lua_err(
@@ -6026,7 +6166,10 @@ fn palette_for(
         Some(crate::source::SourcePayload::Palette(p)) => crate::source::palette_fits(art, p)
             .map(|_| p.clone())
             .map_err(|e| format!("'{art_name}' with palette '{pn}': {e}")),
-        Some(other) => Err(format!("'{pn}' is a {} source, not a palette", other.kind().name())),
+        Some(other) => Err(format!(
+            "'{pn}' is a {} source, not a palette",
+            other.kind().name()
+        )),
     }
 }
 
@@ -6088,7 +6231,12 @@ fn install_dma(
             .or_else(|| crate::bank::get(&name))
         {
             Some(p) => p,
-            None => return Err(lua_err(ctx, &format!("error[snes.dma]: dma: no source named '{name}'"))),
+            None => {
+                return Err(lua_err(
+                    ctx,
+                    &format!("error[snes.dma]: dma: no source named '{name}'"),
+                ))
+            }
         };
         let kind = source.kind();
         let opts = match stack.get(1) {
@@ -6131,9 +6279,7 @@ fn install_dma(
                              interleaved at 0x0000 (palette at CGRAM 1), so it takes no '{k}' opt"
                         )
                     } else {
-                        format!(
-                            "'{name}' is a sample source — it takes only 'addr', not '{k}'"
-                        )
+                        format!("'{name}' is a sample source — it takes only 'addr', not '{k}'")
                     };
                     return Err(lua_err(ctx, &format!("error[snes.dma]: dma: {msg}")));
                 }
@@ -6564,7 +6710,10 @@ fn install_dma(
     // __sfx_hold(v, false) releases voice v (no key-off armed, no borrow): a compiled cold boot's
     // power-on, where the cartridge's driver holds nothing.
     let sfx_hold = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
-        if let (Some(v), Value::Boolean(false)) = (stack.get(0).to_int().filter(|v| (0..=7).contains(v)), stack.get(1)) {
+        if let (Some(v), Value::Boolean(false)) = (
+            stack.get(0).to_int().filter(|v| (0..=7).contains(v)),
+            stack.get(1),
+        ) {
             let v = v as usize;
             let mut hold = hold_rec.sfx_hold.get();
             hold[v] = 0;
@@ -6627,7 +6776,8 @@ fn install_dma(
             Some(v) => v,
             None => {
                 let ticks = ppu_rules::voices::ticks(own).min(u16::MAX as u32) as u16;
-                match ppu_rules::voices::choose(&hold_rec.voice_view(), hold_rec.keep_mask(), ticks) {
+                match ppu_rules::voices::choose(&hold_rec.voice_view(), hold_rec.keep_mask(), ticks)
+                {
                     Some(v) => v as usize,
                     None => {
                         stack.clear();
@@ -6672,15 +6822,30 @@ fn install_dma(
         }
         let n = match stack.get(0).to_int() {
             Some(n) if (0..=2).contains(&n) => n as u8,
-            _ => return Err(lua_err(ctx, "error[snes.timer]: timer: n must be an integer in 0..2")),
+            _ => {
+                return Err(lua_err(
+                    ctx,
+                    "error[snes.timer]: timer: n must be an integer in 0..2",
+                ))
+            }
         };
         let div = match stack.get(1).to_int() {
             Some(d) if (1..=255).contains(&d) => d as u8,
-            _ => return Err(lua_err(ctx, "error[snes.timer]: timer: div must be an integer in 1..255")),
+            _ => {
+                return Err(lua_err(
+                    ctx,
+                    "error[snes.timer]: timer: div must be an integer in 1..255",
+                ))
+            }
         };
         let f = match stack.get(2) {
             Value::Function(f) => f,
-            _ => return Err(lua_err(ctx, "error[snes.timer]: timer: third argument must be a function")),
+            _ => {
+                return Err(lua_err(
+                    ctx,
+                    "error[snes.timer]: timer: third argument must be a function",
+                ))
+            }
         };
         let file = function_chunk_name(&f);
         stack.clear();
@@ -6700,7 +6865,10 @@ fn install_dma(
     let fit_store = song_store.clone();
     let palette_fits = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
         let (Value::String(art), Value::String(pal)) = (stack.get(0), stack.get(1)) else {
-            return Err(lua_err(ctx, "error[snes.dma]: __ppu_palette_fits: arguments must be source names (strings)"));
+            return Err(lua_err(
+                ctx,
+                "error[snes.dma]: __ppu_palette_fits: arguments must be source names (strings)",
+            ));
         };
         let (art, pal) = (
             String::from_utf8_lossy(art.as_bytes()).into_owned(),
@@ -6709,9 +6877,13 @@ fn install_dma(
         stack.clear();
         let store = fit_store.borrow();
         let Some(source) = store.get(&art) else {
-            return Err(lua_err(ctx, &format!("error[snes.dma]: no source named '{art}'")));
+            return Err(lua_err(
+                ctx,
+                &format!("error[snes.dma]: no source named '{art}'"),
+            ));
         };
-        let p = palette_for(&store, &art, source, &pal).map_err(|e| lua_err(ctx, &format!("error[snes.dma]: {e}")))?;
+        let p = palette_for(&store, &art, source, &pal)
+            .map_err(|e| lua_err(ctx, &format!("error[snes.dma]: {e}")))?;
         stack.push_back(Value::Integer(p.rows.len() as i64));
         Ok(CallbackReturn::Return)
     });
@@ -6751,15 +6923,14 @@ fn install_song_natives(
                 "error[snes.song]: __song_load runs during setup — call it from top-level code, not frame() or hooks",
             ));
         }
-        let name = match stack.get(0) {
-            Value::String(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
-            _ => {
-                return Err(lua_err(
+        let name =
+            match stack.get(0) {
+                Value::String(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+                _ => return Err(lua_err(
                     ctx,
                     "error[snes.song]: __song_load: first argument must be a source name (string)",
-                ))
-            }
-        };
+                )),
+            };
         let bytes = match store.borrow().get(&name) {
             Some(crate::source::SourcePayload::Song(bytes)) => bytes.clone(),
             _ => {
@@ -6768,10 +6939,18 @@ fn install_song_natives(
                 return Ok(CallbackReturn::Return);
             }
         };
-        let song = crate::song::decode(&bytes)
-            .map_err(|e| lua_err(ctx, &format!("error[snes.score]: score: song '{name}': {e}")))?;
-        let compiled = crate::song::compile(&song)
-            .map_err(|e| lua_err(ctx, &format!("error[snes.score]: score: song '{name}': {e}")))?;
+        let song = crate::song::decode(&bytes).map_err(|e| {
+            lua_err(
+                ctx,
+                &format!("error[snes.score]: score: song '{name}': {e}"),
+            )
+        })?;
+        let compiled = crate::song::compile(&song).map_err(|e| {
+            lua_err(
+                ctx,
+                &format!("error[snes.score]: score: song '{name}': {e}"),
+            )
+        })?;
         let id = load_rec.songs.borrow().len();
         let rows = song_rows(ctx, &song);
         load_rec.songs.borrow_mut().push(SongPlayer {
@@ -6819,11 +6998,21 @@ fn install_song_natives(
         };
         let insts_t = match stack.get(1) {
             Value::Table(t) => t,
-            _ => return Err(lua_err(ctx, "error[snes.song]: __song_start: insts must be a table")),
+            _ => {
+                return Err(lua_err(
+                    ctx,
+                    "error[snes.song]: __song_start: insts must be a table",
+                ))
+            }
         };
         let pitches_t = match stack.get(2) {
             Value::Table(t) => t,
-            _ => return Err(lua_err(ctx, "error[snes.song]: __song_start: pitches must be a table")),
+            _ => {
+                return Err(lua_err(
+                    ctx,
+                    "error[snes.song]: __song_start: pitches must be a table",
+                ))
+            }
         };
         let looping = stack.get(3).to_bool();
         // Seconds from t = 0, or false/nil: set up, not playing.
@@ -6837,7 +7026,12 @@ fn install_song_natives(
         for i in 1..=n {
             let inst = match insts_t.get(ctx, i) {
                 Value::Table(t) => t,
-                _ => return Err(lua_err(ctx, "error[snes.song]: __song_start: insts must hold tables")),
+                _ => {
+                    return Err(lua_err(
+                        ctx,
+                        "error[snes.song]: __song_start: insts must hold tables",
+                    ))
+                }
             };
             insts.push(ctx.stash(inst));
             pitches.push(pitches_t.get(ctx, i).to_int().unwrap_or(0x1000));
@@ -6894,7 +7088,11 @@ fn install_song_natives(
     let song_play = Callback::from_fn(&ctx, move |ctx, _, mut stack| {
         if let Some(id) = stack.get(0).to_int().and_then(|n| usize::try_from(n).ok()) {
             let mut songs = play_rec.songs.borrow_mut();
-            for (_, p) in songs.iter_mut().enumerate().filter(|(i, p)| *i != id && p.playing) {
+            for (_, p) in songs
+                .iter_mut()
+                .enumerate()
+                .filter(|(i, p)| *i != id && p.playing)
+            {
                 p.set_anchor(Anchor::Stopped);
                 p.playing = false;
                 song_koff(ctx, p.mask & !play_rec.owned());
@@ -6950,7 +7148,8 @@ fn animate_worlds(
     let worlds = rec.worlds.borrow();
     for &(_, w, li, char_base) in rec.world_animated.borrow().iter() {
         let layer = &worlds[w].map.layers[li];
-        let Some(SourcePayload::Sheet(sheet)) = layer.source.as_ref().and_then(|s| store.get(s)) else {
+        let Some(SourcePayload::Sheet(sheet)) = layer.source.as_ref().and_then(|s| store.get(s))
+        else {
             continue;
         };
         let per = sheet.bit_depth as usize * 4;
@@ -8463,12 +8662,16 @@ fn read_memory(ctx: piccolo::Context<'_>, mem: &mut Memory) -> Result<(), String
 /// `vram[]` tables keep working. Anything the rule can't serve is refused with its fix.
 fn write_columns<'gc>(ctx: piccolo::Context<'gc>, mem: &mut Memory) -> Result<(), String> {
     use crate::quantize::{bg_map_base, bg_screen_size, bg_tile_size, scroll_reg};
-    let Value::Table(bg) = ctx.get_global("bg") else { return Ok(()) };
+    let Value::Table(bg) = ctx.get_global("bg") else {
+        return Ok(());
+    };
     let layer = |n: i64| match bg.get(ctx, n) {
         Value::Table(t) => Some(t),
         _ => None,
     };
-    let num = |t: Option<Table<'gc>>, k: &'static str| t.map_or(0.0, |t| t.get(ctx, k).to_number().unwrap_or(0.0));
+    let num = |t: Option<Table<'gc>>, k: &'static str| {
+        t.map_or(0.0, |t| t.get(ctx, k).to_number().unwrap_or(0.0))
+    };
     let scroll = |t: Option<Table<'gc>>| match t.map(|t| t.get(ctx, "scroll")) {
         Some(Value::Table(s)) => (num(Some(s), "x"), num(Some(s), "y")),
         _ => (0.0, 0.0),
@@ -8481,7 +8684,9 @@ fn write_columns<'gc>(ctx: piccolo::Context<'gc>, mem: &mut Memory) -> Result<()
             }
         }
     }
-    let Some(&(n, cols)) = used.first() else { return Ok(()) };
+    let Some(&(n, cols)) = used.first() else {
+        return Ok(());
+    };
     if n > 2 {
         return Err(format!("bg[{n}].columns: only bg[1] and bg[2] can move columns (BG3 holds the table in Mode 2)"));
     }
@@ -8490,7 +8695,9 @@ fn write_columns<'gc>(ctx: piccolo::Context<'gc>, mem: &mut Memory) -> Result<()
     }
     let mode = ctx.get_global("mode").to_int().unwrap_or(0);
     if mode != 2 {
-        return Err(format!("bg[{n}].columns needs mode = 2 (offset-per-tile), but mode is {mode}"));
+        return Err(format!(
+            "bg[{n}].columns needs mode = 2 (offset-per-tile), but mode is {mode}"
+        ));
     }
     let lt = layer(n);
     if bg_tile_size(num(lt, "tile_size") as u8) != 8 {
@@ -8503,19 +8710,32 @@ fn write_columns<'gc>(ctx: piccolo::Context<'gc>, mem: &mut Memory) -> Result<()
     // The table is two map rows (64 words) at bg[3].map_base. Sitting on BG1's or BG2's map is
     // allowed here, as on hardware: the Studio warns and offers a free block, the cart compiler refuses.
     let table = bg_map_base(num(t3, "map_base") as u32) as u32;
-    let width = if bg_screen_size(num(lt, "screen_size") as u8) & 1 != 0 { 64 } else { 32 };
+    let width = if bg_screen_size(num(lt, "screen_size") as u8) & 1 != 0 {
+        64
+    } else {
+        32
+    };
     let mut dy = [0i16; 64];
     for (k, v) in cols {
         let (Some(c), Some(d)) = (k.to_int(), v.to_number()) else {
             return Err(format!("bg[{n}].columns[{k:?}] = {v:?}: use a map column number and a whole number of pixels"));
         };
         if !(0..width as i64).contains(&c) {
-            return Err(format!("bg[{n}].columns[{c}]: the map is {width} columns wide (0 to {})", width - 1));
+            return Err(format!(
+                "bg[{n}].columns[{c}]: the map is {width} columns wide (0 to {})",
+                width - 1
+            ));
         }
         dy[c as usize] = scroll_reg(d as f32);
     }
     let (sx, sy) = scroll(lt);
-    let words = crate::bg::columns_vertical_words((n - 1) as u8, width, scroll_reg(sx as f32), scroll_reg(sy as f32), |c| dy[c as usize]);
+    let words = crate::bg::columns_vertical_words(
+        (n - 1) as u8,
+        width,
+        scroll_reg(sx as f32),
+        scroll_reg(sy as f32),
+        |c| dy[c as usize],
+    );
     for (k, w) in words.into_iter().enumerate() {
         mem.vram[(table as usize + k) & 0x7fff] = 0; // row 0: horizontal entries, unarmed
         mem.vram[(table as usize + 32 + k) & 0x7fff] = w;

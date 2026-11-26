@@ -91,9 +91,7 @@ fn toy_digest(dir: &std::path::Path, toy: &str) -> u64 {
 fn compositor_corpus_digest() {
     let root = std::env::var_os("PPU_CORPUS")
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../templates")
-        });
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../templates"));
     if !root.is_dir() {
         eprintln!("skipping: {} not found (set PPU_CORPUS)", root.display());
         return;

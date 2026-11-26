@@ -55,7 +55,10 @@ struct Resolve {
 impl Resolve {
     fn declare(&mut self, t: &TokenReference) {
         let d = self.names.decls.len();
-        self.names.decls.push(Decl { top: self.scopes.len() == 1, assigned: false });
+        self.names.decls.push(Decl {
+            top: self.scopes.len() == 1,
+            assigned: false,
+        });
         self.names.at.insert(t.token().start_position().bytes(), d);
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(t.token().to_string(), d);
@@ -63,7 +66,11 @@ impl Resolve {
     }
     fn use_(&mut self, t: &TokenReference) -> Option<usize> {
         let name = t.token().to_string();
-        let d = self.scopes.iter().rev().find_map(|s| s.get(&name).copied())?;
+        let d = self
+            .scopes
+            .iter()
+            .rev()
+            .find_map(|s| s.get(&name).copied())?;
         self.names.at.insert(t.token().start_position().bytes(), d);
         Some(d)
     }

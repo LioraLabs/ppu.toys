@@ -2,7 +2,6 @@
 use std::{env, fs, path::Path};
 
 fn main() {
-    println!("cargo:rerun-if-changed=lib");
     let mut names: Vec<String> = fs::read_dir("lib")
         .expect("ppu-core/lib exists")
         .filter_map(|e| e.ok()?.file_name().into_string().ok())
@@ -10,6 +9,8 @@ fn main() {
         .collect();
     names.sort();
     let lib = Path::new(&env::var("CARGO_MANIFEST_DIR").unwrap()).join("lib");
+    // Absolute, like the paths baked below: a checkout at another path reruns this instead of reusing them.
+    println!("cargo:rerun-if-changed={}", lib.display());
     let entries: String = names
         .iter()
         .map(|n| {

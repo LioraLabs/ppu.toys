@@ -51,7 +51,11 @@ fn standalone_png_project_to_portable_upload() {
     assert!(Path::new(project).join("assets/floor.png").is_file());
     failure(&["new", project]); // existing projects are preserved
     let checked = success(&["check", project, "--duration", "0.1", "--seek", "0,0.1"]);
-    assert!(checked.contains("PASS: ") && checked.contains("NOT CHECKED: the cartridge check did not run"), "{checked}");
+    assert!(
+        checked.contains("PASS: ")
+            && checked.contains("NOT CHECKED: the cartridge check did not run"),
+        "{checked}"
+    );
     success(&["render", project, "--at", "0,0.1", "-o", output]);
     let first = fs::read(Path::new(output).join("frame-00000000.png")).unwrap();
     let next = fs::read(Path::new(output).join("frame-00000006.png")).unwrap();
@@ -496,7 +500,12 @@ fn module_site(sha256: &'static str, module: &'static [u8]) -> String {
             } else {
                 module.to_vec()
             };
-            write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .unwrap();
             stream.write_all(&body).unwrap();
         }
     });
@@ -514,7 +523,11 @@ fn a_check_module_that_does_not_match_its_served_hash_is_refused() {
         "cd5d4935a48c0672cb06407bb443bc0087aff947c6b864bac886982c73b3027f",
         b"\0asm\x01",
     );
-    let output = ppu(home.path(), &site, &["check", toy.to_str().unwrap(), "--duration", "0.1"]);
+    let output = ppu(
+        home.path(),
+        &site,
+        &["check", toy.to_str().unwrap(), "--duration", "0.1"],
+    );
     let err = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "{err}");
     assert!(err.contains("does not match the sha256"), "{err}");

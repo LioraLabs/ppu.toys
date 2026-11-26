@@ -161,6 +161,42 @@ fn a_recompile_stays_in_the_running_scene() {
 }
 
 #[test]
+fn a_recompile_stays_in_the_running_scene_when_another_is_selected() {
+    let files = |step| {
+        [
+            ("main.luau", SCENE_MAIN.to_string()),
+            ("a.luau", SCENE_A.to_string()),
+            ("b.luau", scene_b(step)),
+        ]
+    };
+    let load = |e: &mut LuaEngine, step| {
+        let f = files(step);
+        e.set_sources(&f.iter().map(|(n, s)| (*n, s.as_str())).collect::<Vec<_>>())
+            .unwrap();
+    };
+    let mut e = LuaEngine::new();
+    e.set_start_scene(Some("a.luau".into()), true); // the switcher selected a
+    load(&mut e, 1);
+    e.reset().unwrap();
+    run(&mut e, 0..11); // a's scenes.go moved the run on to b
+    assert_eq!(
+        (e.current_scene(), ints(&mut e, "probe_b")),
+        (1, vec![8, 7])
+    );
+    load(&mut e, 2); // a save while a is still selected
+    assert_eq!(
+        e.current_scene(),
+        1,
+        "the save lands in b, where the run is, not back in a"
+    );
+    run(&mut e, 11..12);
+    assert_eq!(ints(&mut e, "probe_b"), vec![10, 8]);
+    // A boot still enters the selection.
+    e.reset().unwrap();
+    assert_eq!(e.current_scene(), 0);
+}
+
+#[test]
 fn reset_powers_on_with_the_initial_values() {
     let mut e = engine(&[("main.luau", &counter(1))]);
     run(&mut e, 0..30);
@@ -505,7 +541,8 @@ fn a_nested_plain_table_where_the_new_code_has_a_record_is_listed() {
 
 #[test]
 fn a_replaced_record_proxy_is_refused_not_a_panic() {
-    let src = "__ppu_record_proxy = nil\nlocal p = {x = makeFixed(0, 0, 9, 1)}\nfunction frame(t, f) end";
+    let src =
+        "__ppu_record_proxy = nil\nlocal p = {x = makeFixed(0, 0, 9, 1)}\nfunction frame(t, f) end";
     let mut e = LuaEngine::new();
     let err = e.set_sources(&[("main.luau", src)]).unwrap_err().message;
     assert!(err.contains("__ppu_record_proxy"), "{err}");
@@ -827,18 +864,30 @@ fn a_reordered_load_puts_each_world_back_on_its_own_map() {
 /// A recompile during a faded switch: the fade goes on where it was and still lands the switch, as with no edit.
 #[test]
 fn a_recompile_mid_fade_keeps_the_fade_and_its_switch() {
-    let a = |c: &str| format!("local function frame(t, f)\n  brightness = 15\n  if f == 2 then scenes.go(B, {{fade = 4}}) end\nend -- {c}\nreturn {{frame = frame}}\n");
-    let files = |a: &str| vec![
-        ("main.luau", "A = scenes.add(require(\"./a\"))\nB = scenes.add(require(\"./b\"))\n".to_string()),
-        ("a.luau", a.to_string()),
-        ("b.luau", "local function frame(t, f)\n  brightness = 9\nend\nreturn {frame = frame}\n".to_string()),
-    ];
+    let a = |c: &str| {
+        format!("local function frame(t, f)\n  brightness = 15\n  if f == 2 then scenes.go(B, {{fade = 4}}) end\nend -- {c}\nreturn {{frame = frame}}\n")
+    };
+    let files = |a: &str| {
+        vec![
+            (
+                "main.luau",
+                "A = scenes.add(require(\"./a\"))\nB = scenes.add(require(\"./b\"))\n".to_string(),
+            ),
+            ("a.luau", a.to_string()),
+            (
+                "b.luau",
+                "local function frame(t, f)\n  brightness = 9\nend\nreturn {frame = frame}\n"
+                    .to_string(),
+            ),
+        ]
+    };
     let load = |e: &mut LuaEngine, a: &str| {
         let f = files(a);
         let refs: Vec<(&str, &str)> = f.iter().map(|(n, s)| (*n, s.as_str())).collect();
         e.set_sources(&refs).unwrap();
     };
-    let level = |e: &mut LuaEngine, f: u32| e.frame(f as f64 / 60.0, f).unwrap().rows[100].brightness;
+    let level =
+        |e: &mut LuaEngine, f: u32| e.frame(f as f64 / 60.0, f).unwrap().rows[100].brightness;
     let mut e = LuaEngine::new();
     load(&mut e, &a("one"));
     let mut seen: Vec<u8> = (0..4).map(|f| level(&mut e, f)).collect();
@@ -869,5 +918,9 @@ fn a_hud_field_made_in_init_shows_the_carried_value_after_a_swap() {
     assert_eq!(e.memory().vram[0x7000], 16 + 3);
     e.set_sources(&[("main.luau", &src("b"))]).unwrap();
     run(&mut e, 2..3);
-    assert_eq!(e.memory().vram[0x7000], 16 + 3, "the carried 3, not init's redrawn 0");
+    assert_eq!(
+        e.memory().vram[0x7000],
+        16 + 3,
+        "the carried 3, not init's redrawn 0"
+    );
 }

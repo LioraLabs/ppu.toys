@@ -245,7 +245,8 @@ fn song(mut args: Vec<String>) -> Result<()> {
                 .transpose()?;
             ensure!(!args.iter().any(|a| a.starts_with('-')), "{usage}");
             let loaded = song::load(&args)?;
-            let roll = ppu_core::song_roll::roll(&loaded.song, slots).map_err(|e| anyhow::anyhow!("--{e}"))?;
+            let roll = ppu_core::song_roll::roll(&loaded.song, slots)
+                .map_err(|e| anyhow::anyhow!("--{e}"))?;
             song::write_png(&roll, Path::new(&out))?;
             println!("{out}: {}x{}", roll.width, roll.height);
             Ok(())
@@ -314,8 +315,7 @@ fn main() -> Result<()> {
     if command == "sfx" {
         use ppu_core::sfx;
         let request = sfx::parse(&args).map_err(anyhow::Error::msg)?;
-        let (wav, stats) =
-            sfx::make(request.preset, &request.knobs).map_err(anyhow::Error::msg)?;
+        let (wav, stats) = sfx::make(request.preset, &request.knobs).map_err(anyhow::Error::msg)?;
         let mut stats = stats.to_json();
         let preset = stats["preset"].as_str().unwrap_or("sfx");
         let out = request.out.unwrap_or_else(|| format!("{preset}.wav"));

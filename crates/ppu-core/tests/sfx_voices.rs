@@ -215,7 +215,15 @@ fn a_burst_of_effects_never_takes_a_kept_part() {
         assert_eq!([voices[0].0, voices[1].0], lead, "frame {f}: {voices:?}");
     }
     for f in [62, 92] {
-        assert!(seen[f][0].1 > 0 && seen[f][1].1 > 0, "the lead's note at {f}: {:?}", seen[f]);
-        assert!((2..8).all(|v| seen[f][v].0 == C2), "the effects at {f}: {:?}", seen[f]);
+        assert!(
+            seen[f][0].1 > 0 && seen[f][1].1 > 0,
+            "the lead's note at {f}: {:?}",
+            seen[f]
+        );
+        assert!(
+            (2..8).all(|v| seen[f][v].0 == C2),
+            "the effects at {f}: {:?}",
+            seen[f]
+        );
     }
 }

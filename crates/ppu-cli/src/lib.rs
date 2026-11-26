@@ -35,15 +35,7 @@ pub mod setup;
 pub mod song;
 
 /// FNV-1a: stable across Rust versions and platforms, unlike std's hasher.
-pub(crate) fn fnv(parts: &[&[u8]]) -> String {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for part in parts {
-        for b in part.iter().chain(&[0u8]) {
-            h = (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3);
-        }
-    }
-    format!("{h:016x}")
-}
+pub(crate) use ppu_core::sync::fnv;
 
 const MANIFEST: &str = "ppu.json";
 /// Where `ppu connect` keeps a folder copy that "Take site's" replaced, one directory per site

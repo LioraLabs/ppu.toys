@@ -19,6 +19,8 @@
 use crate::folder::{back_up, own_palette};
 use crate::login::{self, Credentials};
 use crate::{fnv, write_temp};
+/// Folder is mine, the site theirs: [`compare`] is where base, folder and site hashes meet.
+pub use ppu_core::sync::{compare, hashes, Compared};
 use anyhow::{bail, ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use ppu_core::render::render_png;
@@ -174,44 +176,6 @@ impl Link {
             anyhow::Error::new(e).context(format!("cannot write {}", path.display()))
         })
     }
-}
-
-/// One hash per file (`file main.luau`) and per source (`source ship`) of a `ppu.toys/1` or
-/// project body, and one per manifest field (`meta title`, `meta description`, `meta targetHz`,
-/// `meta romSize`; the last two only when set). A source hashes its kind, options, meta and
-/// payload, not `builtinId`.
-pub fn hashes(body: &Value) -> BTreeMap<String, String> {
-    let list = |k: &str| body[k].as_array().cloned().unwrap_or_default();
-    let text = |v: &Value| v.as_str().unwrap_or_default().to_string();
-    let mut out = BTreeMap::new();
-    for k in ["title", "description"] {
-        out.insert(format!("meta {k}"), fnv(&[text(&body[k]).as_bytes()]));
-    }
-    for k in ["targetHz", "romSize"] {
-        if !body[k].is_null() {
-            out.insert(format!("meta {k}"), fnv(&[body[k].to_string().as_bytes()]));
-        }
-    }
-    for f in list("files") {
-        out.insert(
-            format!("file {}", text(&f["name"])),
-            fnv(&[text(&f["source"]).as_bytes()]),
-        );
-    }
-    for s in list("sources") {
-        let (options, meta) = (
-            ppu_core::save::canonical_json(&s["options"]),
-            ppu_core::save::canonical_json(&s["meta"]),
-        );
-        let hash = fnv(&[
-            text(&s["kind"]).as_bytes(),
-            options.as_bytes(),
-            meta.as_bytes(),
-            text(&s["payload"]).as_bytes(),
-        ]);
-        out.insert(format!("source {}", text(&s["name"])), hash);
-    }
-    out
 }
 
 /// The file names of a body, in its order.
@@ -450,44 +414,6 @@ fn same_content(site: &Value, folder: &Value) -> bool {
             .all(|k| {
                 site.get(*k).filter(|v| !v.is_null()) == folder.get(*k).filter(|v| !v.is_null())
             })
-}
-
-/// A new site revision judged entry by entry (`file <name>`, `source <name>`) against the base
-/// the link holds. Entries only the folder changed are in neither list: the folder keeps them
-/// and saves them next.
-#[derive(Debug, Default, PartialEq)]
-pub struct Compared {
-    /// The site changed these and the folder did not: write the site's copy (or remove it).
-    pub take: BTreeSet<String>,
-    /// Both sides changed these, differently.
-    pub clashes: Vec<String>,
-}
-
-/// The one place base, folder and site hashes meet. An absent hash is an absent entry.
-pub fn compare(
-    base: &BTreeMap<String, String>,
-    folder: &BTreeMap<String, String>,
-    site: &BTreeMap<String, String>,
-) -> Compared {
-    let keys: BTreeSet<&String> = base
-        .keys()
-        .chain(folder.keys())
-        .chain(site.keys())
-        .collect();
-    let mut out = Compared::default();
-    for key in keys {
-        let (b, f, s) = (base.get(key), folder.get(key), site.get(key));
-        // The site did not change it, or both sides already agree.
-        if s == b || s == f {
-            continue;
-        }
-        if f == b {
-            out.take.insert(key.clone());
-        } else {
-            out.clashes.push(key.clone());
-        }
-    }
-    out
 }
 
 /// Which copy wins an entry the folder and the site both changed.
@@ -1274,10 +1200,14 @@ fn tileset_images(dir: &Path) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     let mut todo = vec![dir.to_path_buf()];
     while let Some(d) = todo.pop() {
-        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        let Ok(entries) = std::fs::read_dir(&d) else {
+            continue;
+        };
         for e in entries.flatten() {
             let path = e.path();
-            let Some(fname) = path.file_name().and_then(|n| n.to_str()) else { continue };
+            let Some(fname) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
             if fname.starts_with('.') || fname == "node_modules" {
                 continue;
             }
@@ -1289,16 +1219,21 @@ fn tileset_images(dir: &Path) -> BTreeMap<String, String> {
             if !matches!(ext, "tsj" | "tmj") {
                 continue;
             }
-            let Ok(json) = std::fs::read(&path).map_err(drop).and_then(|b| {
-                serde_json::from_slice::<Value>(&b).map_err(drop)
-            }) else { continue };
+            let Ok(json) = std::fs::read(&path)
+                .map_err(drop)
+                .and_then(|b| serde_json::from_slice::<Value>(&b).map_err(drop))
+            else {
+                continue;
+            };
             let images: Vec<&str> = match ext {
                 "tsj" => json["image"].as_str().into_iter().collect(),
                 _ => (json["tilesets"].as_array().into_iter().flatten())
                     .filter_map(|t| t["image"].as_str())
                     .collect(),
             };
-            let Ok(rel_dir) = d.strip_prefix(dir) else { continue };
+            let Ok(rel_dir) = d.strip_prefix(dir) else {
+                continue;
+            };
             for image in images {
                 // Resolve against the tileset's folder, folding `..`; refuse escaping the folder.
                 let mut parts: Vec<String> = rel_dir
@@ -1315,7 +1250,9 @@ fn tileset_images(dir: &Path) -> BTreeMap<String, String> {
                 }
                 let joined = parts.join("/");
                 let stem = joined.rsplit('/').next().unwrap_or("");
-                let Some(stem) = stem.strip_suffix(".png") else { continue };
+                let Some(stem) = stem.strip_suffix(".png") else {
+                    continue;
+                };
                 if ok && crate::valid_site_name(&joined) {
                     out.entry(stem.to_string()).or_insert(joined);
                 }
@@ -1513,7 +1450,8 @@ fn land(dir: &Path, existing: &[crate::ManifestSource], cands: Vec<Cand>) -> Lan
                                 return None;
                             }
                             let bytes = gpl::write(&pal, &n).into_bytes();
-                            let at = claim(dir, &mut claimed, None, None, "palettes", &n, "gpl", &bytes);
+                            let at =
+                                claim(dir, &mut claimed, None, None, "palettes", &n, "gpl", &bytes);
                             at.ok().map(|at| (n, at, bytes))
                         })
                         .ok_or_else(|| format!("no free palette name for {name}"))?;
@@ -1744,13 +1682,17 @@ fn follow_tilesets(dir: &Path, out: &mut dyn Write) -> Result<()> {
         if !is_image(&s.kind) {
             continue;
         }
-        let (Some(from), Some(to)) = (s.file.clone(), wanted.get(&s.name)) else { continue };
+        let (Some(from), Some(to)) = (s.file.clone(), wanted.get(&s.name)) else {
+            continue;
+        };
         let from = from.replace('\\', "/");
         let free = !listed.contains(&to.to_lowercase()) && !dir.join(to).exists();
         if from.eq_ignore_ascii_case(to) || !free || !crate::valid_file_name(&from) {
             continue;
         }
-        let Ok(bytes) = std::fs::read(dir.join(&from)) else { continue };
+        let Ok(bytes) = std::fs::read(dir.join(&from)) else {
+            continue;
+        };
         put(dir, to, &bytes)?;
         s.file = Some(to.clone());
         moves.push((from, to.clone()));
@@ -3061,10 +3003,17 @@ mod tests {
         std::fs::create_dir_all(dir.join("maps")).unwrap();
         std::fs::write(dir.join("tiles.tsj"), r#"{"image": "assets/tiles.png"}"#).unwrap();
         std::fs::write(dir.join("maps/cave.tsj"), r#"{"image": "../gfx/cave.png"}"#).unwrap();
-        std::fs::write(dir.join("maps/w.tmj"), r#"{"tilesets": [{"image": "sea.png"}, {"source": "x.tsj"}]}"#).unwrap();
+        std::fs::write(
+            dir.join("maps/w.tmj"),
+            r#"{"tilesets": [{"image": "sea.png"}, {"source": "x.tsj"}]}"#,
+        )
+        .unwrap();
         std::fs::write(dir.join("evil.tsj"), r#"{"image": "../../etc/evil.png"}"#).unwrap();
         let got = tileset_images(&dir);
-        assert_eq!(got.get("tiles").map(String::as_str), Some("assets/tiles.png"));
+        assert_eq!(
+            got.get("tiles").map(String::as_str),
+            Some("assets/tiles.png")
+        );
         assert_eq!(got.get("cave").map(String::as_str), Some("gfx/cave.png"));
         assert_eq!(got.get("sea").map(String::as_str), Some("maps/sea.png"));
         assert!(!got.contains_key("evil"), "outside the folder");
@@ -3083,7 +3032,10 @@ mod tests {
         let body: Value = serde_json::from_str(&crate::pack(&src).unwrap()).unwrap();
         std::fs::create_dir_all(&dst).unwrap();
         write_new_folder(&dst, "https://example.test", "p", 1, &body, &mut Vec::new()).unwrap();
-        assert!(dst.join("assets/tiles.png").exists(), "lands at the tileset's image");
+        assert!(
+            dst.join("assets/tiles.png").exists(),
+            "lands at the tileset's image"
+        );
         assert!(!dst.join("art/tiles.png").exists());
         std::fs::remove_dir_all(&base).unwrap();
     }
@@ -3181,7 +3133,11 @@ mod tests {
         crate::author::new_world_project(&src).unwrap();
         // No tileset looks for tiles: the default folder.
         let tsj = std::fs::read_to_string(src.join("tiles.tsj")).unwrap();
-        std::fs::write(src.join("tiles.tsj"), tsj.replace("assets/tiles.png", "elsewhere.png")).unwrap();
+        std::fs::write(
+            src.join("tiles.tsj"),
+            tsj.replace("assets/tiles.png", "elsewhere.png"),
+        )
+        .unwrap();
         let body: Value = serde_json::from_str(&crate::pack(&src).unwrap()).unwrap();
         std::fs::create_dir_all(&dst).unwrap();
         write_new_folder(&dst, "https://example.test", "p", 1, &body, &mut Vec::new()).unwrap();
@@ -3190,7 +3146,11 @@ mod tests {
         std::fs::create_dir_all(dst.join("art")).unwrap();
         std::fs::rename(dst.join("assets/tiles.png"), dst.join("art/tiles.png")).unwrap();
         let manifest = std::fs::read_to_string(dst.join(crate::MANIFEST)).unwrap();
-        std::fs::write(dst.join(crate::MANIFEST), manifest.replace("assets/tiles.png", "art/tiles.png")).unwrap();
+        std::fs::write(
+            dst.join(crate::MANIFEST),
+            manifest.replace("assets/tiles.png", "art/tiles.png"),
+        )
+        .unwrap();
         std::fs::write(dst.join("tiles.tsj"), r#"{"image": "gfx/tiles.png"}"#).unwrap();
         let before = crate::read_manifest(&dst).unwrap();
         let mut log = Vec::new();
@@ -3198,8 +3158,13 @@ mod tests {
         assert!(dst.join("gfx/tiles.png").exists() && !dst.join("art/tiles.png").exists());
         let after = crate::read_manifest(&dst).unwrap();
         assert_eq!(after.sources[0].file.as_deref(), Some("gfx/tiles.png"));
-        assert_eq!(after.sources[0].options, before.sources[0].options, "only file changes");
-        assert!(String::from_utf8(log).unwrap().contains("moved art/tiles.png to gfx/tiles.png"));
+        assert_eq!(
+            after.sources[0].options, before.sources[0].options,
+            "only file changes"
+        );
+        assert!(String::from_utf8(log)
+            .unwrap()
+            .contains("moved art/tiles.png to gfx/tiles.png"));
         // Run again: nothing left to move. A taken path is left alone.
         follow_tilesets(&dst, &mut Vec::new()).unwrap();
         std::fs::write(dst.join("tiles.tsj"), r#"{"image": "main.luau.png"}"#).unwrap();

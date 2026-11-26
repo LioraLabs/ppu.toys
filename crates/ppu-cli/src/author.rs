@@ -545,7 +545,9 @@ pub fn check(
     // The Studio's contract violations, from the same engine record: a cartridge stops on the first.
     let broken = runner.violations().to_vec();
     for v in &broken {
-        let when = v.frame.map_or("at load".to_string(), |f| format!("frame {f}"));
+        let when = v
+            .frame
+            .map_or("at load".to_string(), |f| format!("frame {f}"));
         eprintln!(
             "{}:{}: error[contract]: {} = {} outside {}..{} ({}, {when}, {}×)",
             v.file, v.line, v.store, v.value, v.min, v.max, v.scene, v.count

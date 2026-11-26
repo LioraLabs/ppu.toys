@@ -12,7 +12,9 @@ fn planned(files: &[(&str, &str)]) -> Result<ppu_core::sprites::Plan, String> {
         Some(e) => e.iter().map(|(f, s)| (f.as_str(), s.as_str())).collect(),
         None => files.to_vec(),
     };
-    plan(&files).map(|p| p.unwrap()).map_err(|e| format!("{}:{} {}", e.file, e.line, e.message))
+    plan(&files)
+        .map(|p| p.unwrap())
+        .map_err(|e| format!("{}:{} {}", e.file, e.line, e.message))
 }
 
 #[test]
@@ -21,7 +23,12 @@ fn a_local_helper_makes_one_art_per_file_level_call_on_the_calls_line() {
         "{SHEET}local function cell(n)\n  -- one 16px cell\n  return sprites.art({{{{size = 16, columns = 1, cells = {{n}}}}}}, sheet)\nend\nlocal down = {{cell(1), cell(2)}}\nlocal still = cell(3)\nlocal walk = sprites.animation(down, 8)\nfunction frame(t, f)\n  sprites.draw(walk, 1, 1, {{at = f}})\n  sprites.draw(still, 20, 1)\nend\n"
     );
     let expanded = expand_helpers(&[("main.luau", &main)]).unwrap();
-    assert_eq!(expanded[0].1.lines().count(), main.lines().count(), "{}", expanded[0].1);
+    assert_eq!(
+        expanded[0].1.lines().count(),
+        main.lines().count(),
+        "{}",
+        expanded[0].1
+    );
     let p = planned(&[("main.luau", &main)]).unwrap();
     assert_eq!(p.arts.iter().map(|a| a.line).collect::<Vec<_>>(), [8, 8, 9]);
     assert_eq!(p.animations[0].arts, [1, 2]);
@@ -31,7 +38,13 @@ fn a_local_helper_makes_one_art_per_file_level_call_on_the_calls_line() {
     let mut tiles = vec![];
     for f in [0, 8] {
         engine.frame(f as f64 / 60., f).unwrap();
-        let mut on: Vec<u16> = engine.memory().oam.iter().filter(|o| o.on).map(|o| o.tile).collect();
+        let mut on: Vec<u16> = engine
+            .memory()
+            .oam
+            .iter()
+            .filter(|o| o.on)
+            .map(|o| o.tile)
+            .collect();
         on.sort();
         tiles.push(on);
     }
@@ -46,10 +59,25 @@ fn a_module_helper_makes_each_files_own_art() {
     };
     let (a, b) = (level(1), level(2));
     let main = "local A = require(\"./a\")\nlocal B = require(\"./b\")\nfunction frame(t, f)\n  A.draw(f)\n  B.draw(f)\nend\n";
-    let p = planned(&[("shared.luau", shared), ("a.luau", &a), ("b.luau", &b), ("main.luau", main)]).unwrap();
+    let p = planned(&[
+        ("shared.luau", shared),
+        ("a.luau", &a),
+        ("b.luau", &b),
+        ("main.luau", main),
+    ])
+    .unwrap();
     let sites: Vec<(&str, u32)> = p.arts.iter().map(|s| (s.file.as_str(), s.line)).collect();
-    assert_eq!(sites, [("a.luau", 3), ("a.luau", 3), ("b.luau", 3), ("b.luau", 3)]);
-    assert_eq!(p.animations.iter().map(|a| a.arts.clone()).collect::<Vec<_>>(), [vec![1, 2], vec![3, 4]]);
+    assert_eq!(
+        sites,
+        [("a.luau", 3), ("a.luau", 3), ("b.luau", 3), ("b.luau", 3)]
+    );
+    assert_eq!(
+        p.animations
+            .iter()
+            .map(|a| a.arts.clone())
+            .collect::<Vec<_>>(),
+        [vec![1, 2], vec![3, 4]]
+    );
 }
 
 #[test]
@@ -59,7 +87,11 @@ fn an_exported_local_helper_takes_art_its_caller_made() {
     let meadow = "local Level = require(\"./level\")\nlocal enemy_sheet = dma(\"enemies\", {char = 0x4000, pal = 0})\nlocal beetle_mid = sprites.art({{size = 32, columns = 1, cells = {1}}}, enemy_sheet)\nlocal BEETLE = Level.beetle(enemy_sheet, beetle_mid)\nlocal g = sprites.group()\nfunction frame(t, f) g:draw(BEETLE, 1, 1, {at = f}) end\n";
     let files = [("level.luau", level), ("main.luau", meadow)];
     let expanded = expand_helpers(&files).unwrap();
-    assert!(expanded[0].1.contains("return {read = read, beetle = nil}"), "{}", expanded[0].1);
+    assert!(
+        expanded[0].1.contains("return {read = read, beetle = nil}"),
+        "{}",
+        expanded[0].1
+    );
     let p = planned(&files).unwrap();
     assert_eq!(p.arts.iter().map(|a| a.line).collect::<Vec<_>>(), [3, 4, 4]);
     assert_eq!(p.animations[0].arts, [2, 1, 3, 1]);
@@ -85,7 +117,10 @@ fn a_helper_reading_its_own_files_local_is_refused_from_another_file() {
     let shared = format!("{SHEET}local M = {{}}\nfunction M.cell(n)\n  return sprites.art({{{{size = 16, columns = 1, cells = {{n}}}}}}, sheet)\nend\nreturn M\n");
     let main = "local S = require(\"./shared\")\nlocal a = S.cell(1)\nfunction frame(t, f) sprites.draw(a, 1, 1) end\n";
     let e = planned(&[("shared.luau", &shared), ("main.luau", main)]).unwrap_err();
-    assert!(e.starts_with("shared.luau:6 sprites.art must be called at file level"), "{e}");
+    assert!(
+        e.starts_with("shared.luau:6 sprites.art must be called at file level"),
+        "{e}"
+    );
 }
 
 #[test]
@@ -93,9 +128,19 @@ fn a_helper_that_makes_a_group_makes_one_per_file_level_call() {
     let main = format!("{SHEET}local a = sprites.art({{{{size = 16, columns = 1, cells = {{1}}}}}}, sheet)\nlocal function layer(n)\n  return sprites.group({{slots = n}})\nend\nlocal back, front = layer(2), layer(3)\nfunction frame(t, f)\n  back:draw(a, 1, 1)\n  front:draw(a, 2, 2)\nend\n");
     let negative = main.replace("layer(3)", "layer(-3)");
     let expanded = expand_helpers(&[("main.luau", &negative)]).unwrap();
-    assert!(expanded[0].1.contains("sprites.group({slots = (-3)})"), "{}", expanded[0].1);
+    assert!(
+        expanded[0].1.contains("sprites.group({slots = (-3)})"),
+        "{}",
+        expanded[0].1
+    );
     let p = planned(&[("main.luau", &main)]).unwrap();
-    assert_eq!(p.groups.iter().filter_map(|g| g.site.as_ref().map(|s| s.line)).collect::<Vec<_>>(), [8, 8]);
+    assert_eq!(
+        p.groups
+            .iter()
+            .filter_map(|g| g.site.as_ref().map(|s| s.line))
+            .collect::<Vec<_>>(),
+        [8, 8]
+    );
 }
 
 #[test]

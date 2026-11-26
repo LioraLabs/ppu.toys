@@ -20,10 +20,10 @@ use std::ops::Range;
 
 #[path = "sprite_flow.rs"]
 mod flow;
-#[path = "sprite_scope.rs"]
-mod scope;
 #[path = "sprite_helpers.rs"]
 mod helpers;
+#[path = "sprite_scope.rs"]
+mod scope;
 pub use helpers::expand as expand_helpers;
 
 /// The hosted ident's scene module, which the compiler puts in front of a game (games may not name a file `__ppu_`).
@@ -238,10 +238,9 @@ impl Plan {
                     _ => (String::new(), 0),
                 };
                 // The scene with the least room (the most positions used by groups and its own obj writes).
-                let scene = live
-                    .iter()
-                    .copied()
-                    .max_by_key(|&k| ends[k] + taken[k].iter().filter(|&&p| p >= ends[k]).count() as u64);
+                let scene = live.iter().copied().max_by_key(|&k| {
+                    ends[k] + taken[k].iter().filter(|&&p| p >= ends[k]).count() as u64
+                });
                 let own = scene.map_or(0, |k| taken[k].len() as u64);
                 let before: Vec<(usize, u32)> = (0..out.len())
                     .filter(|&j| scene.is_some_and(|k| self.groups[j].in_scene(k + 1)))
@@ -296,10 +295,17 @@ impl Plan {
                 .map_or(String::new(), |(f, l)| format!(", the first at {f}:{l}"));
             filled.push(format!("its obj[] writes take {}{first}", slots(own)));
         } else if scene_file.is_none() && !self.reserved.is_empty() {
-            filled.push(format!("the program's obj[] writes take {}", slots(self.reserved.len() as u64)));
+            filled.push(format!(
+                "the program's obj[] writes take {}",
+                slots(self.reserved.len() as u64)
+            ));
         }
         for &(j, n) in before {
-            filled.push(format!("{} takes {}", name(&self.groups[j]), slots(n as u64)));
+            filled.push(format!(
+                "{} takes {}",
+                name(&self.groups[j]),
+                slots(n as u64)
+            ));
         }
         if !filled.is_empty() {
             text += &format!(": {}", filled.join("; "));
@@ -475,7 +481,9 @@ impl Tree {
         let Some((step, rest)) = steps.split_first() else {
             return Some(vec![self]);
         };
-        let Tree::Table(fields) = self else { return None };
+        let Tree::Table(fields) = self else {
+            return None;
+        };
         match step {
             Step::Key(k) => fields.iter().find(|(f, _)| f == k)?.1.at(rest),
             Step::Any => fields.iter().try_fold(vec![], |mut all, (_, t)| {
@@ -488,10 +496,13 @@ impl Tree {
     fn arts(&self) -> Option<Vec<usize>> {
         match self {
             Tree::Art(a) => Some(vec![*a]),
-            Tree::Table(fields) => fields.iter().map(|(_, t)| match t {
-                Tree::Art(a) => Some(*a),
-                _ => None,
-            }).collect(),
+            Tree::Table(fields) => fields
+                .iter()
+                .map(|(_, t)| match t {
+                    Tree::Art(a) => Some(*a),
+                    _ => None,
+                })
+                .collect(),
             Tree::Other => None,
         }
     }
@@ -514,10 +525,13 @@ impl Tree {
 
 /// The art a path of nodes shows: every node an art (`None` otherwise).
 fn arts_of(nodes: &[&Tree]) -> Option<Vec<usize>> {
-    nodes.iter().map(|t| match t {
-        Tree::Art(a) => Some(*a),
-        _ => None,
-    }).collect()
+    nodes
+        .iter()
+        .map(|t| match t {
+            Tree::Art(a) => Some(*a),
+            _ => None,
+        })
+        .collect()
 }
 
 /// A var's suffixes as steps into a tree (none for a call).
@@ -526,14 +540,18 @@ fn steps(suffixes: &[&ast::Suffix]) -> Option<Vec<Step>> {
         .iter()
         .map(|s| match s {
             ast::Suffix::Index(ast::Index::Dot { name, .. }) => Some(Step::Key(text(name))),
-            ast::Suffix::Index(ast::Index::Brackets { expression, .. }) => Some(match &**expression {
-                Expression::Number(n) => match text(n).parse::<f64>() {
-                    Ok(v) if v.fract() == 0.0 => Step::Key((v as i64).to_string()),
+            ast::Suffix::Index(ast::Index::Brackets { expression, .. }) => {
+                Some(match &**expression {
+                    Expression::Number(n) => match text(n).parse::<f64>() {
+                        Ok(v) if v.fract() == 0.0 => Step::Key((v as i64).to_string()),
+                        _ => Step::Any,
+                    },
+                    Expression::String(t) => {
+                        Step::Key(text(t).trim_matches(|c| c == '"' || c == '\'').to_string())
+                    }
                     _ => Step::Any,
-                },
-                Expression::String(t) => Step::Key(text(t).trim_matches(|c| c == '"' || c == '\'').to_string()),
-                _ => Step::Any,
-            }),
+                })
+            }
             _ => None,
         })
         .collect()
@@ -712,16 +730,22 @@ impl Walk<'_> {
     }
     /// The stem of the module `M` a `M.f:method(...)` call is made on.
     fn receiver_module(&self, call: &ast::FunctionCall) -> Option<&String> {
-        let ast::Prefix::Name(m) = call.prefix() else { return None };
+        let ast::Prefix::Name(m) = call.prefix() else {
+            return None;
+        };
         self.requires.get(&self.scope.of(m)?)
     }
     /// The module and field of the group a `M.f:method(...)` or `g:method(...)` (`local g = M.f`) call is made on.
     fn module_group(&self, call: &ast::FunctionCall) -> Option<(String, String)> {
         let (receiver, ..) = method(call)?;
         match receiver.split_once('.') {
-            Some((_, field)) => self.receiver_module(call).map(|stem| (stem.clone(), field.to_string())),
+            Some((_, field)) => self
+                .receiver_module(call)
+                .map(|stem| (stem.clone(), field.to_string())),
             None => {
-                let ast::Prefix::Name(g) = call.prefix() else { return None };
+                let ast::Prefix::Name(g) = call.prefix() else {
+                    return None;
+                };
                 self.module_fields.get(&self.scope.of(g)?).cloned()
             }
         }
@@ -735,7 +759,11 @@ impl Walk<'_> {
                 let name = text(n);
                 if let Some(&f) = self.open.last() {
                     if let Some(p) = self.params[f].iter().position(|q| *q == name) {
-                        return if self.names[f].is_empty() { GroupRef::Other } else { GroupRef::Param(self.names[f].clone(), p) };
+                        return if self.names[f].is_empty() {
+                            GroupRef::Other
+                        } else {
+                            GroupRef::Param(self.names[f].clone(), p)
+                        };
                     }
                 }
                 if let Some(&g) = self.group_names.get(&name) {
@@ -747,7 +775,11 @@ impl Walk<'_> {
                 }
             }
             Expression::Var(ast::Var::Expression(v)) => {
-                let (ast::Prefix::Name(m), [ast::Suffix::Index(ast::Index::Dot { name: field, .. })]) = (v.prefix(), &v.suffixes().collect::<Vec<_>>()[..]) else {
+                let (
+                    ast::Prefix::Name(m),
+                    [ast::Suffix::Index(ast::Index::Dot { name: field, .. })],
+                ) = (v.prefix(), &v.suffixes().collect::<Vec<_>>()[..])
+                else {
                     return GroupRef::Other;
                 };
                 match self.scope.of(m).and_then(|d| self.requires.get(&d)) {
@@ -855,14 +887,19 @@ impl Walk<'_> {
             Expression::Parentheses { expression, .. } => self.tree_of(expression),
             Expression::Var(ast::Var::Name(n)) => {
                 let d = self.scope.of(n);
-                match (d.and_then(|d| self.art_names.get(&d)), d.and_then(|d| self.art_tables.get(&d))) {
+                match (
+                    d.and_then(|d| self.art_names.get(&d)),
+                    d.and_then(|d| self.art_tables.get(&d)),
+                ) {
                     (Some(a), _) => Tree::Art(*a),
                     (None, Some(t)) => t.clone(),
                     _ => Tree::Other,
                 }
             }
             Expression::Var(ast::Var::Expression(v)) => {
-                let ast::Prefix::Name(root) = v.prefix() else { return Tree::Other };
+                let ast::Prefix::Name(root) = v.prefix() else {
+                    return Tree::Other;
+                };
                 let at = steps(&v.suffixes().collect::<Vec<_>>())
                     .and_then(|p| self.art_tables.get(&self.scope.of(root)?)?.at(&p));
                 match at.as_deref() {
@@ -966,7 +1003,15 @@ impl Walk<'_> {
                 o.iter().all(|(k, _)| {
                     matches!(
                         k.as_str(),
-                        "depth" | "size" | "prio" | "key" | "layer" | "flip_x" | "flip_y" | "pal" | "at"
+                        "depth"
+                            | "size"
+                            | "prio"
+                            | "key"
+                            | "layer"
+                            | "flip_x"
+                            | "flip_y"
+                            | "pal"
+                            | "at"
                     )
                 })
             });
@@ -998,7 +1043,18 @@ impl Visitor for Walk<'_> {
     fn visit_function_body(&mut self, node: &ast::FunctionBody) {
         self.functions += 1;
         self.names.push(self.next_name.take().unwrap_or_default());
-        self.params.push(node.parameters().iter().map(|p| if let ast::Parameter::Name(n) = p { text(n) } else { String::new() }).collect());
+        self.params.push(
+            node.parameters()
+                .iter()
+                .map(|p| {
+                    if let ast::Parameter::Name(n) = p {
+                        text(n)
+                    } else {
+                        String::new()
+                    }
+                })
+                .collect(),
+        );
         self.open.push(self.names.len() - 1);
         // A function body's loops are its own: calls multiply them in.
         self.trips.push(Some(1));
@@ -1176,7 +1232,9 @@ impl Visitor for Walk<'_> {
             let name = text(token);
             // The declaration, when nothing assigns it after this initialiser.
             let constant = self.scope.constant(token);
-            if let (Some(d), false, Some(arts)) = (constant, top, exprs.get(i).and_then(|e| self.art_of(e))) {
+            if let (Some(d), false, Some(arts)) =
+                (constant, top, exprs.get(i).and_then(|e| self.art_of(e)))
+            {
                 self.art_locals.insert(d, arts);
             }
             if let Some(e) = exprs.get(i) {
@@ -1216,13 +1274,13 @@ impl Visitor for Walk<'_> {
                                 .filter(|s| s.len() == 1)
                                 .and_then(|s| s.first().copied());
                             let module = match call.prefix() {
-                                ast::Prefix::Name(m) => self.scope.of(m).and_then(|m| self.requires.get(&m)),
+                                ast::Prefix::Name(m) => {
+                                    self.scope.of(m).and_then(|m| self.requires.get(&m))
+                                }
                                 _ => None,
                             };
                             if let (Some((_, "new")), Some(n)) = (f.split_once('.'), size) {
-                                if module.is_some_and(|stem| stem == "@ppu/pools")
-                                    && n >= 0
-                                {
+                                if module.is_some_and(|stem| stem == "@ppu/pools") && n >= 0 {
                                     self.pools.insert(name.clone(), n as u64);
                                 }
                             }
@@ -1234,7 +1292,8 @@ impl Visitor for Walk<'_> {
                             [ast::Suffix::Index(ast::Index::Dot { name: field, .. })],
                         ) = (v.prefix(), &v.suffixes().collect::<Vec<_>>()[..])
                         {
-                            if let Some(stem) = self.scope.of(m).and_then(|m| self.requires.get(&m)) {
+                            if let Some(stem) = self.scope.of(m).and_then(|m| self.requires.get(&m))
+                            {
                                 self.module_fields.insert(d, (stem.clone(), text(field)));
                             }
                         } else if let Some(picked) = required_field(v) {
@@ -1297,13 +1356,22 @@ impl Visitor for Walk<'_> {
         if let (Some((callee, args)), ast::Prefix::Name(root)) = (path(call), call.prefix()) {
             let callee = match callee.split_once('.') {
                 None => Some((None, callee.clone())),
-                Some((_, f)) if !f.contains('.') => self.scope.of(root).and_then(|d| self.requires.get(&d)).map(|stem| (Some(stem.clone()), f.to_string())),
+                Some((_, f)) if !f.contains('.') => self
+                    .scope
+                    .of(root)
+                    .and_then(|d| self.requires.get(&d))
+                    .map(|stem| (Some(stem.clone()), f.to_string())),
                 _ => None,
             };
             if let Some((module, name)) = callee {
                 // Every such call, so a parameter a draw is made on knows each thing its callers give it.
                 let args: Vec<_> = args.iter().map(|a| (span(*a), self.group_ref(a))).collect();
-                self.group_calls.push(GroupCall { line: line(call), module, name, args });
+                self.group_calls.push(GroupCall {
+                    line: line(call),
+                    module,
+                    name,
+                    args,
+                });
             }
         }
         let Some((name, args)) = path(call) else {
@@ -1343,10 +1411,16 @@ impl Visitor for Walk<'_> {
                 }
                 let head = span(call).start..range_end(call);
                 self.animations.push(Animation {
-                    site: Site { file: self.file.into(), line: line(call), head, call: span(call) },
+                    site: Site {
+                        file: self.file.into(),
+                        line: line(call),
+                        head,
+                        call: span(call),
+                    },
                     arts: vec![],
                 });
-                self.art_at.insert(span(call), ANIMATION + self.animations.len());
+                self.art_at
+                    .insert(span(call), ANIMATION + self.animations.len());
             }
             "sprites.art" => {
                 self.art = true;
@@ -1372,10 +1446,11 @@ impl Visitor for Walk<'_> {
         };
         let args = path(call).map(|(_, a)| a).unwrap_or_default();
         // Each art this file names, or one a module returns (resolved once every file is walked).
-        let one = |e: &Expression| match self.art_call(e).map(|a| vec![a]).or_else(|| self.art_of(e)) {
-            Some(arts) => Some(ArtPart::Known(arts)),
-            None => self.module_art(e).map(ArtPart::Module),
-        };
+        let one =
+            |e: &Expression| match self.art_call(e).map(|a| vec![a]).or_else(|| self.art_of(e)) {
+                Some(arts) => Some(ArtPart::Known(arts)),
+                None => self.module_art(e).map(ArtPart::Module),
+            };
         let parts: Option<Vec<ArtPart>> = match args.first() {
             Some(Expression::TableConstructor(t)) => t
                 .fields()
@@ -1385,7 +1460,12 @@ impl Visitor for Walk<'_> {
                     _ => None,
                 })
                 .collect(),
-            Some(Expression::Var(ast::Var::Name(t))) => match self.scope.of(t).and_then(|t| self.art_tables.get(&t)).and_then(Tree::arts) {
+            Some(Expression::Var(ast::Var::Name(t))) => match self
+                .scope
+                .of(t)
+                .and_then(|t| self.art_tables.get(&t))
+                .and_then(Tree::arts)
+            {
                 Some(arts) => Some(vec![ArtPart::Known(arts)]),
                 None => self.module_art(args[0]).map(|r| vec![ArtPart::Module(r)]),
             },
@@ -1393,7 +1473,9 @@ impl Visitor for Walk<'_> {
             None => None,
         };
         match parts {
-            Some(parts) if !parts.is_empty() => self.deferred.push((n - ANIMATION - 1, parts, line(call))),
+            Some(parts) if !parts.is_empty() => {
+                self.deferred.push((n - ANIMATION - 1, parts, line(call)))
+            }
             _ => self.fail(call, ANIMATION_ARTS),
         }
     }
@@ -1439,7 +1521,10 @@ fn required_field(v: &ast::VarExpression) -> Option<(String, String)> {
     if text(r) != "require" {
         return None;
     }
-    Some((required_path(&arguments.iter().collect::<Vec<_>>())?, text(field)))
+    Some((
+        required_path(&arguments.iter().collect::<Vec<_>>())?,
+        text(field),
+    ))
 }
 
 /// A require's one string argument as a module stem (`"./m"` is `m`).
@@ -1763,9 +1848,20 @@ pub fn plan(files: &[(&str, &str)]) -> Result<Option<Plan>, Error> {
             sets: (false, false),
         };
         walk.visit_ast(ast);
-        let stem = file.trim_end_matches(".luau").trim_end_matches(".lua").to_string();
-        group_calls.extend(std::mem::take(&mut walk.group_calls).into_iter().map(|c| (file.to_string(), stem.clone(), c)));
-        deferred.extend(walk.deferred.drain(..).map(|(n, parts, line)| (n, parts, file.to_string(), line)));
+        let stem = file
+            .trim_end_matches(".luau")
+            .trim_end_matches(".lua")
+            .to_string();
+        group_calls.extend(
+            std::mem::take(&mut walk.group_calls)
+                .into_iter()
+                .map(|c| (file.to_string(), stem.clone(), c)),
+        );
+        deferred.extend(
+            walk.deferred
+                .drain(..)
+                .map(|(n, parts, line)| (n, parts, file.to_string(), line)),
+        );
         exports.insert(
             file.trim_end_matches(".luau")
                 .trim_end_matches(".lua")
@@ -1831,8 +1927,14 @@ pub fn plan(files: &[(&str, &str)]) -> Result<Option<Plan>, Error> {
                 Some(r) => match (walk.group_names.get(r), &f.module_group) {
                     (Some(g), _) => GroupRef::Known(*g),
                     (None, Some((stem, field))) => GroupRef::Module(stem.clone(), field.clone()),
-                    (None, None) => match walk.params.get(f.function).and_then(|ps| ps.iter().position(|p| p == r)) {
-                        Some(p) if !walk.names[f.function].is_empty() => GroupRef::Param(walk.names[f.function].clone(), p),
+                    (None, None) => match walk
+                        .params
+                        .get(f.function)
+                        .and_then(|ps| ps.iter().position(|p| p == r))
+                    {
+                        Some(p) if !walk.names[f.function].is_empty() => {
+                            GroupRef::Param(walk.names[f.function].clone(), p)
+                        }
                         _ => GroupRef::Other,
                     },
                 },
@@ -1876,7 +1978,11 @@ pub fn plan(files: &[(&str, &str)]) -> Result<Option<Plan>, Error> {
         match arts.filter(|a| !a.is_empty() && a.iter().all(|&a| a < ANIMATION)) {
             Some(arts) => animations[n].arts = arts,
             None => {
-                first_error.get_or_insert(Error { file, line, message: ANIMATION_ARTS.into() });
+                first_error.get_or_insert(Error {
+                    file,
+                    line,
+                    message: ANIMATION_ARTS.into(),
+                });
             }
         }
     }
@@ -1885,8 +1991,15 @@ pub fn plan(files: &[(&str, &str)]) -> Result<Option<Plan>, Error> {
         Default::default()
     } else {
         flow::follow(&flow::Program {
-            files: parsed.iter().zip(facts).map(|((f, ast), facts)| (*f, ast, facts)).collect(),
-            exports: exports.iter().map(|(stem, e)| (stem.clone(), e.arts.clone())).collect(),
+            files: parsed
+                .iter()
+                .zip(facts)
+                .map(|((f, ast), facts)| (*f, ast, facts))
+                .collect(),
+            exports: exports
+                .iter()
+                .map(|(stem, e)| (stem.clone(), e.arts.clone()))
+                .collect(),
         })
     };
     // What each parameter of a file-level function is given by its calls (by stem, function and place): the groups,
@@ -1897,17 +2010,28 @@ pub fn plan(files: &[(&str, &str)]) -> Result<Option<Plan>, Error> {
             Some(m) => Some((m.clone(), exports.get(m)?.names.get(&c.name)?.clone())),
         }
     };
-    let mut given: HashMap<(String, String, usize), (BTreeSet<usize>, Option<(String, u32)>)> = HashMap::new();
+    let mut given: HashMap<(String, String, usize), (BTreeSet<usize>, Option<(String, u32)>)> =
+        HashMap::new();
     // A function no call names (an entry, frame()) gives its parameters what the walk cannot know.
-    let called: HashSet<(String, String)> = group_calls.iter().filter_map(|(_, stem, c)| callee_of(stem, c)).collect();
+    let called: HashSet<(String, String)> = group_calls
+        .iter()
+        .filter_map(|(_, stem, c)| callee_of(stem, c))
+        .collect();
     loop {
         let mut changed = false;
         for (file, stem, c) in &group_calls {
-            let Some((cs, cf)) = callee_of(stem, c) else { continue };
+            let Some((cs, cf)) = callee_of(stem, c) else {
+                continue;
+            };
             for (i, (_, r)) in c.args.iter().enumerate() {
                 let (gs, other) = match r {
-                    GroupRef::Param(f, _) if !called.contains(&(stem.clone(), f.clone())) => (BTreeSet::new(), Some((file.clone(), c.line))),
-                    GroupRef::Param(f, p) => given.get(&(stem.clone(), f.clone(), *p)).cloned().unwrap_or_default(),
+                    GroupRef::Param(f, _) if !called.contains(&(stem.clone(), f.clone())) => {
+                        (BTreeSet::new(), Some((file.clone(), c.line)))
+                    }
+                    GroupRef::Param(f, p) => given
+                        .get(&(stem.clone(), f.clone(), *p))
+                        .cloned()
+                        .unwrap_or_default(),
                     r => match known(&exports, r) {
                         Some(g) => (BTreeSet::from([g]), None),
                         None => (BTreeSet::new(), Some((file.clone(), c.line))),
@@ -1927,14 +2051,26 @@ pub fn plan(files: &[(&str, &str)]) -> Result<Option<Plan>, Error> {
         }
     }
     // The parameters draws are made on, and those that pass a group on to one: their calls' group arguments.
-    let mut drawn: HashSet<(String, String, usize)> = found.iter().filter_map(|(g, _, c, _, _)| match g {
-        GroupRef::Param(f, p) => Some((c.file.trim_end_matches(".luau").trim_end_matches(".lua").to_string(), f.clone(), *p)),
-        _ => None,
-    }).collect();
+    let mut drawn: HashSet<(String, String, usize)> = found
+        .iter()
+        .filter_map(|(g, _, c, _, _)| match g {
+            GroupRef::Param(f, p) => Some((
+                c.file
+                    .trim_end_matches(".luau")
+                    .trim_end_matches(".lua")
+                    .to_string(),
+                f.clone(),
+                *p,
+            )),
+            _ => None,
+        })
+        .collect();
     loop {
         let before = drawn.len();
         for (_, stem, c) in &group_calls {
-            let Some((cs, cf)) = callee_of(stem, c) else { continue };
+            let Some((cs, cf)) = callee_of(stem, c) else {
+                continue;
+            };
             for (i, (_, r)) in c.args.iter().enumerate() {
                 if let GroupRef::Param(f, p) = r {
                     if drawn.contains(&(cs.clone(), cf.clone(), i)) {
@@ -1949,10 +2085,18 @@ pub fn plan(files: &[(&str, &str)]) -> Result<Option<Plan>, Error> {
     }
     let mut group_args = vec![];
     for (file, stem, c) in &group_calls {
-        let Some((cs, cf)) = callee_of(stem, c) else { continue };
+        let Some((cs, cf)) = callee_of(stem, c) else {
+            continue;
+        };
         for (i, (arg, r)) in c.args.iter().enumerate() {
-            if let Some(group) = known(&exports, r).filter(|_| drawn.contains(&(cs.clone(), cf.clone(), i))) {
-                group_args.push(GroupArg { file: file.clone(), arg: arg.clone(), group });
+            if let Some(group) =
+                known(&exports, r).filter(|_| drawn.contains(&(cs.clone(), cf.clone(), i)))
+            {
+                group_args.push(GroupArg {
+                    file: file.clone(),
+                    arg: arg.clone(),
+                    group,
+                });
             }
         }
     }
@@ -1968,7 +2112,8 @@ pub fn plan(files: &[(&str, &str)]) -> Result<Option<Plan>, Error> {
         }
         // An animation counts as its arts; the draw keeps which animations it can show.
         if let Some(arts) = call.arts.take() {
-            let (shown, played): (Vec<usize>, Vec<usize>) = arts.into_iter().partition(|&a| a < ANIMATION);
+            let (shown, played): (Vec<usize>, Vec<usize>) =
+                arts.into_iter().partition(|&a| a < ANIMATION);
             let played: Vec<usize> = played.into_iter().map(|a| a - ANIMATION).collect();
             let mut all = shown;
             all.extend(played.iter().flat_map(|&n| animations[n - 1].arts.clone()));
@@ -1977,13 +2122,21 @@ pub fn plan(files: &[(&str, &str)]) -> Result<Option<Plan>, Error> {
         } else if !call.keep && !reached.contains(&(call.file.clone(), call.call.clone())) {
             call.animations = Some(vec![]);
         }
-        let stem = call.file.trim_end_matches(".luau").trim_end_matches(".lua").to_string();
+        let stem = call
+            .file
+            .trim_end_matches(".luau")
+            .trim_end_matches(".lua")
+            .to_string();
         let (through, into) = match &group {
             GroupRef::Param(f, p) => match given.get(&(stem, f.clone(), *p)) {
                 Some((_, Some((file, line)))) => {
                     let r = receiver.unwrap_or_default();
                     let message = format!("{r} is a parameter of `{f}`, and the call at {file}:{line} gives it something other than a sprites group the program makes: pass the group itself (a `sprites.group` local, or one a module returns) at every call, so each draw knows its group");
-                    first_error.get_or_insert(Error { file: call.file, line: call.line, message });
+                    first_error.get_or_insert(Error {
+                        file: call.file,
+                        line: call.line,
+                        message,
+                    });
                     continue;
                 }
                 g => (receiver, g.map(|g| g.0.clone())),
@@ -1991,7 +2144,11 @@ pub fn plan(files: &[(&str, &str)]) -> Result<Option<Plan>, Error> {
             g => (None, known(&exports, g).map(|g| BTreeSet::from([g]))),
         };
         let Some(into) = into.filter(|g| !g.is_empty()) else {
-            first_error.get_or_insert(Error { file: call.file, line: call.line, message: NO_GROUP.into() });
+            first_error.get_or_insert(Error {
+                file: call.file,
+                line: call.line,
+                message: NO_GROUP.into(),
+            });
             continue;
         };
         // A draw on a parameter draws into each group its callers give it.
@@ -2004,7 +2161,11 @@ pub fn plan(files: &[(&str, &str)]) -> Result<Option<Plan>, Error> {
                     groups[group].draws.push(need)
                 }
             }
-            calls.push(Call { group, through: through.clone(), ..call.clone() });
+            calls.push(Call {
+                group,
+                through: through.clone(),
+                ..call.clone()
+            });
         }
     }
     if let Some(e) = first_error {
@@ -2392,22 +2553,39 @@ end"#;
         let groups = "return {cars = sprites.group({slots = 1})}";
         let game = "local Art = require(\"./art\")\nlocal Groups = require(\"./groups\")\nlocal cars = Groups.cars\nlocal function frame() cars:draw(Art.A, 0, 0) end\nreturn {frame = frame}";
         let other = "local function frame() for i = 0, 127 do obj[i].on = true end end\nreturn {frame = frame}";
-        let p = plan(&[("main.luau", main), ("art.luau", art), ("groups.luau", groups), ("game.luau", game), ("other.luau", other)])
-            .unwrap()
-            .unwrap();
+        let p = plan(&[
+            ("main.luau", main),
+            ("art.luau", art),
+            ("groups.luau", groups),
+            ("game.luau", game),
+            ("other.luau", other),
+        ])
+        .unwrap()
+        .unwrap();
         assert_eq!(p.groups[0].scenes, vec![1]);
         assert_eq!(p.layout(&[1]).unwrap()[0], (0, 1));
         // The same pick in one line.
         let game = "local Art = require(\"./art\")\nlocal cars = require(\"./groups\").cars\nlocal function frame() cars:draw(Art.A, 0, 0) end\nreturn {frame = frame}";
-        let p = plan(&[("main.luau", main), ("art.luau", art), ("groups.luau", groups), ("game.luau", game), ("other.luau", other)])
-            .unwrap()
-            .unwrap();
+        let p = plan(&[
+            ("main.luau", main),
+            ("art.luau", art),
+            ("groups.luau", groups),
+            ("game.luau", game),
+            ("other.luau", other),
+        ])
+        .unwrap()
+        .unwrap();
         assert_eq!(p.groups[0].scenes, vec![1]);
         assert_eq!(p.layout(&[1]).unwrap()[0], (0, 1));
     }
 
     fn refusal_of(files: &[(&str, &str)], cells: &[u64]) -> String {
-        plan(files).unwrap().unwrap().layout(cells).unwrap_err().message
+        plan(files)
+            .unwrap()
+            .unwrap()
+            .layout(cells)
+            .unwrap_err()
+            .message
     }
 
     #[test]
@@ -2437,7 +2615,10 @@ end"#;
         let main = "local A = sprites.art({{size = 16, cells = {0}}})\nlocal g = sprites.group({slots = 1})\nGAME = scenes.add(require(\"./game\"))\nfunction frame() g:draw(A, 0, 0) end\n";
         let game = "local function frame() for i = 0, 127 do obj[i].on = true end end\nreturn {frame = frame}";
         let m = refusal_of(&[("main.luau", main), ("game.luau", game)], &[1]);
-        assert!(m.contains("; the group is drawn in main.luau:4, so it counts in every scene: "), "{m}");
+        assert!(
+            m.contains("; the group is drawn in main.luau:4, so it counts in every scene: "),
+            "{m}"
+        );
     }
 
     #[test]

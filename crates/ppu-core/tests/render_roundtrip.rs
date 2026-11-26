@@ -510,7 +510,9 @@ fn input_that_is_not_what_it_claims_is_refused() {
     );
     // palette, sample and song payloads do not render
     let (pal, meta) = ppu_core::gpl::convert_palette("GIMP Palette\n1 2 3\n").unwrap();
-    assert!(render(&pal, &meta, None).unwrap_err().contains("gpl::write"));
+    assert!(render(&pal, &meta, None)
+        .unwrap_err()
+        .contains("gpl::write"));
     // a priority mask does not go with SNES art
     let good = encode_png(&art(8, 8, 16, 16, vec![1; 64]).image);
     let e =

@@ -314,7 +314,10 @@ fn a_streamed_map_keeps_every_window_cell_in_the_plane_through_diagonal_moves_an
     keeps_every_window_cell(&stream_main(4, 20, 806, 1006));
     // Two cells a frame on each axis, and jumps past the whole 40-cell window and back.
     keeps_every_window_cell(&stream_main(16, 20, 806, 1006));
-    keeps_every_window_cell(&stream_main(4, 20, 806, 1006).replace("w:follow(w.x + k * 4, w.y + k * 4)", "w:follow(if n % 2 == 0 then 806 else 1206, if n % 3 == 0 then 1006 else 1700)"));
+    keeps_every_window_cell(&stream_main(4, 20, 806, 1006).replace(
+        "w:follow(w.x + k * 4, w.y + k * 4)",
+        "w:follow(if n % 2 == 0 then 806 else 1206, if n % 3 == 0 then 1006 else 1700)",
+    ));
 }
 
 fn keeps_every_window_cell(main: &str) {
@@ -374,7 +377,10 @@ fn streaming_refusals_name_the_problem() {
     let m = load(MAIN, 200, 300);
     assert!(m.contains("200x300") && m.contains("radius = r"), "{m}");
     let m = load(
-        &MAIN.replace("world.load(\"level1\")", "world.load(\"level1\", {radius = 10})"),
+        &MAIN.replace(
+            "world.load(\"level1\")",
+            "world.load(\"level1\", {radius = 10})",
+        ),
         128,
         128,
     );
@@ -395,7 +401,11 @@ fn streaming_refusals_name_the_problem() {
     let m = load(&stream_main(4, 20, 100, 600), 200, 300);
     assert!(m.contains("clamp it") && m.contains("160..1447"), "{m}");
     // speed belongs to a view: a streamed map ignores it.
-    assert!(ok(&stream_main(4, 20, 600, 600).replace("{radius", "{speed = 4, radius"), 200, 300));
+    assert!(ok(
+        &stream_main(4, 20, 600, 600).replace("{radius", "{speed = 4, radius"),
+        200,
+        300
+    ));
     // A streamed plane and a background are one or the other, in either order.
     let both = |a: &str, b: &str| {
         let main = stream_main(4, 20, 600, 600)
@@ -406,7 +416,11 @@ fn streaming_refusals_name_the_problem() {
     let m = both("w:bind(\"track\", m7)", "w:bind(\"track\", bg[1])");
     assert!(m.contains("not both"), "{m}");
     // The library's refusal carries the world code, which opens its note.
-    assert_eq!(ppu_core::engine_code(&m), Some(ppu_core::codes::WORLD), "{m}");
+    assert_eq!(
+        ppu_core::engine_code(&m),
+        Some(ppu_core::codes::WORLD),
+        "{m}"
+    );
     assert!(both("w:bind(\"track\", bg[1])", "w:bind(\"track\", m7)").contains("Mode 7 tileset"));
 }
 
@@ -740,7 +754,10 @@ fn view_refusals_name_the_problem() {
             &main(&|s| s.replace("speed = 4,", "speed = 4, veiw = 1,")),
             &big,
         ),
-        &["options are radius, view (and its speed), period, pick and chunk", "veiw"],
+        &[
+            "options are radius, view (and its speed), period, pick and chunk",
+            "veiw",
+        ],
     );
     // Near is 24 cells: x in 192..2215.
     refuse(
@@ -925,7 +942,11 @@ fn the_hash_is_the_documented_one_and_the_seed_changes_the_ground() {
             "hash({s}, {x}, {y})"
         );
         // math.hash is the same function; world.hash its deprecated name.
-        assert_eq!(e.call_ints("mhash", &[s, x, y]).unwrap()[0], hash(s, x, y), "math.hash({s}, {x}, {y})");
+        assert_eq!(
+            e.call_ints("mhash", &[s, x, y]).unwrap()[0],
+            hash(s, x, y),
+            "math.hash({s}, {x}, {y})"
+        );
         seen.insert(hash(s, x, y));
     }
     assert!(seen.len() >= 5, "{seen:?}");
@@ -988,7 +1009,11 @@ fn what_a_generated_world_cannot_be_is_refused_naming_the_cause() {
 #[test]
 fn a_generated_plane_keeps_its_window_through_moves_of_any_length() {
     // 9 and 24 px a frame (past the window centre's 2-cell step: a whole redraw), and jumps round the seam.
-    for movement in ["x = (x + 9) % 8192", "x = (x + 24) % 8192 y = (y + 16) % 8192", "x = (x + 3000) % 8192 y = (y + 8000) % 8192"] {
+    for movement in [
+        "x = (x + 9) % 8192",
+        "x = (x + 24) % 8192 y = (y + 16) % 8192",
+        "x = (x + 3000) % 8192 y = (y + 8000) % 8192",
+    ] {
         fly(&generated("radius = 40", "", movement), 40, 60);
     }
 }

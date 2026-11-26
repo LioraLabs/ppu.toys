@@ -230,7 +230,13 @@ end"#;
     let mut kon = vec![];
     for f in 0..2 {
         engine.frame(f as f64 / 60., f).unwrap();
-        kon.push(engine.take_dsp_log().iter().filter(|w| w.1 == 0x4c).fold(0u8, |a, w| a | w.2));
+        kon.push(
+            engine
+                .take_dsp_log()
+                .iter()
+                .filter(|w| w.1 == 0x4c)
+                .fold(0u8, |a, w| a | w.2),
+        );
     }
     assert_eq!(kon, [1 << 6 | 1 << 7, 1 << 5 | 1 << 7]);
 }
