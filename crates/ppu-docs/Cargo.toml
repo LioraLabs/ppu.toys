@@ -8,7 +8,7 @@ homepage.workspace = true
 description = "The ppu.toys docs as atomic notes: parse, search and walk, shared by ppu docs, the MCP docs tool and the site"
 
 [dependencies]
-ppu-core = { path = "../ppu-core", default-features = false, version = "0.2.3" }
+ppu-core = { path = "../ppu-core", default-features = false, version = "0.2.4" }
 
 [dev-dependencies]
 ppu-cli = { path = "../ppu-cli" }

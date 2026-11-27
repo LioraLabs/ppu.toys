@@ -25,7 +25,7 @@ Rules (each broke a shipped game):
   - big graphics (a Mode 7 track) as an image source via `dma()`; a level bigger than the screen as a Tiled map, `level1.tmj` via `write_file`, layer `data` a number array. No `vram[]` loops in `init()`: a console shows black for seconds.
   - sound: `zap = bank("pluck")` at file level, `sfx(zap, "C5")`: the driver picks a voice, borrowing one from the song until the effect ends (song parts marked keep are never taken); name one (`sfx(zap, 6, "C5")`) only for effects that cut each other off. A looping sample stops after 0.15 s unless `bank()` or `sfx(..., {len = 0.4})` sets `len`.
   - `lookup`, `bakeHdma` to precompute math and scanline effects; `routine` spreads work over frames; `saveData` for battery saves.
-- Before saying a ROM works, play it with `cart_run` and input, judging motion over shots. Before claiming 60 Hz (or 30), run `cart_profile` over the busy parts.
+- `snes_check` is the cart's verdict: no `cart_run` per feature. Done: `cart_run` with input (judge motion), `cart_profile` busy parts before claiming 60 Hz.
 - Run `convert_to_luau` before changing a Lua toy (`main.lua`).
 - Query `score` before writing music; run `song_check` after every `write_song`.
 

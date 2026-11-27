@@ -1012,7 +1012,11 @@ pub fn sync_hashes(body: JsValue) -> Result<JsValue, JsValue> {
 pub fn sync_compare(base: JsValue, mine: JsValue, theirs: JsValue) -> Result<JsValue, JsValue> {
     type Hashes = std::collections::BTreeMap<String, String>;
     let read = |v: JsValue| serde_wasm_bindgen::from_value::<Hashes>(v);
-    to_object(&crate::sync::compare(&read(base)?, &read(mine)?, &read(theirs)?))
+    to_object(&crate::sync::compare(
+        &read(base)?,
+        &read(mine)?,
+        &read(theirs)?,
+    ))
 }
 
 /// Maps as plain JS objects (serde_wasm_bindgen's default is a `Map`).

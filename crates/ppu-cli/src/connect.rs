@@ -19,11 +19,11 @@
 use crate::folder::{back_up, own_palette};
 use crate::login::{self, Credentials};
 use crate::{fnv, write_temp};
-/// Folder is mine, the site theirs: [`compare`] is where base, folder and site hashes meet.
-pub use ppu_core::sync::{compare, hashes, Compared};
 use anyhow::{bail, ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use ppu_core::render::render_png;
+/// Folder is mine, the site theirs: [`compare`] is where base, folder and site hashes meet.
+pub use ppu_core::sync::{compare, hashes, Compared};
 use ppu_core::Rule;
 use ppu_core::{
     convert_png_source, gpl, row_size_for, ConvertOptions, PaletteSource, SourceKind, SourceMeta,
